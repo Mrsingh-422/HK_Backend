@@ -6,7 +6,7 @@ const sendEmailOTP = async (email, otp) => {
         const apiKey = defaultClient.authentications['api-key'];
         
         // Aapki API Key
-        apiKey.apiKey = "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"; 
+        apiKey.apiKey = process.env.BREVO_API_KEY; 
 
         const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
         const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
