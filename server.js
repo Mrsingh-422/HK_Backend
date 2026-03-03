@@ -1,0 +1,78 @@
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const dotenv = require('dotenv');
+const os = require('os');
+
+// Config
+const envFile = path.join(__dirname, '.env');
+dotenv.config({ path: envFile });
+const connectDB = require('./config/db');
+
+// Connect DB
+connectDB();
+
+const app = express();
+
+// Middleware
+app.use(cors()); // Allow all origins
+app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Form डेटा के लिए (Optional)
+
+// Static folder for uploads
+app.use('/uploads', express.static('public/uploads'));
+
+// Admin Routes 
+app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
+app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
+app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
+app.use('/admin/doctor-data', require('./routes/admin/others/doctorDataRoute'));
+// app.use('/admin/roles', require('./routes/subAdmin/RoleRoute')); // Role Management Route
+app.use('/api/homepage', require('./routes/admin/user/home/HomePageRoute')); // HomePage Content Management Route
+app.use('/api/footer', require('./routes/admin/user/home/footerRoutes')); // Footer Management Route
+app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); // List Management Route (Doctors, Hospitals, etc.)
+
+// User Routes 
+app.use('/api/auth/user', require('./routes/user/authUser')); 
+ 
+
+// Doctor Routes
+app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
+
+// Hospital Routes
+app.use('/api/auth/hospital', require('./routes/hospital/authHospital'));
+
+// Provider Routes
+app.use('/api/auth/provider', require('./routes/provider/authProvider'));
+
+// others Routes or public routes
+app.use('/api/public', require('./routes/others/locationRoutes'));
+app.use('/api/password', require('./routes/others/forgotPassword'));
+
+app.get('/', (req, res) => {
+    res.send('HK Backend is running...');
+}); 
+
+// --- HELPER FUNCTION TO GET IP ---
+const getLocalIpAddress = () => {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            // Skip internal (localhost) and non-IPv4 addresses
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
+            }
+        }
+    }
+    return 'localhost';
+};
+ 
+const PORT = process.env.PORT;
+
+
+app.listen(PORT, '0.0.0.0', () => {
+    const ip = getLocalIpAddress(); // IP Function call kiya
+    // console.log(`🚀 Server running on port ${PORT}`);
+    // console.log(`📡 Access locally: http://localhost:${PORT}`);
+    console.log(`🌍 Access on Network: http://${ip}:${PORT}`); // Ab ye real IP dikhayega
+});
