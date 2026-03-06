@@ -154,9 +154,39 @@ const uploadExcel = multer({
 });
 
 
+// ==========================================
+// 4. PROVIDER DOCUMENT CONFIGURATION (Added)
+// ==========================================
+const providerDir = 'public/uploads/providers';
+if (!fs.existsSync(providerDir)){
+    fs.mkdirSync(providerDir, { recursive: true });
+}
+
+const providerStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, providerDir);
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'prov-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const uploadProvider = multer({ 
+    storage: providerStorage,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
+
+// Keys for Postman: profileImage (1), certificates (up to 10)
+const providerDocUploads = uploadProvider.fields([
+    { name: 'profileImage', maxCount: 1 },
+    { name: 'certificates', maxCount: 10 }
+]);
+
 module.exports = { 
     hospitalUploads, // Purana wala
     contentUploads,  // Naya wala (About Us / Ambulance ke liye)
     doctorDocUploads, // DOCTOR DOCUMENTS
+    providerDocUploads, // PROVIDER DOCUMENTS
     uploadExcel // EXCEL FILE UPLOAD
 };

@@ -147,8 +147,17 @@ const loginDoctor = async (req, res) => {
 };
 
 
-const generateToken = (id) => {
-    return jwt.sign({ id, role: 'doctor' }, process.env.JWT_SECRET, { expiresIn: '30d' });
+const generateToken = (id, role) => {
+    // Agar development hai toh 100 saal (maano expire hi nahi hoga)
+    // Warna production mein sirf 30 din
+    const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
+
+    return jwt.sign(
+        { id, role }, 
+        process.env.JWT_SECRET, 
+        { expiresIn: expiry }
+    );
 };
+
 
 module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor };

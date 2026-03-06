@@ -2,140 +2,137 @@ const Provider = require('../../models/Provider');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-// --- 1. REGISTER PROVIDER ---
-// Endpoint: POST /api/auth/provider/register
+const generateToken = (id, role) => {
+    // Agar development hai toh 100 saal (maano expire hi nahi hoga)
+    // Warna production mein sirf 30 din
+    const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
+
+    return jwt.sign(
+        { id, role }, 
+        process.env.JWT_SECRET, 
+        { expiresIn: expiry }
+    );
+};
+
+// --- 1. REGISTER PROVIDER (Step 1) ---
 const registerProvider = async (req, res) => {
     try {
-        const { 
-            name, email, phone, gender, category, location, password 
-        } = req.body;
+        const { name, email, phone, password, category, country, state, city } = req.body;
 
-        // 1. Validation: Kam se kam ek contact method hona chahiye
-        if (!email && !phone) {
-            return res.status(400).json({ message: 'Email or Phone is required' });
-        }
+        if (!email && !phone) return res.status(400).json({ message: 'Email or Phone required' });
 
-        // 2. Dynamic Duplicate Check
-        // Check array banayenge taaki 'undefined' values DB query me na jaayein
-        let query = [];
-        if (email) query.push({ email });
-        if (phone) query.push({ phone });
+        const exists = await Provider.findOne({ $or: [{ email: email || undefined }, { phone: phone || undefined }] });
+        if (exists) return res.status(400).json({ message: 'Provider already registered' });
 
-        if (query.length > 0) {
-            const exists = await Provider.findOne({ $or: query });
-            if (exists) {
-                return res.status(400).json({ message: 'Provider already registered with this Email or Phone' });
-            }
-        }
-
-        // 3. Create Provider
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        await Provider.create({
-            email: email || undefined, // Sparse index ke liye zaroori
-            phone: phone || undefined, 
+        const newProvider = await Provider.create({
+            name, category, country, state, city,
+            email: email || undefined,
+            phone: phone || undefined,
             password: hashedPassword,
-            name, gender, category, location,
-            profileStatus: 'Pending'
+            profileStatus: 'Incomplete'
         });
 
-        res.status(201).json({ success: true, message: 'Provider Registered. Waiting for Approval.' });
+        const token = generateToken(newProvider._id);
+        newProvider.token = token;
+        await newProvider.save();
 
+        res.status(201).json({ 
+            success: true, 
+            message: 'Registered! Please upload documents.', 
+            token,
+            profileStatus: 'Incomplete' 
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// --- 2. LOGIN PROVIDER ---
-// Endpoint: POST /api/auth/provider/login
+// --- 2. LOGIN PROVIDER (Flow Signals) ---
 const loginProvider = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
-        
-        let query = {};
-        if (email) query = { email };
-        else if (phone) query = { phone };
-        else return res.status(400).json({ message: 'Provide Email or Phone' });
+        let query = email ? { email } : { phone };
 
         const provider = await Provider.findOne(query).select('+password');
         if (!provider || !(await bcrypt.compare(password, provider.password))) {
             return res.status(400).json({ message: 'Invalid Credentials' });
         }
 
-        if (provider.profileStatus === 'Pending') return res.status(403).json({ message: 'Pending Approval' });
-        if (provider.profileStatus === 'Rejected') return res.status(403).json({ message: 'Application Rejected' });
-
-        let token = null;
-
-        // --- DEVELOPMENT MODE: Token Reuse ---
-        if (process.env.NODE_ENV === 'development') {
-            if (provider.token) {
-                try {
-                    jwt.verify(provider.token, process.env.JWT_SECRET);
-                    token = provider.token;
-                    console.log("Dev Mode: Reusing Provider Token");
-                } catch (err) {
-                    token = null;
-                }
-            }
+        // --- PRODUCTION FLOW LOGIC ---
+        
+        if (provider.profileStatus === 'Pending') {
+            return res.status(200).json({ 
+                success: true, fullAccess: false, profileStatus: 'Pending',
+                message: 'Profile under review by Admin.' 
+            });
         }
 
-        // --- NEW TOKEN GENERATION ---
+        if (provider.profileStatus === 'Incomplete') {
+            const token = provider.token || generateToken(provider._id);
+            return res.status(200).json({ 
+                success: true, fullAccess: false, token, profileStatus: 'Incomplete',
+                message: 'Please complete document upload.' 
+            });
+        }
+
+        if (provider.profileStatus === 'Rejected') {
+            const token = provider.token || generateToken(provider._id);
+            return res.status(200).json({ 
+                success: true, fullAccess: false, token, profileStatus: 'Rejected',
+                rejectionReason: provider.rejectionReason,
+                message: `Rejected: ${provider.rejectionReason}. Re-upload documents.` 
+            });
+        }
+
+        // --- APPROVED / SUCCESS ---
+        let token = null;
+        if (process.env.NODE_ENV === 'development' && provider.token) {
+            try {
+                jwt.verify(provider.token, process.env.JWT_SECRET);
+                token = provider.token;
+            } catch (err) { token = null; }
+        }
+
         if (!token) {
-            token = jwt.sign({ id: provider._id, role: 'provider' }, process.env.JWT_SECRET, { expiresIn: '30d' });
+            token = generateToken(provider._id);
             provider.token = token;
             await provider.save();
-            console.log("New Provider Token Generated");
         }
 
-        res.json({ success: true, token, role: 'provider', data: provider });
+        provider.password = undefined;
+        res.json({ success: true, fullAccess: true, token, data: provider });
 
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// --- 3. UPDATE PROVIDER PROFILE (NEW) ---
-// Login ke baad apna Email/Phone add/update karne ke liye
-const updateProviderProfile = async (req, res) => {
+// --- 3. UPLOAD DOCUMENTS (Step 2) ---
+const uploadProviderDocs = async (req, res) => {
     try {
-        const providerId = req.user.id; // Auth Middleware se aayega
-        const { email, phone, name, location, category } = req.body;
+        const providerId = req.user.id;
+        const updates = req.body;
 
-        // Check 1: Agar Email update ho raha hai, to unique check karo
-        if (email) {
-            const emailExists = await Provider.findOne({ email });
-            if (emailExists && emailExists._id.toString() !== providerId) {
-                return res.status(400).json({ message: 'Email already used by another provider' });
+        if (req.files) {
+            // Profile Image
+            if (req.files.profileImage) {
+                updates.profileImage = `/uploads/providers/${req.files.profileImage[0].filename}`;
+            }
+            // Certificates Array
+            if (req.files.certificates) {
+                updates.documents = req.files.certificates.map(f => `/uploads/providers/${f.filename}`);
+                // Docs upload hote hi status PENDING kar do
+                updates.profileStatus = 'Pending';
             }
         }
 
-        // Check 2: Agar Phone update ho raha hai, to unique check karo
-        if (phone) {
-            const phoneExists = await Provider.findOne({ phone });
-            if (phoneExists && phoneExists._id.toString() !== providerId) {
-                return res.status(400).json({ message: 'Phone already used by another provider' });
-            }
-        }
-
-        // Update Fields
-        const updatedProvider = await Provider.findByIdAndUpdate(
-            providerId,
-            {
-                ...(email && { email }),
-                ...(phone && { phone }),
-                ...(name && { name }),
-                ...(location && { location }),
-                ...(category && { category })
-            },
-            { new: true } // Return updated data
-        );
-
-        res.json({ success: true, message: "Profile Updated", data: updatedProvider });
-
+        const updated = await Provider.findByIdAndUpdate(providerId, { $set: updates }, { new: true });
+        res.json({ success: true, message: "Documents submitted successfully", data: updated });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
- 
-module.exports = { registerProvider, loginProvider, updateProviderProfile };
+
+module.exports = { registerProvider, loginProvider, uploadProviderDocs };

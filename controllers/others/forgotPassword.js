@@ -3,44 +3,66 @@ const Doctor = require("../../models/Doctor");
 const Hospital = require("../../models/Hospital");
 const Provider = require("../../models/Provider");
 const User = require("../../models/User");
+const HospitalDoctor = require("../../models/HospitalDoctor");
 const bcrypt = require("bcryptjs");
 const { sendEmailOTP } = require("../../utils/emailService");
+
+// Helper function to find account in any model
+const findAccount = async (email) => {
+    const models = [Admin, Doctor, Hospital, Provider, User, HospitalDoctor];
+    for (let Model of models) {
+        const account = await Model.findOne({ email: email.toLowerCase().trim() });
+        if (account) return account;
+    }
+    return null;
+};
 
 // A. FORGOT PASSWORD - SEND OTP
 // endpoint: POST /api/password/forgot-password
 const forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
+        if (!email) return res.status(400).json({ message: "Email is required" });
 
-        // Sirf User model mein dhoond rahe hain (baaki abhi ke liye disabled)
-        const account = await User.findOne({ email });
+        const account = await findAccount(email);
 
         if (!account) {
-            return res.status(404).json({ message: "User not found with this email" });
+            return res.status(404).json({ message: "Account not found with this email" });
         }
 
-        const otp = Math.floor(1000 + Math.random() * 9000).toString();
+        let otp;
+        let isProduction = process.env.NODE_ENV === 'production';
+
+        if (isProduction) {
+            // Production mein dynamic OTP
+            otp = Math.floor(1000 + Math.random() * 9000).toString();
+        } else {
+            // Development mein static OTP
+            otp = "1111";
+        }
 
         account.resetPasswordOtp = otp;
         account.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 mins
         await account.save();
 
-        const emailSent = await sendEmailOTP(email, otp);
+        console.log(`[${process.env.NODE_ENV}] OTP for ${email} is: ${otp}`);
 
-        if (!emailSent) {
-            // 🔥 BYPASS: Email fail hua toh bhi terminal mein OTP dikhao aur aage badho
-            console.log("-----------------------------------------");
-            console.log(`⚠️  BREVO BLOCKED IP, BUT TESTING OTP IS: ${otp}`);
-            console.log("-----------------------------------------");
-            
-            return res.json({ 
-                success: true, 
-                message: "OTP generated. Check server terminal since email is blocked locally.",
-                testOtp: otp // Postman mein bhi OTP dikhega testing ke liye
-            });
+        // Email sirf production mein bhejo
+        if (isProduction) {
+            const emailSent = await sendEmailOTP(email, otp);
+            if (emailSent) {
+                return res.json({ success: true, message: "OTP sent to your email" });
+            }
         }
 
-        res.json({ success: true, message: "OTP sent to email" });
+        // Dev mode ya email fail hone par bypass response
+        res.json({ 
+            success: true, 
+            message: isProduction 
+                ? "OTP generated (Email failed, check server console)" 
+                : "Development Mode: Use static OTP 1111",
+            testOtp: isProduction ? undefined : otp // Postman mein sirf dev mode me dikhega
+        });
 
     } catch (error) {
         console.error("Forgot Password Error:", error);
@@ -53,33 +75,20 @@ const forgotPassword = async (req, res) => {
 const verifyOtp = async (req, res) => {
     try {
         const { email, otp } = req.body;
+        if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required" });
 
-        let account =
-            await Hospital.findOne({
-                email,
-                resetPasswordOtp: otp,
-                resetPasswordExpires: { $gt: Date.now() }
-            }) ||
-            await User.findOne({
-                email,
-                resetPasswordOtp: otp,
-                resetPasswordExpires: { $gt: Date.now() }
-            }) ||
-            await Admin.findOne({
-                email,
-                resetPasswordOtp: otp,
-                resetPasswordExpires: { $gt: Date.now() }
-            }) ||
-            await Provider.findOne({
-                email,
-                resetPasswordOtp: otp,
-                resetPasswordExpires: { $gt: Date.now() }
-            }) ||
-            await Doctor.findOne({
-                email,
+        // Sabhi models mein check karein
+        const models = [Admin, Doctor, Hospital, Provider, User, HospitalDoctor];
+        let account = null;
+
+        for (let Model of models) {
+            account = await Model.findOne({
+                email: email.toLowerCase().trim(),
                 resetPasswordOtp: otp,
                 resetPasswordExpires: { $gt: Date.now() }
             });
+            if (account) break;
+        }
 
         if (!account) {
             return res.status(400).json({ message: "Invalid or Expired OTP" });
@@ -98,16 +107,11 @@ const resetPassword = async (req, res) => {
     try {
         const { email, newPassword, confirmPassword } = req.body;
 
-        if (newPassword !== confirmPassword) {
-            return res.status(400).json({ message: "Passwords do not match" });
+        if (!newPassword || newPassword !== confirmPassword) {
+            return res.status(400).json({ message: "Passwords do not match or missing" });
         }
 
-        let account =
-            await Hospital.findOne({ email }) ||
-            await User.findOne({ email }) ||
-            await Admin.findOne({ email }) ||
-            await Provider.findOne({ email }) ||
-            await Doctor.findOne({ email });
+        const account = await findAccount(email);
 
         if (!account) {
             return res.status(404).json({ message: "User not found" });
