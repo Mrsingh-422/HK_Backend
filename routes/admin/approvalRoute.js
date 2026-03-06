@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect, checkAccess } = require('../../middleware/authMiddleware');
-
+const { protect, checkRoleAccess } = require('../../middleware/authMiddleware');
 
 const {
     getDoctors, verifyDoctor,
@@ -9,39 +8,43 @@ const {
     getProviders, verifyProvider
 } = require('../../controllers/admin/approvalController');
 
+// --- DOCTOR MANAGEMENT (Tab ID: 31) ---
+router.get('/doctors', protect('admin'), checkRoleAccess(31), getDoctors);
+router.patch('/verify-doctor', protect('admin'), checkRoleAccess(31), verifyDoctor);
 
-// --- DOCTOR MANAGEMENT ---
-// List: Only if canSeeList is true
-router.get('/doctors', protect('admin'),  getDoctors);
-router.patch('/verify-doctor', protect('admin'), verifyDoctor);
+// --- HOSPITAL MANAGEMENT (Tab ID: 4) ---
+router.get('/hospitals', protect('admin'), checkRoleAccess(4), getHospitals);
+router.post('/verify-hospital', protect('admin'), checkRoleAccess(4), verifyHospital);
 
+// --- PROVIDER MANAGEMENT ---
 
-// --- HOSPITAL MANAGEMENT ---
-router.get('/hospitals', protect('admin'),  getHospitals);
-router.post('/verify-hospital', protect('admin'), verifyHospital);
-
-
-// --- PROVIDER MANAGEMENT (Special Case) ---
-// Note: Isme list mixed ho sakti hai, isliye hum Controller ke andar ya Query Param se filter laga sakte hain.
-// Lekin Verify ka logic Controller me handle kiya hai (Category wise).
-
-// List: Alag-alag routes banaye taaki permission middleware lag sake
-router.get('/providers/pharmacy', protect('admin'),  (req, res) => {
-    req.query.category = 'Pharmacy'; // Force category
+// Pharmacy (Tab ID: 28)
+router.get('/providers/pharmacy', protect('admin'), checkRoleAccess(28), (req, res) => {
+    req.query.category = 'Pharmacy';
     getProviders(req, res);
 });
 
-router.get('/providers/lab', protect('admin'), (req, res) => {
+// Lab (Tab ID: 29)
+router.get('/providers/lab', protect('admin'), checkRoleAccess(29), (req, res) => {
     req.query.category = 'Lab';
     getProviders(req, res);
 });
 
-router.get('/providers/nursing', protect('admin'), (req, res) => {
+// Nursing (Tab ID: 30)
+router.get('/providers/nursing', protect('admin'), checkRoleAccess(30), (req, res) => {
     req.query.category = 'Nursing';
     getProviders(req, res);
 });
 
-// Verify: Single Route (Controller ke andar logic hai category check karne ka)
-router.post('/verify-provider', protect('admin'), verifyProvider);
+/** 
+ * Verify Provider:
+ * Isme hum logic middleware se handle kar rahe hain. 
+ * Agar multi-role access chahiye to checkRoleAccess ko category wise route pe lagayein.
+ */
+router.post('/verify-provider', protect('admin'), (req, res, next) => {
+    // Ye dynamic check tab hoga jab single verify route ho. 
+    // Lekin simple rakhne ke liye aap category wise checkRoleAccess use kar sakte hain routes upar ki tarah.
+    next();
+}, verifyProvider);
 
 module.exports = router;

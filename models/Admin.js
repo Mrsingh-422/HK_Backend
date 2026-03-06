@@ -6,24 +6,16 @@ const adminSchema = new mongoose.Schema({
     password: { type: String, required: true, select: false },
     phone: { type: String },
     
-    role: { 
-        type: String, 
-        enum: ['superadmin', 'subadmin'], 
-        default: 'subadmin' 
-    },
-
-    // PHP Flow के हिसाब से Role Assign करना
+    role: { type: String, enum: ['superadmin', 'subadmin'], default: 'subadmin' },
     roleType: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'Role', 
         default: null 
     },
-
-    // Location specific permissions (Separate Key)
     locationAccess: {
-        country: { type: String, default: null }, // e.g., "India"
-        state: { type: String, default: null },   // e.g., "Rajasthan"
-        city: { type: String, default: null }     // e.g., "Jaipur"
+        country: { type: String, default: null },
+        state: { type: String, default: null },
+        city: { type: String, default: null }
     },
     
     token: { 

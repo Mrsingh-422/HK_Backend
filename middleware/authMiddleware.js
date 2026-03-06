@@ -4,6 +4,8 @@ const User = require('../models/User');
 const Doctor = require('../models/Doctor');
 const Hospital = require('../models/Hospital');
 const Provider = require('../models/Provider');
+const HospitalDoctor = require('../models/HospitalDoctor'); // Naya model yahan import kiya
+
 
 // 1. Verify Token & Identify User Type
 const protect = (modelType) => async (req, res, next) => {
@@ -13,17 +15,28 @@ const protect = (modelType) => async (req, res, next) => {
             token = req.headers.authorization.split(' ')[1];
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-            // Model Type ke hisab se user dhundo
             let user;
-            if (modelType === 'admin') user = await Admin.findById(decoded.id);
+            if (modelType === 'admin') {
+                // Admin ke sath uska Role Template (tabIds) bhi load karo
+                user = await Admin.findById(decoded.id).populate('roleType');
+            } 
             else if (modelType === 'user') user = await User.findById(decoded.id);
             else if (modelType === 'doctor') user = await Doctor.findById(decoded.id);
             else if (modelType === 'hospital') user = await Hospital.findById(decoded.id);
             else if (modelType === 'provider') user = await Provider.findById(decoded.id);
+            // --- Naya logic yahan add kiya gaya hai ---
+            else if (modelType === 'hospital-doctor') {
+                user = await HospitalDoctor.findById(decoded.id);
+            }
 
             if (!user) return res.status(401).json({ message: 'User not found' });
 
-            req.user = user; // Attach user to request
+            // Check if account is active (for Admin/Vendors/HospitalDoctors)
+            if (user.isActive === false) {
+                return res.status(403).json({ message: 'Account is deactivated' });
+            }
+
+            req.user = user; 
             next();
         } catch (error) {
             res.status(401).json({ message: 'Not authorized, invalid token' });
@@ -35,38 +48,50 @@ const protect = (modelType) => async (req, res, next) => {
 
 // 2. PHP Style Tab ID Check (SQL IDs like 1, 28, 31...)
 const checkRoleAccess = (tabId) => {
-    return async (req, res, next) => {
+    return (req, res, next) => {
         try {
-            // SuperAdmin को सब एक्सेस है
+            // 1. SuperAdmin ko bypass karein (Hamesha Allow)
             if (req.user.role === 'superadmin') return next();
 
-            // Admin को populate करके 'roleType' निकालें
-            const admin = await Admin.findById(req.user._id).populate('roleType');
-            
-            if (!admin.roleType || !admin.roleType.role_ids.includes(tabId)) {
+            // 2. Check karein Admin ke paas Role assigned hai ya nahi
+            const roleType = req.user.roleType;
+            if (!roleType) {
+                return res.status(403).json({ message: "Access Denied: No Role Assigned to this Admin" });
+            }
+
+            // 3. Check tabId in tabIds array (PHP logic: includes role id)
+            // Note: Humne Model me 'tabIds' use kiya hai array ke liye
+            const hasAccess = roleType.tabIds && roleType.tabIds.includes(Number(tabId));
+
+            if (!hasAccess) {
                 return res.status(403).json({ 
-                    message: `Access Denied: You don't have permission for Tab ID ${tabId}` 
+                    success: false,
+                    message: `Access Denied: You do not have permission for Tab ID ${tabId}` 
                 });
             }
 
             next();
         } catch (error) {
-            res.status(500).json({ message: error.message });
+            res.status(500).json({ message: "Internal Server Error in Role Access" });
         }
     };
 };
 
 // 3. Location Filter Helper (For Controller use)
 const getLocationFilter = (req) => {
+    // SuperAdmin can see everything
     if (req.user.role === 'superadmin') return {};
 
-    const { country, state, city } = req.user.locationAccess;
+    const access = req.user.locationAccess;
+    if (!access) return {}; // Default empty filter if no location restricted
+
     let filter = {};
-    if (country) filter.country = country;
-    if (state) filter.state = state;
-    if (city) filter.city = city;
+    if (access.country) filter.country = access.country;
+    if (access.state) filter.state = access.state;
+    if (access.city) filter.city = access.city;
     
     return filter;
 };
+
 
 module.exports = { protect, checkRoleAccess, getLocationFilter };

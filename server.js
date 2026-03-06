@@ -27,10 +27,11 @@ app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
 app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
 app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
 app.use('/admin/doctor-data', require('./routes/admin/others/doctorDataRoute'));
-// app.use('/admin/roles', require('./routes/subAdmin/RoleRoute')); // Role Management Route
+app.use('/admin/roles', require('./routes/subAdmin/RoleRoute')); // Role Management Route
 app.use('/api/homepage', require('./routes/admin/user/home/HomePageRoute')); // HomePage Content Management Route
 app.use('/api/footer', require('./routes/admin/user/home/footerRoutes')); // Footer Management Route
 app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); // List Management Route (Doctors, Hospitals, etc.)
+app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
 
 // User Routes 
 app.use('/api/auth/user', require('./routes/user/authUser')); 
@@ -41,6 +42,7 @@ app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
 
 // Hospital Routes
 app.use('/api/auth/hospital', require('./routes/hospital/authHospital'));
+app.use('/api/hospital/doctors', require('./routes/hospital/hospitalDoctor/hosDoctorRoute')); // Hospital Doctor Management
 
 // Provider Routes
 app.use('/api/auth/provider', require('./routes/provider/authProvider'));

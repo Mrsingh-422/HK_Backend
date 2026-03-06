@@ -2,88 +2,143 @@ const Doctor = require('../../models/Doctor');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-// --- 1. REGISTER DOCTOR ---
+// --- 1. REGISTER (Step 1 & 2: Basic Info & OTP Verification logic) ---
 const registerDoctor = async (req, res) => {
     try {
-        const { 
-            email, phone, password, 
-            name, address, qualification, speciality, licenseNumber, councilNumber 
-        } = req.body;
+        const { name, email, phone, country, state, city, password } = req.body;
 
-        // 1. Validation: Kam se kam ek cheez honi chahiye
-        if (!email && !phone) return res.status(400).json({ message: 'Email or Phone required' });
+        // Duplicate Check
+        const exists = await Doctor.findOne({ $or: [{ email }, { phone }] });
+        if (exists) return res.status(400).json({ message: 'Email or Phone already exists' });
 
-        // 2. Dynamic Duplicate Check (Jo field bheja hai sirf wahi check karo)
-        let query = [];
-        if (email) query.push({ email });
-        if (phone) query.push({ phone });
-
-        if (query.length > 0) {
-            const exists = await Doctor.findOne({ $or: query });
-            if (exists) {
-                return res.status(400).json({ message: 'Doctor with this Email or Phone already exists' });
-            }
-        }
-
-        // 3. Create Doctor
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        await Doctor.create({
-            email: email || undefined, // Agar khali hai to undefined bhejo (Sparse ke liye zaroori)
-            phone: phone || undefined,
+        const doctor = await Doctor.create({
+            name, email, phone, country, state, city,
             password: hashedPassword,
-            name, address, qualification, speciality, licenseNumber, councilNumber,
-            profileStatus: 'Pending'
+            profileStatus: 'Incomplete', // Initial status
+            isPhoneVerified: false 
         });
 
-        res.status(201).json({ success: true, message: 'Doctor Registered. Waiting for Approval.' });
+        res.status(201).json({ 
+            success: true, 
+            message: 'OTP sent to your phone (Static: 1234)', 
+            doctorId: doctor._id 
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// --- 2. LOGIN DOCTOR ---
+// --- 2. VERIFY OTP (Static) ---
+const verifyOTP = async (req, res) => {
+    try {
+        const { phone, otp } = req.body;
+
+        if (otp !== '1234') return res.status(400).json({ message: 'Invalid OTP' });
+
+        const doctor = await Doctor.findOneAndUpdate(
+            { phone }, 
+            { isPhoneVerified: true }, 
+            { new: true }
+        );
+
+        if (!doctor) return res.status(404).json({ message: 'Doctor not found' });
+
+        res.json({ success: true, message: 'Phone Verified Successfully' });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// --- 3. UPLOAD DOCUMENTS (Status change to Pending) ---
+// --- 1. UPLOAD DOCUMENTS (Figma: Upload Screen) ---
+// --- 2. UPLOAD DOCUMENTS (Update for Array Structure) ---
+// --- UPLOAD DOCUMENTS (Step 3: Professional Info & Docs) ---
+const uploadDocuments = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { 
+            qualification, 
+            councilNumber, 
+            councilName, // 👈 req.body se extract kiya
+            licenseNumber, 
+            speciality 
+        } = req.body;
+
+        const files = req.files;
+
+        let updateData = {
+            qualification,
+            councilNumber,
+            councilName, // 👈 updateData mein add kiya
+            licenseNumber,
+            speciality,
+            profileStatus: 'Pending' // Submission ke baad Pending status
+        };
+
+        // Profile Image handle karein
+        if (files && files.profileImage) {
+            updateData.profileImage = files.profileImage[0].path;
+        }
+
+        // Certificates (Documents) array handle karein
+        if (files && files.certificates) {
+            updateData.documents = files.certificates.map(file => file.path);
+        }
+
+        const updatedDoctor = await Doctor.findByIdAndUpdate(
+            doctorId, 
+            updateData, 
+            { new: true }
+        );
+
+        res.json({ 
+            success: true, 
+            message: 'Documents and Professional details uploaded successfully. Waiting for admin approval.', 
+            data: updatedDoctor 
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+
+
+// --- 4. LOGIN ---
+// --- LOGIN DOCTOR (Updated with Token Reuse Logic) ---
+// --- 1. LOGIN DOCTOR (With Token Save Logic) ---
 const loginDoctor = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
-        
-        let query = {};
-        if (email) query = { email };
-        else if (phone) query = { phone };
-        else return res.status(400).json({ message: 'Provide Email or Phone' });
+        let query = email ? { email } : { phone };
+        if (!email && !phone) return res.status(400).json({ message: 'Provide Email or Phone' });
 
         const doctor = await Doctor.findOne(query).select('+password');
         if (!doctor || !(await bcrypt.compare(password, doctor.password))) {
             return res.status(400).json({ message: 'Invalid Credentials' });
         }
 
-        if (doctor.profileStatus === 'Pending') return res.status(403).json({ message: 'Pending Approval' });
-        if (doctor.profileStatus === 'Rejected') return res.status(403).json({ message: 'Application Rejected' });
-
         let token = null;
 
-        // --- DEVELOPMENT MODE: Token Reuse ---
-        if (process.env.NODE_ENV === 'development') {
-            if (doctor.token) {
-                try {
-                    jwt.verify(doctor.token, process.env.JWT_SECRET);
-                    token = doctor.token;
-                    console.log("Dev Mode: Reusing Doctor Token");
-                } catch (err) {
-                    token = null;
-                }
-            }
+        // --- DEVELOPMENT MODE: Reuse Token ---
+        if (process.env.NODE_ENV === 'development' && doctor.token) {
+            try {
+                jwt.verify(doctor.token, process.env.JWT_SECRET);
+                token = doctor.token;
+            } catch (err) { token = null; }
         }
 
-        // --- NEW TOKEN GENERATION ---
+        // --- NEW TOKEN ---
         if (!token) {
-            token = jwt.sign({ id: doctor._id, role: 'doctor' }, process.env.JWT_SECRET, { expiresIn: '30d' });
-            doctor.token = token;
+            token = generateToken(doctor._id);
+            doctor.token = token; // DB mein save ho jayega
             await doctor.save();
-            console.log("New Doctor Token Generated");
         }
-        doctor.password = undefined; // Password ko response se hata do
-        
+
+        doctor.password = undefined;
         res.json({ success: true, token, role: 'doctor', data: doctor });
 
     } catch (error) {
@@ -91,45 +146,9 @@ const loginDoctor = async (req, res) => {
     }
 };
 
-// --- 3. UPDATE PROFILE (Isse wo baad mein Phone add kar payega) ---
-const updateDoctorProfile = async (req, res) => {
-    try {
-        const doctorId = req.user.id; // Middleware se aayega
-        const { email, phone, address, qualification } = req.body;
 
-        // Agar Email update kar raha hai, to check karo kisi aur ka to nahi
-        if (email) {
-            const emailExists = await Doctor.findOne({ email });
-            if (emailExists && emailExists._id.toString() !== doctorId) {
-                return res.status(400).json({ message: 'Email already used by another doctor' });
-            }
-        }
-
-        // Agar Phone update kar raha hai
-        if (phone) {
-            const phoneExists = await Doctor.findOne({ phone });
-            if (phoneExists && phoneExists._id.toString() !== doctorId) {
-                return res.status(400).json({ message: 'Phone already used by another doctor' });
-            }
-        }
-
-        // Update Fields
-        const updatedDoctor = await Doctor.findByIdAndUpdate(
-            doctorId,
-            {
-                ...(email && { email }),
-                ...(phone && { phone }),
-                ...(address && { address }),
-                ...(qualification && { qualification })
-            },
-            { new: true } // Return new updated data
-        );
-
-        res.json({ success: true, message: "Profile Updated", data: updatedDoctor });
-
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+const generateToken = (id) => {
+    return jwt.sign({ id, role: 'doctor' }, process.env.JWT_SECRET, { expiresIn: '30d' });
 };
 
-module.exports = { registerDoctor, loginDoctor, updateDoctorProfile };
+module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor };

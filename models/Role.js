@@ -1,8 +1,9 @@
+// models/Role.js
 const mongoose = require('mongoose');
 
 const roleSchema = new mongoose.Schema({
-    name: { type: String, required: true, unique: true }, // उदा: "Pharmacy Manager"
-    role_ids: [{ type: Number }], // SQL की ID (1, 2, 28, 30...)
+    name: { type: String, required: true, unique: true }, // e.g., "Manager", "Accountant"
+    tabIds: [{ type: Number }], // Array of tabIds e.g., [1, 2, 28, 31]
     description: { type: String }
 }, { timestamps: true });
 

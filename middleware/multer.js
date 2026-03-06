@@ -84,7 +84,79 @@ const contentUploads = uploadFrontend.array('images', 10);
 // ==========================================
 // EXPORTS
 // ==========================================
+
+// ==========================================
+// 3. DOCTOR DOCUMENT CONFIGURATION (Add This)
+// ==========================================
+const doctorDir = 'public/uploads/doctors';
+if (!fs.existsSync(doctorDir)){
+    fs.mkdirSync(doctorDir, { recursive: true });
+}
+
+const doctorStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, doctorDir);
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'doc-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const uploadDoctor = multer({ 
+    storage: doctorStorage,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
+
+// Match these names to what you used in your Controller (uploadDocuments)
+const doctorDocUploads = uploadDoctor.fields([
+    { name: 'certificates', maxCount: 10 },
+    { name: 'qualificationDoc', maxCount: 1 },
+    { name: 'licenseDoc', maxCount: 1 },
+    { name: 'photoId', maxCount: 1 }
+]);
+
+
+// ==========================================
+// 3. EXCEL FILE UPLOAD CONFIGURATION
+// ==========================================
+const excelDir = 'public/uploads/excel';
+if (!fs.existsSync(excelDir)){
+    fs.mkdirSync(excelDir, { recursive: true });
+}
+
+const excelStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, excelDir);
+    },
+    filename: function (req, file, cb) {
+        cb(null, Date.now() + '-' + file.originalname);
+    }
+});
+
+const excelFilter = (req, file, cb) => {
+    // Check for .xlsx or .csv
+    if (
+        file.mimetype.includes('excel') || 
+        file.mimetype.includes('spreadsheetml') || 
+        file.mimetype === 'text/csv' ||
+        file.originalname.match(/\.(xlsx|xls|csv)$/)
+    ) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only Excel (.xlsx, .xls) or CSV files are allowed!'), false);
+    }
+};
+
+const uploadExcel = multer({ 
+    storage: excelStorage,
+    fileFilter: excelFilter
+});
+
+
 module.exports = { 
     hospitalUploads, // Purana wala
-    contentUploads   // Naya wala (About Us / Ambulance ke liye)
+    contentUploads,  // Naya wala (About Us / Ambulance ke liye)
+    doctorDocUploads, // DOCTOR DOCUMENTS
+    uploadExcel // EXCEL FILE UPLOAD
 };
