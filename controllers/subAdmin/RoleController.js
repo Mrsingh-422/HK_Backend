@@ -4,6 +4,7 @@ const Tab = require('../../models/Tab');
 const Admin = require('../../models/Admin');
 
 // 1. Saare available Tabs (Permissions) dikhane ke liye - UI me checkbox banane ke kaam aayega
+// endpoint GET /admin/roles/tabs
 const getAllTabs = async (req, res) => {
     try {
         const tabs = await Tab.find().sort({ tabId: 1 });
@@ -14,6 +15,7 @@ const getAllTabs = async (req, res) => {
 };
 
 // 2. Naya Role Template banana (PHP: roleTabs insert)
+// endpoint POST /admin/roles/create
 const createRoleTemplate = async (req, res) => {
     try {
         const { name, tabIds, description } = req.body; // tabIds: [1, 2, 28]
@@ -29,6 +31,7 @@ const createRoleTemplate = async (req, res) => {
 };
 
 // 3. Admin ko Role Assign karna
+// endpoint POST /admin/roles/assign
 const assignRoleToAdmin = async (req, res) => {
     try {
         const { adminId, roleId } = req.body;
@@ -45,6 +48,8 @@ const assignRoleToAdmin = async (req, res) => {
     }
 };
 
+// 4. Naya Tab (Permission) add karna - Jaise ki Hospital Management ka tabId 4 hai, agar future me koi naya module add karna ho to uska tabId yahan add karenge
+// endpoint POST /admin/roles/add-new-tab
 const addNewTab = async (req, res) => {
     try {
         const { tabId, name, parentId, subParentId } = req.body;
@@ -61,6 +66,7 @@ const addNewTab = async (req, res) => {
 
 
 // 5. Toggle Tab Status (Global Switch)
+// endpoint PUT /admin/roles/toggle-tab-status
 const toggleTabStatus = async (req, res) => {
     try {
         const { tabId, isActive } = req.body; // e.g., tabId: 28, isActive: false
@@ -83,5 +89,24 @@ const toggleTabStatus = async (req, res) => {
     }
 };
 
+// controllers/subAdmin/RoleController.js mein ye add karein
+// 6. Role Template ke permissions update karna (Tab IDs update karna)
+// endpoint PUT /admin/roles/update-role-permissions
+const updateRolePermissions = async (req, res) => {
+    try {
+        const { roleId, tabIds } = req.body; // e.g., roleId: "ID_OF_ROLE", tabIds: [1, 2, 4, 28]
 
-module.exports = { getAllTabs, createRoleTemplate, assignRoleToAdmin, addNewTab, toggleTabStatus };
+        const updatedRole = await Role.findByIdAndUpdate(
+            roleId,
+            { tabIds: tabIds }, // Yahan [4] hona zaroori hai Hospital access ke liye
+            { new: true }
+        );
+
+        res.json({ success: true, message: "Permissions updated", data: updatedRole });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+module.exports = { getAllTabs, createRoleTemplate, assignRoleToAdmin, addNewTab, toggleTabStatus, updateRolePermissions };

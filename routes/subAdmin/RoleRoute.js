@@ -10,21 +10,13 @@ const {
     createRoleTemplate, 
     assignRoleToAdmin,  
     addNewTab,
-    toggleTabStatus
+    toggleTabStatus, updateRolePermissions
 } = require('../../controllers/subAdmin/RoleController');
 
-/**
- * @route   GET /api/admin/roles/tabs
- * @desc    Get all available permissions/tabs (PHP role table logic)
- * @access  Protected (Admin Only)
- */
+// Base route: /admin/roles
+
 router.get('/tabs', protect('admin'), getAllTabs);
 
-/**
- * @route   POST /api/admin/roles/create
- * @desc    Create a new Role Template (e.g., "Manager" with tabIds [1,2,28])
- * @access  Protected (SuperAdmin Only)
- */
 router.post('/create', protect('admin'), (req, res, next) => {
     if (req.user.role !== 'superadmin') {
         return res.status(403).json({ message: 'Only SuperAdmin can create role templates' });
@@ -32,11 +24,6 @@ router.post('/create', protect('admin'), (req, res, next) => {
     next();
 }, createRoleTemplate);
 
-/**
- * @route   POST /api/admin/roles/assign
- * @desc    Assign a Role Template to an Admin user
- * @access  Protected (SuperAdmin Only)
- */
 router.post('/assign', protect('admin'), (req, res, next) => {
     if (req.user.role !== 'superadmin') {
         return res.status(403).json({ message: 'Only SuperAdmin can assign roles to other admins' });
@@ -54,5 +41,10 @@ router.put('/toggle-tab-status', protect('admin'), (req, res, next) => {
     if (req.user.role !== 'superadmin') return res.status(403).json({ message: "Unauthorized" });
     next();
 }, toggleTabStatus);
+
+router.put('/update-role-permissions', protect('admin'), (req, res, next) => {
+    if (req.user.role !== 'superadmin') return res.status(403).json({ message: "Unauthorized" });
+    next();
+}, updateRolePermissions);
 
 module.exports = router;
