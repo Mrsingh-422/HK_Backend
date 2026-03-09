@@ -9,7 +9,8 @@ const {
     getAllTabs, 
     createRoleTemplate, 
     assignRoleToAdmin,  
-    addNewTab
+    addNewTab,
+    toggleTabStatus
 } = require('../../controllers/subAdmin/RoleController');
 
 /**
@@ -48,5 +49,10 @@ router.post('/add-new-tab', protect('admin'), (req, res, next) => {
     if (req.user.role !== 'superadmin') return res.status(403).json({ message: "Unauthorized" });
     next();
 }, addNewTab);
+
+router.put('/toggle-tab-status', protect('admin'), (req, res, next) => {
+    if (req.user.role !== 'superadmin') return res.status(403).json({ message: "Unauthorized" });
+    next();
+}, toggleTabStatus);
 
 module.exports = router;

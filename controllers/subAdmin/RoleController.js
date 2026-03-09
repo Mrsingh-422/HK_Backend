@@ -58,4 +58,30 @@ const addNewTab = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-module.exports = { getAllTabs, createRoleTemplate, assignRoleToAdmin, addNewTab };
+
+
+// 5. Toggle Tab Status (Global Switch)
+const toggleTabStatus = async (req, res) => {
+    try {
+        const { tabId, isActive } = req.body; // e.g., tabId: 28, isActive: false
+
+        const updatedTab = await Tab.findOneAndUpdate(
+            { tabId: Number(tabId) },
+            { isActive: isActive },
+            { new: true }
+        );
+
+        if (!updatedTab) return res.status(404).json({ message: "Tab not found" });
+
+        res.json({ 
+            success: true, 
+            message: `Tab ${updatedTab.name} is now ${isActive ? 'Active' : 'Inactive'}`,
+            data: updatedTab 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+module.exports = { getAllTabs, createRoleTemplate, assignRoleToAdmin, addNewTab, toggleTabStatus };

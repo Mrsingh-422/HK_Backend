@@ -5,6 +5,7 @@ const Doctor = require('../models/Doctor');
 const Hospital = require('../models/Hospital');
 const Provider = require('../models/Provider');
 const HospitalDoctor = require('../models/HospitalDoctor'); // Naya model yahan import kiya
+const Tab = require('../models/Tab'); // Tab model for global tab status check
 
 
 // 1. Verify Token & Identify User Type
@@ -48,32 +49,38 @@ const protect = (modelType) => async (req, res, next) => {
 
 // 2. PHP Style Tab ID Check (SQL IDs like 1, 28, 31...)
 const checkRoleAccess = (tabId) => {
-    return (req, res, next) => {
+    return async (req, res, next) => {
         try {
-            // 1. SuperAdmin ko bypass karein (Hamesha Allow)
             if (req.user.role === 'superadmin') return next();
 
-            // 2. Check karein Admin ke paas Role assigned hai ya nahi
+            // 1. Global Check
+            const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
+            if (!globalTab) return res.status(403).json({ message: "...disabled by Admin" });
+
+            // 2. Role Check
             const roleType = req.user.roleType;
-            if (!roleType) {
-                return res.status(403).json({ message: "Access Denied: No Role Assigned to this Admin" });
+            
+            // --- DEBUG LOG START ---
+            console.log("Admin Name:", req.user.name);
+            console.log("Checking for TabId:", tabId);
+            console.log("Admin's Assigned Permissions (tabIds):", roleType ? roleType.tabIds : "No Role Found");
+            // --- DEBUG LOG END ---
+
+            if (!roleType || !roleType.tabIds) {
+                return res.status(403).json({ message: "Access Denied: No Role Assigned" });
             }
 
-            // 3. Check tabId in tabIds array (PHP logic: includes role id)
-            // Note: Humne Model me 'tabIds' use kiya hai array ke liye
-            const hasAccess = roleType.tabIds && roleType.tabIds.includes(Number(tabId));
-
+            // includes() check
+            const hasAccess = roleType.tabIds.includes(Number(tabId));
+            
             if (!hasAccess) {
                 return res.status(403).json({ 
-                    success: false,
-                    message: `Access Denied: You do not have permission for Tab ID ${tabId}` 
+                    success: false, 
+                    message: "Access Denied: You do not have permission for this module." 
                 });
             }
-
             next();
-        } catch (error) {
-            res.status(500).json({ message: "Internal Server Error in Role Access" });
-        }
+        } catch (error) { res.status(500).json({ message: error.message }); }
     };
 };
 

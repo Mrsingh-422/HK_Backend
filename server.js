@@ -47,6 +47,9 @@ app.use('/api/hospital/doctors', require('./routes/hospital/hospitalDoctor/hosDo
 // Provider Routes
 app.use('/api/auth/provider', require('./routes/provider/authProvider'));
 
+// Ambulance Routes
+app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulance'));
+
 // others Routes or public routes
 app.use('/api/public', require('./routes/others/locationRoutes'));
 app.use('/api/password', require('./routes/others/forgotPassword'));

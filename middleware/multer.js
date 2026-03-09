@@ -2,25 +2,15 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// ==========================================
-// 1. HOSPITAL UPLOAD CONFIGURATION (Existing)
-// ==========================================
-const hospitalDir = 'public/uploads/hospitals';
-if (!fs.existsSync(hospitalDir)){
-    fs.mkdirSync(hospitalDir, { recursive: true });
-}
+// Helper to create directory if not exists
+const ensureDir = (dir) => {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+};
 
-const hospitalStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, hospitalDir);
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'hospital-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
-
-const hospitalFilter = (req, file, cb) => {
+// ==========================================
+// 1. FILTERS (Common for Doctors/Providers)
+// ==========================================
+const docFileFilter = (req, file, cb) => {
     if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
         cb(null, true);
     } else {
@@ -28,165 +18,100 @@ const hospitalFilter = (req, file, cb) => {
     }
 };
 
-const uploadHospital = multer({ 
-    storage: hospitalStorage,
-    fileFilter: hospitalFilter,
+// ==========================================
+// 2. HOSPITAL CONFIGURATION
+// ==========================================
+const hospitalDir = 'public/uploads/hospitals';
+ensureDir(hospitalDir);
+const hospitalUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, hospitalDir),
+        filename: (req, file, cb) => cb(null, `hospital-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
     limits: { fileSize: 5 * 1024 * 1024 }
 });
 
-const hospitalUploads = uploadHospital.fields([
+const hospitalUploads = hospitalUpload.fields([
     { name: 'hospitalImage', maxCount: 5 },
     { name: 'licenseDocument', maxCount: 5 },
     { name: 'otherDocuments', maxCount: 10 }
 ]);
 
-
 // ==========================================
-// 2. FRONTEND CONTENT CONFIGURATION (New)
-// ==========================================
-// Folder: public/uploads/homepage
-const frontendDir = 'public/uploads/homepage';
-if (!fs.existsSync(frontendDir)){
-    fs.mkdirSync(frontendDir, { recursive: true });
-}
-
-const frontendStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, frontendDir); // Files yahan save hongi
-    },
-    filename: function (req, file, cb) {
-        // Example: content-170899... .jpg
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'content-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
-
-// Filter: Only Images (No PDF needed for sliders/banners)
-const frontendFilter = (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-        cb(null, true);
-    } else {
-        cb(new Error('Only image files are allowed for frontend content!'), false);
-    }
-};
-
-const uploadFrontend = multer({ 
-    storage: frontendStorage,
-    fileFilter: frontendFilter,
-    limits: { fileSize: 10 * 1024 * 1024 } // Limit: 10MB (High quality images ke liye)
-});
-
-// Export Logic for Multiple Images (Array)
-// Key 'images' matches your React FormData key: data.append("images", image);
-const contentUploads = uploadFrontend.array('images', 10); 
-
-
-// ==========================================
-// EXPORTS
-// ==========================================
-
-// ==========================================
-// 3. DOCTOR DOCUMENT CONFIGURATION (Add This)
+// 3. DOCTOR CONFIGURATION (Fixed for Hospital Doctors)
 // ==========================================
 const doctorDir = 'public/uploads/doctors';
-if (!fs.existsSync(doctorDir)){
-    fs.mkdirSync(doctorDir, { recursive: true });
-}
-
-const doctorStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, doctorDir);
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'doc-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
-
+ensureDir(doctorDir);
 const uploadDoctor = multer({ 
-    storage: doctorStorage,
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, doctorDir),
+        filename: (req, file, cb) => cb(null, `doc-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
 });
 
-// Match these names to what you used in your Controller (uploadDocuments)
+// Matches keys used in both Independent and Hospital-Doctor flows
 const doctorDocUploads = uploadDoctor.fields([
-    { name: 'certificates', maxCount: 10 },
+    { name: 'profileImage', maxCount: 1 },  // circle avatar
+    { name: 'certificates', maxCount: 10 }, // multiple certificates
     { name: 'qualificationDoc', maxCount: 1 },
     { name: 'licenseDoc', maxCount: 1 },
     { name: 'photoId', maxCount: 1 }
 ]);
 
-
 // ==========================================
-// 3. EXCEL FILE UPLOAD CONFIGURATION
-// ==========================================
-const excelDir = 'public/uploads/excel';
-if (!fs.existsSync(excelDir)){
-    fs.mkdirSync(excelDir, { recursive: true });
-}
-
-const excelStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, excelDir);
-    },
-    filename: function (req, file, cb) {
-        cb(null, Date.now() + '-' + file.originalname);
-    }
-});
-
-const excelFilter = (req, file, cb) => {
-    // Check for .xlsx or .csv
-    if (
-        file.mimetype.includes('excel') || 
-        file.mimetype.includes('spreadsheetml') || 
-        file.mimetype === 'text/csv' ||
-        file.originalname.match(/\.(xlsx|xls|csv)$/)
-    ) {
-        cb(null, true);
-    } else {
-        cb(new Error('Only Excel (.xlsx, .xls) or CSV files are allowed!'), false);
-    }
-};
-
-const uploadExcel = multer({ 
-    storage: excelStorage,
-    fileFilter: excelFilter
-});
-
-
-// ==========================================
-// 4. PROVIDER DOCUMENT CONFIGURATION (Added)
+// 4. PROVIDER CONFIGURATION
 // ==========================================
 const providerDir = 'public/uploads/providers';
-if (!fs.existsSync(providerDir)){
-    fs.mkdirSync(providerDir, { recursive: true });
-}
-
-const providerStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, providerDir);
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'prov-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
-
-const uploadProvider = multer({ 
-    storage: providerStorage,
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
-});
-
-// Keys for Postman: profileImage (1), certificates (up to 10)
-const providerDocUploads = uploadProvider.fields([
+ensureDir(providerDir);
+const providerDocUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, providerDir),
+        filename: (req, file, cb) => cb(null, `prov-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter
+}).fields([
     { name: 'profileImage', maxCount: 1 },
     { name: 'certificates', maxCount: 10 }
 ]);
 
+// ==========================================
+// 5. AMBULANCE CONFIGURATION
+// ==========================================
+const ambulanceDir = 'public/uploads/ambulances';
+ensureDir(ambulanceDir);
+const ambulanceDocUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, ambulanceDir),
+        filename: (req, file, cb) => cb(null, `amb-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter
+}).fields([
+    { name: 'drivingLicenseFile', maxCount: 1 },
+    { name: 'rcFile', maxCount: 1 },
+    { name: 'insuranceFile', maxCount: 1 },
+    { name: 'fitnessCertificate', maxCount: 1 },
+    { name: 'ambulancePermit', maxCount: 1 }
+]);
+
+// ==========================================
+// 6. EXCEL & FRONTEND CONFIGURATION
+// ==========================================
+const excelDir = 'public/uploads/excel';
+const frontendDir = 'public/uploads/homepage';
+ensureDir(excelDir);
+ensureDir(frontendDir);
+
+const uploadExcel = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, excelDir), filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`) }) });
+const contentUploads = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, frontendDir), filename: (req, file, cb) => cb(null, `content-${Date.now()}${path.extname(file.originalname)}`) }) }).array('images', 10);
+
 module.exports = { 
-    hospitalUploads, // Purana wala
-    contentUploads,  // Naya wala (About Us / Ambulance ke liye)
-    doctorDocUploads, // DOCTOR DOCUMENTS
-    providerDocUploads, // PROVIDER DOCUMENTS
-    uploadExcel // EXCEL FILE UPLOAD
+    hospitalUploads,
+    contentUploads,
+    doctorDocUploads,
+    providerDocUploads,
+    ambulanceDocUploads,
+    uploadExcel
 };

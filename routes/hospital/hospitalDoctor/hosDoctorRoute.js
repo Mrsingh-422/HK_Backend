@@ -10,6 +10,8 @@ const {
     deleteHospitalDoctor 
 } = require('../../../controllers/hospital/hospitalDoctor/hosDoctor');
 
+// Base route: /api/hospital/doctors
+
 // --- PUBLIC AUTH ROUTE ---
 router.post('/login', loginHospitalDoctor);
 
