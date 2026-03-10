@@ -15,6 +15,7 @@ const generateToken = (id, role) => {
 };
 
 // --- 1. REGISTER PROVIDER (Step 1) ---
+// Endpoint: POST /api/auth/provider/register
 const registerProvider = async (req, res) => {
     try {
         const { name, email, phone, password, category, country, state, city } = req.body;
@@ -50,6 +51,7 @@ const registerProvider = async (req, res) => {
 };
 
 // --- 2. LOGIN PROVIDER (Flow Signals) ---
+// Endpoint: POST /api/auth/provider/login
 const loginProvider = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
@@ -110,6 +112,7 @@ const loginProvider = async (req, res) => {
 };
 
 // --- 3. UPLOAD DOCUMENTS (Step 2) ---
+// Endpoint: POST /api/auth/provider/upload-docs
 const uploadProviderDocs = async (req, res) => {
     try {
         const providerId = req.user.id;

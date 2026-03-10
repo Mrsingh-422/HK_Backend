@@ -16,6 +16,7 @@ const generateToken = (id, role) => {
 
 
 // --- 1. REGISTER HOSPITAL ---
+// Endpoint: POST /api/auth/hospital/register
 const registerHospital = async (req, res) => {
     try {
         const { name, email, phone, country, state, city, password, type } = req.body;
@@ -52,6 +53,7 @@ const registerHospital = async (req, res) => {
 };
 
 // --- 2. LOGIN HOSPITAL (Flow-Based Logic) ---
+// Endpoint: POST /api/auth/hospital/login
 const loginHospital = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
@@ -131,6 +133,7 @@ const loginHospital = async (req, res) => {
 };
 
 // --- 3. UPDATE DOCUMENTS & CHANGE STATUS ---
+// Endpoint: PUT /api/auth/hospital/update-profile
 const updateHospitalProfile = async (req, res) => {
     try {
         const hospitalId = req.user.id;

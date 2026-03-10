@@ -6,8 +6,8 @@ const { uploadMedicinesExcel, getMedicinesList, createMedicine } = require('../.
 
 // 1. Upload Excel File (Admin only)
 // Note: 'file' yahan form-data ki key ka naam hai
-router.post('/upload', protect('admin'), uploadExcel.single('file'), uploadMedicinesExcel);
-router.post('/create', protect('admin'), createMedicine);
+router.post('/upload', protect('admin'), checkRoleAccess(28), uploadExcel.single('file'), uploadMedicinesExcel);
+router.post('/create', protect('admin'), checkRoleAccess(28), createMedicine);
 
 
 // 2. Get Medicines List (Admin & App Users can access)

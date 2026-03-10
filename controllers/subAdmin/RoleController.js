@@ -65,7 +65,7 @@ const addNewTab = async (req, res) => {
 };
 
 
-// 5. Toggle Tab Status (Global Switch)
+// 5. Toggle Tab Status (Global Switch) for enable/disable permission without deleting it from DB
 // endpoint PUT /admin/roles/toggle-tab-status
 const toggleTabStatus = async (req, res) => {
     try {

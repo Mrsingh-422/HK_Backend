@@ -43,6 +43,7 @@ app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
 // Hospital Routes
 app.use('/api/auth/hospital', require('./routes/hospital/authHospital'));
 app.use('/api/hospital/doctors', require('./routes/hospital/hospitalDoctor/hosDoctorRoute')); // Hospital Doctor Management
+app.use('/api/hospital/ambulance', require('./routes/hospital/hospitalAmbulance/hosAmbulanceRoute')); // Hospital Ambulance Management
 
 // Provider Routes
 app.use('/api/auth/provider', require('./routes/provider/authProvider'));
