@@ -35,6 +35,8 @@ app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUpl
 
 // User Routes 
 app.use('/api/auth/user', require('./routes/user/authUser')); 
+app.use('/user/doctor/pills', require('./routes/user/Doctor/PillsRoute')); // Doctor's Prescription Management
+app.use('/user/health-records', require('./routes/user/Doctor/HealthRoute')); // Health Records Management
  
 
 // Doctor Routes

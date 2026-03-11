@@ -222,16 +222,68 @@ const resetPassword = async (req, res) => {
 const updateUserProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { phone, email, insuranceId, country, state, city } = req.body;
+        
+        // Req.body se saari fields destructure kar lijiye
+        const { 
+            name, phone, email, country, state, city, insuranceId, 
+            addressData, familyData, emergencyData 
+        } = req.body;
 
-        const updatedUser = await User.findByIdAndUpdate(
-            userId,
-            { phone, email, insuranceId, country, state, city },
-            { new: true }
-        );
-        res.json({ success: true, message: "Profile Updated", user: updatedUser });
+        // 1. User find karein
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        // 2. Basic fields ko update karein (sirf unhi ko update karein jo req.body mein aaye hain)
+        const updateFields = { name, phone, email, country, state, city, insuranceId };
+        
+        Object.keys(updateFields).forEach(key => {
+            if (updateFields[key] !== undefined) {
+                user[key] = updateFields[key]; // Field assign kar rahe hain
+            }
+        });
+
+        // 3. Array Fields mein data Push karein
+        // Handle Address
+        if (addressData) {
+            // Agar ek sath multiple address aaye hain (array), toh spread operator se push karein
+            if (Array.isArray(addressData)) {
+                user.userAddress.push(...addressData);
+            } else {
+                // Agar single address object aaya hai
+                user.userAddress.push(addressData);
+            }
+        }
+
+        // Handle Family Data
+        if (familyData) {
+            if (Array.isArray(familyData)) {
+                user.familyMember.push(...familyData);
+            } else {
+                user.familyMember.push(familyData);
+            }
+        }
+
+        // Handle Emergency Data
+        if (emergencyData) {
+            if (Array.isArray(emergencyData)) {
+                user.emergencyContact.push(...emergencyData);
+            } else {
+                user.emergencyContact.push(emergencyData);
+            }
+        }
+
+        // 4. Data database me save karein
+        await user.save();
+
+        res.json({ success: true, message: "Profile Updated Successfully", user });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        // Agar Email ya Phone number pehle se database me exist karta ho (Unique Duplicate Key Error)
+        if (error.code === 11000) {
+            return res.status(400).json({ success: false, message: "Email or Phone already exists." });
+        }
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
