@@ -56,7 +56,28 @@ const doctorSchema = new mongoose.Schema({
         enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
         default: 'Incomplete' 
     },
-    rejectionReason: { type: String, default: null }
+    rejectionReason: { type: String, default: null },
+
+    // --- New Fields from Website/Figma Screenshots ---
+    experienceYears: { type: Number, default: 0 },
+    languages: [{ type: String }], // Speaks: English, Hindi, etc.
+    
+    // Fees for different consultation types
+    fees: {
+        online: { type: Number, default: 0 }, // Consult Online
+        clinic: { type: Number, default: 0 }  // Visit Clinic
+    },
+
+    // Rating (Dynamic calculations ke liye)
+    averageRating: { type: Number, default: 0 },
+    totalReviews: { type: Number, default: 0 },
+
+    // Slots (Simple representation)
+    availableDays: [{ type: String }], // ['Mon', 'Tue', 'Wed']
+    workingHours: {
+        start: { type: String }, // "09:00 AM"
+        end: { type: String }    // "05:00 PM"
+    }
 
 }, { timestamps: true });
 

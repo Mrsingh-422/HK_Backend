@@ -107,10 +107,24 @@ ensureDir(frontendDir);
 const uploadExcel = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, excelDir), filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`) }) });
 const contentUploads = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, frontendDir), filename: (req, file, cb) => cb(null, `content-${Date.now()}${path.extname(file.originalname)}`) }) }).array('images', 10);
 
+// ==========================================
+// 7. USER REPORTS (Figma: Patient Details Upload Button)
+// ==========================================
+const userReportDir = 'public/uploads/user_reports';
+if (!fs.existsSync(userReportDir)) fs.mkdirSync(userReportDir, { recursive: true });
+
+const userReportUploads = multer({ 
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, userReportDir),
+        filename: (req, file, cb) => cb(null, `report-${Date.now()}${path.extname(file.originalname)}`)
+    })
+}).single('medicalReport'); // Figma: Patient Details upload button
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
     doctorDocUploads,
+    userReportUploads,
     providerDocUploads,
     ambulanceDocUploads,
     uploadExcel

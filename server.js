@@ -37,14 +37,18 @@ app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUpl
 app.use('/api/auth/user', require('./routes/user/authUser')); 
 app.use('/user/doctor/pills', require('./routes/user/Doctor/PillsRoute')); // Doctor's Prescription Management
 app.use('/user/health-records', require('./routes/user/Doctor/HealthRoute')); // Health Records Management
+app.use('/user/doctors', require('./routes/user/Doctor/BookAppointment')); // Doctor Appointment Booking
+app.use('/user/review', require('./routes/user/Doctor/ReviewDoctorRoute')); // Doctor Review Route
  
 
 // Doctor Routes
 app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
+app.use('/doctor/appointments', require('./routes/doctor/AppointmentRoute')); // Doctor Appointments Route
 
 // Hospital Routes
 app.use('/api/auth/hospital', require('./routes/hospital/authHospital'));
 app.use('/api/hospital/doctors', require('./routes/hospital/hospitalDoctor/hosDoctorRoute')); // Hospital Doctor Management
+app.use('/hospital/doctor/appointments', require('./routes/hospital/hospitalDoctor/hosAppointment')); // Hospital Doctor Appointments Route
 app.use('/api/hospital/ambulance', require('./routes/hospital/hospitalAmbulance/hosAmbulanceRoute')); // Hospital Ambulance Management
 
 // Provider Routes
