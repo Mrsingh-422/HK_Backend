@@ -1,6 +1,5 @@
 const HealthData = require('../../../models/HealthData');
-const moment = require('moment'); // Time handling ke liye useful hai
-
+const moment = require('moment');
 
 // 1. ADD HEALTH METRIC
 // endpoint POST /user/health-records/add-metric
@@ -8,70 +7,113 @@ const addHealthMetric = async (req, res) => {
     try {
         const { type, value, notes, date } = req.body;
         
-        // Basic Validation
-        if(!type || !value) return res.status(400).json({ message: "Type and Value are required" });
+        // Auto-assign units based on type
+        const units = {
+            'Heart rate': 'bpm',
+            'Blood Pressure': 'mmHg',
+            'Weight': 'kg',
+            'Sugar': 'mg/dL',
+            'Steps': 'steps',
+            'Calories': 'kcal'
+        };
+
+        const numericValue = parseFloat(value.split('/')[0]); // "120/80" -> 120
 
         const newData = await HealthData.create({
             userId: req.user.id,
-            type, 
-            value, 
-            note: notes, 
+            type,
+            value,
+            numericValue,
+            unit: units[type] || '',
+            note: notes,
             date: date || Date.now()
         });
+
         res.status(201).json({ success: true, message: "Metric added", data: newData });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// 2. GET LATEST METRICS (For Home Dashboard)
-// Har type (Heart Rate, BP, etc.) ki sabse latest reading nikalne ke liye
-// endpoint GET /user/health-records/latest
-const getLatestMetrics = async (req, res) => {
-    try {
-        const types = ['Heart rate', 'Blood Pressure', 'Weight', 'Sugar'];
-        let latestData = {};
-
-        for (let type of types) {
-            const record = await HealthData.findOne({ userId: req.user.id, type })
-                .sort({ date: -1 });
-            latestData[type] = record;
-        }
-
-        res.json({ success: true, data: latestData });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
-// 3. GET STATISTICS (For Figma Graphs: Daily/Weekly/Monthly)
+// 2. GET STATISTICS (Figma: Graph with Min/Max/Avg)
 // endpoint GET /user/health-records/stats?type=Heart rate&period=weekly
 const getHealthStats = async (req, res) => {
     try {
         const { type, period } = req.query; // period: daily, weekly, monthly
-        let startDate = moment().startOf('day');
+        let startDate = moment().startOf('day').subtract(period === 'monthly' ? 30 : 7, 'days').toDate();
 
-        if (period === 'weekly') startDate = moment().subtract(7, 'days');
-        else if (period === 'monthly') startDate = moment().subtract(30, 'days');
+        // MongoDB Aggregation for Min, Max, Avg
+        const statsData = await HealthData.aggregate([
+            { $match: { userId: req.user.id, type, date: { $gte: startDate } } },
+            { $group: {
+                _id: null,
+                min: { $min: "$numericValue" },
+                max: { $max: "$numericValue" },
+                avg: { $avg: "$numericValue" },
+                history: { $push: "$$ROOT" }
+            }},
+            { $project: { _id: 0, min: 1, max: 1, avg: { $round: ["$avg", 1] }, history: 1 } }
+        ]);
 
-        const stats = await HealthData.find({
-            userId: req.user.id,
-            type: type,
-            date: { $gte: startDate.toDate() }
-        }).sort({ date: 1 });
+        const result = statsData.length > 0 ? statsData[0] : { min: 0, max: 0, avg: 0, history: [] };
 
-        res.json({ success: true, period, data: stats });
+        res.json({ success: true, period, type, ...result });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// 4. GET FULL HISTORY (With Pagination)
-// endpoint GET /user/health-records/history?page=1&limit=20
+// 3. GET LATEST SUMMARY (Figma Dashboard with % Change)
+// endpoint GET /user/health-records/summary
+const getDashboardSummary = async (req, res) => {
+    try {
+        const types = ['Heart rate', 'Steps', 'Calories', 'Blood Pressure'];
+        let summary = {};
+
+        // Calculate Weekly Progress for Steps (Example of Figma "+12% vs last week")
+        const currentWeekSteps = await HealthData.aggregate([
+            { $match: { userId: req.user.id, type: 'Steps', date: { $gte: moment().startOf('week').toDate() } } },
+            { $group: { _id: null, total: { $sum: "$numericValue" } } }
+        ]);
+
+        const lastWeekSteps = await HealthData.aggregate([
+            { $match: { 
+                userId: req.user.id, 
+                type: 'Steps', 
+                date: { 
+                    $gte: moment().subtract(1, 'weeks').startOf('week').toDate(),
+                    $lte: moment().subtract(1, 'weeks').endOf('week').toDate()
+                } 
+            }},
+            { $group: { _id: null, total: { $sum: "$numericValue" } } }
+        ]);
+
+        const curr = currentWeekSteps[0]?.total || 0;
+        const prev = lastWeekSteps[0]?.total || 0;
+        const progress = prev === 0 ? 0 : (((curr - prev) / prev) * 100).toFixed(1);
+
+        // Get Latest Readings
+        for (let type of types) {
+            const latest = await HealthData.findOne({ userId: req.user.id, type }).sort({ date: -1 });
+            summary[type] = latest;
+        }
+
+        res.json({ 
+            success: true, 
+            healthScore: 82, // Mock score as per Figma
+            weeklyProgress: `${progress > 0 ? '+' : ''}${progress}%`,
+            data: summary 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// 4. GET FULL HISTORY (Pagination for History List)
 const getHealthHistory = async (req, res) => {
     try {
-        const { page = 1, limit = 20, type } = req.query;
-        const query = { userId: req.user.id };
+        const { page = 1, limit = 15, type } = req.query;
+        let query = { userId: req.user.id };
         if (type) query.type = type;
 
         const history = await HealthData.find(query)
@@ -79,18 +121,7 @@ const getHealthHistory = async (req, res) => {
             .limit(limit * 1)
             .skip((page - 1) * limit);
 
-        res.json({ success: true, count: history.length, data: history });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
-// 5. DELETE A RECORD
-// endpoint DELETE /user/health-records/delete/:id
-const deleteHealthRecord = async (req, res) => {
-    try {
-        await HealthData.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
-        res.json({ success: true, message: "Record deleted" });
+        res.json({ success: true, data: history });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -98,8 +129,7 @@ const deleteHealthRecord = async (req, res) => {
 
 module.exports = { 
     addHealthMetric, 
-    getLatestMetrics, 
     getHealthStats, 
-    getHealthHistory,
-    deleteHealthRecord 
+    getDashboardSummary, 
+    getHealthHistory 
 };

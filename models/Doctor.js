@@ -1,83 +1,63 @@
 const mongoose = require('mongoose');
 
 const doctorSchema = new mongoose.Schema({
-    // --- Identification & Role ---
-    // Hospital-doctor ke liye hospitalId store hogi, independent ke liye null rahega
-    hospitalId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Hospital', 
-        default: null 
-    },
+    hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital', default: null },
     name: { type: String, required: true },
     email: { type: String, unique: true, sparse: true, lowercase: true }, 
     phone: { type: String, unique: true, sparse: true }, 
     password: { type: String, required: true, select: false },
-    role: { 
-        type: String, 
-        enum: ['doctor', 'hospital-doctor'], 
-        default: 'doctor' 
-    },
+    role: { type: String, enum: ['doctor', 'hospital-doctor'], default: 'doctor' },
 
-    // --- Location ---
+    // Location
     country: { type: String, default: null },
     state: { type: String, default: null },
     city: { type: String, default: null },
     address: { type: String, default: null }, 
 
-    // --- Verification & Security ---
+    // Verification & Auth
     isPhoneVerified: { type: Boolean, default: false },
     resetOTP: { type: String, default: null },
     token: { type: String, default: null },
-    
-    // 👇 YEH HAI ZAROORI FIELD: Iska default 'true' hona chahiye
     isActive: { type: Boolean, default: true },
 
-    // --- Professional Info ---
+    // Professional Info
     qualification: { type: String, default: null },
     speciality: { type: String, default: null }, 
     licenseNumber: { type: String, default: null },
     councilNumber: { type: String, default: null },
     councilName: { type: String, default: null },
     about: { type: String, default: null },
+    experienceYears: { type: Number, default: 0 },
+    languages: [{ type: String }], // Figma: Speaks (English, Hindi, etc.)
 
-    // --- Hospital Specific (Checkboxes) ---
-    department: {
-        isNormal: { type: Boolean, default: false },
-        isEmergency: { type: Boolean, default: false }
+    // --- Figma: Select Consultation Type & Fees ---
+    fees: {
+        online: { type: Number, default: 0 }, // Video Consult
+        clinic: { type: Number, default: 0 }, // Clinic Visit
+        home: { type: Number, default: 0 }    // Home Visit
     },
 
-    // --- Documents & Images ---
+    // --- Figma: Dynamic Slot Management ---
+    slotDuration: { type: Number, default: 30 }, // 30 mins per patient
+    availability: [{
+        day: { type: String, enum: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] },
+        startTime: String, // "09:00"
+        endTime: String,   // "18:00"
+        isLiveTrackingAvailable: { type: Boolean, default: false }
+    }],
+
+    // System Stats
+    averageRating: { type: Number, default: 0 },
+    totalReviews: { type: Number, default: 0 },
     profileImage: { type: String, default: null }, 
     documents: [{ type: String }], 
 
-    // --- Approval Status ---
     profileStatus: { 
         type: String, 
         enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
         default: 'Incomplete' 
     },
     rejectionReason: { type: String, default: null },
-
-    // --- New Fields from Website/Figma Screenshots ---
-    experienceYears: { type: Number, default: 0 },
-    languages: [{ type: String }], // Speaks: English, Hindi, etc.
-    
-    // Fees for different consultation types
-    fees: {
-        online: { type: Number, default: 0 }, // Consult Online
-        clinic: { type: Number, default: 0 }  // Visit Clinic
-    },
-
-    // Rating (Dynamic calculations ke liye)
-    averageRating: { type: Number, default: 0 },
-    totalReviews: { type: Number, default: 0 },
-
-    // Slots (Simple representation)
-    availableDays: [{ type: String }], // ['Mon', 'Tue', 'Wed']
-    workingHours: {
-        start: { type: String }, // "09:00 AM"
-        end: { type: String }    // "05:00 PM"
-    }
 
 }, { timestamps: true });
 

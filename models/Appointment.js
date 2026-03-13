@@ -1,81 +1,65 @@
 const mongoose = require('mongoose');
 
 const appointmentSchema = new mongoose.Schema({
-    // --- Links ---
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', required: true },
-    
-    // Agar doctor hospital staff hai toh yahan hospital ID store hogi (Auto-fetch logic from Doctor)
     hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital', default: null },
 
-    // --- Patients (Figma: Multi-Patient Support) ---
     patients: [{
         patientName: { type: String, required: true },
         patientAge: { type: Number, required: true },
         gender: { type: String, enum: ['Male', 'Female', 'Other'] },
-        relation: { type: String, default: 'Self' }, // 'Self', 'Spouse', 'Child' etc.
+        relation: { type: String, default: 'Self' },
         reasonForVisit: { type: String },
         isMainUser: { type: Boolean, default: false } 
     }],
 
-    // --- Booking Details ---
     appointmentDate: { type: Date, required: true },
-    appointmentTime: { type: String, required: true }, // "09:30 AM"
+    appointmentTime: { type: String, required: true }, 
     consultationType: { 
         type: String, 
         enum: ['Video Consult', 'Clinic Visit', 'Home Visit'], 
         required: true 
     },
     
-    // --- Finance & Payment ---
+    // Payments
     totalAmount: { type: Number, required: true },
-    doctorFees: { type: Number },   // Actual Doctor's charge
-    platformFees: { type: Number }, // App service charge
-    paymentStatus: { 
-        type: String, 
-        enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], 
-        default: 'Pending' 
-    },
-    paymentMethod: { type: String, enum: ['UPI', 'Card', 'Cash', 'Net Banking'] },
+    doctorFees: { type: Number },
+    platformFees: { type: Number },
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
     transactionId: { type: String },
+    medicalReport: { type: String }, // Figma: Upload Medical Report path
 
-    // --- Status Logic (Production Level) ---
+    // --- Production Flow Status ---
     status: { 
         type: String, 
         enum: [
-            'Pending',              // Independent Doctor context
-            'Hospital-Pending',     // Hospital Doctor context (Admin approval needed)
-            'Confirmed',            // Approved by Admin or Accepted by Doctor
-            'In-Progress',          // Visit/Call started
-            'Completed',            // Checkup finished
-            'Cancelled-By-User',    // User ne app se cancel kiya
-            'Cancelled-By-Doctor',  // Doctor ne dashboard se cancel kiya
-            'Cancelled-By-Hospital',// Hospital Admin ne cancel kiya
-            'No-Show',              // Patient nahi aaya
-            'Rescheduled'           // Time change request
+            'Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 
+            'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 
+            'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'
         ], 
         default: 'Pending' 
     },
 
-    // --- Tracking (Figma: On the way screen) ---
+    // --- Step 4 & 5 Logic: Video Call & Live Tracking ---
+    videoRoomId: { type: String, default: null }, // Meeting ID for Video Call
     tracking: {
-        otp: { type: String }, // Figma: "Start Visit OTP" (e.g. 8902)
-        doctorLocation: {
-            lat: { type: Number },
-            lng: { type: Number }
+        otp: { type: String }, // Figma: 8902
+        liveLocation: {
+            lat: Number,
+            lng: Number,
+            lastUpdated: Date
         },
-        eta: { type: String } // Estimated time of arrival (e.g. "12 min")
+        eta: { type: String } // e.g., "12 min"
     },
 
-    // --- Cancellation & Refund Tracking ---
     cancellationDetails: {
-        cancelledBy: { type: mongoose.Schema.Types.ObjectId }, // User/Doctor/Hospital Admin ID
-        reason: { type: String },
-        cancelledAt: { type: Date },
-        refundId: { type: String }
+        cancelledBy: { type: mongoose.Schema.Types.ObjectId },
+        reason: String,
+        cancelledAt: Date
     },
 
-    bookingId: { type: String, unique: true } // Unique Receipt ID: e.g., HK-A1B2C3
+    bookingId: { type: String, unique: true } 
 }, { timestamps: true });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);

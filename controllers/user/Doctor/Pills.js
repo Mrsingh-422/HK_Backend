@@ -1,126 +1,98 @@
 const PillReminder = require('../../../models/PillReminder');
 const moment = require('moment');
 
-/**
- * 1. ADD NEW MEDICATION
- * endpoint: POST /user/doctor/pills/add
- */
+// 1. ADD PILL (Same logic, slightly cleaned)
 const addPill = async (req, res) => {
     try {
         const { medicineName, dosage, times, frequency, daysOfWeek, startDate, endDate, notes } = req.body;
-
-        // Times को objects के array में convert करना ताकि status track हो सके
         const formattedTimes = times.map(t => ({ time: t, isTakenToday: false }));
 
         const pill = await PillReminder.create({
             userId: req.user.id,
-            medicineName,
-            dosage,
-            times: formattedTimes,
-            frequency,
-            daysOfWeek,
-            startDate,
-            endDate,
-            notes
+            medicineName, dosage, times: formattedTimes, frequency, 
+            daysOfWeek, startDate, endDate, notes
         });
-
-        res.status(201).json({ success: true, message: "Medication reminder set successfully", data: pill });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.status(201).json({ success: true, message: "Medication reminder set", data: pill });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-/**
- * 2. GET TODAY'S PILL SCHEDULE (Figma: Home/Pill Screen)
- * Isme sirf wahi dawai aayengi jo aaj ke din ke liye scheduled hain.
- * endpoint: GET /user/doctor/pills/today
- */
+// 2. GET TODAY'S SCHEDULE (With Auto-Reset Logic)
+// endpoint: GET /user/doctor/pills/today
 const getTodaySchedule = async (req, res) => {
     try {
-        const today = moment().startOf('day');
-        const dayNum = today.day(); // 0-6
+        const todayStr = moment().format('YYYY-MM-DD');
+        const dayNum = moment().day();
 
-        // Find pills that are active and match today's day/frequency
-        const pills = await PillReminder.find({
+        // Pehle wo saari pills nikale jo aaj ke liye active hain
+        let pills = await PillReminder.find({
             userId: req.user.id,
             status: 'Active',
-            isReminderOn: true,
-            startDate: { $lte: today.toDate() },
-            $or: [
-                { frequency: 'Daily' },
-                { daysOfWeek: dayNum }
-            ]
+            startDate: { $lte: new Date() },
+            $or: [{ frequency: 'Daily' }, { daysOfWeek: dayNum }]
         });
 
-        res.json({ success: true, count: pills.length, data: pills });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        // 🚀 Production Logic: Check if we need to reset "isTakenToday"
+        // Agar history me aaj ki date ki entry nahi hai aur isTakenToday true hai, 
+        // to iska matlab naya din shuru ho gaya hai.
+        for (let pill of pills) {
+            let needsSave = false;
+            pill.times.forEach(t => {
+                // Check history for this specific pill and time for today
+                const alreadyRecorded = pill.history.some(h => h.date === todayStr && h.time === t.time && h.action === 'Taken');
+                
+                if (!alreadyRecorded && t.isTakenToday) {
+                    t.isTakenToday = false; // Reset for new day
+                    needsSave = true;
+                }
+            });
+            if (needsSave) await pill.save();
+        }
+
+        res.json({ success: true, data: pills });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-/**
- * 3. MARK PILL AS TAKEN / SKIPPED (Figma: Taken Button)
- * endpoint: PATCH /user/doctor/pills/action/:pillId
- */
+// 3. RECORD ACTION (Taken / Snooze 10 Min)
+// endpoint: PATCH /user/doctor/pills/action/:pillId
 const recordPillAction = async (req, res) => {
     try {
         const { pillId } = req.params;
-        const { time, action } = req.body; // action: 'Taken', 'Skipped', 'Snoozed'
+        const { time, action } = req.body; // action: 'Taken', 'Snoozed', 'Skipped'
+        const todayStr = moment().format('YYYY-MM-DD');
 
         const pill = await PillReminder.findOne({ _id: pillId, userId: req.user.id });
         if (!pill) return res.status(404).json({ message: "Pill not found" });
 
-        // History में record add करना
-        pill.history.push({
-            date: new Date(),
-            time: time,
-            action: action
-        });
+        const timeIndex = pill.times.findIndex(t => t.time === time);
+        if (timeIndex === -1) return res.status(400).json({ message: "Time slot not found" });
 
-        // Agar Action 'Taken' hai, toh current schedule me update karein
-        if(action === 'Taken') {
-            const timeIndex = pill.times.findIndex(t => t.time === time);
-            if(timeIndex !== -1) pill.times[timeIndex].isTakenToday = true;
+        if (action === 'Taken') {
+            pill.times[timeIndex].isTakenToday = true;
+            pill.times[timeIndex].snoozeUntil = null; // Clear snooze
+        } else if (action === 'Snoozed') {
+            // Figma logic: Snooze for 10 minutes
+            pill.times[timeIndex].snoozeUntil = moment().add(10, 'minutes').toDate();
         }
 
+        // Save to History
+        pill.history.push({ date: todayStr, time: time, action: action });
         await pill.save();
+
         res.json({ success: true, message: `Medication marked as ${action}`, data: pill });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-/**
- * 4. TOGGLE REMINDER (ON/OFF)
- * endpoint: PATCH /user/doctor/pills/toggle/:id
- */
-const toggleReminder = async (req, res) => {
-    try {
-        const pill = await PillReminder.findOne({ _id: req.params.id, userId: req.user.id });
-        pill.isReminderOn = !pill.isReminderOn;
-        await pill.save();
-        res.json({ success: true, message: `Reminder turned ${pill.isReminderOn ? 'ON' : 'OFF'}` });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
-/**
- * 5. GET ALL ACTIVE MEDICATIONS (List View)
- * endpoint: GET /user/doctor/pills/my-pills
- */
+// 4. GET MY PILLS (List View)
+// endpoint: GET /user/doctor/pills
 const getMyPills = async (req, res) => {
     try {
         const pills = await PillReminder.find({ userId: req.user.id }).sort({ createdAt: -1 });
         res.json({ success: true, data: pills });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-/**
- * 6. UPDATE PILL
- */
+// 5. UPDATE PILL (Figma Edit Screen)
+// endpoint: PUT /user/doctor/pills/update/:id
 const updatePill = async (req, res) => {
     try {
         const pill = await PillReminder.findOneAndUpdate(
@@ -128,29 +100,23 @@ const updatePill = async (req, res) => {
             { $set: req.body },
             { new: true }
         );
-        res.json({ success: true, message: "Updated", data: pill });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.json({ success: true, message: "Reminder updated", data: pill });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-/**
- * 7. DELETE PILL
- */
+// 6. DELETE PILL (Figma: Delete Button)
+// endpoint: DELETE /user/doctor/pills/delete/:id
 const deletePill = async (req, res) => {
     try {
         await PillReminder.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
-        res.json({ success: true, message: "Deleted" });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.json({ success: true, message: "Medication deleted" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 module.exports = { 
     addPill, 
     getTodaySchedule, 
     recordPillAction, 
-    toggleReminder, 
     getMyPills, 
     updatePill, 
     deletePill 

@@ -2,6 +2,7 @@ const Doctor = require('../../../models/Doctor');
 const Appointment = require('../../../models/Appointment');
 const Specialization = require('../../../models/Specialization');
 const Prescription = require('../../../models/Prescription');
+const moment = require('moment');
 const crypto = require('crypto');
 
 // 1. GET ALL SPECIALIZATIONS (For dropdown)
@@ -19,13 +20,18 @@ const getSpecializations = async (req, res) => {
 // endpoint: GET /user/doctors/list?speciality=Cardiologist&city=Mohali
 const searchDoctors = async (req, res) => {
     try {
-        const { speciality, city, search, role } = req.query;
+        const { speciality, city, search, role, videoCall, availableNow } = req.query;
         let query = { profileStatus: 'Approved', isActive: true };
 
         if (speciality) query.speciality = speciality;
         if (city) query.city = { $regex: city, $options: 'i' };
         if (role) query.role = role; 
         if (search) query.name = { $regex: search, $options: 'i' };
+
+        // Figma Toggle: Video Call available
+        if (videoCall === 'true') {
+            query['fees.online'] = { $gt: 0 };
+        }
 
         const doctors = await Doctor.find(query)
             .select('-password -token')
@@ -53,44 +59,50 @@ const getDoctorDetails = async (req, res) => {
 // endpoint: POST /user/doctors/book
 const bookAppointment = async (req, res) => {
     try {
+        // Patients data usually comes as stringified JSON in form-data
+        const patientsData = typeof req.body.patients === 'string' 
+            ? JSON.parse(req.body.patients) 
+            : req.body.patients;
+
         const {
-            doctorId, patients, appointmentDate, appointmentTime, 
+            doctorId, appointmentDate, appointmentTime, 
             consultationType, totalAmount 
         } = req.body;
 
-        if (!patients || !Array.isArray(patients) || patients.length === 0) {
+        if (!patientsData || !Array.isArray(patientsData) || patientsData.length === 0) {
             return res.status(400).json({ message: "Please select at least one patient" });
         }
 
-        // --- 🚀 NEW LOGIC: Role based status check ---
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
 
-        // Agar Hospital Doctor hai toh status 'Hospital-Pending' jayega
-        // Agar Independent hai toh status 'Pending' jayega
         const initialStatus = doctor.role === 'hospital-doctor' ? 'Hospital-Pending' : 'Pending';
-
         const bookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        
+        // 🚀 Figma Logic: Generate 4-digit OTP for Tracking
+        const trackingOTP = Math.floor(1000 + Math.random() * 9000).toString();
 
         const newAppointment = await Appointment.create({
             userId: req.user.id,
             doctorId,
-            patients,
+            hospitalId: doctor.hospitalId,
+            patients: patientsData,
             appointmentDate,
             appointmentTime,
             consultationType,
             totalAmount,
             bookingId,
             status: initialStatus, 
-            paymentStatus: 'Paid'
+            paymentStatus: 'Paid',
+            'tracking.otp': trackingOTP, // Figma tracking screen ke liye
+            medicalReport: req.file ? req.file.path : null // Figma: Upload Report
         });
 
         res.status(201).json({ 
             success: true, 
-            message: initialStatus === 'Hospital-Pending' 
-                ? "Appointment Booked. Waiting for Hospital approval." 
-                : "Appointment Booked. Waiting for Doctor confirmation.", 
+            message: "Booking Successful", 
             bookingId, 
+            trackingOTP,
             data: newAppointment 
         });
     } catch (error) {
@@ -162,15 +174,16 @@ const trackAppointment = async (req, res) => {
         res.json({ 
             success: true, 
             status: appointment.status,
-            eta: "12 min", 
-            doctorLocation: { lat: 30.7333, lng: 76.7794 }, 
-            otp: "8902", // Figma OTP Simulation
+            eta: appointment.tracking?.eta || "12 min", 
+            doctorLocation: appointment.tracking?.liveLocation || { lat: 30.7333, lng: 76.7794 }, 
+            otp: appointment.tracking?.otp, // Database wala real OTP
             data: appointment 
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
+
 
 //8. GET PRESCRIPTION & DIAGNOSIS (Figma: Prescription View Button)
 // endpoint: GET /user/doctors/prescription
@@ -185,6 +198,41 @@ const getMyPrescriptions = async (req, res) => {
     }
 };
 
+// GET /user/doctors/slots/:doctorId?date=2026-03-20
+const getAvailableSlots = async (req, res) => {
+    try {
+        const { doctorId } = req.params;
+        const { date } = req.query; // Format: YYYY-MM-DD
+        
+        const doctor = await Doctor.findById(doctorId);
+        const dayName = moment(date).format('ddd'); // e.g., "Mon"
+
+        const dayConfig = doctor.availability.find(a => a.day === dayName);
+        if (!dayConfig) return res.json({ success: true, message: "Doctor not available today", slots: [] });
+
+        // Existing Bookings find karein
+        const booked = await Appointment.find({ doctorId, appointmentDate: date, status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] } })
+            .select('appointmentTime');
+        const bookedTimes = booked.map(b => b.appointmentTime);
+
+        let slots = [];
+        let start = moment(dayConfig.startTime, "HH:mm");
+        let end = moment(dayConfig.endTime, "HH:mm");
+
+        while (start.isBefore(end)) {
+            const timeStr = start.format("hh:mm A");
+            slots.push({
+                time: timeStr,
+                isBooked: bookedTimes.includes(timeStr),
+                isHighDemand: bookedTimes.length > 5 // Figma Indicator logic
+            });
+            start.add(doctor.slotDuration, 'minutes');
+        }
+
+        res.json({ success: true, date, slots });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { 
     getSpecializations, 
     searchDoctors, 
@@ -193,5 +241,6 @@ module.exports = {
     getUserAppointments,
     userCancelAppointment,
     trackAppointment ,
-    getMyPrescriptions
+    getMyPrescriptions,
+    getAvailableSlots
 };
