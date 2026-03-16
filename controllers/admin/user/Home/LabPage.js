@@ -40,7 +40,7 @@ const updatePrescriptionTest = async (req, res) => {
         let updateData = { miniTitle, mainTitle, bulkTitle, bulkDescription, mainDescription, badgeText };
 
         if (req.files && req.files.length > 0) {
-            updateData.images = req.files.map(file => `/uploads/lab/${file.filename}`);
+            updateData.images = req.files.map(file => `/uploads/homepage/${file.filename}`);
         }
 
         const content = await LabContent.findOneAndUpdate(
@@ -112,7 +112,7 @@ const updateLabCare = async (req, res) => {
         }
 
         if (req.files && req.files.length > 0) {
-            updateData.images = req.files.map(file => `/uploads/lab/${file.filename}`);
+            updateData.images = req.files.map(file => `/uploads/homepage/${file.filename}`);
         }
 
         const content = await LabContent.findOneAndUpdate(
@@ -150,7 +150,7 @@ const updateAboutLab = async (req, res) => {
         }
 
         if (req.files && req.files.length > 0) {
-            updateData.images = req.files.map(file => `/uploads/lab/${file.filename}`);
+            updateData.images = req.files.map(file => `/uploads/homepage/${file.filename}`);
         }
 
         const content = await LabContent.findOneAndUpdate(
@@ -188,7 +188,7 @@ const updateResearchSection = async (req, res) => {
         }
 
         if (req.files && req.files.length > 0) {
-            updateData.images = req.files.map(file => `/uploads/lab/${file.filename}`);
+            updateData.images = req.files.map(file => `/uploads/homepage/${file.filename}`);
         }
 
         const content = await LabContent.findOneAndUpdate(

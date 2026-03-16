@@ -10,8 +10,23 @@ const frontendContentSchema = new mongoose.Schema({
             'aboutUs', 'ambulance', 'homepage', 'introduction', 
             'getHealthApp', 'hospitals', 'nursing', 'featuredProducts', 'laboratory',
             
-            // --- Lab Page Sections (NEW) ---
-            'searchTest', 'prescriptionTest', 'howItWorks', 'labCare', 'aboutLab', 'research'
+            // --- Lab Page Sections ---
+            'searchTest', 'prescriptionTest', 'howItWorks', 'labCare', 'aboutLab', 'research',
+
+            // --- Appointment Page Sections ---
+            'findDoctor', 'findConsultant', 'doctorsPriority', 'howToSecure',
+
+            // --- Medicine / Pharmacy Page Sections ---
+            'pharmacyPage', 'onlinePharmacyFeatured', 'medicinePrescription', 'bestOfBest', 'recommendedMed', 'aboutMedicine',
+
+            // --- Ambulance Page Sections ---
+            'ambulanceHero', 'ambulanceReferralHero', 'emergencyFacility', 'accidentalEmergency', 'medicalEmergency', 'referralAmbulance',
+
+            // --- Hospital Page Sections ---
+            'hospitalHero', 'hospitalFacility', 'mainHowItWorks',
+
+            // --- Nurse Page Sections (NEW) ---
+            'nurseHero', 'nursePrescription', 'nursingSteps', 'nursingServices', 'experiencedNurses', 'onlyTheBestCare'
         ] 
     },
     
@@ -22,32 +37,68 @@ const frontendContentSchema = new mongoose.Schema({
     subtitle: { type: String },
     description: { type: String },
     introduction: { type: String },
-    images: [{ type: String }], // Stores URLs
+    images: [{ type: String }], 
 
     // =====================================
-    // SPECIFIC TO LAB PAGES (NEW FIELDS)
+    // LAB / APPOINTMENT / MEDICINE / AMBULANCE / HOSPITAL FIELDS
     // =====================================
     miniTitle: { type: String },
     mainTitle: { type: String },
     searchLabel: { type: String },
-    
-    // Prescription Page specific
     bulkTitle: { type: String },
     bulkDescription: { type: String },
     mainDescription: { type: String },
     badgeText: { type: String },
-    
-    // Lab Care / Research specific
     buttonText: { type: String },
     statusLabel: { type: String },
     statusValue: { type: String },
     phone1: { type: String },
     phone2: { type: String },
+    headerTag: { type: String },
+    titlePart1: { type: String },
+    titlePart2: { type: String },
+    subTitle: { type: String },
+    header: { type: String },
+    tag: { type: String },
+    statusText: { type: String },
+    expressTag: { type: String },
+    sidebarTitle: { type: String },
+    sidebarDescription: { type: String },
+    searchPlaceholder: { type: String },
+    card1Title: { type: String },
+    card1Btn: { type: String },
+    card2Title: { type: String },
+    card2Btn: { type: String },
+    card3Title: { type: String },
+    card3Btn: { type: String },
+    typeHeading: { type: String },
+    tagline: { type: String },
+    sectionTag: { type: String },
+    highlightText: { type: String },
+    subHeader: { type: String },
+    carouselImages: [{ type: String }],
+    headerTitle: { type: String }, 
 
-    // Dynamic Arrays (Using Mixed type so it can accept your frontend JSON arrays easily)
-    steps: { type: mongoose.Schema.Types.Mixed },     // For How It Works [{title, desc, iconKey, colorKey}]
-    features: { type: mongoose.Schema.Types.Mixed },  // For Lab Care (objects) & Research (strings)
-    skills: { type: mongoose.Schema.Types.Mixed },    // For About Lab [{name, percentage}]
+    // =====================================
+    // NURSE PAGE SPECIFIC FIELDS (NEW)
+    // =====================================
+    titleEmoji: { type: String },
+    uploadLabel: { type: String },
+    uploadBtnText: { type: String },
+    footerNote: { type: String },
+    subheading: { type: String },
+
+    // =====================================
+    // DYNAMIC ARRAYS (Mixed Type)
+    // =====================================
+    steps: { type: mongoose.Schema.Types.Mixed },     
+    features: { type: mongoose.Schema.Types.Mixed },  
+    skills: { type: mongoose.Schema.Types.Mixed },    
+    points: { type: mongoose.Schema.Types.Mixed },    
+    items: { type: mongoose.Schema.Types.Mixed },     
+    categories: { type: mongoose.Schema.Types.Mixed },
+    partners: { type: mongoose.Schema.Types.Mixed }, 
+    services: { type: mongoose.Schema.Types.Mixed }, // NEW: Used in Nursing Services
 
     // =====================================
     // SPECIFIC TO HOMEPAGE 'About Us'

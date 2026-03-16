@@ -30,7 +30,7 @@ router.post('/prescription-test', protect('admin'), contentUploads, updatePrescr
 // 3. HOW IT WORKS 
 // ===========================
 router.get('/how-it-works', getHowItWorks);
-router.post('/how-it-works', protect('admin'), updateHowItWorks); // Isme sirf JSON data aur stringify arrays hain
+router.post('/how-it-works', protect('admin'), contentUploads, updateHowItWorks); // Isme sirf JSON data aur stringify arrays hain
 
 // ===========================
 // 4. LAB CARE
