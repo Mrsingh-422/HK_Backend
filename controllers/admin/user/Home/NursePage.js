@@ -1,11 +1,39 @@
 const FrontendContent = require('../../../../models/HomePage'); // Apna model import karein (eg. NursePageContent ya FrontendContent)
 
-// Utility function to handle parsed data properly (Supports both JSON & FormData strings)
+// Utility function to handle parsed data properly (Supports JSON strings or direct arrays)
 const parseJsonField = (field) => {
     if (field && typeof field === 'string') {
         try { return JSON.parse(field); } catch (e) { return field; }
     }
     return field;
+};
+
+// Utility function to merge Old Images and New Uploaded Images
+const processImages = (existingImages, files) => {
+    let finalImages =[];
+    
+    // 1. Handle existing images (coming as string or array of strings)
+    if (existingImages) {
+        if (Array.isArray(existingImages)) {
+            finalImages =[...existingImages];
+        } else {
+            finalImages.push(existingImages); // if only one existing image
+        }
+    }
+
+    // 2. Handle new uploaded files via Multer
+    if (files && files.length > 0) {
+        const newImages = files.map(file => `/uploads/homepage/${file.filename}`);
+        finalImages = [...finalImages, ...newImages];
+    }
+
+    return finalImages;
+};
+
+// Utility to handle array fields sent via FormData like 'services[]'
+const processFormDataArray = (reqBody, fieldName) => {
+    let arr = reqBody[`${fieldName}[]`] || reqBody[fieldName] || [];
+    return Array.isArray(arr) ? arr : [arr];
 };
 
 // ==========================================
@@ -34,8 +62,12 @@ const getNurseHero = async (req, res) => {
 // ==========================================
 const updateNursePrescription = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        updateData.carouselImages = parseJsonField(updateData.carouselImages);
+        const { sectionTag, mainTitle, titleEmoji, subTitle, description, uploadLabel, uploadBtnText, existingImages } = req.body;
+        
+        let updateData = { sectionTag, mainTitle, titleEmoji, subTitle, description, uploadLabel, uploadBtnText };
+        
+        // Merge old and new images
+        updateData.carouselImages = processImages(existingImages, req.files);
 
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'nursePrescription' },
@@ -82,9 +114,15 @@ const getNursingSteps = async (req, res) => {
 // ==========================================
 const updateNursingServices = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        updateData.services = parseJsonField(updateData.services);
-        updateData.carouselImages = parseJsonField(updateData.carouselImages);
+        const { title, description, existingImages } = req.body;
+        
+        let updateData = { title, description };
+        
+        // Extract services array safely
+        updateData.services = processFormDataArray(req.body, 'services');
+        
+        // Merge old and new images
+        updateData.carouselImages = processImages(existingImages, req.files);
 
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'nursingServices' },
@@ -128,9 +166,15 @@ const getExperiencedNurses = async (req, res) => {
 // ==========================================
 const updateOnlyTheBestCare = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        updateData.points = parseJsonField(updateData.points);
-        updateData.carouselImages = parseJsonField(updateData.carouselImages);
+        const { title, subheading, description, existingImages } = req.body;
+        
+        let updateData = { title, subheading, description };
+
+        // Extract points array safely
+        updateData.points = processFormDataArray(req.body, 'points');
+
+        // Merge old and new images
+        updateData.carouselImages = processImages(existingImages, req.files);
 
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'onlyTheBestCare' },

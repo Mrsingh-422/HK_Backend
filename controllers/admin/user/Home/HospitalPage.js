@@ -1,11 +1,28 @@
 const FrontendContent = require('../../../../models/HomePage');
 
-// Utility function to parse JSON arrays safely
+// Utility to parse JSON fields if sent as string from FormData
 const parseJsonField = (field) => {
     if (field && typeof field === 'string') {
         try { return JSON.parse(field); } catch (e) { return field; }
     }
     return field;
+};
+
+// Utility to handle images (supports new uploads + existing URL strings)
+const processHospitalImages = (existingImages, files) => {
+    let finalImages = [];
+    
+    // 1. Handle existing images (can be array or single string from form)
+    if (existingImages) {
+        finalImages = Array.isArray(existingImages) ? existingImages : [existingImages];
+    }
+
+    // 2. Add new files from Multer
+    if (files && files.length > 0) {
+        const newImages = files.map(file => `/uploads/homepage/${file.filename}`);
+        finalImages = [...finalImages, ...newImages];
+    }
+    return finalImages;
 };
 
 // ==========================================
@@ -34,19 +51,26 @@ const getHospitalHero = async (req, res) => {
 // ==========================================
 const updateHospitalFacility = async (req, res) => {
     try {
-        const updateData = { ...req.body };
+        const { tagline, titlePart1, titlePart2, description, badgeText, existingImages } = req.body;
         
-        // Ensure arrays sent as stringified JSON (from formData) are parsed properly
-        updateData.carouselImages = parseJsonField(updateData.carouselImages);
-        updateData.partners = parseJsonField(updateData.partners);
+        let updateData = { tagline, titlePart1, titlePart2, description, badgeText };
+        
+        // Parse partners if sent as stringified JSON
+        updateData.partners = parseJsonField(req.body.partners);
+        
+        // Merge old image URLs and new uploaded files
+        updateData.carouselImages = processHospitalImages(existingImages, req.files);
 
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'hospitalFacility' },
             { $set: updateData },
             { new: true, upsert: true }
         );
+
         res.status(200).json({ success: true, message: 'Hospital Facility updated', data: content });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 const getHospitalFacility = async (req, res) => {

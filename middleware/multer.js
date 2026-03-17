@@ -120,6 +120,33 @@ const userReportUploads = multer({
     })
 }).single('medicalReport'); // Figma: Patient Details upload button
 
+
+// ==========================================
+// 8. LAB SERVICES CONFIGURATION (Tests & Packages)
+// ==========================================
+const labServiceDir = 'public/uploads/lab_services';
+ensureDir(labServiceDir);
+
+const labServiceStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, labServiceDir),
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'lab-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const uploadLabService = multer({ 
+    storage: labServiceStorage,
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
+
+// Figma ke according 'photos' key use hogi multiple images ke liye
+const labServiceUploads = uploadLabService.fields([
+    { name: 'photos', maxCount: 10 } // Lab test ya package ki photos
+]);
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -127,5 +154,6 @@ module.exports = {
     userReportUploads,
     providerDocUploads,
     ambulanceDocUploads,
+        labServiceUploads,
     uploadExcel
 };

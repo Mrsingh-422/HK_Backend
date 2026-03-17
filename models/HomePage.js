@@ -17,7 +17,7 @@ const frontendContentSchema = new mongoose.Schema({
             'findDoctor', 'findConsultant', 'doctorsPriority', 'howToSecure',
 
             // --- Medicine / Pharmacy Page Sections ---
-            'pharmacyPage', 'onlinePharmacyFeatured', 'medicinePrescription', 'bestOfBest', 'recommendedMed', 'aboutMedicine',
+            'pharmacyPage', 'onlinePharmacyFeatured', 'medicinePrescription', 'bestOfBest', 'recommendedMed', 'aboutMedicine', 'declarePast',
 
             // --- Ambulance Page Sections ---
             'ambulanceHero', 'ambulanceReferralHero', 'emergencyFacility', 'accidentalEmergency', 'medicalEmergency', 'referralAmbulance',

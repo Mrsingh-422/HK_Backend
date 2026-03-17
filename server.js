@@ -22,7 +22,7 @@ app.use(express.urlencoded({ extended: true })); // Form डेटा के ल
 // Static folder for uploads
 app.use('/uploads', express.static('public/uploads'));
 
-// Admin Routes 
+////////////////// Admin Routes /////////////////////////
 app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
 app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
 app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
@@ -40,31 +40,46 @@ app.use('/api/footer', require('./routes/admin/user/home/footerRoutes')); // Foo
 app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); // List Management Route (Doctors, Hospitals, etc.)
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
 
-// User Routes 
+/////////////  User Routes /////////////////////////
 app.use('/api/auth/user', require('./routes/user/authUser')); 
+// --- user doctor ---
 app.use('/user/doctor/pills', require('./routes/user/Doctor/PillsRoute')); // Doctor's Prescription Management
 app.use('/user/health-records', require('./routes/user/Doctor/HealthRoute')); // Health Records Management
 app.use('/user/doctors', require('./routes/user/Doctor/BookAppointment')); // Doctor Appointment Booking
 app.use('/user/review', require('./routes/user/Doctor/ReviewDoctorRoute')); // Doctor Review Route
+// --- user lab ---
+app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
+
  
 
-// Doctor Routes
+//////////////// Doctor Routes ///////////////////////
 app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
 app.use('/doctor/appointments', require('./routes/doctor/AppointmentRoute')); // Doctor Appointments Route
 
-// Hospital Routes
+//////////////// Hospital Routes /////////////////////
 app.use('/api/auth/hospital', require('./routes/hospital/authHospital'));
 app.use('/api/hospital/doctors', require('./routes/hospital/hospitalDoctor/hosDoctorRoute')); // Hospital Doctor Management
 app.use('/hospital/doctor/appointments', require('./routes/hospital/hospitalDoctor/hosAppointment')); // Hospital Doctor Appointments Route
 app.use('/api/hospital/ambulance', require('./routes/hospital/hospitalAmbulance/hosAmbulanceRoute')); // Hospital Ambulance Management
 
-// Provider Routes
+//////////////// Provider Routes /////////////////////
 app.use('/api/auth/provider', require('./routes/provider/authProvider'));
+app.use('/provider/wallet', require('./routes/provider/Common/WalletRoute')); // Wallet Management Route (Withdrawals)
+app.use('/provider/promotions', require('./routes/provider/Common/CouponRoute')); // Promotions & Coupon Management Route
+app.use('/provider/availability', require('./routes/provider/Common/AvailabilityRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
+// --- Provider Lab Routes ---
+app.use('/provider/labs', require('./routes/provider/Lab/LabOrderRoute')); // Lab Order Management
+app.use('/provider/labs/services', require('./routes/provider/Lab/LabsServiceRoute')); // Lab Test Management
 
-// Ambulance Routes
+// --- Provider Pharmacy Routes ---
+
+// --- Provider Nurse Routes ---
+
+
+//////////////// Ambulance Routes /////////////////////
 app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulance'));
 
-// others Routes or public routes
+//////////////// others Routes or public routes  /////////////////////
 app.use('/api/public', require('./routes/others/locationRoutes'));
 app.use('/api/password', require('./routes/others/forgotPassword'));
 

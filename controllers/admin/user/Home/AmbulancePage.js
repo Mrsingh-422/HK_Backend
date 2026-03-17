@@ -1,6 +1,22 @@
-const FrontendContent = require('../../../../models/HomePage');
+const FrontendContent = require('../../../../models/HomePage'); // Model import
 
-// Utility function to handle parsed data properly (Supports both JSON & FormData)
+// Utility to merge Old Image URLs and New Uploaded Files
+const processImages = (existingImages, files) => {
+    let finalImages = [];
+    
+    // 1. Existing images (can be array or string)
+    if (existingImages) {
+        finalImages = Array.isArray(existingImages) ? existingImages : [existingImages];
+    }
+
+    // 2. Add new files from Multer
+    if (files && files.length > 0) {
+        const newImages = files.map(file => `/uploads/homepage/${file.filename}`);
+        finalImages = [...finalImages, ...newImages];
+    }
+    return finalImages;
+};
+
 const parseJsonField = (field) => {
     if (field && typeof field === 'string') {
         try { return JSON.parse(field); } catch (e) { return field; }
@@ -9,13 +25,12 @@ const parseJsonField = (field) => {
 };
 
 // ==========================================
-// 1. MANAGE AMBULANCE PAGE (LEFT SECTION)
+// 1. AMBULANCE PAGE (LEFT SECTION)
 // ==========================================
 const updateAmbulanceHero = async (req, res) => {
     try {
         const updateData = { ...req.body };
         updateData.categories = parseJsonField(updateData.categories);
-
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'ambulanceHero' },
             { $set: updateData },
@@ -39,7 +54,6 @@ const updateReferralAmbulanceHero = async (req, res) => {
     try {
         const updateData = { ...req.body };
         updateData.categories = parseJsonField(updateData.categories);
-
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'ambulanceReferralHero' },
             { $set: updateData },
@@ -82,8 +96,11 @@ const getEmergencyFacility = async (req, res) => {
 // ==========================================
 const updateAccidentalEmergency = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        updateData.carouselImages = parseJsonField(updateData.carouselImages);
+        const { sectionTag, mainTitle, description, buttonText, existingImages } = req.body;
+        let updateData = { sectionTag, mainTitle, description, buttonText };
+        
+        // Merge URLs with new Multer files (key: 'carouselImages')
+        updateData.carouselImages = processImages(existingImages, req.files);
 
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'accidentalEmergency' },
@@ -106,8 +123,10 @@ const getAccidentalEmergency = async (req, res) => {
 // ==========================================
 const updateMedicalEmergency = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        updateData.carouselImages = parseJsonField(updateData.carouselImages);
+        const { title, description, highlightText, buttonText, existingImages } = req.body;
+        let updateData = { title, description, highlightText, buttonText };
+
+        updateData.carouselImages = processImages(existingImages, req.files);
 
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'medicalEmergency' },
@@ -130,8 +149,10 @@ const getMedicalEmergency = async (req, res) => {
 // ==========================================
 const updateReferralAmbulance = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        updateData.carouselImages = parseJsonField(updateData.carouselImages);
+        const { tagline, subHeader, description, buttonText, badgeText, existingImages } = req.body;
+        let updateData = { tagline, subHeader, description, buttonText, badgeText };
+
+        updateData.carouselImages = processImages(existingImages, req.files);
 
         const content = await FrontendContent.findOneAndUpdate(
             { section: 'referralAmbulance' },
@@ -156,4 +177,4 @@ module.exports = {
     updateAccidentalEmergency, getAccidentalEmergency,
     updateMedicalEmergency, getMedicalEmergency,
     updateReferralAmbulance, getReferralAmbulance
-}; 
+};

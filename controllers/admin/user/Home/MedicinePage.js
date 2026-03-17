@@ -1,5 +1,16 @@
 const FrontendContent = require('../../../../models/HomePage');
 
+// Helper for Image Merging
+const processImages = (existingImages, files) => {
+    let finalImages = [];
+    if (existingImages) finalImages = Array.isArray(existingImages) ? existingImages : [existingImages];
+    if (files && files.length > 0) {
+        const newImages = files.map(file => `/uploads/homepage/${file.filename}`);
+        finalImages = [...finalImages, ...newImages];
+    }
+    return finalImages;
+};
+
 // ==========================================
 // 1. MANAGE PHARMACY PAGE SECTION
 // ==========================================
@@ -194,11 +205,40 @@ const getAboutMedicine = async (req, res) => {
     }
 };
 
+// ==========================================
+// 7. DECLARE THE PAST SECTION
+// ==========================================
+const updateDeclarePast = async (req, res) => {
+    try {
+        const { title, description, subtitle, buttonText, existingImages } = req.body;
+        let updateData = { title, description, subtitle, buttonText };
+        
+        updateData.images = processImages(existingImages, req.files);
+
+        const content = await FrontendContent.findOneAndUpdate(
+            { section: 'declarePast' },
+            { $set: updateData },
+            { new: true, upsert: true }
+        );
+        res.status(200).json({ success: true, message: 'Declare Past updated', data: content });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const getDeclarePast = async (req, res) => {
+    try {
+        const content = await FrontendContent.findOne({ section: 'declarePast' });
+        res.status(200).json({ success: true, data: content });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+
 module.exports = {
     updatePharmacyPage, getPharmacyPage,
     updateFeaturedProducts, getFeaturedProducts,
     updateMedicinePrescription, getMedicinePrescription,
     updateBestOfBest, getBestOfBest,
     updateRecommendedMed, getRecommendedMed,
-    updateAboutMedicine, getAboutMedicine
+    updateAboutMedicine, getAboutMedicine,
+    updateDeclarePast, getDeclarePast
 };

@@ -9,7 +9,8 @@ const {
     updateMedicinePrescription, getMedicinePrescription,
     updateBestOfBest, getBestOfBest,
     updateRecommendedMed, getRecommendedMed,
-    updateAboutMedicine, getAboutMedicine
+    updateAboutMedicine, getAboutMedicine,
+    updateDeclarePast, getDeclarePast
 } = require('../../../../controllers/admin/user/Home/MedicinePage');
 
 // Base URL assumed: /api/medicinepage
@@ -49,5 +50,11 @@ router.post('/recommended', protect('admin'), contentUploads, updateRecommendedM
 // ===========================
 router.get('/about', getAboutMedicine);
 router.post('/about', protect('admin'), contentUploads, updateAboutMedicine);
+
+// ===========================
+// 7. DECLARE PAST MEDICINE
+// ===========================
+router.get('/declare-past', getDeclarePast);
+router.post('/declare-past', protect('admin'), contentUploads, updateDeclarePast);
 
 module.exports = router;
