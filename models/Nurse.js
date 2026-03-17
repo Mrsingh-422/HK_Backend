@@ -1,7 +1,7 @@
-// models/Lab.js (Lab Provider Model)
+// models/Nurse.js (Nurse Model)
 const mongoose = require('mongoose');
 
-const labSchema = new mongoose.Schema({
+const nurseSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, unique: true, sparse: true },
     phone: { type: String, unique: true, sparse: true },
@@ -11,10 +11,9 @@ const labSchema = new mongoose.Schema({
     token: { type: String, default: null },
     isActive: { type: Boolean, default: true },
 
-
     profileImage: { type: String, default: null },
-
-    // Location Details
+    
+     // Location Details
     country: { type: String, default: null },
     state: { type: String, default: null },
     city: { type: String, default: null },
@@ -27,20 +26,6 @@ const labSchema = new mongoose.Schema({
     },
         rejectionReason: { type: String, default: null },
 
-    
-
-    // Figma Labels
-    isHomeCollectionAvailable: { type: Boolean, default: false },
-    isRapidServiceAvailable: { type: Boolean, default: false },
-    isInsuranceAccepted: { type: Boolean, default: false },
-    
-    about: String,
-    image: String, // Clinic image
-    rating: { type: Number, default: 4.5 },
-    totalReviews: { type: Number, default: 0 },
-    
-    
-
 }, { timestamps: true });
 
-module.exports = mongoose.model('Lab', labSchema);
+module.exports = mongoose.model('Nurse', nurseSchema);

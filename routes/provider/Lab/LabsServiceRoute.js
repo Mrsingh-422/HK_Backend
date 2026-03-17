@@ -1,14 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { labServiceUploads } = require('../../../middleware/multer'); // Same Multer for Lab Services
-const { saveLabTest, saveLabPackage, deleteService } = require('../../../controllers/provider/Lab/LabsService');
+const { doctorDocUploads } = require('../../../middleware/multer'); 
+
+const { 
+    saveLabTest, 
+    getMyTests, 
+    saveLabPackage, 
+    getMyPackages, 
+    deleteService 
+} = require('../../../controllers/provider/Lab/LabsService');
 
 // Base URL: /provider/labs/services
 
-// PROTECTED (Requires Provider token)
-router.post('/add-test', protect('provider'), labServiceUploads, saveLabTest);
-router.post('/add-package', protect('provider'), labServiceUploads, saveLabPackage);
-router.delete('/delete-service/:type/:id', protect('provider'), deleteService);
+// --- LAB TESTS (Pathology/Radiology) ---
+router.post('/tests/save', protect('lab'), doctorDocUploads, saveLabTest);
+router.get('/tests/my-tests', protect('lab'), getMyTests);
+
+// --- LAB PACKAGES ---
+router.post('/packages/save', protect('lab'), doctorDocUploads, saveLabPackage);
+router.get('/packages/my-packages', protect('lab'), getMyPackages);
+
+// --- DELETE ---
+router.delete('/delete/:type/:id', protect('lab'), deleteService);
 
 module.exports = router;

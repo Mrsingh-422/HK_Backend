@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
-const { providerDocUploads } = require('../../middleware/multer'); // Multer import
+const { labDocUploads, pharmacyDocUploads, nurseDocUploads } = require('../../middleware/multer'); // Multer import
 const { 
     registerProvider, 
     loginProvider, 
@@ -17,7 +17,14 @@ router.post('/register', registerProvider);
 router.post('/login', loginProvider);
 
 // 3. Step 3: Complete Profile (Upload Documents)
-// Iske liye Login token zaroori hai
-router.put('/upload-docs', protect('provider'), providerDocUploads, uploadProviderDocs);
+// login token necessary
+// Lab
+router.put('/upload-docs/lab', protect('Lab'), labDocUploads, uploadProviderDocs);
+
+// Pharmacy 
+router.put('/upload-docs/pharmacy', protect('Pharmacy'), pharmacyDocUploads, uploadProviderDocs);
+
+// Nurse
+router.put('/upload-docs/nurse', protect('Nurse'), nurseDocUploads, uploadProviderDocs);
 
 module.exports = router;

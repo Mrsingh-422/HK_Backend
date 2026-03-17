@@ -6,7 +6,7 @@ const { savePhlebotomist, toggleStaffStatus } = require('../../../controllers/pr
 // Base URL: /provider/labs/staff
 
 // PROTECTED (Requires Provider token)
-router.post('/add-phlebotomist', protect('provider'), savePhlebotomist);
-router.patch('/toggle-status/:id', protect('provider'), toggleStaffStatus);
+router.post('/add-phlebotomist', protect('lab'), savePhlebotomist);
+router.patch('/toggle-status/:id', protect('lab'), toggleStaffStatus);
 
 module.exports = router;

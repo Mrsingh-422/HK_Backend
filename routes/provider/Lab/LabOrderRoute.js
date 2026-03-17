@@ -9,9 +9,9 @@ const {
 
 // Lab Operations
 router.get('/dashboard', protect('provider'), getLabStats);
-router.patch('/order-action/:orderId', protect('provider'), handleOrderAction);
+router.patch('/order-action/:orderId', protect('Lab'), handleOrderAction);
 
-router.patch('/update-progress/:orderId', protect('provider'), updateProgressStatus);
-router.post('/upload-report/:orderId', protect('provider'), uploadReport);
+router.patch('/update-progress/:orderId', protect('Lab'), updateProgressStatus);
+router.post('/upload-report/:orderId', protect('Lab'), uploadReport);
 
 module.exports = router;

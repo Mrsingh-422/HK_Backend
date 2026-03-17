@@ -3,8 +3,10 @@ const Admin = require('../models/Admin');
 const User = require('../models/User');
 const Doctor = require('../models/Doctor');
 const Hospital = require('../models/Hospital');
-const Provider = require('../models/Provider');
-const HospitalDoctor = require('../models/HospitalDoctor'); // Naya model yahan import kiya
+const Lab = require('../models/Lab');
+const Pharmacy = require('../models/Pharmacy');
+const Nurse = require('../models/Nurse');
+const Ambulance = require('../models/Ambulance');
 const Tab = require('../models/Tab'); // Tab model for global tab status check
 
 
@@ -14,25 +16,48 @@ const protect = (modelType) => async (req, res, next) => {
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
         try {
             token = req.headers.authorization.split(' ')[1];
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+            // --- Development Mode: No Expiry Check ---
+            const verifyOptions = process.env.NODE_ENV === 'development' ? { ignoreExpiration: true } : {};
+            const decoded = jwt.verify(token, process.env.JWT_SECRET, verifyOptions);
 
             let user;
-            if (modelType === 'admin') {
-                // Admin ke sath uska Role Template (tabIds) bhi load karo
-                user = await Admin.findById(decoded.id).populate('roleType');
-            } 
-            else if (modelType === 'user') user = await User.findById(decoded.id);
-            else if (modelType === 'doctor') user = await Doctor.findById(decoded.id);
-            else if (modelType === 'hospital') user = await Hospital.findById(decoded.id);
-            else if (modelType === 'provider') user = await Provider.findById(decoded.id);
-            // --- Naya logic yahan add kiya gaya hai ---
-            else if (modelType === 'hospital-doctor') {
-                user = await HospitalDoctor.findById(decoded.id);
+            
+            // Model Selection Logic based on modelType or JWT role
+            switch (modelType) {
+                case 'admin':
+                    user = await Admin.findById(decoded.id).populate('roleType');
+                    break;
+                case 'user':
+                    user = await User.findById(decoded.id);
+                    break;
+                case 'doctor':
+                case 'hospital-doctor':
+                    user = await Doctor.findById(decoded.id);
+                    break;
+                case 'hospital':
+                    user = await Hospital.findById(decoded.id);
+                    break;
+                case 'lab':
+                    user = await Lab.findById(decoded.id);
+                    break;
+                case 'pharmacy':
+                    user = await Pharmacy.findById(decoded.id);
+                    break;
+                case 'nurse':
+                    user = await Nurse.findById(decoded.id);
+                    break;
+                case 'ambulance':
+                case 'hospital-ambulance':
+                    user = await Ambulance.findById(decoded.id);
+                    break;
+                default:
+                    return res.status(400).json({ message: 'Invalid Model Type in Middleware' });
             }
 
             if (!user) return res.status(401).json({ message: 'User not found' });
 
-            // Check if account is active (for Admin/Vendors/HospitalDoctors)
+            // --- Deactivation Check (Common for all) ---
             if (user.isActive === false) {
                 return res.status(403).json({ message: 'Account is deactivated' });
             }
@@ -40,6 +65,7 @@ const protect = (modelType) => async (req, res, next) => {
             req.user = user; 
             next();
         } catch (error) {
+            console.error("Auth Error:", error.message);
             res.status(401).json({ message: 'Not authorized, invalid token' });
         }
     } else {
