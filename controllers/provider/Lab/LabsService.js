@@ -1,5 +1,21 @@
 const LabTest = require('../../../models/LabTest');
 const LabPackage = require('../../../models/LabPackage');
+const MasterLabTest = require('../../../models/MasterLabTest');
+
+
+// endpoint: GET /provider/labs/services/tests/master-tests?mainCategory=Pathology&search=diabetes
+// Radiology or Pathology ke master test list ke liye
+const getMasterList = async (req, res) => {
+    try {
+        const { mainCategory, search } = req.query;
+        let query = { isActive: true };
+        if (mainCategory) query.mainCategory = mainCategory;
+        if (search) query.testName = new RegExp(search, 'i');
+
+        const list = await MasterLabTest.find(query);
+        res.json({ success: true, data: list });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 // ==========================================
 // 1. LAB TEST SECTION (Radiology & Pathology)
@@ -8,18 +24,39 @@ const LabPackage = require('../../../models/LabPackage');
 // endpoint: POST /provider/labs/services/add-test
 const saveLabTest = async (req, res) => {
     try {
-        const { id, ...data } = req.body;
-        
-        if (req.files && req.files.photos) {
-            data.photos = req.files.photos.map(f => f.path);
-        }
-        
-        const test = id 
-            ? await LabTest.findByIdAndUpdate(id, data, { new: true })
-            : await LabTest.create({ labId: req.user.id, ...data });
+        const { masterTestId, amount, discountPrice, testType, description, safetyAdvice, precaution, sicknessType } = req.body;
 
-        res.json({ success: true, message: "Test saved successfully", data: test });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // Pehle Master data fetch karo
+        const masterData = await MasterLabTest.findById(masterTestId);
+        if (!masterData) return res.status(404).json({ message: "Invalid Master Test ID" });
+
+        // Logic Check: Radiology me aksar Home Collection nahi hota
+        if (masterData.mainCategory === 'Radiology' && testType === 'Home Collection') {
+            return res.status(400).json({ message: "Radiology tests are only available as Walk-In" });
+        }
+
+        const photos = req.files ? req.files.map(f => f.path) : [];
+
+        const newTest = await LabTest.create({
+            labId: req.user.id,
+            masterTestId,
+            testName: masterData.testName,
+            mainCategory: masterData.mainCategory,
+            sampleType: masterData.sampleType,
+            amount,
+            discountPrice,
+            testType,
+            description,
+            safetyAdvice,
+            precaution,
+            sicknessType,
+            photos
+        });
+
+        res.status(201).json({ success: true, message: "Test created in your lab profile", data: newTest });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
 };
 
 // endpoint: GET /provider/lab/tests/my-tests?mainCategory=Pathology
@@ -85,4 +122,4 @@ const deleteService = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService };
+module.exports = { getMasterList, saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService };

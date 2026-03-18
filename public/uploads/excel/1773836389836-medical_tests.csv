@@ -1,0 +1,31 @@
+testName,mainCategory,category,sampleType
+Complete Blood Count (CBC),Pathology,General Health,Blood
+Lipid Profile,Pathology,Heart Health,Blood
+Liver Function Test (LFT),Pathology,Liver Health,Blood
+Kidney Function Test (KFT),Pathology,Kidney Health,Blood
+Thyroid Profile (T3 T4 TSH),Pathology,Thyroid,Blood
+HbA1c (Diabetes Control),Pathology,Diabetes,Blood
+Blood Sugar (Fasting),Pathology,Diabetes,Blood
+Vitamin D (25-OH),Pathology,Deficiency,Blood
+Vitamin B12,Pathology,Deficiency,Blood
+Urine Routine & Microscopy,Pathology,General Health,Urine
+Stool Routine,Pathology,Digestion,Stool
+Malaria Parasite (MP),Pathology,Fever,Blood
+Dengue NS1 Antigen,Pathology,Fever,Blood
+Widal Test (Typhoid),Pathology,Fever,Blood
+CRP (C-Reactive Protein),Pathology,Inflammation,Blood
+X-Ray Chest PA View,Radiology,Respiratory,NA
+Ultrasound Abdomen & Pelvis,Radiology,General Health,NA
+MRI Brain (Plain),Radiology,Neurological,NA
+CT Scan Whole Abdomen,Radiology,Digestive,NA
+ECG (Electrocardiogram),Radiology,Heart Health,NA
+HRCT Chest,Radiology,Respiratory,NA
+Mammography (Both Breasts),Radiology,Women Health,NA
+Bone Densitometry (DEXA),Radiology,Orthopedic,NA
+PSA (Prostate Specific Antigen),Pathology,Men Health,Blood
+Iron Profile,Pathology,Deficiency,Blood
+Electrolytes (Serum),Pathology,Kidney Health,Blood
+Biopsy (Small Tissue),Pathology,Cancer Detection,Tissue
+Sputum for AFB,Pathology,Respiratory,Sputum
+Pap Smear,Pathology,Women Health,Swab
+NT-Pro BNP,Pathology,Heart Health,Blood

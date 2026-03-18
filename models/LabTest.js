@@ -3,18 +3,24 @@ const mongoose = require('mongoose');
 
 const labTestSchema = new mongoose.Schema({
     labId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lab' },
-    mainCategory: { type: String, enum: ['Radiology', 'Pathology'], required: true }, 
-    category: String, // e.g., "Full Body", "Diabetes"
-    testName: { type: String, required: true },
-    sampleType: String, 
+    // Master Test se link
+    masterTestId: { type: mongoose.Schema.Types.ObjectId, ref: 'MasterLabTest', required: true },
+    
+    // Inhe hum master list se copy kar sakte hain ya ref se populate
+    mainCategory: { type: String, enum: ['Radiology', 'Pathology'] }, 
+    testName: { type: String },
+    sampleType: { type: String },
+    
+    // Vendor specific data (Figma fields)
     photos: [String],
-    description: String,
-    safetyAdvice: String,
-    precaution: String,
-    sicknessType: String,
-    testType: { type: String, enum: ['Home Collection', 'Walk-In'] },
+    description: { type: String },
+    safetyAdvice: { type: String },
+    precaution: { type: String },
+    sicknessType: { type: String }, // Figma: Which test for Sickness
+    testType: { type: String, enum: ['Home Collection', 'Walk-In', 'Both'] },
     amount: { type: Number, required: true },
-    discountPrice: { type: Number, default: 0 }
+    discountPrice: { type: Number, default: 0 },
+    discountPercent: { type: String }, // Calculated field
 }, { timestamps: true });
 
 module.exports = mongoose.model('LabTest', labTestSchema);

@@ -1,3 +1,4 @@
+// middleware/multer.js
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -64,44 +65,57 @@ ensureDir(labDir);
 const labDocUploads = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, labDir),
-        filename: (req, file, cb) => cb(null, `lab-profile-${Date.now()}${path.extname(file.originalname)}`)
+        filename: (req, file, cb) => cb(null, `lab-${Date.now()}${path.extname(file.originalname)}`)
     }),
-    fileFilter: docFileFilter
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
 }).fields([
     { name: 'profileImage', maxCount: 1 },
-    { name: 'certificates', maxCount: 10 } // Lab License, NABL, etc.
+    { name: 'labImages', maxCount: 10 },
+    { name: 'labCertificates', maxCount: 10 },
+    { name: 'labLicenses', maxCount: 10 },
+    { name: 'gstCertificates', maxCount: 5 },
+    { name: 'drugLicenses', maxCount: 5 },
+    { name: 'otherCertificates', maxCount: 10 }
 ]);
 
 // ==========================================
 // 5. PHARMACY CONFIGURATION (Specific)
 // ==========================================
-const pharmacyDir = 'public/uploads/pharmacies';
-ensureDir(pharmacyDir);
 const pharmacyDocUploads = multer({
     storage: multer.diskStorage({
-        destination: (req, file, cb) => cb(null, pharmacyDir),
-        filename: (req, file, cb) => cb(null, `pharmacy-profile-${Date.now()}${path.extname(file.originalname)}`)
+        destination: (req, file, cb) => cb(null, 'public/uploads/pharmacies'),
+        filename: (req, file, cb) => cb(null, `pharma-${Date.now()}${path.extname(file.originalname)}`)
     }),
-    fileFilter: docFileFilter
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
 }).fields([
     { name: 'profileImage', maxCount: 1 },
-    { name: 'certificates', maxCount: 10 } // Drug License, GST, etc.
+    { name: 'pharmacyImages', maxCount: 10 },       // Matches Figma
+    { name: 'pharmacyCertificates', maxCount: 10 }, // Matches Figma
+    { name: 'pharmacyLicenses', maxCount: 10 },     // Matches Figma
+    { name: 'gstCertificates', maxCount: 5 },       // Matches Figma
+    { name: 'drugLicenses', maxCount: 5 },          // Matches Figma
+    { name: 'otherCertificates', maxCount: 10 }     // Matches Figma
 ]);
 
 // ==========================================
 // 6. NURSE CONFIGURATION (Specific)
 // ==========================================
-const nurseDir = 'public/uploads/nurses';
-ensureDir(nurseDir);
 const nurseDocUploads = multer({
     storage: multer.diskStorage({
-        destination: (req, file, cb) => cb(null, nurseDir),
-        filename: (req, file, cb) => cb(null, `nurse-profile-${Date.now()}${path.extname(file.originalname)}`)
+        destination: (req, file, cb) => cb(null, 'public/uploads/nurses'),
+        filename: (req, file, cb) => cb(null, `nurse-${Date.now()}${path.extname(file.originalname)}`)
     }),
-    fileFilter: docFileFilter
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
 }).fields([
     { name: 'profileImage', maxCount: 1 },
-    { name: 'certificates', maxCount: 10 } // Degree, Govt Registration, etc.
+    { name: 'nursingCertificates', maxCount: 10 },    // Figma: Nursing Certificate
+    { name: 'licensePhotos', maxCount: 10 },          // Figma: License Photo
+    { name: 'gstCertificates', maxCount: 5 },        // Figma: GST Certificate
+    { name: 'experienceCertificates', maxCount: 10 }, // Figma: Award/Experience
+    { name: 'otherCertificates', maxCount: 10 }       // Figma: Other
 ]);
 
 // ==========================================

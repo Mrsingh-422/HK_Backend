@@ -155,42 +155,146 @@ const loginProvider = async (req, res) => {
 };
 
 // ==========================================
-// 3. UPLOAD DOCUMENTS & CHANGE STATUS
-// endpoint: PUT /api/auth/provider/upload-docs
+// 3. SEPARATE UPLOAD DOCS: LAB
+// endpoint: PUT /api/auth/provider/upload-docs/lab
 // ==========================================
-const uploadProviderDocs = async (req, res) => {
+const uploadLabDocs = async (req, res) => {
     try {
-        // req.user.role contains 'Lab', 'Pharmacy', or 'Nurse' from middleware
-        const Model = getModelByCategory(req.user.role); 
-        const updates = req.body;
+        const labId = req.user.id;
+        const { documentState, issuingAuthority, gstNumber, experience, drugLicenseType, about } = req.body;
+        const files = req.files;
 
-        if (req.files) {
-            if (req.files.profileImage) {
-                updates.profileImage = `/uploads/providers/${req.files.profileImage[0].filename}`;
-            }
-            if (req.files.certificates) {
-                updates.documents = req.files.certificates.map(f => `/uploads/providers/${f.filename}`);
-                
-                // Essential logic: Change status to Pending once docs are uploaded
-                updates.profileStatus = 'Pending';
-                updates.rejectionReason = null; 
-            }
-        }
+        // 1. Pehle pura documents object taiyar karein (Dot notation ki jagah nested object)
+        const documentsObj = {
+            documentState,
+            issuingAuthority,
+            gstNumber,
+            experience,
+            drugLicenseType,
+            labImages: files?.labImages ? files.labImages.map(f => f.path) : [],
+            labCertificates: files?.labCertificates ? files.labCertificates.map(f => f.path) : [],
+            labLicenses: files?.labLicenses ? files.labLicenses.map(f => f.path) : [],
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path) : [],
+            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => f.path) : [],
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
+        };
 
-        const updated = await Model.findByIdAndUpdate(
-            req.user.id, 
-            { $set: updates }, 
-            { new: true }
+        // 2. Database update
+        const updatedLab = await Lab.findByIdAndUpdate(
+            labId, 
+            { 
+                $set: { 
+                    about,
+                    profileStatus: 'Pending',
+                    rejectionReason: null,
+                    documents: documentsObj, // 👈 Pura object replace hoga, array conflict khatam
+                    ...(files?.profileImage && { profileImage: files.profileImage[0].path })
+                } 
+            }, 
+            { new: true, runValidators: true }
         );
 
-        res.json({ 
-            success: true, 
-            message: updates.profileStatus === 'Pending' ? "Documents submitted for review" : "Profile Updated", 
-            data: updated 
-        });
+        res.json({ success: true, message: "Documents uploaded.", data: updatedLab });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-module.exports = { registerProvider, loginProvider, uploadProviderDocs };
+// ==========================================
+// 4. SEPARATE UPLOAD DOCS: PHARMACY
+// endpoint: PUT /api/auth/provider/upload-docs/pharmacy
+// ==========================================
+const uploadPharmacyDocs = async (req, res) => {
+    try {
+        const pharmacyId = req.user.id;
+        const { documentState, issuingAuthority, gstNumber, drugLicenseType, about, isHomeDeliveryAvailable, is24x7 } = req.body;
+        const files = req.files;
+
+        // 1. Prepare entire documents object (Overwrites any old array)
+        const documentsObj = {
+            documentState,
+            issuingAuthority,
+            gstNumber,
+            drugLicenseType,
+            pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => f.path) : [],
+            pharmacyCertificates: files?.pharmacyCertificates ? files.pharmacyCertificates.map(f => f.path) : [],
+            pharmacyLicenses: files?.pharmacyLicenses ? files.pharmacyLicenses.map(f => f.path) : [],
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path) : [],
+            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => f.path) : [],
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
+        };
+
+        // 2. Perform Atomic update
+        const updatedPharmacy = await Pharmacy.findByIdAndUpdate(
+            pharmacyId, 
+            { 
+                $set: { 
+                    about,
+                    isHomeDeliveryAvailable,
+                    is24x7,
+                    profileStatus: 'Pending',
+                    rejectionReason: null,
+                    documents: documentsObj,
+                    ...(files?.profileImage && { profileImage: files.profileImage[0].path })
+                } 
+            }, 
+            { new: true, runValidators: true }
+        );
+
+        res.json({ success: true, message: "Pharmacy documents submitted for review.", data: updatedPharmacy });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// ==========================================
+// 5. SEPARATE UPLOAD DOCS: NURSE
+// endpoint: PUT /api/auth/provider/upload-docs/nurse
+// ==========================================
+const uploadNurseDocs = async (req, res) => {
+    try {
+        const nurseId = req.user.id;
+        const { 
+            documentState, issuingAuthority, gstNumber, 
+            experience, about, experienceYears, speciality, gender 
+        } = req.body;
+        const files = req.files;
+
+        // 1. Prepare entire documents object as per Figma Labels
+        const documentsObj = {
+            documentState,
+            issuingAuthority,
+            gstNumber,
+            experience,
+            nursingCertificates: files?.nursingCertificates ? files.nursingCertificates.map(f => f.path) : [],
+            licensePhotos: files?.licensePhotos ? files.licensePhotos.map(f => f.path) : [],
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path) : [],
+            experienceCertificates: files?.experienceCertificates ? files.experienceCertificates.map(f => f.path) : [],
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
+        };
+
+        // 2. Atomic update: Overwrite 'documents' field to convert from Array to Object
+        const updatedNurse = await Nurse.findByIdAndUpdate(
+            nurseId, 
+            { 
+                $set: { 
+                    about,
+                    experienceYears,
+                    speciality,
+                    gender,
+                    profileStatus: 'Pending',
+                    rejectionReason: null,
+                    documents: documentsObj, 
+                    ...(files?.profileImage && { profileImage: files.profileImage[0].path })
+                } 
+            }, 
+            { new: true, runValidators: true }
+        );
+
+        res.json({ success: true, message: "Nursing documents submitted for review.", data: updatedNurse });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+module.exports = { registerProvider, loginProvider, uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs };

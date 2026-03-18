@@ -8,10 +8,18 @@ const {
     getMyTests, 
     saveLabPackage, 
     getMyPackages, 
-    deleteService 
+    deleteService ,
+    getMasterList
+
 } = require('../../../controllers/provider/Lab/LabsService');
 
 // Base URL: /provider/labs/services
+
+
+
+// --- MASTER TESTS ---
+router.get('/tests/master-tests', protect('lab'), getMasterList);
+
 
 // --- LAB TESTS (Pathology/Radiology) ---
 router.post('/tests/save', protect('lab'), doctorDocUploads, saveLabTest);

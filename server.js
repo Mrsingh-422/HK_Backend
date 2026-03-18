@@ -28,6 +28,7 @@ app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
 app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
 app.use('/admin/doctor-data', require('./routes/admin/others/doctorDataRoute'));
 app.use('/admin/roles', require('./routes/subAdmin/RoleRoute')); // Role Management Route
+
 app.use('/api/homepage', require('./routes/admin/user/home/HomePageRoute')); // HomePage Content Management Route
 app.use('/api/labpage', require('./routes/admin/user/home/LabPageRoute')) // LabPage Content Management Route
 app.use('/api/appointmentpage', require('./routes/admin/user/home/AppointmentPageRoute')); // Appointment Page Content Management Route
@@ -35,10 +36,12 @@ app.use('/api/medicinepage', require('./routes/admin/user/home/MedicinePageRoute
 app.use('/api/ambulancepage', require('./routes/admin/user/home/AmbulancePageRoute')); // Ambulance Page Content Management Route
 app.use('/api/hospitalpage', require('./routes/admin/user/home/HoppitalPageRoute')); // Hospital Page Content Management Route
 app.use('/api/nursepage', require('./routes/admin/user/home/NursePageRoute')); // Nurse Page Content Management Route
-
 app.use('/api/footer', require('./routes/admin/user/home/footerRoutes')); // Footer Management Route
 app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); // List Management Route (Doctors, Hospitals, etc.)
+// --- Admin pharmacy Routes ---
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
+// --- Admin Lab Routes ---
+app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // Master Lab Test Upload & List Route
 
 /////////////  User Routes /////////////////////////
 app.use('/api/auth/user', require('./routes/user/authUser')); 
