@@ -27,7 +27,7 @@ const driverSchema = new mongoose.Schema({
     address: String,
     
     status: { type: String, enum: ['Available', 'Busy', 'Offline'], default: 'Available' },
-    token: { type: String, default: null }
+    token: { type: String, default: null },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Driver', driverSchema);

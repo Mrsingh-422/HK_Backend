@@ -54,9 +54,6 @@ const saveLabTest = async (req, res) => {
         res.json({ success: true, data: test });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-
-
-
 // endpoint: GET /provider/labs/services/tests/my-tests?mainCategory=Pathology
 const getMyTests = async (req, res) => {
     try {
@@ -73,7 +70,7 @@ const getMyTests = async (req, res) => {
 // 2. LAB PACKAGE SECTION
 // ==========================================
 
-// endpoint: POST /api/provider/labs/services/packages/save
+// endpoint: POST /provider/labs/services/packages/save
 const saveLabPackage = async (req, res) => {
     try {
         const { id, tests, packageName, mrp, discountPercent, reportTime, description, gender, ageGroup } = req.body;
@@ -100,7 +97,7 @@ const saveLabPackage = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// endpoint: GET /api/provider/labs/services/packages/my-packages
+// endpoint: GET /provider/labs/services/packages/my-packages
 const getMyPackages = async (req, res) => {
     try {
         const packages = await LabPackage.find({ labId: req.user.id }).populate('tests');
@@ -112,7 +109,7 @@ const getMyPackages = async (req, res) => {
 // 3. COMMON ACTIONS
 // ==========================================
 
-// endpoint: DELETE /api/provider/labs/services/service/delete/:type/:id
+// endpoint: DELETE /provider/labs/services/service/delete/:type/:id
 const deleteService = async (req, res) => {
     try {
         const Model = req.params.type === 'test' ? LabTest : LabPackage;
@@ -125,7 +122,7 @@ const deleteService = async (req, res) => {
 
 
 // 4. GET SPECIFIC MASTER TEST DETAILS (Figma logic: Auto-fill fields)
-// endpoint: GET /api/provider/lab/services/master-test-details/:masterTestId
+// endpoint: GET /provider/lab/services/master-test-details/:masterTestId
 const getMasterTestDetails = async (req, res) => {
     try {
         const test = await MasterLabTest.findById(req.params.masterTestId);
@@ -134,12 +131,6 @@ const getMasterTestDetails = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Helper function for discount
-const calculateDiscount = (mrp, price) => {
-    if (!mrp || mrp <= 0) return "0%";
-    const discount = ((mrp - price) / mrp) * 100;
-    return `${Math.round(discount)}%`;
-};
 
 
 module.exports = { getMasterList, saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService,getMasterTestDetails };
