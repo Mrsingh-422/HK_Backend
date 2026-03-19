@@ -43,6 +43,9 @@ app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUpl
 // --- Admin Lab Routes ---
 app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // Master Lab Test Upload & List Route
 
+
+
+
 /////////////  User Routes /////////////////////////
 app.use('/api/auth/user', require('./routes/user/authUser')); 
 // --- user doctor ---
@@ -59,20 +62,30 @@ app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
 app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
 app.use('/doctor/appointments', require('./routes/doctor/AppointmentRoute')); // Doctor Appointments Route
 
+
+
+
 //////////////// Hospital Routes /////////////////////
 app.use('/api/auth/hospital', require('./routes/hospital/authHospital'));
 app.use('/api/hospital/doctors', require('./routes/hospital/hospitalDoctor/hosDoctorRoute')); // Hospital Doctor Management
 app.use('/hospital/doctor/appointments', require('./routes/hospital/hospitalDoctor/hosAppointment')); // Hospital Doctor Appointments Route
 app.use('/api/hospital/ambulance', require('./routes/hospital/hospitalAmbulance/hosAmbulanceRoute')); // Hospital Ambulance Management
 
+
+
+
 //////////////// Provider Routes /////////////////////
 app.use('/api/auth/provider', require('./routes/provider/authProvider'));
 app.use('/provider/wallet', require('./routes/provider/Common/WalletRoute')); // Wallet Management Route (Withdrawals)
 app.use('/provider/promotions', require('./routes/provider/Common/CouponRoute')); // Promotions & Coupon Management Route
 app.use('/provider/availability', require('./routes/provider/Common/AvailabilityRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
+app.use('/provider/driver', require('./routes/provider/Common/DriverRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
+
 // --- Provider Lab Routes ---
 app.use('/provider/labs', require('./routes/provider/Lab/LabOrderRoute')); // Lab Order Management
 app.use('/provider/labs/services', require('./routes/provider/Lab/LabsServiceRoute')); // Lab Test Management
+app.use('/provider/labs/driver', require('./routes/provider/Lab/LabDriverRoute')); // Lab Test Management
+
 
 // --- Provider Pharmacy Routes ---
 

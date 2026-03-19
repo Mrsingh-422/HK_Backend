@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo | Manage Lab Services</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; padding: 20px; font-family: sans-serif; }
+        .form-container { max-width: 700px; margin: auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .tab-btn { cursor: pointer; padding: 10px 25px; border: none; background: #ddd; border-radius: 5px; margin-right: 10px; font-weight: 600; }
+        .tab-btn.active { background: #198754; color: white; }
+        .hidden { display: none; }
+        .scrollable-list { max-height: 200px; overflow-y: auto; border: 1px solid #ced4da; padding: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="form-container">
+    <h3 class="text-center mb-4 text-success">Manage Lab Services</h3>
+    
+    <div class="d-flex justify-content-center mb-4">
+        <button class="tab-btn active" onclick="switchTab('testForm')">Add Test</button>
+        <button class="tab-btn" onclick="switchTab('packageForm')">Add Package</button>
+    </div>
+
+    <!-- ADD TEST FORM -->
+    <form id="testForm">
+        <div class="mb-3">
+            <label class="form-label">Main Category</label>
+            <select id="mainCategory" class="form-select" onchange="loadMasterTests()" required>
+                <option value="">Select Category</option>
+                <option value="Pathology">Pathology</option>
+                <option value="Radiology">Radiology</option>
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Select Test Name</label>
+            <select id="masterTestId" class="form-select" onchange="autoFillDetails()" required>
+                <option value="">First select category</option>
+            </select>
+        </div>
+        <div class="row">
+            <div class="col-md-6 mb-3"><label class="form-label">Category</label><input type="text" id="autoCategory" class="form-control" readonly></div>
+            <div class="col-md-6 mb-3"><label class="form-label">Sample Type</label><input type="text" id="autoSample" class="form-control" readonly></div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Upload Photos</label>
+            <input type="file" id="testPhotos" class="form-control" multiple>
+        </div>
+        <div class="row">
+            <div class="col-md-6 mb-3"><label class="form-label">Amount (MRP)</label><input type="number" id="amount" class="form-control" required></div>
+            <div class="col-md-6 mb-3"><label class="form-label">Discount %</label><input type="number" id="discountPercent" class="form-control" required></div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Description</label>
+            <textarea id="description" class="form-control" rows="2"></textarea>
+        </div>
+        <button type="submit" class="btn btn-success w-100">Submit Test</button>
+    </form>
+
+    <!-- ADD PACKAGE FORM -->
+    <form id="packageForm" class="hidden">
+        <div class="mb-3">
+            <label class="form-label">Package Name</label>
+            <input type="text" id="pkgName" class="form-control" required>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Select Tests</label>
+            <div id="testCheckboxList" class="scrollable-list"></div>
+        </div>
+        <div class="row">
+            <div class="col-md-6 mb-3"><label class="form-label">MRP</label><input type="number" id="pkgMrp" class="form-control" required></div>
+            <div class="col-md-6 mb-3"><label class="form-label">Discount %</label><input type="number" id="pkgDiscount" class="form-control" required></div>
+        </div>
+        <button type="submit" class="btn btn-primary w-100">Create Package</button>
+    </form>
+</div>
+
+<script>
+    const BASE_URL = 'http://localhost:5002'; 
+    const token = localStorage.getItem('token');
+
+    function switchTab(tabId) {
+        document.querySelectorAll('form').forEach(f => f.classList.add('hidden'));
+        document.getElementById(tabId).classList.remove('hidden');
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        event.target.classList.add('active');
+        if(tabId === 'packageForm') loadAllMyTests();
+    }
+
+    async function loadMasterTests() {
+        const cat = document.getElementById('mainCategory').value;
+        const res = await fetch(`${BASE_URL}/provider/labs/services/tests/master-tests?mainCategory=${cat}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const json = await res.json();
+        const select = document.getElementById('masterTestId');
+        select.innerHTML = '<option value="">Select Test Name</option>';
+        json.data.forEach(t => select.innerHTML += `<option value="${t._id}">${t.testName}</option>`);
+    }
+
+    async function autoFillDetails() {
+        const id = document.getElementById('masterTestId').value;
+        if(!id) return;
+        const res = await fetch(`${BASE_URL}/provider/labs/services/tests/master-details/${id}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const json = await res.json();
+        document.getElementById('autoCategory').value = json.data.category;
+        document.getElementById('autoSample').value = json.data.sampleType;
+    }
+
+    async function loadAllMyTests() {
+        const res = await fetch(`${BASE_URL}/provider/labs/services/tests/my-tests`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const json = await res.json();
+        const list = document.getElementById('testCheckboxList');
+        list.innerHTML = '';
+        json.data.forEach(t => {
+            list.innerHTML += `<div class="form-check"><input type="checkbox" value="${t._id}" class="form-check-input pkg-test"> <label class="form-check-label">${t.testName}</label></div>`;
+        });
+    }
+
+    // Submit Test
+    document.getElementById('testForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const formData = new FormData();
+        formData.append('masterTestId', document.getElementById('masterTestId').value);
+        formData.append('amount', document.getElementById('amount').value);
+        formData.append('discountPercent', document.getElementById('discountPercent').value);
+        formData.append('description', document.getElementById('description').value);
+        formData.append('testType', 'Walk-In');
+        
+        const files = document.getElementById('testPhotos').files;
+        for(let i=0; i<files.length; i++) formData.append('photos', files[i]);
+
+        const res = await fetch(`${BASE_URL}/provider/labs/services/tests/save`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+        alert('Test Added!');
+    };
+
+    // Submit Package
+    document.getElementById('packageForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const selectedTests = Array.from(document.querySelectorAll('.pkg-test:checked')).map(cb => cb.value);
+        
+        // Safety Check: Null check for inputs
+        const pkgName = document.getElementById('pkgName')?.value;
+        const pkgMrp = document.getElementById('pkgMrp')?.value;
+        const pkgDiscount = document.getElementById('pkgDiscount')?.value;
+
+        if(!pkgName || !pkgMrp || !pkgDiscount) return alert("All fields required");
+
+        const formData = new FormData();
+        formData.append('packageName', pkgName);
+        formData.append('tests', JSON.stringify(selectedTests));
+        formData.append('mrp', pkgMrp);
+        formData.append('discountPercent', pkgDiscount);
+
+        await fetch(`${BASE_URL}/provider/labs/services/packages/save`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+        alert('Package Created!');
+    };
+</script>
+</body>
+</html>

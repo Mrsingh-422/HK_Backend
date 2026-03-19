@@ -2,7 +2,11 @@ const LabTest = require('../../../models/LabTest');
 const LabPackage = require('../../../models/LabPackage');
 const MasterLabTest = require('../../../models/MasterLabTest');
 
-
+// Helper to auto-calculate Discount Price
+const calculateActualPrice = (amount, discountPercent) => {
+    const discount = (amount * parseInt(discountPercent)) / 100;
+    return amount - discount;
+};
 // endpoint: GET /provider/labs/services/tests/master-tests?mainCategory=Pathology&search=diabetes
 // Radiology or Pathology ke master test list ke liye
 const getMasterList = async (req, res) => {
@@ -24,42 +28,36 @@ const getMasterList = async (req, res) => {
 // endpoint: POST /provider/labs/services/add-test
 const saveLabTest = async (req, res) => {
     try {
-        const { masterTestId, amount, discountPrice, testType, description, safetyAdvice, precaution, sicknessType } = req.body;
-
-        // Pehle Master data fetch karo
+        const { id, masterTestId, amount, discountPercent, description, testType, safetyAdvice, precaution, sicknessType } = req.body;
+        
+        // Master data fetch karo
         const masterData = await MasterLabTest.findById(masterTestId);
         if (!masterData) return res.status(404).json({ message: "Invalid Master Test ID" });
 
-        // Logic Check: Radiology me aksar Home Collection nahi hota
-        if (masterData.mainCategory === 'Radiology' && testType === 'Home Collection') {
-            return res.status(400).json({ message: "Radiology tests are only available as Walk-In" });
-        }
-
-        const photos = req.files ? req.files.map(f => f.path) : [];
-
-        const newTest = await LabTest.create({
+        const payload = {
             labId: req.user.id,
             masterTestId,
             testName: masterData.testName,
             mainCategory: masterData.mainCategory,
             sampleType: masterData.sampleType,
             amount,
-            discountPrice,
-            testType,
-            description,
-            safetyAdvice,
-            precaution,
-            sicknessType,
-            photos
-        });
+            discountPercent: `${discountPercent}%`,
+            discountPrice: calculateActualPrice(amount, discountPercent), // Auto-calculate
+            testType, description, safetyAdvice, precaution, sicknessType,
+            photos: req.files?.photos ? req.files.photos.map(f => f.path) : []
+        };
+        
+        const test = id 
+            ? await LabTest.findByIdAndUpdate(id, payload, { new: true })
+            : await LabTest.create(payload);
 
-        res.status(201).json({ success: true, message: "Test created in your lab profile", data: newTest });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.json({ success: true, data: test });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// endpoint: GET /provider/lab/tests/my-tests?mainCategory=Pathology
+
+
+// endpoint: GET /provider/labs/services/tests/my-tests?mainCategory=Pathology
 const getMyTests = async (req, res) => {
     try {
         const { mainCategory } = req.query; // Pathology or Radiology
@@ -75,31 +73,34 @@ const getMyTests = async (req, res) => {
 // 2. LAB PACKAGE SECTION
 // ==========================================
 
-// endpoint: POST /api/provider/lab/packages/save
+// endpoint: POST /api/provider/labs/services/packages/save
 const saveLabPackage = async (req, res) => {
     try {
-        const { id, tests, ...data } = req.body;
+        const { id, tests, packageName, mrp, discountPercent, reportTime, description, gender, ageGroup } = req.body;
         
-        // Parse tests array if coming from form-data
-        if (tests) data.tests = typeof tests === 'string' ? JSON.parse(tests) : tests;
-        
-        if (req.files && req.files.photos) {
-            data.photos = req.files.photos.map(f => f.path);
-        }
+        const offerPrice = calculateActualPrice(mrp, discountPercent);
+
+        const payload = {
+            labId: req.user.id,
+            packageName,
+            mrp,
+            offerPrice,
+            discountPercent: `${discountPercent}%`,
+            reportTime, description, gender, ageGroup,
+            tests: tests ? (typeof tests === 'string' ? JSON.parse(tests) : tests) : [],
+            totalTestsIncluded: tests ? (typeof tests === 'string' ? JSON.parse(tests).length : tests.length) : 0,
+            photos: req.files?.photos ? req.files.photos.map(f => f.path) : []
+        };
 
         const packageData = id
-            ? await LabPackage.findByIdAndUpdate(id, data, { new: true })
-            : await LabPackage.create({ 
-                labId: req.user.id, 
-                ...data,
-                totalTestsIncluded: data.tests ? data.tests.length : 0 
-            });
+            ? await LabPackage.findByIdAndUpdate(id, payload, { new: true })
+            : await LabPackage.create(payload);
 
-        res.json({ success: true, message: "Package saved successfully", data: packageData });
+        res.json({ success: true, data: packageData });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// endpoint: GET /api/provider/lab/packages/my-packages
+// endpoint: GET /api/provider/labs/services/packages/my-packages
 const getMyPackages = async (req, res) => {
     try {
         const packages = await LabPackage.find({ labId: req.user.id }).populate('tests');
@@ -111,7 +112,7 @@ const getMyPackages = async (req, res) => {
 // 3. COMMON ACTIONS
 // ==========================================
 
-// endpoint: DELETE /api/provider/lab/service/delete/:type/:id
+// endpoint: DELETE /api/provider/labs/services/service/delete/:type/:id
 const deleteService = async (req, res) => {
     try {
         const Model = req.params.type === 'test' ? LabTest : LabPackage;
@@ -122,4 +123,23 @@ const deleteService = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { getMasterList, saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService };
+
+// 4. GET SPECIFIC MASTER TEST DETAILS (Figma logic: Auto-fill fields)
+// endpoint: GET /api/provider/lab/services/master-test-details/:masterTestId
+const getMasterTestDetails = async (req, res) => {
+    try {
+        const test = await MasterLabTest.findById(req.params.masterTestId);
+        if (!test) return res.status(404).json({ message: "Test not found" });
+        res.json({ success: true, data: test });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// Helper function for discount
+const calculateDiscount = (mrp, price) => {
+    if (!mrp || mrp <= 0) return "0%";
+    const discount = ((mrp - price) / mrp) * 100;
+    return `${Math.round(discount)}%`;
+};
+
+
+module.exports = { getMasterList, saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService,getMasterTestDetails };

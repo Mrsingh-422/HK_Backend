@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { doctorDocUploads } = require('../../../middleware/multer'); 
+const { labServiceUploads } = require('../../../middleware/multer'); 
 
 const { 
     saveLabTest, 
@@ -9,7 +9,7 @@ const {
     saveLabPackage, 
     getMyPackages, 
     deleteService ,
-    getMasterList
+    getMasterList, getMasterTestDetails
 
 } = require('../../../controllers/provider/Lab/LabsService');
 
@@ -19,14 +19,15 @@ const {
 
 // --- MASTER TESTS ---
 router.get('/tests/master-tests', protect('lab'), getMasterList);
+router.get('/tests/master-details/:masterTestId', protect('lab'), getMasterTestDetails);
 
 
 // --- LAB TESTS (Pathology/Radiology) ---
-router.post('/tests/save', protect('lab'), doctorDocUploads, saveLabTest);
+router.post('/tests/save', protect('lab'), labServiceUploads, saveLabTest);
 router.get('/tests/my-tests', protect('lab'), getMyTests);
 
 // --- LAB PACKAGES ---
-router.post('/packages/save', protect('lab'), doctorDocUploads, saveLabPackage);
+router.post('/packages/save', protect('lab'), labServiceUploads, saveLabPackage);
 router.get('/packages/my-packages', protect('lab'), getMyPackages);
 
 // --- DELETE ---

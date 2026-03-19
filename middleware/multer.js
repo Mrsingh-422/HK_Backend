@@ -164,6 +164,26 @@ const uploadExcel = multer({ storage: multer.diskStorage({ destination: (req, fi
 const contentUploads = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, frontendDir), filename: (req, file, cb) => cb(null, `content-${Date.now()}${path.extname(file.originalname)}`) }) }).array('images', 10);
 const userReportUploads = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, userReportDir), filename: (req, file, cb) => cb(null, `report-${Date.now()}${path.extname(file.originalname)}`) }) }).single('medicalReport');
 
+
+// ==========================================
+// 10. DRIVER DOCUMENT CONFIGURATION
+// ==========================================
+const driverDir = 'public/uploads/drivers';
+ensureDir(driverDir);
+
+const driverDocUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, driverDir),
+        filename: (req, file, cb) => cb(null, `driver-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter, // Purana wala common filter
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).fields([
+    { name: 'profilePic', maxCount: 1 },        // Figma: Driver Profile Image
+    { name: 'certificate', maxCount: 1 },       // Figma: Add Certificate
+    { name: 'license', maxCount: 1 },           // Figma: Add Driver License
+    { name: 'rcImage', maxCount: 1 }            // Figma: Add RC Image
+]);
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -174,5 +194,6 @@ module.exports = {
     nurseDocUploads,       // For Nurse Step 2
     ambulanceDocUploads,
     labServiceUploads,     // For Lab Tests/Packages
+    driverDocUploads,
     uploadExcel
 }; 
