@@ -30,4 +30,4 @@ const driverSchema = new mongoose.Schema({
     token: { type: String, default: null },
 }, { timestamps: true });
 
-module.exports = mongoose.model('Driver', driverSchema); 
+module.exports = mongoose.model('Driver', driverSchema);  

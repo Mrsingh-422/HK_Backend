@@ -47,6 +47,12 @@ const protect = (modelType) => async (req, res, next) => {
                 case 'nurse':
                     user = await Nurse.findById(decoded.id);
                     break;
+    case 'provider':
+    // Hum teeno models ko check karenge (Priority order mein)
+    user = await Lab.findById(decoded.id) || 
+           await Pharmacy.findById(decoded.id) || 
+           await Nurse.findById(decoded.id);
+    break;
                 case 'ambulance':
                 case 'hospital-ambulance':
                     user = await Ambulance.findById(decoded.id);

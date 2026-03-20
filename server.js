@@ -77,7 +77,7 @@ app.use('/api/hospital/ambulance', require('./routes/hospital/hospitalAmbulance/
 //////////////// Provider Routes /////////////////////
 app.use('/api/auth/provider', require('./routes/provider/authProvider'));
 app.use('/provider/wallet', require('./routes/provider/Common/WalletRoute')); // Wallet Management Route (Withdrawals)
-app.use('/provider/promotions', require('./routes/provider/Common/CouponRoute')); // Promotions & Coupon Management Route
+app.use('/provider/coupons', require('./routes/provider/Common/CouponRoute')); // Promotions & Coupon Management Route
 app.use('/provider/availability', require('./routes/provider/Common/AvailabilityRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 app.use('/provider/driver', require('./routes/provider/Common/DriverRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 
@@ -88,8 +88,12 @@ app.use('/provider/labs/driver', require('./routes/provider/Lab/LabDriverRoute')
 
 
 // --- Provider Pharmacy Routes ---
+app.use('/provider/pharmacy/driver', require('./routes/provider/Pharmacy/DriverPharmacyRoute')); // Lab Test Management
+
 
 // --- Provider Nurse Routes ---
+app.use('/provider/nurse/driver', require('./routes/provider/Nurse/NurseDriverRoute')); // Lab Test Management
+
 
 
 //////////////// Ambulance Routes /////////////////////
