@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { saveDeliveryCharges, getMyDeliveryCharges } = require('../../../controllers/provider/Common/Coupon'); // Apna Coupon controller import karein
+const { saveDeliveryCharges, getMyDeliveryCharges } = require('../../../controllers/provider/Common/Delivery');
 
-// Route: POST /provider/delivery
+// Base URL: /provider/delivery-charges
 
-router.post('/charges', protect('provider'), saveDeliveryCharges);
-router.get('/charges', protect('provider'), getMyDeliveryCharges);
+router.post('/save', protect('provider'), saveDeliveryCharges);
+router.get('/my-charges', protect('provider'), getMyDeliveryCharges);
 
 module.exports = router;

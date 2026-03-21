@@ -80,6 +80,7 @@ app.use('/provider/wallet', require('./routes/provider/Common/WalletRoute')); //
 app.use('/provider/coupons', require('./routes/provider/Common/CouponRoute')); // Promotions & Coupon Management Route
 app.use('/provider/availability', require('./routes/provider/Common/AvailabilityRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 app.use('/provider/driver', require('./routes/provider/Common/DriverRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
+app.use('/provider/delivery-charges', require('./routes/provider/Common/DeliveryRoute')); // Delivery Charges Management Route
 
 // --- Provider Lab Routes ---
 app.use('/provider/labs', require('./routes/provider/Lab/LabOrderRoute')); // Lab Order Management
