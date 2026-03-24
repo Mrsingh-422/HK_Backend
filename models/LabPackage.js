@@ -17,4 +17,4 @@ const labPackageSchema = new mongoose.Schema({
     ageGroup: { type: String } 
 }, { timestamps: true });
 
-module.exports = mongoose.model('LabPackage', labPackageSchema);
+module.exports = mongoose.model('LabPackage', labPackageSchema); 

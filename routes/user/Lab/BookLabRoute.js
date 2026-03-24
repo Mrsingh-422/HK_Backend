@@ -1,24 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { doctorDocUploads } = require('../../../middleware/multer'); // Same keys for user uploads
+const { prescriptionUploads } = require('../../../middleware/multer'); // Ensure this handles 'prescriptionImages' key
 const { 
-    getLabs, 
-    searchLabItems, 
-    bookLabTest, 
-    uploadPrescription,
-    getMyLabBookings 
+    getLabs, getLabDetails, getLabSlots,
+    bookLabTest, uploadPrescriptionFlow,
+    getMyBookings, getBookingDetails 
 } = require('../../../controllers/user/Lab/BookLab');
 
-// Base URL: /api/user/labs
+// Discovery
+router.get('/list', getLabs);
+router.get('/details/:id', getLabDetails);
+router.get('/slots', getLabSlots);
 
-// PUBLIC / SEMI-PUBLIC (POST used for complex filtering)
-router.post('/list', getLabs);
-router.post('/search-items', searchLabItems);
-
-// PROTECTED (Requires User token)
+// Booking (Protected)
 router.post('/book', protect('user'), bookLabTest);
-router.post('/upload-prescription', protect('user'), doctorDocUploads, uploadPrescription);
-router.get('/my-bookings', protect('user'), getMyLabBookings);
+router.post('/upload-prescription', protect('user'), prescriptionUploads.array('prescriptionImages', 5), uploadPrescriptionFlow);
+
+// Tracking & History
+router.get('/my-bookings', protect('user'), getMyBookings);
+router.get('/details/:id/track', protect('user'), getBookingDetails);
 
 module.exports = router;

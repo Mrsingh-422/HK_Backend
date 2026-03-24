@@ -184,6 +184,22 @@ const driverDocUploads = multer({
     { name: 'license', maxCount: 1 },           // Figma: Add Driver License
     { name: 'rcImage', maxCount: 1 }            // Figma: Add RC Image
 ]);
+
+// ==========================================
+// 11. PRESCRIPTION CONFIGURATION (User Side)
+// ==========================================
+const prescriptionDir = 'public/uploads/prescriptions';
+ensureDir(prescriptionDir);
+
+const prescriptionUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, prescriptionDir),
+        filename: (req, file, cb) => cb(null, `presc-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -195,5 +211,6 @@ module.exports = {
     ambulanceDocUploads,
     labServiceUploads,     // For Lab Tests/Packages
     driverDocUploads,
+    prescriptionUploads,
     uploadExcel
 }; 

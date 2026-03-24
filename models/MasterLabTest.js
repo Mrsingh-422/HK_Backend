@@ -8,4 +8,4 @@ const masterLabTestSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 
-module.exports = mongoose.model('MasterLabTest', masterLabTestSchema);
+module.exports = mongoose.model('MasterLabTest', masterLabTestSchema); 
