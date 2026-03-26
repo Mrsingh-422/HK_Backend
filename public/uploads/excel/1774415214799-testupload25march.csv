@@ -1,0 +1,51 @@
+testName,testCode,mainCategory,category,sampleType,pretestPreparation,standardMRP,parameters,faqs,detailedDescription
+Complete Blood Count,CBC001,Pathology,General Health,Blood,No fasting required,300,Hemoglobin || WBC || RBC || Platelets,What is CBC?:It measures blood components || Why is it done?:To detect infections,Overview:Basic blood test || Usage:General health screening
+Lipid Profile,LIP002,Pathology,Heart Health,Blood,8-10 hours fasting required,500,Cholesterol || HDL || LDL || Triglycerides,Why test?:Check heart risk || Fasting needed?:Yes,Overview:Measures fats || Usage:Heart disease risk
+Liver Function Test,LFT003,Pathology,Liver,Blood,No special preparation,600,ALT || AST || Bilirubin || ALP,Why LFT?:Check liver health || Alcohol allowed?:Avoid before test,Overview:Liver enzymes || Usage:Detect liver damage
+Kidney Function Test,KFT004,Pathology,Kidney,Blood,No special preparation,550,Creatinine || Urea || Uric Acid,Why KFT?:Check kidney health || Water intake?:Normal allowed,Overview:Kidney markers || Usage:Renal function check
+Thyroid Profile,THY005,Pathology,Hormonal,Blood,No fasting required,700,T3 || T4 || TSH,Why test?:Check thyroid || Symptoms?:Weight change,Overview:Hormone levels || Usage:Thyroid disorders
+Blood Sugar Fasting,BSF006,Pathology,Diabetes,Blood,8 hours fasting required,150,Glucose,Why fasting?:Accurate sugar level || Frequency?:Regular check,Overview:Sugar test || Usage:Diabetes screening
+HbA1c,HBA007,Pathology,Diabetes,Blood,No fasting required,400,HbA1c,What is HbA1c?:3 month sugar avg || Needed?:Yes for diabetics,Overview:Long term sugar || Usage:Diabetes control
+Urine Routine,URT008,Pathology,General Health,Urine,No special preparation,200,pH || Protein || Glucose || Ketones,Why test?:Detect infection || Sample?:Morning preferred,Overview:Urine test || Usage:UTI detection
+Vitamin D Test,VD009,Pathology,Vitamins,Blood,No fasting required,900,Vitamin D,Why test?:Check deficiency || Sun exposure?:Helps levels,Overview:Vitamin check || Usage:Bone health
+Vitamin B12,VB010,Pathology,Vitamins,Blood,No fasting required,850,Vitamin B12,Why test?:Check deficiency || Symptoms?:Weakness,Overview:Nerve health || Usage:B12 deficiency
+Widal Test,WID011,Pathology,Fever,Blood,No special preparation,300,Salmonella Antigens,What is it?:Typhoid test || Accuracy?:Moderate,Overview:Infection test || Usage:Typhoid detection
+Dengue NS1,DEN012,Pathology,Fever,Blood,No fasting required,600,NS1 Antigen,Why test?:Detect dengue early || Fever?:Yes symptom,Overview:Viral test || Usage:Dengue diagnosis
+Malaria Test,MAL013,Pathology,Fever,Blood,No fasting required,250,Parasite Detection,Why test?:Detect malaria || Fever?:Yes,Overview:Parasitic test || Usage:Malaria detection
+COVID-19 RT PCR,COV014,Pathology,Viral,Nasal Swab,No preparation,1200,RT-PCR,Why test?:Detect COVID || Time?:Few hours,Overview:Viral detection || Usage:COVID confirmation
+Chest X-Ray,CXR015,Radiology,Lungs,NA,Remove metal objects,800,Imaging,Why test?:Check lungs || Radiation?:Minimal,Overview:Imaging test || Usage:Lung issues
+MRI Brain,MRI016,Radiology,Brain,NA,Fasting sometimes required,5000,Imaging,Why MRI?:Detailed brain scan || Safe?:Yes,Overview:Magnetic imaging || Usage:Brain disorders
+CT Scan Abdomen,CT017,Radiology,Abdomen,NA,Fasting required,4000,Imaging,Why CT?:Detailed scan || Contrast?:Sometimes used,Overview:CT imaging || Usage:Organ analysis
+Ultrasound Abdomen,USG018,Radiology,Abdomen,NA,Full bladder required,1200,Imaging,Why USG?:Check organs || Pain?:No,Overview:Sound waves || Usage:Abdominal issues
+ECG,ECG019,Pathology,Heart,NA,No preparation,300,Heart Rate || Rhythm,Why ECG?:Check heart || Time?:Quick,Overview:Electrical test || Usage:Heart monitoring
+2D Echo,ECHO020,Radiology,Heart,NA,No preparation,1500,Imaging,Why echo?:Heart structure || Pain?:No,Overview:Ultrasound heart || Usage:Heart function
+TMT Test,TMT021,Pathology,Heart,NA,Light meal only,2000,Stress Test,Why TMT?:Stress heart || Exercise?:Required,Overview:Stress test || Usage:Heart risk
+Prolactin Test,PRL022,Pathology,Hormonal,Blood,Fasting preferred,600,Prolactin,Why test?:Hormone check || Symptoms?:Infertility,Overview:Hormone test || Usage:Reproductive health
+FSH Test,FSH023,Pathology,Hormonal,Blood,No preparation,650,FSH,Why test?:Fertility check || Men?:Also needed,Overview:Hormone levels || Usage:Fertility
+LH Test,LH024,Pathology,Hormonal,Blood,No preparation,650,LH,Why test?:Ovulation || Timing?:Cycle based,Overview:Hormone test || Usage:Fertility
+PSA Test,PSA025,Pathology,Cancer,Blood,No preparation,900,PSA,Why test?:Prostate cancer || Age?:Above 50,Overview:Cancer marker || Usage:Screening
+CRP Test,CRP026,Pathology,Inflammation,Blood,No fasting required,400,CRP,Why test?:Inflammation || Infection?:Yes indicator,Overview:Protein test || Usage:Inflammation
+ESR Test,ESR027,Pathology,Inflammation,Blood,No fasting required,150,ESR,Why test?:Inflammation || Chronic?:Yes,Overview:Blood test || Usage:Disease detection
+Ferritin Test,FER028,Pathology,Iron,Blood,No preparation,700,Ferritin,Why test?:Iron levels || Deficiency?:Yes,Overview:Iron storage || Usage:Anemia
+Iron Test,IRON029,Pathology,Iron,Blood,Fasting preferred,500,Iron,Why test?:Iron levels || Diet?:Affects,Overview:Iron check || Usage:Anemia
+Calcium Test,CAL030,Pathology,Bone,Blood,No preparation,300,Calcium,Why test?:Bone health || Vitamin D?:Related,Overview:Mineral test || Usage:Bones
+Phosphorus Test,PHO031,Pathology,Bone,Blood,No preparation,300,Phosphorus,Why test?:Bone mineral || Kidney?:Related,Overview:Mineral test || Usage:Bones
+Uric Acid Test,URIC032,Pathology,Joint,Blood,No preparation,350,Uric Acid,Why test?:Gout || Pain?:Yes,Overview:Acid levels || Usage:Gout
+Amylase Test,AMY033,Pathology,Pancreas,Blood,Fasting preferred,600,Amylase,Why test?:Pancreatitis || Pain?:Abdominal,Overview:Enzyme test || Usage:Pancreas
+Lipase Test,LIP034,Pathology,Pancreas,Blood,Fasting preferred,650,Lipase,Why test?:Pancreas || Specific?:Yes,Overview:Enzyme test || Usage:Pancreatitis
+Troponin Test,TROP035,Pathology,Heart,Blood,No preparation,1200,Troponin,Why test?:Heart attack || Emergency?:Yes,Overview:Protein test || Usage:Heart damage
+D-Dimer Test,DD036,Pathology,Blood Clot,Blood,No preparation,1500,D-Dimer,Why test?:Clot detection || COVID?:Used,Overview:Clot test || Usage:Thrombosis
+Allergy Test,ALL037,Pathology,Allergy,Blood,No preparation,2000,IgE,Why test?:Allergy cause || Skin?:Also used,Overview:Immune test || Usage:Allergy
+HIV Test,HIV038,Pathology,Infection,Blood,No preparation,500,HIV Antibodies,Why test?:Detect HIV || Confidential?:Yes,Overview:Viral test || Usage:HIV detection
+Hepatitis B Test,HBV039,Pathology,Infection,Blood,No preparation,600,HBsAg,Why test?:Liver infection || Spread?:Yes,Overview:Virus test || Usage:Hepatitis
+Hepatitis C Test,HCV040,Pathology,Infection,Blood,No preparation,700,HCV Antibody,Why test?:Detect HCV || Chronic?:Yes,Overview:Virus test || Usage:Hepatitis
+Pap Smear,PAP041,Pathology,Cancer,Cervical,No intercourse before test,1200,Cells,Why test?:Cervical cancer || Women?:Yes,Overview:Screening test || Usage:Cancer detection
+Mammography,MAM042,Radiology,Breast,NA,No deodorant,2500,Imaging,Why test?:Breast cancer || Pain?:Minimal,Overview:X-ray test || Usage:Breast screening
+Bone Density Test,BD043,Radiology,Bone,NA,No preparation,2000,DEXA Scan,Why test?:Bone strength || Age?:Older adults,Overview:Bone scan || Usage:Osteoporosis
+PET Scan,PET044,Radiology,Cancer,NA,Fasting required,15000,Imaging,Why test?:Cancer spread || Cost?:High,Overview:Advanced scan || Usage:Cancer detection
+CT Brain,CT045,Radiology,Brain,NA,No preparation,3500,Imaging,Why test?:Brain injury || Fast?:Yes,Overview:CT scan || Usage:Brain issues
+Ultrasound Pelvis,USG046,Radiology,Reproductive,NA,Full bladder,1000,Imaging,Why test?:Pelvic organs || Pain?:No,Overview:USG || Usage:Pelvis check
+X-Ray Spine,XR047,Radiology,Bone,NA,Remove metal,900,Imaging,Why test?:Back pain || Quick?:Yes,Overview:X-ray || Usage:Spine issues
+MRI Spine,MRI048,Radiology,Bone,NA,Fasting sometimes,5500,Imaging,Why test?:Detailed spine || Pain?:No,Overview:MRI || Usage:Spine disorders
+CT Chest,CT049,Radiology,Lungs,NA,Fasting required,4500,Imaging,Why test?:Lung issues || COVID?:Used,Overview:CT scan || Usage:Lungs
+Ultrasound Thyroid,USG050,Radiology,Thyroid,NA,No preparation,1200,Imaging,Why test?:Thyroid nodules || Safe?:Yes,Overview:USG || Usage:Thyroid

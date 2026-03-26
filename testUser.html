@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagnostic Center | Health Kangaroo</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { --primary: #00a651; --bg: #f4f7f6; --text-dark: #2d3436; }
+        body { background-color: var(--bg); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: var(--text-dark); }
+        
+        .nav-pills .nav-link { color: #666; font-weight: 600; border-radius: 50px; padding: 12px 35px; border: 1px solid #ddd; margin: 0 5px; }
+        .nav-pills .nav-link.active { background-color: var(--primary); border-color: var(--primary); box-shadow: 0 4px 12px rgba(0,166,81,0.2); }
+        
+        .card-service { border: none; border-radius: 20px; transition: 0.3s; box-shadow: 0 8px 20px rgba(0,0,0,0.05); background: white; }
+        .card-service:hover { transform: translateY(-8px); box-shadow: 0 12px 30px rgba(0,0,0,0.1); }
+        
+        .price-big { color: var(--primary); font-size: 1.5rem; font-weight: 800; }
+        .discount-badge { background: #e8f5e9; color: #2e7d32; padding: 5px 12px; border-radius: 8px; font-size: 0.75rem; font-weight: bold; }
+        
+        .sample-tag { background: #f0f2f5; color: #555; padding: 3px 10px; border-radius: 5px; font-size: 0.75rem; font-weight: 600; }
+        
+        .modal-header { background: var(--primary); color: white; border: none; }
+        .param-tag { display: inline-block; background: #e3f2fd; color: #0d47a1; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; margin: 3px; font-weight: 500; }
+        
+        .test-item-in-pkg { border-left: 3px solid var(--primary); padding-left: 15px; margin-bottom: 20px; }
+        .faq-item { background: #f8f9fa; border-radius: 12px; padding: 12px; margin-bottom: 10px; border-left: 3px solid #ff9f00; }
+    </style>
+</head>
+<body>
+
+<div class="container py-5">
+    <div class="text-center mb-5">
+        <h2 class="fw-bold">Diagnostic Center</h2>
+        <p class="text-muted">High-quality lab tests and health checkup packages</p>
+    </div>
+
+    <ul class="nav nav-pills justify-content-center mb-5" id="pills-tab">
+        <li class="nav-item"><button class="nav-link active" onclick="loadData('test', this)">Individual Tests</button></li>
+        <li class="nav-item"><button class="nav-link" onclick="loadData('package', this)">Health Packages</button></li>
+    </ul>
+
+    <div class="row g-4" id="serviceList">
+        <!-- Content injected by JS -->
+    </div>
+</div>
+
+<!-- DETAILS MODAL -->
+<div class="modal fade" id="detailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content" style="border-radius: 20px; overflow: hidden;">
+            <div class="modal-header px-4">
+                <h5 class="modal-title fw-bold" id="modalTitle">Details</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4">
+                <div class="row mb-4">
+                    <div class="col-md-7">
+                        <div id="modalMainContent">
+                            <!-- Tests or Parameters list -->
+                        </div>
+                    </div>
+                    <div class="col-md-5">
+                        <div class="bg-light p-3 rounded-4 sticky-top" style="top: 0;">
+                            <h6 class="fw-bold"><i class="fas fa-info-circle me-2 text-primary"></i>Quick Info</h6>
+                            <hr>
+                            <p class="small mb-2"><strong><i class="far fa-clock me-2"></i>TAT:</strong> <span id="modalTat"></span></p>
+                            <p class="small mb-2"><strong><i class="fas fa-venus-mars me-2"></i>Gender:</strong> <span id="modalGender"></span></p>
+                            <p class="small mb-3"><strong><i class="fas fa-user-clock me-2"></i>Age:</strong> <span id="modalAge"></span></p>
+                            
+                            <h6 class="fw-bold mt-4 small">PREPARATION:</h6>
+                            <p id="modalPrep" class="small text-muted"></p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="modalFaqs" class="mt-4">
+                    <h5 class="fw-bold mb-3"><i class="far fa-question-circle me-2 text-warning"></i>Frequently Asked Questions</h5>
+                    <div id="faqContainer"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const BASE_URL = 'http://localhost:5002';
+    const token = localStorage.getItem('token');
+    const myModal = new bootstrap.Modal(document.getElementById('detailsModal'));
+    let currentData = [];
+
+    async function loadData(type, btn) {
+        if(btn) {
+            document.querySelectorAll('.nav-link').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+
+        const endpoint = type === 'test' ? '/provider/labs/services/tests/my-tests' : '/provider/labs/services/packages/my-packages';
+        
+        try {
+            const res = await fetch(`${BASE_URL}${endpoint}`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const result = await res.json();
+            currentData = result.data;
+            
+            document.getElementById('serviceList').innerHTML = currentData.map(item => {
+                const isPkg = type === 'package';
+                const finalPrice = isPkg ? item.offerPrice : item.discountPrice;
+                const mrp = isPkg ? item.mrp : item.amount;
+                const samples = Array.isArray(item.sampleType) ? item.sampleType.join(', ') : (item.sampleType || 'N/A');
+
+                return `
+                <div class="col-md-4">
+                    <div class="card card-service p-4 h-100">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <span class="discount-badge">${isPkg ? (item.totalTestsIncluded + ' Tests') : item.mainCategory}</span>
+                            <div class="text-end">
+                                <div class="sample-tag"><i class="fas fa-vial me-1"></i> ${samples}</div>
+                            </div>
+                        </div>
+                        
+                        <h5 class="fw-bold mt-3 mb-1 text-truncate" title="${isPkg ? item.packageName : item.testName}">
+                            ${isPkg ? item.packageName : item.testName}
+                        </h5>
+                        <p class="text-muted small mb-3"><i class="far fa-clock me-1"></i> Reports in ${item.reportTime}</p>
+                        
+                        <div class="mt-auto pt-3 border-top">
+                            <div class="d-flex align-items-center justify-content-between">
+                                <div>
+                                    <div class="price-big">₹${finalPrice}</div>
+                                    <span class="text-muted text-decoration-line-through small">₹${mrp}</span>
+                                    <span class="text-success small ms-1 fw-bold">${item.discountPercent}% OFF</span>
+                                </div>
+                                <button class="btn btn-outline-success rounded-pill px-3 btn-sm fw-bold" 
+                                    onclick="showFullDetails('${item._id}', '${type}')">DETAILS</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        } catch (err) { console.error("Fetch Error:", err); }
+    }
+
+    function showFullDetails(id, type) {
+        const item = currentData.find(x => x._id === id);
+        if(!item) return;
+
+        const isPkg = type === 'package';
+        document.getElementById('modalTitle').innerText = isPkg ? item.packageName : item.testName;
+        document.getElementById('modalTat').innerText = item.reportTime;
+        document.getElementById('modalGender').innerText = item.gender || 'All';
+        document.getElementById('modalAge').innerText = item.ageGroup || 'All';
+        
+        // Preparation logic
+        let prepText = "No specific preparation required.";
+        if(!isPkg && item.precaution) prepText = item.precaution;
+        else if(isPkg && item.tests.length > 0) {
+            // Aggregating preparations from all tests in package
+            const preps = item.tests.map(t => t.pretestPreparation).filter(p => p && p !== 'None');
+            prepText = preps.length > 0 ? [...new Set(preps)].join(' | ') : prepText;
+        }
+        document.getElementById('modalPrep').innerText = prepText;
+
+        // Content (Parameters or Tests)
+        const mainContent = document.getElementById('modalMainContent');
+        if(isPkg) {
+            mainContent.innerHTML = `<h6 class="fw-bold mb-3 text-success">Included Tests (${item.tests.length}):</h6>`;
+            mainContent.innerHTML += item.tests.map(t => `
+                <div class="test-item-in-pkg">
+                    <div class="fw-bold text-dark">${t.testName}</div>
+                    <div class="mt-1">
+                        ${t.parameters.map(p => `<span class="param-tag">${p}</span>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            const params = item.masterTestId?.parameters || [];
+            mainContent.innerHTML = `
+                <h6 class="fw-bold mb-3 text-success">Parameters Tested (${params.length}):</h6>
+                <div>${params.map(p => `<span class="param-tag">${p}</span>`).join('')}</div>
+                <p class="mt-4 small text-muted">${item.description || item.masterTestId?.detailedDescription[0]?.sectionContent || ''}</p>
+            `;
+        }
+
+        // FAQs Logic
+        let allFaqs = [];
+        if(!isPkg) allFaqs = item.masterTestId?.faqs || [];
+        else {
+            // Combine FAQs from all tests in the package
+            item.tests.forEach(t => { if(t.faqs) allFaqs.push(...t.faqs); });
+        }
+
+        const faqContainer = document.getElementById('faqContainer');
+        if(allFaqs.length > 0) {
+            document.getElementById('modalFaqs').style.display = 'block';
+            faqContainer.innerHTML = allFaqs.map(f => `
+                <div class="faq-item">
+                    <div class="fw-bold small text-dark">Q: ${f.question}</div>
+                    <div class="text-muted small mt-1">A: ${f.answer}</div>
+                </div>
+            `).join('');
+        } else {
+            document.getElementById('modalFaqs').style.display = 'none';
+        }
+
+        myModal.show();
+    }
+
+    window.onload = () => loadData('test');
+</script>
+</body>
+</html>

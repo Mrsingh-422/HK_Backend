@@ -9,17 +9,24 @@ const {
     saveLabPackage, 
     getMyPackages, 
     deleteService ,
-    getMasterList, getMasterTestDetails
+    getMasterList, getMasterTestDetails, getStandardCatalogTests, getStandardPackages,getMasterPackages,getMasterPackageDetails
 
 } = require('../../../controllers/provider/Lab/LabsService');
 
 // Base URL: /provider/labs/services
+
+// List all standard tests/packages
+router.get('/tests/standard-catalog', getStandardCatalogTests);
+router.get('/packages/standard-catalog', getStandardPackages);
 
 
 
 // --- MASTER TESTS ---
 router.get('/tests/master-tests', protect('lab'), getMasterList);
 router.get('/tests/master-details/:masterTestId', protect('lab'), getMasterTestDetails);
+router.get('/packages/master-packages', protect('lab'), getMasterPackages);
+router.get('/packages/master-details/:id', protect('lab'), getMasterPackageDetails);
+
 
 
 // --- LAB TESTS (Pathology/Radiology) ---
