@@ -5,8 +5,12 @@ const { prescriptionUploads } = require('../../../middleware/multer'); // Ensure
 const { 
     getLabs, getLabDetails, getLabSlots,
     bookLabTest, uploadPrescriptionFlow,
-    getMyBookings, getBookingDetails 
+    getMyBookings, getBookingDetails ,
+    getLabsByMasterTest, getLabsByMasterPackage,
+    getMasterTestDetails, getMasterPackageDetails
 } = require('../../../controllers/user/Lab/BookLab');
+
+// Base URL: /user/labs
 
 // Discovery
 router.get('/list', getLabs);
@@ -20,5 +24,17 @@ router.post('/upload-prescription', protect('user'), prescriptionUploads.array('
 // Tracking & History
 router.get('/my-bookings', protect('user'), getMyBookings);
 router.get('/details/:id/track', protect('user'), getBookingDetails);
+
+// Master Tests
+router.get('/comparison/test/:masterTestId', protect('user'), getLabsByMasterTest);
+router.get('/comparison/package/:masterPackageId', protect('user'), getLabsByMasterPackage);
+
+
+// Master Test details
+router.get('/master-test/:id', protect('user'), getMasterTestDetails);
+
+// Master Package details
+router.get('/master-package/:id', protect('user'), getMasterPackageDetails);
+
 
 module.exports = router;

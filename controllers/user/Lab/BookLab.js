@@ -6,8 +6,12 @@ const Prescription = require('../../../models/Prescription');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Availability = require('../../../models/Availability');
 const Coupon = require('../../../models/Coupon');
+const MasterLabTest = require('../../../models/MasterLabTest');
+const MasterLabPackage = require('../../../models/MasterLabPackage');
+const moment = require('moment');
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 
 // --- HELPER: Pricing Logic (Production Level) ---
 const calculateBill = async (labId, items, patientsCount, collectionType, couponCode, isRapid) => {
@@ -91,18 +95,25 @@ const getLabs = async (req, res) => {
 };
 
 // 2. GET LAB DETAILS (Updated with Deep Population)
+// 2. GET LAB DETAILS (Lab-wise Inventory)
 const getLabDetails = async (req, res) => {
     try {
         const { id } = req.params;
         const [tests, packages, lab] = await Promise.all([
-            // Populate MasterTestId to show Parameters/Description on details page
+            // Tests with master details
             LabTest.find({ labId: id, isActive: true }).populate('masterTestId'),
-            // Populate tests inside package to show what's included
-            LabPackage.find({ labId: id, isActive: true }).populate('tests'),
+            // Packages with nested test and their master details
+            LabPackage.find({ labId: id, isActive: true }).populate({
+                path: 'tests',
+                model: 'MasterLabTest'
+            }),
             Lab.findById(id)
         ]);
+        
+        if (!lab) return res.status(404).json({ success: false, message: "Lab not found" });
+        
         res.json({ success: true, lab, tests, packages });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
 // 3. GET AVAILABLE SLOTS
@@ -224,8 +235,95 @@ const getBookingDetails = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// NAYA: Kisi specific Master Test ko kaun-kaun si Labs provide kar rahi hain?
+const getLabsByMasterTest = async (req, res) => {
+    try {
+        const { masterTestId } = req.params;
+        // Un saari Labs ko dhundo jinhone ye test list kiya hai
+        const labsOfferingTest = await LabTest.find({ masterTestId, isActive: true })
+            .populate('labId', 'name profileImage rating totalReviews address city')
+            .sort({ discountPrice: 1 }); // Sasta wala pehle
+
+        res.json({ success: true, data: labsOfferingTest });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// NAYA: Kisi specific Master Package ko kaun-kaun si Labs provide kar rahi hain?
+const getLabsByMasterPackage = async (req, res) => {
+    try {
+        const { masterPackageId } = req.params;
+        let query = { isActive: true };
+
+        // Check if ID or Name
+        if (mongoose.Types.ObjectId.isValid(masterPackageId)) {
+            query.masterPackageId = masterPackageId;
+        } else {
+            // Agar Name hai tohpackageName se dhundo
+            query.packageName = masterPackageId; 
+        }
+
+        const labsOfferingPackage = await LabPackage.find(query)
+            .populate('labId', 'name profileImage rating totalReviews address city')
+            .sort({ offerPrice: 1 });
+
+        res.json({ success: true, data: labsOfferingPackage });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// NEW: Get Master Test Details for User
+const getMasterTestDetails = async (req, res) => {
+    try {
+        const data = await MasterLabTest.findById(req.params.id); // params.id match route
+        if (!data) return res.status(404).json({ success: false, message: "Test not found" });
+        res.json({ success: true, data });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+
+// NEW: Get Master Package Details for User
+const getMasterPackageDetails = async (req, res) => {
+    try {
+        const { id } = req.params; // Yeh ID bhi ho sakti hai ya Name bhi
+        let data;
+
+        // 1. Check karein ki kya 'id' ek valid MongoDB ObjectId hai?
+        const isValidId = mongoose.Types.ObjectId.isValid(id);
+
+        if (isValidId) {
+            // A. Agar ID hai, toh pehle Master Templates mein dhundo
+            data = await MasterLabPackage.findById(id).populate('tests');
+
+            // B. Agar master mein nahi mila, toh LabPackage (Vendor listing) mein dhundo
+            if (!data) {
+                data = await LabPackage.findById(id).populate({
+                    path: 'tests',
+                    model: 'MasterLabTest'
+                });
+            }
+        } else {
+            // 2. Agar ID nahi hai (Matlab yeh Name string hai), toh LabPackage mein Name se dhundo
+            // Hum .findOne use karenge kyunki humein sirf package ka structure (tests/description) chahiye
+            data = await LabPackage.findOne({ packageName: id }).populate({
+                path: 'tests',
+                model: 'MasterLabTest'
+            });
+        }
+
+        if (!data) {
+            return res.status(404).json({ success: false, message: "Package information not found" });
+        }
+
+        res.json({ success: true, data });
+    } catch (error) {
+        // CastError ya koi aur error handle karne ke liye
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     getLabs, getLabDetails, getLabSlots, 
     bookLabTest, uploadPrescriptionFlow, 
-    getMyBookings, getBookingDetails 
+    getMyBookings, getBookingDetails ,
+    getLabsByMasterTest, getLabsByMasterPackage,
+    getMasterTestDetails, getMasterPackageDetails
 };

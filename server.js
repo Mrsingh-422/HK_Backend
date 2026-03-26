@@ -55,6 +55,7 @@ app.use('/user/doctors', require('./routes/user/Doctor/BookAppointment')); // Do
 app.use('/user/review', require('./routes/user/Doctor/ReviewDoctorRoute')); // Doctor Review Route
 // --- user lab ---
 app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
+app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
 
  
 
