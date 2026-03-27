@@ -35,10 +35,10 @@
         .price-text { color: var(--primary); font-size: 1.4rem; font-weight: 800; }
         
         /* MODAL DETAILS STYLING */
-        .detail-section-title { color: var(--primary); font-weight: 800; border-bottom: 2px solid #eee; padding-bottom: 5px; margin-top: 20px; font-size: 1rem; }
-        .param-tag { background: #e8f5e9; color: #2e7d32; font-size: 11px; padding: 3px 10px; border-radius: 50px; margin-right: 5px; margin-bottom: 5px; display: inline-block; font-weight: 600; }
-        .faq-item { background: #f1f3f5; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
-        .prep-box { background: #fff8e1; border-left: 4px solid #ffc107; padding: 10px; font-size: 0.9rem; border-radius: 5px; }
+        .detail-section-title { color: var(--primary); font-weight: 800; border-bottom: 2px solid #eee; padding-bottom: 5px; margin-top: 20px; font-size: 1rem; text-transform: uppercase; }
+        .param-tag { background: #e8f5e9; color: #2e7d32; font-size: 11px; padding: 3px 10px; border-radius: 50px; margin-right: 5px; margin-bottom: 5px; display: inline-block; font-weight: 600; border: 1px solid #c8e6c9; }
+        .faq-item { background: white; border: 1px solid #eee; border-radius: 12px; padding: 15px; margin-bottom: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
+        .prep-box { background: #fff8e1; border-left: 5px solid #ffc107; padding: 15px; font-size: 0.95rem; border-radius: 8px; color: #856404; }
 
         /* CART OFF-CANVAS */
         .offcanvas { width: 420px !important; }
@@ -48,9 +48,12 @@
 </head>
 <body>
 
+<!-- GLOBAL NAVBAR -->
 <nav class="navbar-custom d-flex align-items-center px-4 justify-content-between shadow-sm">
     <div class="d-flex align-items-center">
-        <h3 class="m-0 fw-bold text-success me-4"><i class="fas fa-microscope me-2"></i>Health Kangaroo</h3>
+        <h3 class="m-0 fw-bold text-success me-4" style="cursor:pointer" onclick="switchMainView('discoveryPage')">
+            <i class="fas fa-microscope me-2"></i>Health Kangaroo
+        </h3>
         <ul class="nav main-nav p-1 bg-light rounded-pill d-none d-md-flex">
             <li class="nav-item"><button class="nav-link active" id="nav-discovery" onclick="switchMainView('discoveryPage')">Smart Booking</button></li>
             <li class="nav-item"><button class="nav-link" id="nav-labs" onclick="switchMainView('labsListPage')">Explore All Labs</button></li>
@@ -66,7 +69,7 @@
 
 <div class="container py-4">
 
-    <!-- PAGE 1: DISCOVERY -->
+    <!-- PAGE 1: DISCOVERY (CATALOG) -->
     <div id="discoveryPage">
         <div class="text-center mb-5">
             <h2 class="fw-bold">Lab Diagnostics</h2>
@@ -79,7 +82,7 @@
         <div class="row g-4" id="catalogList"></div>
     </div>
 
-    <!-- PAGE 2: COMPARISON -->
+    <!-- PAGE 2: COMPARISON VIEW -->
     <div id="comparisonPage" class="hidden">
         <button class="btn btn-sm btn-outline-dark mb-4 rounded-pill px-4" onclick="showPage('discoveryPage')">
             <i class="fas fa-arrow-left me-1"></i> Back to Catalog
@@ -99,14 +102,15 @@
     <div id="labsListPage" class="hidden">
         <div class="text-center mb-5">
             <h2 class="fw-bold">Find a Diagnostic Center</h2>
-            <div class="row g-4" id="labsContainer"></div>
+            <p class="text-muted">Partner Labs Providing Quality Services</p>
         </div>
+        <div class="row g-4" id="labsContainer"></div>
     </div>
 
     <!-- PAGE 4: LAB INVENTORY -->
     <div id="labInventoryPage" class="hidden">
         <button class="btn btn-sm btn-dark mb-4 rounded-pill px-4" onclick="showPage('labsListPage')">
-            <i class="fas fa-arrow-left me-1"></i> Back to Labs
+            <i class="fas fa-arrow-left me-1"></i> Back to All Labs
         </button>
         <div id="labProfileHeader" class="inventory-header shadow-sm"></div>
         <ul class="nav nav-pills justify-content-center mb-4">
@@ -117,25 +121,28 @@
     </div>
 </div>
 
-<!-- INFO MODAL (For Full Details) -->
+<!-- FULL INFO MODAL -->
 <div class="modal fade" id="infoModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
-        <div class="modal-content" style="border-radius:20px;">
-            <div class="modal-header border-0 pb-0"><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-            <div class="modal-body pt-0" id="infoModalBody">
-                <!-- Dynamic Content Based on JSON -->
+        <div class="modal-content" style="border-radius:25px; overflow: hidden;">
+            <div class="modal-header border-0 pb-0 px-4 pt-4">
+                <h5 class="modal-title fw-bold text-success">Service Information</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body px-4 pb-5" id="infoModalBody">
+                <!-- Data from JSON injected here -->
             </div>
         </div>
     </div>
 </div>
 
-<!-- CART SIDEBAR (Existing) -->
+<!-- GLOBAL CART SIDEBAR -->
 <div class="offcanvas offcanvas-end" id="cartSidebar">
     <div class="offcanvas-header border-bottom px-4"><h5 class="offcanvas-title fw-bold">Shopping Cart</h5><button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button></div>
     <div class="offcanvas-body p-4"><div id="cartStatusArea"></div><div id="cartItemsList"></div></div>
     <div class="offcanvas-footer p-4 border-top bg-light">
-        <div class="d-flex justify-content-between mb-3"><span class="fw-bold">Total:</span><span class="h4 fw-bold text-success" id="totalPayable">₹0</span></div>
-        <button class="btn btn-success w-100 py-3 fw-bold rounded-4 shadow">CHECKOUT</button>
+        <div class="d-flex justify-content-between mb-3"><span class="fw-bold">Total Payable:</span><span class="h4 fw-bold text-success" id="totalPayable">₹0</span></div>
+        <button class="btn btn-success w-100 py-3 fw-bold rounded-4 shadow" onclick="alert('Proceeding...')">CHECKOUT</button>
     </div>
 </div>
 
@@ -148,7 +155,7 @@
     let currentType = 'test';
     let currentLabTests = [], currentLabPackages = [];
 
-    // Switch Main Views
+    // NAVIGATION LOGIC
     function switchMainView(pageId) {
         document.querySelectorAll('.main-nav .nav-link').forEach(l => l.classList.remove('active'));
         if (pageId === 'discoveryPage') { document.getElementById('nav-discovery').classList.add('active'); loadStandardCatalog(); }
@@ -159,9 +166,10 @@
     function showPage(id) {
         ['discoveryPage', 'comparisonPage', 'labsListPage', 'labInventoryPage'].forEach(p => document.getElementById(p).classList.add('hidden'));
         document.getElementById(id).classList.remove('hidden');
+        window.scrollTo(0,0);
     }
 
-    // Load Catalog
+    // SMART BOOKING FLOW
     async function loadStandardCatalog() {
         const endpoint = currentType === 'test' ? '/provider/labs/services/tests/standard-catalog' : '/provider/labs/services/packages/standard-catalog';
         const res = await fetch(`${BASE_URL}${endpoint}`);
@@ -171,18 +179,15 @@
                 <div class="card card-catalog p-4 shadow-sm" onclick="compareLabs('${item._id}')">
                     <span class="badge bg-light text-success border mb-2 small">${item.category || 'General'}</span>
                     <h6 class="fw-bold mb-1">${currentType === 'test' ? item.testName : item.packageName}</h6>
-                    <div class="mt-auto border-top pt-2"><small class="text-muted">Starting from</small><div class="fw-bold">₹${item.standardMRP || 0}</div></div>
+                    <div class="mt-auto border-top pt-2"><small class="text-muted">Starting from</small><div class="fw-bold text-dark">₹${item.standardMRP || 0}</div></div>
                 </div>
             </div>`).join('');
     }
 
-    // Comparison View
     async function compareLabs(masterId) {
         const detailUrl = currentType === 'test' ? `/user/labs/master-test/${masterId}` : `/user/labs/master-package/${masterId}`;
         const res = await fetch(`${BASE_URL}${detailUrl}`, { headers: { 'Authorization': `Bearer ${token}` }});
         const mData = (await res.json()).data;
-        
-        // Left Sidebar Mini Card
         renderMasterSideCard(mData);
 
         const compareUrl = currentType === 'test' ? `/user/labs/comparison/test/${masterId}` : `/user/labs/comparison/package/${masterId}`;
@@ -204,54 +209,71 @@
     }
 
     function renderMasterSideCard(m) {
-        const title = currentType === 'test' ? m.testName : m.packageName;
+        const title = m.testName || m.packageName;
         document.getElementById('selectedItemDetails').innerHTML = `
-            <h6 class="fw-bold text-success text-uppercase small">${currentType} Detail</h6>
+            <h6 class="fw-bold text-success text-uppercase small">${currentType} Information</h6>
             <h4 class="fw-bold mb-3">${title}</h4>
-            <div class="prep-box mb-3"><i class="fas fa-info-circle"></i> ${m.pretestPreparation || 'Standard preparation'}</div>
-            <button class="btn btn-sm btn-dark w-100 rounded-pill mb-3" onclick='showFullDetails(${JSON.stringify(m).replace(/'/g, "&apos;")})'>View All Info & FAQs</button>
-            <p class="extra-small text-muted mb-0">Contains ${m.totalTestsIncluded || 1} major health markers.</p>
+            <div class="prep-box mb-3 small"><i class="fas fa-info-circle me-1"></i> ${m.pretestPreparation || 'Standard guidelines apply'}</div>
+            <button class="btn btn-sm btn-dark w-100 rounded-pill mb-3 py-2 fw-bold" onclick='showFullDetails(${JSON.stringify(m).replace(/'/g, "&apos;")})'>View Parameters & FAQs</button>
+            <p class="extra-small text-muted mb-0">Code: ${m.testCode || 'N/A'} | Sample: ${Array.isArray(m.sampleType) ? m.sampleType.join(', ') : m.sampleType}</p>
         `;
     }
 
-    // MODAL RENDERING LOGIC (Full Info)
+    // UPDATED FULL DETAILS MODAL LOGIC (Handles Test & Package)
     function showFullDetails(data) {
         let content = `
-            <h3 class="fw-bold text-dark mb-1">${data.packageName || data.testName}</h3>
-            <p class="text-muted small">Sample: <b>${Array.isArray(data.sampleType) ? data.sampleType.join(', ') : data.sampleType}</b> | Gender: <b>${data.gender || 'All'}</b></p>
-            
-            <div class="prep-box my-3">
-                <h6 class="m-0 fw-bold"><i class="fas fa-clock me-2"></i>Preparation:</h6>
-                <p class="m-0 small">${data.pretestPreparation || 'No special preparation required.'}</p>
+            <div class="d-flex justify-content-between align-items-start mt-3">
+                <div>
+                    <h3 class="fw-bold text-dark mb-1">${data.packageName || data.testName}</h3>
+                    <p class="text-muted small mb-0">Category: <b>${data.category || 'General'}</b> | Sample: <b>${Array.isArray(data.sampleType) ? data.sampleType.join(', ') : data.sampleType}</b></p>
+                    <p class="text-muted small">Code: <b>${data.testCode || 'N/A'}</b> | Gender: <b>${data.gender || 'Both'}</b></p>
+                </div>
+                <div class="text-end">
+                    <div class="h4 fw-bold text-success mb-0">₹${data.offerPrice || data.discountPrice || data.standardMRP}</div>
+                    ${data.discountPercent ? `<span class="badge bg-danger small">${data.discountPercent}% OFF</span>` : ''}
+                </div>
             </div>
             
-            <div class="detail-section-title">WHAT'S INCLUDED?</div>
+            <div class="prep-box my-3">
+                <h6 class="m-0 fw-bold small"><i class="fas fa-exclamation-triangle me-2"></i>Preparation / Instructions:</h6>
+                <p class="m-0 small mt-1">${data.pretestPreparation || data.precaution || 'No special preparation required.'}</p>
+            </div>
+            
+            <div class="detail-section-title">Inclusions & Parameters</div>
         `;
 
-        // If it's a package, loop through tests
-        if (data.tests && Array.isArray(data.tests)) {
+        // If Package (Loop tests)
+        if (data.tests && Array.isArray(data.tests) && data.tests.length > 0) {
             data.tests.forEach(test => {
                 content += `
-                    <div class="mt-3 p-3 border rounded">
-                        <h6 class="fw-bold m-0 text-dark">${test.testName}</h6>
-                        <div class="mt-2">${test.parameters.map(p => `<span class="param-tag">${p}</span>`).join('')}</div>
+                    <div class="mt-3 p-3 border rounded bg-white">
+                        <h6 class="fw-bold m-0 text-success">${test.testName}</h6>
+                        <div class="mt-2 mb-2">${test.parameters ? test.parameters.map(p => `<span class="param-tag">${p}</span>`).join('') : ''}</div>
                         ${test.detailedDescription ? test.detailedDescription.map(d => `<div class="mt-2 small"><b>${d.sectionTitle}:</b> ${d.sectionContent}</div>`).join('') : ''}
-                    </div>
-                `;
+                    </div>`;
             });
-        } else if (data.parameters) { // Single test
-            content += `<div class="mt-2">${data.parameters.map(p => `<span class="param-tag">${p}</span>`).join('')}</div>`;
+        } 
+        // If Single Test (Parameters directly)
+        else if (data.parameters) {
+            content += `
+                <div class="mt-3 p-3 border rounded bg-white">
+                    <div class="mb-3">${data.parameters.map(p => `<span class="param-tag">${p}</span>`).join('')}</div>
+                    ${data.detailedDescription ? data.detailedDescription.map(d => `<div class="mt-2 small"><b>${d.sectionTitle}:</b> ${d.sectionContent}</div>`).join('') : ''}
+                </div>`;
         }
 
-        // FAQs Section
+        // Aggregate FAQs
         const faqs = [];
-        if(data.tests) data.tests.forEach(t => { if(t.faqs) faqs.push(...t.faqs); });
-        else if(data.faqs) faqs.push(...data.faqs);
+        if (data.tests) data.tests.forEach(t => { if(t.faqs) faqs.push(...t.faqs); });
+        if (data.faqs) faqs.push(...data.faqs);
 
-        if(faqs.length > 0) {
-            content += `<div class="detail-section-title">FAQs</div><div class="mt-3">`;
+        if (faqs.length > 0) {
+            content += `<div class="detail-section-title">Common Questions</div><div class="mt-3">`;
             faqs.forEach(f => {
-                content += `<div class="faq-item"><div class="fw-bold small">Q: ${f.question}</div><div class="text-muted small mt-1">A: ${f.answer}</div></div>`;
+                content += `<div class="faq-item">
+                    <div class="fw-bold small text-dark"><i class="far fa-question-circle me-1 text-primary"></i> Q: ${f.question}</div>
+                    <div class="text-muted small mt-1 ps-4">A: ${f.answer}</div>
+                </div>`;
             });
             content += `</div>`;
         }
@@ -260,38 +282,55 @@
         infoModal.show();
     }
 
-    // Explore Labs logic
+    // EXPLORE ALL LABS FLOW
     async function loadLabs() {
         const res = await fetch(`${BASE_URL}/user/labs/list`);
         const result = await res.json();
         document.getElementById('labsContainer').innerHTML = result.data.map(lab => `
-            <div class="col-md-3"><div class="card card-lab shadow-sm" onclick="openLabInventory('${lab._id}')">
-                <img src="${lab.profileImage || 'https://placehold.co/400x200'}" class="lab-img">
-                <div class="p-3"><h6 class="fw-bold mb-1">${lab.name}</h6><small class="text-muted">${lab.city}</small></div>
-            </div></div>`).join('');
+            <div class="col-md-4 col-lg-3">
+                <div class="card card-lab shadow-sm" onclick="openLabInventory('${lab._id}')">
+                    <img src="${lab.profileImage || 'https://placehold.co/400x200?text=Lab'}" class="lab-img">
+                    <div class="p-3"><h6 class="fw-bold mb-1">${lab.name}</h6><small class="text-muted"><i class="fas fa-map-marker-alt me-1 text-danger"></i>${lab.city}</small></div>
+                </div>
+            </div>`).join('');
     }
 
     async function openLabInventory(labId) {
         const res = await fetch(`${BASE_URL}/user/labs/details/${labId}`, { headers: { 'Authorization': `Bearer ${token}` }});
         const result = await res.json();
         currentLabTests = result.tests; currentLabPackages = result.packages;
-        document.getElementById('labProfileHeader').innerHTML = `<h3 class="fw-bold m-0">${result.lab.name}</h3><p class="text-muted m-0">${result.lab.address}</p>`;
+        document.getElementById('labProfileHeader').innerHTML = `
+            <div class="d-flex align-items-center">
+                <img src="${result.lab.profileImage}" class="rounded-circle border me-4" width="80" height="80">
+                <div><h3 class="fw-bold m-0">${result.lab.name}</h3><p class="text-muted m-0 small">${result.lab.address}, ${result.lab.city}</p></div>
+            </div>`;
         filterInventory('test');
         showPage('labInventoryPage');
     }
 
     function filterInventory(type) {
         const data = (type === 'test') ? currentLabTests : currentLabPackages;
-        document.getElementById('inventoryContainer').innerHTML = data.map(item => `
-            <div class="col-md-4"><div class="card card-service shadow-sm">
-                <h6 class="fw-bold mb-2">${item.packageName || item.testName}</h6>
-                <div class="price-text">₹${item.offerPrice || item.discountPrice}</div>
-                <button class="btn btn-outline-dark btn-sm rounded-pill w-100 mt-3" onclick='showFullDetails(${JSON.stringify(item).replace(/'/g, "&apos;")})'>Details</button>
-                <button class="btn btn-success btn-sm rounded-pill w-100 mt-2" onclick="handleAddToCart('${item.labId}', '${item._id}', '${item.packageName ? 'LabPackage' : 'LabTest'}')">ADD</button>
-            </div></div>`).join('');
+        document.getElementById('inv-test').classList.toggle('active', type === 'test');
+        document.getElementById('inv-pkg').classList.toggle('active', type === 'package');
+
+        document.getElementById('inventoryContainer').innerHTML = data.map(item => {
+            const isPkg = type === 'package';
+            const price = isPkg ? item.offerPrice : item.discountPrice;
+            return `
+            <div class="col-md-4">
+                <div class="card card-service shadow-sm">
+                    <h6 class="fw-bold mb-2">${isPkg ? item.packageName : item.testName}</h6>
+                    <div class="price-text mb-3">₹${price}</div>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-dark btn-sm rounded-pill" onclick='showFullDetails(${JSON.stringify(item).replace(/'/g, "&apos;")})'>Full Details</button>
+                        <button class="btn btn-success btn-sm rounded-pill fw-bold" onclick="handleAddToCart('${item.labId}', '${item._id}', '${isPkg ? 'LabPackage' : 'LabTest'}')">BOOK NOW</button>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
     }
 
-    // Cart Logic
+    // CART SYSTEM
     async function handleAddToCart(labId, itemId, productType, forceReplace = false) {
         const res = await fetch(`${BASE_URL}/user/cart/lab/add`, {
             method: 'POST',
@@ -299,8 +338,9 @@
             body: JSON.stringify({ labId, itemId, productType, forceReplace })
         });
         const result = await res.json();
-        if(result.success) { alert("Added!"); loadCart(); }
+        if(result.success) { alert("Successfully added to cart!"); loadCart(); }
         else if(result.canReplace) { if(confirm(result.message)) handleAddToCart(labId, itemId, productType, true); }
+        else alert(result.message);
     }
 
     async function loadCart() {
@@ -308,12 +348,20 @@
         const result = await res.json();
         const cart = result.data?.labCart || { items: [] };
         document.getElementById('cartCount').innerText = cart.items.length;
-        document.getElementById('cartItemsList').innerHTML = cart.items.map(item => `
-            <div class="cart-item-box d-flex justify-content-between">
-                <div><div class="fw-bold small">${item.name}</div><div class="text-success small fw-bold">₹${item.price}</div></div>
-                <button class="btn btn-sm text-danger" onclick="updateQty('${item.itemId._id}', 'dec', true)"><i class="fas fa-trash"></i></button>
-            </div>`).join('');
-        document.getElementById('totalPayable').innerText = `₹${cart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0)}`;
+        
+        if(cart.items.length > 0) {
+            document.getElementById('cartStatusArea').innerHTML = `<div class="alert alert-warning py-2 small">Cart locked for: <b>${cart.labId.name}</b></div>`;
+            document.getElementById('cartItemsList').innerHTML = cart.items.map(item => `
+                <div class="cart-item-box shadow-sm d-flex justify-content-between align-items-center">
+                    <div><div class="fw-bold small">${item.name}</div><div class="text-success small fw-bold">₹${item.price}</div></div>
+                    <button class="btn btn-sm text-danger" onclick="updateQty('${item.itemId._id}', 'dec')"><i class="fas fa-trash"></i></button>
+                </div>`).join('');
+            document.getElementById('totalPayable').innerText = `₹${cart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0)}`;
+        } else {
+            document.getElementById('cartStatusArea').innerHTML = "";
+            document.getElementById('cartItemsList').innerHTML = `<p class="text-center py-5 text-muted">Cart is empty</p>`;
+            document.getElementById('totalPayable').innerText = `₹0`;
+        }
     }
 
     async function updateQty(itemId, action) {

@@ -1,5 +1,6 @@
 const MasterLabTest = require('../../../models/MasterLabTest');
 const MasterLabPackage = require('../../../models/MasterLabPackage');
+const MasterRequest = require('../../../models/MasterRequest');
 const xlsx = require('xlsx');
 
 // endpoint: POST /admin/lab/tests/upload
@@ -144,4 +145,93 @@ const getMasterPackages = async (req, res) => {
     }
 };
 
-module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages };
+
+
+
+
+// 1. LIST WITH PAGINATION (20 per page)
+const listMasterData = async (req, res) => {
+    try {
+        const { type } = req.params; // 'test' or 'package'
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        const Model = type === 'test' ? MasterLabTest : MasterLabPackage;
+        const total = await Model.countDocuments();
+        const data = await Model.find().skip(skip).limit(limit).sort({ createdAt: -1 });
+
+        res.json({ success: true, total, page, totalPages: Math.ceil(total / limit), data });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 2. SEARCH API (POST)
+const searchMasterData = async (req, res) => {
+    try {
+        const { type, query } = req.body;
+        const Model = type === 'test' ? MasterLabTest : MasterLabPackage;
+        const searchRegex = new RegExp(query, 'i');
+
+        const filter = type === 'test' ? { testName: searchRegex } : { packageName: searchRegex };
+        const results = await Model.find(filter).limit(20);
+
+        res.json({ success: true, data: results });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 3. MANUAL CREATE (Admin)
+const createMasterData = async (req, res) => {
+    try {
+        const { type, payload } = req.body;
+        const Model = type === 'test' ? MasterLabTest : MasterLabPackage;
+        
+        const newData = await Model.create(payload);
+        res.status(201).json({ success: true, data: newData });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 4. EDIT API
+const editMasterData = async (req, res) => {
+    try {
+        const { type, id } = req.params;
+        const Model = type === 'test' ? MasterLabTest : MasterLabPackage;
+
+        const updated = await Model.findByIdAndUpdate(id, req.body, { new: true });
+        res.json({ success: true, data: updated });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// ================= APPROVAL FLOW SECTION =================
+
+// 5. GET ALL VENDOR REQUESTS
+const getPendingRequests = async (req, res) => {
+    try {
+        const requests = await MasterRequest.find({ status: 'Pending' }).populate('vendorId', 'name');
+        res.json({ success: true, data: requests });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 6. APPROVE REQUEST (Moves data to Master Collection)
+const approveRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const request = await MasterRequest.findById(requestId);
+        if (!request) return res.status(404).json({ message: "Request not found" });
+
+        const Model = request.requestType === 'Test' ? MasterLabTest : MasterLabPackage;
+        
+        // Move data to Master
+        await Model.create(request.data);
+        
+        // Update Request Status
+        request.status = 'Approved';
+        await request.save();
+
+        res.json({ success: true, message: "Request approved and moved to Master list" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
+                    listMasterData, searchMasterData, createMasterData, editMasterData,
+                    getPendingRequests, approveRequest
+ };

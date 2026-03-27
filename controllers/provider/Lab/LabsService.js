@@ -2,6 +2,7 @@ const LabTest = require('../../../models/LabTest');
 const LabPackage = require('../../../models/LabPackage');
 const MasterLabTest = require('../../../models/MasterLabTest');
 const MasterLabPackage = require('../../../models/MasterLabPackage');
+const MasterRequest = require('../../../models/MasterRequest');
 
 // Helper to auto-calculate Discount Price
 const calculateActualPrice = (amount, discountPercent) => {
@@ -336,8 +337,22 @@ const getMasterPackageDetails = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const submitNewMasterRequest = async (req, res) => {
+    try {
+        const { requestType, data } = req.body; // requestType: 'Test' or 'Package'
+        
+        const newRequest = await MasterRequest.create({
+            vendorId: req.user.id,
+            vendorType: req.user.role, // Lab
+            requestType,
+            data, // Saari keys yahan Object me aayengi
+            status: 'Pending'
+        });
+
+        res.json({ success: true, message: "Request submitted to Admin for approval", data: newRequest });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 
 
-
-module.exports = { getMasterList,getStandardCatalogTests, getStandardPackages, saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService,getMasterTestDetails,getMasterPackages, getMasterPackageDetails };
+module.exports = { getMasterList,getStandardCatalogTests, getStandardPackages, saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService,getMasterTestDetails,getMasterPackages, getMasterPackageDetails, submitNewMasterRequest };

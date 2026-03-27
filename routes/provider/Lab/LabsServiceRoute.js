@@ -9,7 +9,8 @@ const {
     saveLabPackage, 
     getMyPackages, 
     deleteService ,
-    getMasterList, getMasterTestDetails, getStandardCatalogTests, getStandardPackages,getMasterPackages,getMasterPackageDetails
+    getMasterList, getMasterTestDetails, getStandardCatalogTests, getStandardPackages,getMasterPackages,getMasterPackageDetails,
+    submitNewMasterRequest
 
 } = require('../../../controllers/provider/Lab/LabsService');
 
@@ -39,5 +40,7 @@ router.get('/packages/my-packages', protect('lab'), getMyPackages);
 
 // --- DELETE ---
 router.delete('/delete/:type/:id', protect('lab'), deleteService);
+
+router.post('/suggest-new', protect('lab'), submitNewMasterRequest);
 
 module.exports = router;

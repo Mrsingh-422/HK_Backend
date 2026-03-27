@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard | Health Kangaroo Master Lab</title>
+    <!-- CSS Dependencies -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --sidebar-width: 260px;
+            --primary-color: #00a651;
+            --secondary-color: #2c3e50;
+            --bg-light: #f4f7f6;
+        }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: var(--bg-light);
+            overflow-x: hidden;
+        }
+
+        /* Sidebar Styling */
+        #sidebar {
+            width: var(--sidebar-width);
+            height: 100vh;
+            position: fixed;
+            background: var(--secondary-color);
+            color: white;
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        #sidebar .sidebar-header {
+            padding: 20px;
+            background: rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        #sidebar ul.components {
+            padding: 20px 0;
+        }
+
+        #sidebar ul li {
+            padding: 10px 20px;
+            transition: 0.3s;
+        }
+
+        #sidebar ul li:hover, #sidebar ul li.active {
+            background: var(--primary-color);
+            cursor: pointer;
+        }
+
+        #sidebar ul li i {
+            margin-right: 15px;
+            width: 20px;
+        }
+
+        /* Main Content */
+        #content {
+            margin-left: var(--sidebar-width);
+            padding: 30px;
+            min-height: 100vh;
+        }
+
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+            margin-bottom: 25px;
+        }
+
+        .stats-card {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+.hidden { 
+    display: none !important; 
+}
+        .stats-icon {
+            font-size: 2.5rem;
+            opacity: 0.3;
+        }
+
+        /* Table Styling */
+        .table-container {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+        }
+
+        .table thead th {
+            background-color: #f8f9fa;
+            border: none;
+            color: #777;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+        }
+
+        .badge-status {
+            padding: 5px 12px;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        /* Upload Area */
+        .upload-zone {
+            border: 2px dashed #ddd;
+            padding: 40px;
+            text-align: center;
+            border-radius: 15px;
+            background: #fff;
+            transition: 0.3s;
+            cursor: pointer;
+        }
+
+        .upload-zone:hover {
+            border-color: var(--primary-color);
+            background: #f0fdf4;
+        }
+
+        /* Modal Customization */
+        .modal-content {
+            border: none;
+            border-radius: 20px;
+        }
+
+        .dynamic-row {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            position: relative;
+        }
+
+        .remove-btn {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background: #ff4757;
+            color: white;
+            border-radius: 50%;
+            width: 25px;
+            height: 25px;
+            line-height: 25px;
+            text-align: center;
+            cursor: pointer;
+        }
+
+        .hidden { display: none; }
+        .loading-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.8);
+            display: flex; justify-content: center; align-items: center;
+            z-index: 2000;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Overlay -->
+    <div id="loader" class="loading-overlay hidden">
+        <div class="spinner-border text-success" style="width: 3rem; height: 3rem;"></div>
+    </div>
+
+    <!-- Sidebar -->
+    <nav id="sidebar">
+        <div class="sidebar-header">
+            <h4 class="fw-bold m-0"><i class="fas fa-kangaroo me-2"></i>Admin Lab</h4>
+        </div>
+        <ul class="list-unstyled components">
+            <li class="active" onclick="changeSection('tests')">
+                <i class="fas fa-microscope"></i> Master Tests
+            </li>
+            <li onclick="changeSection('packages')">
+                <i class="fas fa-box-tissue"></i> Master Packages
+            </li>
+            <li onclick="changeSection('requests')">
+                <i class="fas fa-bell"></i> Vendor Requests
+                <span class="badge bg-danger rounded-pill ms-2" id="requestCount">0</span>
+            </li>
+            <li onclick="changeSection('upload')">
+                <i class="fas fa-file-upload"></i> Bulk Import
+            </li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <div id="content">
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 id="sectionTitle" class="fw-bold">Master Tests Catalog</h2>
+            <div class="d-flex gap-2">
+                <div class="input-group" style="width: 300px;">
+                    <input type="text" id="globalSearch" class="form-control" placeholder="Search data...">
+                    <button class="btn btn-success" onclick="performSearch()"><i class="fas fa-search"></i></button>
+                </div>
+                <button class="btn btn-dark rounded-pill px-4" id="btnCreateNew">
+                    <i class="fas fa-plus me-2"></i> Create New
+                </button>
+            </div>
+        </div>
+
+        <!-- Dashboard Stats -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <div><h6 class="text-muted mb-1">Total Tests</h6><h3 class="fw-bold" id="statTests">0</h3></div>
+                    <i class="fas fa-vial stats-icon text-success"></i>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <div><h6 class="text-muted mb-1">Total Packages</h6><h3 class="fw-bold" id="statPkgs">0</h3></div>
+                    <i class="fas fa-boxes-stacked stats-icon text-primary"></i>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <div><h6 class="text-muted mb-1">Avg Price</h6><h3 class="fw-bold">₹850</h3></div>
+                    <i class="fas fa-tags stats-icon text-warning"></i>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <div><h6 class="text-muted mb-1">Active Labs</h6><h3 class="fw-bold">42</h3></div>
+                    <i class="fas fa-hospital stats-icon text-info"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Table Container -->
+        <div id="tableSection" class="table-container shadow-sm">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead id="tableHead">
+                        <!-- Dynamic Header -->
+                    </thead>
+                    <tbody id="tableBody">
+                        <!-- Dynamic Rows -->
+                    </tbody>
+                </table>
+            </div>
+            <!-- Pagination -->
+            <nav class="d-flex justify-content-between align-items-center mt-4">
+                <p class="text-muted small" id="paginationInfo">Showing 1 to 20 of 0 entries</p>
+                <ul class="pagination pagination-sm m-0">
+                    <li class="page-item"><a class="page-link" href="#" id="prevPage">Previous</a></li>
+                    <li class="page-item active"><a class="page-link" href="#" id="currentPage">1</a></li>
+                    <li class="page-item"><a class="page-link" href="#" id="nextPage">Next</a></li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Bulk Upload Section (Hidden by Default) -->
+        <div id="bulkUploadSection" class="hidden">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card p-4">
+                        <h5 class="fw-bold mb-3">Bulk Upload Tests</h5>
+                        <p class="text-muted small">Upload .csv or .xlsx file according to standard template.</p>
+                        <form id="formUploadTests">
+                            <div class="upload-zone" onclick="document.getElementById('fileTests').click()">
+                                <i class="fas fa-cloud-upload-alt fa-3x text-success mb-3"></i>
+                                <h6>Drag & Drop or Click to Upload Tests</h6>
+                                <input type="file" id="fileTests" class="hidden" accept=".csv, .xlsx">
+                            </div>
+                            <button type="submit" class="btn btn-success w-100 mt-3 py-2 fw-bold">Process Test File</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card p-4">
+                        <h5 class="fw-bold mb-3">Bulk Upload Packages</h5>
+                        <p class="text-muted small">Combine existing master tests into standard packages.</p>
+                        <form id="formUploadPackages">
+                            <div class="upload-zone" onclick="document.getElementById('filePackages').click()">
+                                <i class="fas fa-layer-group fa-3x text-primary mb-3"></i>
+                                <h6>Drag & Drop or Click to Upload Packages</h6>
+                                <input type="file" id="filePackages" class="hidden" accept=".csv, .xlsx">
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100 mt-3 py-2 fw-bold">Process Package File</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: CREATE/EDIT MASTER TEST -->
+    <div class="modal fade" id="testModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header border-0 p-4">
+                    <h5 class="modal-title fw-bold" id="testModalTitle">Create Master Test</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <form id="formTest">
+                        <input type="hidden" id="editTestId">
+                        <div class="row">
+                            <div class="col-md-4 mb-3"><label class="form-label">Test Name</label><input type="text" id="tName" class="form-control" required></div>
+                            <div class="col-md-4 mb-3"><label class="form-label">Test Code</label><input type="text" id="tCode" class="form-control" required></div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Main Category</label>
+                                <select id="tMainCat" class="form-select">
+                                    <option value="Pathology">Pathology</option>
+                                    <option value="Radiology">Radiology</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4 mb-3"><label class="form-label">Sub Category</label><input type="text" id="tSubCat" class="form-control" placeholder="e.g. Heart Health"></div>
+                            <div class="col-md-4 mb-3"><label class="form-label">Sample Type</label><input type="text" id="tSample" class="form-control" placeholder="Blood, Urine etc."></div>
+                            <div class="col-md-4 mb-3"><label class="form-label">Catalog MRP (₹)</label><input type="number" id="tMrp" class="form-control" required></div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Pre-test Preparation</label>
+                            <textarea id="tPrep" class="form-control" rows="2"></textarea>
+                        </div>
+
+                        <h6 class="fw-bold mt-4 border-bottom pb-2">Inclusions / Parameters</h6>
+                        <div id="paramContainer" class="mb-3">
+                            <div class="input-group mb-2">
+                                <input type="text" class="form-control param-input" placeholder="Enter parameter name">
+                                <button class="btn btn-outline-secondary" type="button" onclick="addParamRow()">+</button>
+                            </div>
+                        </div>
+
+                        <h6 class="fw-bold mt-4 border-bottom pb-2">Detailed Sections (Overview, Usage etc)</h6>
+                        <div id="descContainer"></div>
+                        <button type="button" class="btn btn-sm btn-outline-success mt-2" onclick="addDescRow()">+ Add Section</button>
+
+                        <h6 class="fw-bold mt-4 border-bottom pb-2">FAQs</h6>
+                        <div id="faqContainer"></div>
+                        <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addFaqRow()">+ Add FAQ</button>
+                    </form>
+                </div>
+                <div class="modal-footer border-0 p-4">
+                    <button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-success rounded-pill px-4" onclick="saveTestData()">Save Test Catalog</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.4.0/axios.min.js"></script>
+
+    <script>
+        // --- GLOBAL CONFIG & STATE ---
+        const API_BASE = 'http://localhost:5002/admin/lab/tests'; // Backend mount path
+        let currentSection = 'tests';
+        let currentPage = 1;
+        let totalPages = 1;
+        const testModal = new bootstrap.Modal(document.getElementById('testModal'));
+
+        // Axios defaults (Token management)
+        const token = localStorage.getItem('adminToken');
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchStats();
+            loadData();
+        });
+
+        // --- CORE NAVIGATION ---
+        function changeSection(section) {
+            currentSection = section;
+            currentPage = 1;
+            
+            // Update UI Active State
+            document.querySelectorAll('#sidebar ul li').forEach(li => li.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+
+            // Toggle visibility
+            const tableSec = document.getElementById('tableSection');
+            const bulkSec = document.getElementById('bulkUploadSection');
+            const searchBox = document.getElementById('globalSearch');
+            const btnCreate = document.getElementById('btnCreateNew');
+
+            if (section === 'upload') {
+                tableSec.classList.add('hidden');
+                bulkSec.classList.remove('hidden');
+                document.getElementById('sectionTitle').innerText = "Bulk Catalog Import";
+            } else {
+                tableSec.classList.remove('hidden');
+                bulkSec.classList.add('hidden');
+                document.getElementById('sectionTitle').innerText = 
+                    section === 'tests' ? "Master Tests Catalog" : 
+                    section === 'packages' ? "Master Packages Catalog" : "Vendor Approval Requests";
+                loadData();
+            }
+        }
+
+        // --- DATA FETCHING ---
+        async function loadData() {
+            showLoader(true);
+            try {
+                let url = `${API_BASE}/list/${currentSection === 'tests' ? 'test' : 'package'}?page=${currentPage}`;
+                
+                if (currentSection === 'requests') {
+                    url = `${API_BASE}/requests/pending`;
+                }
+
+                const res = await axios.get(url);
+                if (res.data.success) {
+                    renderTable(res.data.data);
+                    updatePaginationUI(res.data);
+                }
+            } catch (err) {
+                Swal.fire('Error', err.response?.data?.message || 'Failed to fetch data', 'error');
+            }
+            showLoader(false);
+        }
+
+        async function fetchStats() {
+            try {
+                const [tests, pkgs] = await Promise.all([
+                    axios.get(`${API_BASE}/list/test?limit=1`),
+                    axios.get(`${API_BASE}/list/package?limit=1`)
+                ]);
+                document.getElementById('statTests').innerText = tests.data.total;
+                document.getElementById('statPkgs').innerText = pkgs.data.total;
+            } catch (e) {}
+        }
+
+        // --- RENDER ENGINE ---
+        function renderTable(data) {
+            const head = document.getElementById('tableHead');
+            const body = document.getElementById('tableBody');
+            body.innerHTML = '';
+
+            if (currentSection === 'tests') {
+                head.innerHTML = `<tr><th>Code</th><th>Test Name</th><th>Category</th><th>Sample</th><th>Price</th><th>Params</th><th>Actions</th></tr>`;
+                data.forEach(item => {
+                    body.innerHTML += `
+                        <tr>
+                            <td><span class="badge bg-light text-dark border">${item.testCode}</span></td>
+                            <td class="fw-bold">${item.testName}</td>
+                            <td><small>${item.mainCategory} / ${item.category || '-'}</small></td>
+                            <td>${item.sampleType}</td>
+                            <td class="fw-bold text-success">₹${item.standardMRP}</td>
+                            <td><span class="badge bg-info">${item.parameters.length}</span></td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="editItem('test', '${item._id}')"><i class="fas fa-edit"></i></button>
+                                <button class="btn btn-sm btn-outline-danger"><i class="fas fa-trash"></i></button>
+                            </td>
+                        </tr>`;
+                });
+            } else if (currentSection === 'packages') {
+                head.innerHTML = `<tr><th>Package Name</th><th>Category</th><th>Included Tests</th><th>Price</th><th>Gender</th><th>Actions</th></tr>`;
+                data.forEach(item => {
+                    body.innerHTML += `
+                        <tr>
+                            <td class="fw-bold">${item.packageName}</td>
+                            <td><span class="badge bg-secondary">${item.category}</span></td>
+                            <td><span class="badge bg-primary">${item.tests?.length || 0} Tests</span></td>
+                            <td class="fw-bold text-success">₹${item.standardMRP}</td>
+                            <td>${item.gender}</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="editItem('package', '${item._id}')"><i class="fas fa-edit"></i></button>
+                            </td>
+                        </tr>`;
+                });
+            } else if (currentSection === 'requests') {
+                head.innerHTML = `<tr><th>Vendor</th><th>Request Type</th><th>Item Name</th><th>Submitted</th><th>Status</th><th>Actions</th></tr>`;
+                document.getElementById('requestCount').innerText = data.length;
+                data.forEach(item => {
+                    body.innerHTML += `
+                        <tr>
+                            <td class="fw-bold text-primary">${item.vendorId?.name || 'Unknown'}</td>
+                            <td><span class="badge bg-dark">${item.requestType}</span></td>
+                            <td>${item.data?.testName || item.data?.packageName}</td>
+                            <td>${new Date(item.createdAt).toLocaleDateString()}</td>
+                            <td><span class="badge-status bg-warning text-dark">${item.status}</span></td>
+                            <td>
+                                <button class="btn btn-sm btn-success px-3" onclick="handleApproval('${item._id}')">Approve</button>
+                            </td>
+                        </tr>`;
+                });
+            }
+        }
+
+        // --- SEARCH ENGINE ---
+        async function performSearch() {
+            const query = document.getElementById('globalSearch').value;
+            if(!query) return loadData();
+
+            showLoader(true);
+            try {
+                const res = await axios.post(`${API_BASE}/search`, {
+                    type: currentSection === 'tests' ? 'test' : 'package',
+                    query: query
+                });
+                renderTable(res.data.data);
+            } catch (err) {
+                Swal.fire('Search Failed', '', 'error');
+            }
+            showLoader(false);
+        }
+
+        // --- MANUAL CREATION & EDITING ---
+        document.getElementById('btnCreateNew').onclick = () => {
+            if (currentSection === 'tests') {
+                document.getElementById('formTest').reset();
+                document.getElementById('testModalTitle').innerText = "Create Master Test";
+                document.getElementById('editTestId').value = '';
+                document.getElementById('paramContainer').innerHTML = `
+                    <div class="input-group mb-2">
+                        <input type="text" class="form-control param-input" placeholder="Enter parameter name">
+                        <button class="btn btn-outline-secondary" type="button" onclick="addParamRow()">+</button>
+                    </div>`;
+                document.getElementById('descContainer').innerHTML = '';
+                document.getElementById('faqContainer').innerHTML = '';
+                testModal.show();
+            } else if (currentSection === 'packages') {
+                // Similarly handle package modal
+                Swal.fire('Info', 'Package Modal is under implementation. Use Bulk Upload for now.', 'info');
+            }
+        };
+
+        function addParamRow() {
+            const div = document.createElement('div');
+            div.className = 'input-group mb-2';
+            div.innerHTML = `
+                <input type="text" class="form-control param-input" placeholder="Enter parameter name">
+                <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove()">-</button>
+            `;
+            document.getElementById('paramContainer').appendChild(div);
+        }
+
+        function addDescRow(val = {title:'', content:''}) {
+            const div = document.createElement('div');
+            div.className = 'dynamic-row';
+            div.innerHTML = `
+                <div class="remove-btn" onclick="this.parentElement.remove()">×</div>
+                <div class="row">
+                    <div class="col-md-4"><input type="text" class="form-control d-title mb-2" placeholder="Section Title" value="${val.title}"></div>
+                    <div class="col-md-8"><textarea class="form-control d-content" placeholder="Content...">${val.content}</textarea></div>
+                </div>`;
+            document.getElementById('descContainer').appendChild(div);
+        }
+
+        function addFaqRow(val = {q:'', a:''}) {
+            const div = document.createElement('div');
+            div.className = 'dynamic-row';
+            div.innerHTML = `
+                <div class="remove-btn" onclick="this.parentElement.remove()">×</div>
+                <div class="row">
+                    <div class="col-md-5"><input type="text" class="form-control f-q mb-2" placeholder="Question" value="${val.q}"></div>
+                    <div class="col-md-7"><textarea class="form-control f-a" placeholder="Answer...">${val.a}</textarea></div>
+                </div>`;
+            document.getElementById('faqContainer').appendChild(div);
+        }
+
+        async function saveTestData() {
+            const id = document.getElementById('editTestId').value;
+            const payload = {
+                testName: document.getElementById('tName').value,
+                testCode: document.getElementById('tCode').value,
+                mainCategory: document.getElementById('tMainCat').value,
+                category: document.getElementById('tSubCat').value,
+                sampleType: document.getElementById('tSample').value,
+                standardMRP: document.getElementById('tMrp').value,
+                pretestPreparation: document.getElementById('tPrep').value,
+                parameters: Array.from(document.querySelectorAll('.param-input')).map(i => i.value).filter(v => v),
+                detailedDescription: Array.from(document.querySelectorAll('.dynamic-row')).filter(r => r.querySelector('.d-title')).map(r => ({
+                    sectionTitle: r.querySelector('.d-title').value,
+                    sectionContent: r.querySelector('.d-content').value
+                })),
+                faqs: Array.from(document.querySelectorAll('.dynamic-row')).filter(r => r.querySelector('.f-q')).map(r => ({
+                    question: r.querySelector('.f-q').value,
+                    answer: r.querySelector('.f-a').value
+                }))
+            };
+
+            showLoader(true);
+            try {
+                if (id) {
+                    await axios.put(`${API_BASE}/edit/test/${id}`, payload);
+                } else {
+                    await axios.post(`${API_BASE}/create`, { type: 'test', payload });
+                }
+                testModal.hide();
+                Swal.fire('Success', 'Data saved successfully', 'success');
+                loadData();
+            } catch (err) {
+                Swal.fire('Failed', err.response?.data?.message || 'Server error', 'error');
+            }
+            showLoader(false);
+        }
+
+        // --- BULK UPLOAD HANDLERS ---
+        document.getElementById('formUploadTests').onsubmit = async (e) => {
+            e.preventDefault();
+            const file = document.getElementById('fileTests').files[0];
+            if(!file) return Swal.fire('Wait!', 'Select a file first', 'warning');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            showLoader(true);
+            try {
+                const res = await axios.post(`${API_BASE}/upload`, formData);
+                Swal.fire('Import Complete', res.data.message, 'success');
+                fetchStats();
+            } catch (err) {
+                Swal.fire('Import Failed', err.response?.data?.message, 'error');
+            }
+            showLoader(false);
+        };
+
+        document.getElementById('formUploadPackages').onsubmit = async (e) => {
+            e.preventDefault();
+            const file = document.getElementById('filePackages').files[0];
+            if(!file) return Swal.fire('Wait!', 'Select a file first', 'warning');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            showLoader(true);
+            try {
+                const res = await axios.post(`${API_BASE}/upload-packages`, formData);
+                Swal.fire('Import Complete', res.data.message, 'success');
+                fetchStats();
+            } catch (err) {
+                Swal.fire('Import Failed', err.response?.data?.message, 'error');
+            }
+            showLoader(false);
+        };
+
+        // --- APPROVAL SYSTEM ---
+        async function handleApproval(requestId) {
+            const result = await Swal.fire({
+                title: 'Approve this request?',
+                text: "This will move the vendor's data to the Master Catalog.",
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonColor: '#00a651',
+                confirmButtonText: 'Yes, Approve'
+            });
+
+            if (result.isConfirmed) {
+                showLoader(true);
+                try {
+                    await axios.put(`${API_BASE}/requests/approve/${requestId}`);
+                    Swal.fire('Approved!', 'Catalog updated.', 'success');
+                    loadData();
+                } catch (e) {
+                    Swal.fire('Error', 'Approval failed', 'error');
+                }
+                showLoader(false);
+            }
+        }
+
+        // --- HELPERS ---
+        function showLoader(show) {
+            document.getElementById('loader').classList.toggle('hidden', !show);
+        }
+
+        function updatePaginationUI(data) {
+            if (currentSection === 'requests') return; // Approval list doesn't have standard pagination here
+            
+            totalPages = data.totalPages;
+            document.getElementById('currentPage').innerText = data.page;
+            document.getElementById('paginationInfo').innerText = `Page ${data.page} of ${data.totalPages} (Total: ${data.total})`;
+            
+            document.getElementById('prevPage').parentElement.classList.toggle('disabled', data.page === 1);
+            document.getElementById('nextPage').parentElement.classList.toggle('disabled', data.page === data.totalPages);
+        }
+
+        document.getElementById('prevPage').onclick = (e) => {
+            e.preventDefault();
+            if(currentPage > 1) { currentPage--; loadData(); }
+        };
+
+        document.getElementById('nextPage').onclick = (e) => {
+            e.preventDefault();
+            if(currentPage < totalPages) { currentPage++; loadData(); }
+        };
+
+        async function editItem(type, id) {
+            if (type === 'test') {
+                showLoader(true);
+                try {
+                    // Logic: Get details and fill modal
+                    // We can reuse getMasterList or specific detail API if available
+                    const res = await axios.get(`${API_BASE}/master-tests?search=${id}`); // Simple mock for detail
+                    const d = res.data.data.find(x => x._id === id);
+                    if(!d) return;
+
+                    document.getElementById('editTestId').value = d._id;
+                    document.getElementById('tName').value = d.testName;
+                    document.getElementById('tCode').value = d.testCode;
+                    document.getElementById('tMainCat').value = d.mainCategory;
+                    document.getElementById('tSubCat').value = d.category || '';
+                    document.getElementById('tSample').value = d.sampleType;
+                    document.getElementById('tMrp').value = d.standardMRP;
+                    document.getElementById('tPrep').value = d.pretestPreparation;
+
+                    // Clear dynamic containers
+                    document.getElementById('paramContainer').innerHTML = '';
+                    d.parameters.forEach(p => {
+                        const div = document.createElement('div');
+                        div.className = 'input-group mb-2';
+                        div.innerHTML = `
+                            <input type="text" class="form-control param-input" value="${p}">
+                            <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove()">-</button>`;
+                        document.getElementById('paramContainer').appendChild(div);
+                    });
+
+                    document.getElementById('descContainer').innerHTML = '';
+                    d.detailedDescription.forEach(sec => addDescRow({title: sec.sectionTitle, content: sec.sectionContent}));
+
+                    document.getElementById('faqContainer').innerHTML = '';
+                    d.faqs.forEach(f => addFaqRow({q: f.question, a: f.answer}));
+
+                    document.getElementById('testModalTitle').innerText = "Edit Master Test";
+                    testModal.show();
+                } catch (e) {}
+                showLoader(false);
+            }
+        }
+    </script>
+</body>
+</html>
