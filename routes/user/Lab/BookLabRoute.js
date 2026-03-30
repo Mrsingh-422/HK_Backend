@@ -7,7 +7,12 @@ const {
     bookLabTest, uploadPrescriptionFlow,
     getMyBookings, getBookingDetails ,
     getLabsByMasterTest, getLabsByMasterPackage,
-    getMasterTestDetails, getMasterPackageDetails
+    getMasterTestDetails, getMasterPackageDetails,
+    checkoutLabBooking,
+    confirmPrescriptionBooking,
+    rateLabOrder,cancelBooking,
+    getAvailableCoupons 
+    
 } = require('../../../controllers/user/Lab/BookLab');
 
 // Base URL: /user/labs
@@ -17,24 +22,30 @@ router.get('/list', getLabs);
 router.get('/details/:id', getLabDetails);
 router.get('/slots', getLabSlots);
 
-// Booking (Protected)
-router.post('/book', protect('user'), bookLabTest);
-router.post('/upload-prescription', protect('user'), prescriptionUploads.array('prescriptionImages', 5), uploadPrescriptionFlow);
+router.get('/master-test/:id', protect('user'), getMasterTestDetails);
+router.get('/master-package/:id', protect('user'), getMasterPackageDetails);
 
-// Tracking & History
-router.get('/my-bookings', protect('user'), getMyBookings);
-router.get('/details/:id/track', protect('user'), getBookingDetails);
-
-// Master Tests
 router.get('/comparison/test/:masterTestId', protect('user'), getLabsByMasterTest);
 router.get('/comparison/package/:masterPackageId', protect('user'), getLabsByMasterPackage);
 
 
-// Master Test details
-router.get('/master-test/:id', protect('user'), getMasterTestDetails);
+// Booking (Protected)
+router.post('/checkout', protect('user'), checkoutLabBooking);
+router.post('/confirm-prescription', protect('user'), confirmPrescriptionBooking); // Prescription Flow Part 2
+router.post('/upload-prescription', protect('user'), prescriptionUploads.array('prescriptionImages', 5), uploadPrescriptionFlow);
 
-// Master Package details
-router.get('/master-package/:id', protect('user'), getMasterPackageDetails);
+// Discovery & Logistics
+router.get('/slots', protect('user'), getLabSlots); // User selects slot
+router.get('/coupons', protect('user'), getAvailableCoupons); // User views applicable coupons
+
+
+router.post('/book', protect('user'), bookLabTest);
+
+// Tracking & History
+router.get('/my-bookings', protect('user'), getMyBookings);
+router.get('/details/:id/track', protect('user'), getBookingDetails);
+router.put('/cancel/:id', protect('user'), cancelBooking);
+router.post('/rate', protect('user'), rateLabOrder);
 
 
 module.exports = router;

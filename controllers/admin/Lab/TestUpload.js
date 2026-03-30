@@ -3,8 +3,8 @@ const MasterLabPackage = require('../../../models/MasterLabPackage');
 const MasterRequest = require('../../../models/MasterRequest');
 const xlsx = require('xlsx');
 
+// upload master tests // Example CSV Format: 
 // endpoint: POST /admin/lab/tests/upload
-// Example CSV Format: 
 // testName: CBC, parameters: Hb||WBC||RBC, faqs: What is CBC?:It is blood test||Why do it?:To check health
 const uploadMasterTests = async (req, res) => {
     try {
@@ -43,21 +43,7 @@ const uploadMasterTests = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-
-// endpoint: GET /admin/lab/tests/master-tests
-const getMasterList = async (req, res) => {
-    try {
-        const { mainCategory, search } = req.query;
-        let query = { isActive: true };
-        if (mainCategory) query.mainCategory = mainCategory;
-        if (search) query.testName = new RegExp(search, 'i');
-
-        const list = await MasterLabTest.find(query);
-        res.json({ success: true, data: list });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-
+// Upload Master Packages
 // endpoint: POST admin/lab/tests/upload-packages
 const uploadMasterPackages = async (req, res) => {
     try {
@@ -129,27 +115,8 @@ const uploadMasterPackages = async (req, res) => {
     }
 };
 
-// GET MASTER PACKAGES LIST
-// endpoint: GET /admin/lab/tests/master-packages
-const getMasterPackages = async (req, res) => {
-    try {
-        const { category, search } = req.query;
-        let query = { isActive: true };
-        if (category) query.category = category;
-        if (search) query.packageName = new RegExp(search, 'i');
-
-        const list = await MasterLabPackage.find(query).populate('tests', 'testName sampleType');
-        res.json({ success: true, data: list });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
-
-
-
-
-// 1. LIST WITH PAGINATION (20 per page)
+// 1. LIST WITH PAGINATION (20 per page) || req.params => type: 'test' or 'package'
+// endpoint: GET /admin/lab/tests/list/:type
 const listMasterData = async (req, res) => {
     try {
         const { type } = req.params; // 'test' or 'package'
@@ -159,13 +126,26 @@ const listMasterData = async (req, res) => {
 
         const Model = type === 'test' ? MasterLabTest : MasterLabPackage;
         const total = await Model.countDocuments();
-        const data = await Model.find().skip(skip).limit(limit).sort({ createdAt: -1 });
+        
+        // Initial query
+        let query = Model.find().skip(skip).limit(limit).sort({ createdAt: -1 });
+
+        // AGAR PACKAGE HAI TOH TESTS POPULATE KAREIN
+        if (type === 'package') {
+            query = query.populate('tests', 'testName sampleType mainCategory standardMRP'); 
+            // 'tests' field ko populate kiya aur sirf kaam ke fields mangwaye
+        }
+
+        const data = await query;
 
         res.json({ success: true, total, page, totalPages: Math.ceil(total / limit), data });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
-// 2. SEARCH API (POST)
+// 2. SEARCH API (POST) || req.body => type: 'test' or 'package', query
+// endpoint: POST /admin/lab/tests/search
 const searchMasterData = async (req, res) => {
     try {
         const { type, query } = req.body;
@@ -179,7 +159,8 @@ const searchMasterData = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. MANUAL CREATE (Admin)
+// 3. MANUAL CREATE (Admin) || req.body => type: 'test' or 'package'
+// endpoint: POST /admin/lab/tests/create
 const createMasterData = async (req, res) => {
     try {
         const { type, payload } = req.body;
@@ -190,7 +171,7 @@ const createMasterData = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 4. EDIT API
+// 4. EDIT API (Admin) || req.params => type: 'test' or 'package', id
 const editMasterData = async (req, res) => {
     try {
         const { type, id } = req.params;
@@ -203,7 +184,8 @@ const editMasterData = async (req, res) => {
 
 // ================= APPROVAL FLOW SECTION =================
 
-// 5. GET ALL VENDOR REQUESTS
+// 5. GET ALL VENDOR REQUESTS (Pending)
+// endpoint: GET /admin/lab/tests/requests/pending
 const getPendingRequests = async (req, res) => {
     try {
         const requests = await MasterRequest.find({ status: 'Pending' }).populate('vendorId', 'name');
@@ -212,6 +194,7 @@ const getPendingRequests = async (req, res) => {
 };
 
 // 6. APPROVE REQUEST (Moves data to Master Collection)
+// endpoint: PUT /admin/lab/tests/request/approve/:requestId
 const approveRequest = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -231,7 +214,40 @@ const approveRequest = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+
+
+
+// not in use
+// endpoint: GET /admin/lab/tests/master-tests
+const getMasterList = async (req, res) => {
+    try {
+        const { mainCategory, search } = req.query;
+        let query = { isActive: true };
+        if (mainCategory) query.mainCategory = mainCategory;
+        if (search) query.testName = new RegExp(search, 'i');
+
+        const list = await MasterLabTest.find(query);
+        res.json({ success: true, data: list });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+// GET MASTER PACKAGES LIST
+// endpoint: GET /admin/lab/tests/master-packages
+const getMasterPackages = async (req, res) => {
+    try {
+        const { category, search } = req.query;
+        let query = { isActive: true };
+        if (category) query.category = category;
+        if (search) query.packageName = new RegExp(search, 'i');
+
+        const list = await MasterLabPackage.find(query).populate('tests', 'testName sampleType');
+        res.json({ success: true, data: list });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
                     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest
- };
+ }; 

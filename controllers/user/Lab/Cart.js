@@ -131,6 +131,6 @@ const removeItem = async (req, res) => {
         await cart.save();
         res.json({ success: true, message: "Item removed", data: cart });
     } catch (error) { res.status(500).json({ message: error.message }); }
-};
+}; 
 
 module.exports = { addToLabCart,updateCartQuantity, getMyCart, clearLabCart, removeItem };
