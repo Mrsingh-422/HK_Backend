@@ -1,142 +1,135 @@
 const Doctor = require('../../models/Doctor');
 const Hospital = require('../../models/Hospital');
-const Provider = require('../../models/Provider');
 const Ambulance = require('../../models/Ambulance');
+const Lab = require('../../models/Lab');
+const Pharmacy = require('../../models/Pharmacy');
+const Nurse = require('../../models/Nurse');
 const { getLocationFilter } = require('../../middleware/authMiddleware');
 
-// ==========================================
-// 1. LISTING APIs (Location Aware)
-// ==========================================
-
-const getDoctorsList = async (req, res) => {
+// Helper function to handle listing with Search and Pagination
+const getPaginatedList = async (Model, req, res, searchFields = [], populateFields = null) => {
     try {
-        const { status, role } = req.query; 
+        const { status, page = 1, limit = 10, search = "" } = req.query;
         const locFilter = getLocationFilter(req);
-        const filter = { 
-            ...locFilter, 
-            ...(status && { profileStatus: status }),
-            ...(role && { role: role }) 
-        };
-        const doctors = await Doctor.find(filter).populate('hospitalId', 'name email');
-        res.json({ success: true, count: doctors.length, data: doctors });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
 
-const getHospitalsList = async (req, res) => {
-    try {
-        const { status } = req.query;
-        const locFilter = getLocationFilter(req);
-        const filter = { ...locFilter, ...(status && { profileStatus: status }) };
-        const hospitals = await Hospital.find(filter);
-        res.json({ success: true, count: hospitals.length, data: hospitals });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
-const getProvidersList = async (req, res) => {
-    try {
-        const { category, status } = req.query;
-        const locFilter = getLocationFilter(req);
-        let filter = { ...locFilter };
-        if (category) filter.category = category; 
+        const filter = { ...locFilter };
         if (status) filter.profileStatus = status;
 
-        const providers = await Provider.find(filter);
-        res.json({ success: true, count: providers.length, data: providers });
+        if (search && searchFields.length > 0) {
+            filter.$or = searchFields.map(field => ({
+                [field]: { $regex: search, $options: 'i' }
+            }));
+        }
+
+        const skip = (page - 1) * limit;
+        const totalDocs = await Model.countDocuments(filter);
+        
+        let query = Model.find(filter).skip(skip).limit(parseInt(limit)).sort({ createdAt: -1 });
+        if (populateFields) query = query.populate(populateFields);
+
+        const data = await query;
+
+        res.json({
+            success: true,
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / limit),
+            currentPage: parseInt(page),
+            data
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
-
-const getAmbulancesList = async (req, res) => {
-    try {
-        const { status } = req.query;
-        const locFilter = getLocationFilter(req);
-        const filter = { ...locFilter, ...(status && { profileStatus: status }) };
-        const ambulances = await Ambulance.find(filter).populate('hospitalId', 'name');
-        res.json({ success: true, count: ambulances.length, data: ambulances });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
-// ==========================================
-// 2. APPROVAL & REJECTION LOGIC (Separate APIs)
-// ==========================================
 
 // --- DOCTOR ---
+const getDoctorsList = (req, res) => getPaginatedList(Doctor, req, res, ['name', 'email', 'specialization'], { path: 'hospitalId', select: 'name email' });
+
 const approveDoctor = async (req, res) => {
-    try {
-        const doctor = await Doctor.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
-        if (!doctor) return res.status(404).json({ message: 'Doctor not found' });
-        res.json({ success: true, message: 'Doctor approved successfully', data: doctor });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    const doctor = await Doctor.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
+    res.json({ success: true, message: 'Doctor approved', data: doctor });
 };
 
 const rejectDoctor = async (req, res) => {
-    try {
-        const { reason } = req.body;
-        if (!reason) return res.status(400).json({ message: 'Rejection reason is required' });
-        const doctor = await Doctor.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
-        res.json({ success: true, message: 'Doctor rejected', data: doctor });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    const { reason } = req.body;
+    const doctor = await Doctor.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
+    res.json({ success: true, message: 'Doctor rejected', data: doctor });
 };
 
 // --- HOSPITAL ---
+const getHospitalsList = (req, res) => getPaginatedList(Hospital, req, res, ['name', 'email']);
+
 const approveHospital = async (req, res) => {
-    try {
-        const hospital = await Hospital.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
-        res.json({ success: true, message: 'Hospital approved', data: hospital });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    const hospital = await Hospital.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
+    res.json({ success: true, message: 'Hospital approved', data: hospital });
 };
 
 const rejectHospital = async (req, res) => {
-    try {
-        const { reason } = req.body;
-        const hospital = await Hospital.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
-        res.json({ success: true, message: 'Hospital rejected', data: hospital });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    const { reason } = req.body;
+    const hospital = await Hospital.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
+    res.json({ success: true, message: 'Hospital rejected', data: hospital });
 };
 
-// --- PROVIDER (Pharmacy/Lab/Nurse) ---
-const approveProvider = async (req, res) => {
-    try {
-        const provider = await Provider.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
-        res.json({ success: true, message: 'Provider approved', data: provider });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+// --- LAB ---
+const getLabsList = (req, res) => getPaginatedList(Lab, req, res, ['name', 'email']);
+
+const approveLab = async (req, res) => {
+    const lab = await Lab.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
+    res.json({ success: true, message: 'Lab approved', data: lab });
 };
 
-const rejectProvider = async (req, res) => {
-    try {
-        const { reason } = req.body;
-        const provider = await Provider.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
-        res.json({ success: true, message: 'Provider rejected', data: provider });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+const rejectLab = async (req, res) => {
+    const { reason } = req.body;
+    const lab = await Lab.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
+    res.json({ success: true, message: 'Lab rejected', data: lab });
+};
+
+// --- PHARMACY ---
+const getPharmaciesList = (req, res) => getPaginatedList(Pharmacy, req, res, ['name', 'email']);
+
+const approvePharmacy = async (req, res) => {
+    const pharmacy = await Pharmacy.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
+    res.json({ success: true, message: 'Pharmacy approved', data: pharmacy });
+};
+
+const rejectPharmacy = async (req, res) => {
+    const { reason } = req.body;
+    const pharmacy = await Pharmacy.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
+    res.json({ success: true, message: 'Pharmacy rejected', data: pharmacy });
+};
+
+// --- NURSE ---
+const getNursesList = (req, res) => getPaginatedList(Nurse, req, res, ['name', 'email']);
+
+const approveNurse = async (req, res) => {
+    const nurse = await Nurse.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
+    res.json({ success: true, message: 'Nurse approved', data: nurse });
+};
+
+const rejectNurse = async (req, res) => {
+    const { reason } = req.body;
+    const nurse = await Nurse.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
+    res.json({ success: true, message: 'Nurse rejected', data: nurse });
 };
 
 // --- AMBULANCE ---
+const getAmbulancesList = (req, res) => getPaginatedList(Ambulance, req, res, ['vehicleNumber', 'driverName'], 'hospitalId');
+
 const approveAmbulance = async (req, res) => {
-    try {
-        const ambulance = await Ambulance.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
-        res.json({ success: true, message: 'Ambulance approved', data: ambulance });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    const ambulance = await Ambulance.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
+    res.json({ success: true, message: 'Ambulance approved', data: ambulance });
 };
 
 const rejectAmbulance = async (req, res) => {
-    try {
-        const { reason } = req.body;
-        const ambulance = await Ambulance.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
-        res.json({ success: true, message: 'Ambulance rejected', data: ambulance });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    const { reason } = req.body;
+    const ambulance = await Ambulance.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
+    res.json({ success: true, message: 'Ambulance rejected', data: ambulance });
 };
 
 module.exports = {
-    getDoctorsList, getHospitalsList, getProvidersList, getAmbulancesList,
-    approveDoctor, rejectDoctor,
-    approveHospital, rejectHospital,
-    approveProvider, rejectProvider,
-    approveAmbulance, rejectAmbulance
+    getDoctorsList, approveDoctor, rejectDoctor,
+    getHospitalsList, approveHospital, rejectHospital,
+    getLabsList, approveLab, rejectLab,
+    getPharmaciesList, approvePharmacy, rejectPharmacy,
+    getNursesList, approveNurse, rejectNurse,
+    getAmbulancesList, approveAmbulance, rejectAmbulance
 };

@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer'); // Ensure this handles 'prescriptionImages' key
 const { 
-    getLabs, getLabDetails, getLabSlots,
+    getLabs, getLabDetails, getLabSlots, getLabDeliveryCharges,
     bookLabTest, uploadPrescriptionFlow,
     getMyBookings, getBookingDetails ,
     getLabsByMasterTest, getLabsByMasterPackage,
@@ -28,6 +28,7 @@ router.get('/master-package/:id', protect('user'), getMasterPackageDetails);
 router.get('/comparison/test/:masterTestId', protect('user'), getLabsByMasterTest);
 router.get('/comparison/package/:masterPackageId', protect('user'), getLabsByMasterPackage);
 
+router.get('/delivery-charges', protect('user'), getLabDeliveryCharges); // NEW
 
 // Booking (Protected)
 router.post('/checkout', protect('user'), checkoutLabBooking);

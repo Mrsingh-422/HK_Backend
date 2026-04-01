@@ -1,14 +1,16 @@
 const mongoose = require('mongoose');
 
 const insuranceSchema = new mongoose.Schema({
-    name: { 
+    insuranceName: { 
         type: String, 
         required: true, 
-        unique: true,
+        unique: true, // Naya index 'insuranceName_1' banega
         trim: true 
-    }, 
-    // Example values: 'RGHS', 'CGHS', 'General / Paid'
-
+    },
+    type: { 
+        type: String, 
+        required: true 
+    },
     isActive: { 
         type: Boolean, 
         default: true 

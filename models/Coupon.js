@@ -1,11 +1,19 @@
 const mongoose = require('mongoose');
 
 const couponSchema = new mongoose.Schema({
-    vendorId: { type: mongoose.Schema.Types.ObjectId, refPath: 'vendorType', default: null },
-    vendorType: { type: String, enum: ['Lab', 'Pharmacy', 'Nurse', 'Admin'], default: 'Admin' },
-    
+        creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, 
+vendorType: { 
+        type: String, 
+        enum: ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance', 'All'], 
+        required: true 
+    },    
+        isAdminCreated: { type: Boolean, default: false }, // Flag to identify admin coupons
+
+        vendorId: { type: mongoose.Schema.Types.ObjectId, refPath: 'vendorType', default: null },
+
+
     couponName: { type: String, required: true, uppercase: true },
-    discountPercentage: { type: Number, required: true },
+    discountPercentage: { type: Number, required: true }, 
     maxDiscount: { type: Number, required: true },
     
     // --- New Production Fields ---

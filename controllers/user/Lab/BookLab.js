@@ -20,7 +20,6 @@ const mongoose = require('mongoose');
 const calculateBill = async (labId, items, patientsCount, collectionType, couponCode, isRapid, userId) => {
     let itemTotal = 0;
     
-    // 1. Calculate Items Total
     for (let t of items.tests) {
         const test = await LabTest.findById(t.testId);
         if (test) itemTotal += test.discountPrice || test.amount;
@@ -30,7 +29,6 @@ const calculateBill = async (labId, items, patientsCount, collectionType, coupon
         if (pkg) itemTotal += pkg.offerPrice || pkg.mrp;
     }
 
-    // 2. Delivery / Home Visit Charges
     let homeVisitCharge = 0;
     let rapidCharge = 0;
     const charges = await DeliveryCharge.findOne({ vendorId: labId });
@@ -42,13 +40,11 @@ const calculateBill = async (labId, items, patientsCount, collectionType, coupon
         rapidCharge = (charges.fastDeliveryExtra || 0) * patientsCount;
     }
 
-    // 3. Strict Coupon Logic
     let couponDiscount = 0;
     let couponId = null;
     if (couponCode) {
         const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
         if (coupon) {
-            // Check usage limit for THIS specific user
             const userUsage = coupon.usedBy.filter(u => u.userId.toString() === userId.toString()).length;
             if (itemTotal >= coupon.minOrderAmount && userUsage < coupon.maxUsagePerUser) {
                 couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
@@ -60,7 +56,32 @@ const calculateBill = async (labId, items, patientsCount, collectionType, coupon
     const totalAmount = (itemTotal - couponDiscount) + homeVisitCharge + rapidCharge;
     return { itemTotal, couponDiscount, couponId, homeVisitCharge, rapidDeliveryCharge: rapidCharge, totalAmount };
 };
- 
+ // 1. NEW: Get Delivery Charges for Lab in User Cart
+const getLabDeliveryCharges = async (req, res) => {
+    try {
+        const cart = await Cart.findOne({ userId: req.user.id });
+        if (!cart || !cart.labCart.labId) {
+            return res.status(400).json({ success: false, message: "No lab selected in cart" });
+        }
+
+        const labId = cart.labCart.labId;
+
+        // Vendor specific charges fetch karein
+        let charges = await DeliveryCharge.findOne({ vendorId: labId });
+
+        // Agar vendor ne set nahi kiya, toh standard defaults return karein
+        if (!charges) {
+            return res.json({ 
+                success: true, 
+                isDefault: true,
+                data: { fixedPrice: 50, fixedDistance: 5, pricePerKM: 10, fastDeliveryExtra: 100 } 
+            });
+        }
+        
+        res.json({ success: true, data: charges, isDefault: false });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 
 // 1. GET LABS LIST WITH FILTERS
 const getLabs = async (req, res) => {
@@ -168,97 +189,143 @@ const getLabSlotsForUser = async (req, res) => {
 // 2. GET AVAILABLE COUPONS (Admin Global + Specific Vendor)
 const getAvailableCoupons = async (req, res) => {
     try {
-        const { labId } = req.query;
-        // Logic: Fetch all Admin coupons OR coupons created by this specific Lab
-        const coupons = await Coupon.find({
+        // 1. User ki cart find karein
+        const cart = await Cart.findOne({ userId: req.user.id });
+        
+        if (!cart || !cart.labCart || !cart.labCart.labId) {
+            return res.status(400).json({ success: false, message: "No lab in cart" });
+        }
+
+        const labId = cart.labCart.labId;
+        const today = new Date();
+
+        // 2. Coupons search karein
+        const list = await Coupon.find({ 
             isActive: true,
-            expiryDate: { $gte: new Date() },
+            // Expiry date aaj se badi ya barabar honi chahiye
+            expiryDate: { $gte: today }, 
             $or: [
-                { vendorType: 'Admin' },
-                { vendorId: labId }
+                // CASE 1: Us specific Lab ka apna coupon
+                { vendorId: labId }, 
+                
+                // CASE 2: Admin ka banaya Global coupon jo 'Lab' ke liye hai
+                { 
+                    isAdminCreated: true, 
+                    vendorType: 'Lab', // Make sure 'Lab' matches Schema Enum exactly
+                    vendorId: null 
+                }
             ]
         }).sort({ createdAt: -1 });
 
-        res.json({ success: true, data: coupons });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // DEBUGGING: Agar coupons nahi aa rahe toh console check karein
+        console.log("Searching coupons for LabId:", labId);
+        console.log("Found Coupons Count:", list.length);
+
+        res.json({ success: true, count: list.length, data: list });
+    } catch (error) { 
+        console.error("Coupon Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 // 3. FINAL CHECKOUT (Integrating Delivery & Coupons)
 const checkoutLabBooking = async (req, res) => {
     try {
         const { 
             appointmentDate, appointmentTime, address, paymentMethod, 
-            couponCode, isRapid, selectedPatientIds, distanceInKm 
+            couponCode, isRapid, selectedPatientIds, collectionType 
         } = req.body;
-
+        
         const userId = req.user.id;
+        const patientCount = selectedPatientIds.length; // Count of selected patients
+
         const cart = await Cart.findOne({ userId });
-        if (!cart || cart.labCart.items.length === 0) return res.status(400).json({ message: "Cart is empty" });
+        if (!cart || cart.labCart.items.length === 0) {
+            return res.status(400).json({ message: "Cart is empty" });
+        }
 
         const labId = cart.labCart.labId;
 
-        // --- STEP A: Calculate Item Total ---
-        let itemTotal = 0;
-        cart.labCart.items.forEach(item => { itemTotal += item.price * item.quantity; });
+        // 1. Calculate Items Total (Unit Price * Quantity * Patient Count)
+        let unitItemsTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+        let itemTotal = unitItemsTotal * patientCount; // Multiply by patients
 
-        // --- STEP B: Delivery Charges ---
-        const chargesConfig = await DeliveryCharge.findOne({ vendorId: labId });
-        let deliveryFee = 0;
-        if (req.body.collectionType === 'Home Collection') {
-            deliveryFee = calculateDeliveryFee(distanceInKm || 0, itemTotal, chargesConfig);
-        }
+        // 2. Fetch Charges
+        const charges = await DeliveryCharge.findOne({ vendorId: labId });
+        
+        // Delivery Charge is FLAT (only once per order)
+        const fixedFee = (collectionType === 'Home Collection') ? (charges?.fixedPrice || 50) : 0;
+        
+        // Rapid Charge is PER PATIENT
+        const rapidFee = isRapid ? (charges?.fastDeliveryExtra || 100) * patientCount : 0;
 
-        // --- STEP C: Rapid Delivery ---
-        let rapidCharge = 0;
-        if (isRapid && chargesConfig) {
-            rapidCharge = chargesConfig.fastDeliveryExtra * selectedPatientIds.length;
-        }
+        // 3. Coupon Logic (Discount applied on total multiplied price)
+        let disc = 0;
+        let couponData = null;
 
-        // --- STEP D: Coupon Validation ---
-        let couponDiscount = 0;
-        let couponId = null;
         if (couponCode) {
             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
             if (coupon) {
-                const userUsage = coupon.usedBy.filter(u => u.userId.toString() === userId).length;
+                const userUsage = coupon.usedBy.filter(u => u.userId.toString() === userId.toString()).length;
                 if (itemTotal >= coupon.minOrderAmount && userUsage < coupon.maxUsagePerUser) {
-                    couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
-                    couponId = coupon._id;
+                    disc = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                    couponData = {
+                        couponId: coupon._id,
+                        couponName: coupon.couponName,
+                        discountPercentage: coupon.discountPercentage,
+                        maxDiscount: coupon.maxDiscount,
+                        minOrderAmount: coupon.minOrderAmount
+                    };
                 }
             }
         }
 
-        const totalAmount = (itemTotal - couponDiscount) + deliveryFee + rapidCharge;
+        const finalTotal = (itemTotal - disc) + fixedFee + rapidFee;
 
-        // Create Booking object
+        // 4. Create Booking
         const booking = await LabBooking.create({
             bookingId: `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
             labId,
-            patients: await mapPatients(userId, selectedPatientIds), // Helper to fetch patient data
-            items: cart.labCart.items.map(i => ({ testId: i.itemId, price: i.price, name: i.name })),
-            collectionType: req.body.collectionType,
+            patients: await mapPatients(userId, selectedPatientIds),
+            items: {
+                tests: cart.labCart.items.filter(i => i.productType === 'LabTest').map(i => ({ 
+                    testId: i.itemId, price: i.price, name: i.name 
+                })),
+                packages: cart.labCart.items.filter(i => i.productType === 'LabPackage').map(i => ({ 
+                    packageId: i.itemId, price: i.price, name: i.name 
+                }))
+            },
+            collectionType,
             address,
             appointmentDate,
             appointmentTime,
             billSummary: {
                 itemTotal,
-                couponDiscount,
-                homeVisitCharge: deliveryFee,
-                rapidDeliveryCharge: rapidCharge,
-                totalAmount
+                appliedCoupon: couponData,
+                couponDiscount: disc,
+                homeVisitCharge: fixedFee,
+                rapidDeliveryCharge: rapidFee,
+                totalAmount: finalTotal
             },
             paymentMethod,
-            status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending'
+            status: 'Confirmed',
+            paymentStatus: paymentMethod === 'COD' ? 'Pending' : 'Done'
         });
 
-        // Clear Cart & Update Coupon usage
-        await Cart.findOneAndUpdate({ userId }, { $set: { "labCart.items": [] } });
-        if(couponId) await Coupon.findByIdAndUpdate(couponId, { $push: { usedBy: { userId } } });
+        // 5. Post-booking actions
+        await Cart.findOneAndUpdate({ userId }, { $set: { "labCart.items": [], "labCart.labId": null, "labCart.categoryType": null } });
+        if (couponData) {
+            await Coupon.findByIdAndUpdate(couponData.couponId, { $push: { usedBy: { userId } } });
+        }
 
         res.status(201).json({ success: true, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 // Helper to map patient IDs to full objects
 async function mapPatients(userId, pids) {
@@ -541,7 +608,7 @@ const getMasterPackageDetails = async (req, res) => {
 };
 
 module.exports = { 
-    getLabs, getLabDetails, getLabSlots, 
+    getLabs, getLabDetails, getLabSlots, getLabDeliveryCharges,
     bookLabTest, uploadPrescriptionFlow, 
     getMyBookings, getBookingDetails ,
     checkoutLabBooking,

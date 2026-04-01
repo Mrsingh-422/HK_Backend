@@ -222,70 +222,99 @@ const resetPassword = async (req, res) => {
 const updateUserProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        
-        // Req.body se saari fields destructure kar lijiye
-        const { 
-            name, phone, email, country, state, city, insuranceId, 
-            addressData, familyData, emergencyData 
-        } = req.body;
+        const { name, phone, email, country, state, city, insuranceId, addressData, familyData, emergencyData } = req.body;
 
-        // 1. User find karein
         const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ success: false, message: "User not found" });
-        }
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        // 2. Basic fields ko update karein (sirf unhi ko update karein jo req.body mein aaye hain)
-        const updateFields = { name, phone, email, country, state, city, insuranceId };
-        
-        Object.keys(updateFields).forEach(key => {
-            if (updateFields[key] !== undefined) {
-                user[key] = updateFields[key]; // Field assign kar rahe hain
-            }
-        });
+        // Basic Info update
+        if (name) user.name = name;
+        if (phone) user.phone = phone;
+        if (email) user.email = email;
+        if (country) user.country = country;
+        if (state) user.state = state;
+        if (city) user.city = city;
+        if (insuranceId) user.insuranceId = insuranceId;
 
-        // 3. Array Fields mein data Push karein
-        // Handle Address
+        // PUSH logic: Mongoose automatically _id create karega har naye item ke liye
         if (addressData) {
-            // Agar ek sath multiple address aaye hain (array), toh spread operator se push karein
-            if (Array.isArray(addressData)) {
-                user.userAddress.push(...addressData);
-            } else {
-                // Agar single address object aaya hai
-                user.userAddress.push(addressData);
-            }
+            const data = Array.isArray(addressData) ? addressData : [addressData];
+            user.userAddress.push(...data);
         }
-
-        // Handle Family Data
         if (familyData) {
-            if (Array.isArray(familyData)) {
-                user.familyMember.push(...familyData);
-            } else {
-                user.familyMember.push(familyData);
-            }
+            const data = Array.isArray(familyData) ? familyData : [familyData];
+            user.familyMember.push(...data);
         }
-
-        // Handle Emergency Data
         if (emergencyData) {
-            if (Array.isArray(emergencyData)) {
-                user.emergencyContact.push(...emergencyData);
-            } else {
-                user.emergencyContact.push(emergencyData);
-            }
+            const data = Array.isArray(emergencyData) ? emergencyData : [emergencyData];
+            user.emergencyContact.push(...data);
         }
 
-        // 4. Data database me save karein
-        await user.save();
-
-        res.json({ success: true, message: "Profile Updated Successfully", user });
+        await user.save(); // <--- Is point par IDs generate ho jayengi
+        res.json({ success: true, message: "Profile Updated", user });
     } catch (error) {
-        // Agar Email ya Phone number pehle se database me exist karta ho (Unique Duplicate Key Error)
-        if (error.code === 11000) {
-            return res.status(400).json({ success: false, message: "Email or Phone already exists." });
-        }
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// 5. GET PROFILE (Fixed Populate)
+const getUserProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        // NOTE: populate sirf insuranceId par chalega kyunki baaki sab user ke andar hi hain
+        const user = await User.findById(userId)
+            .select('-password -token')
+            .populate('insuranceId', 'name'); 
+
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        res.status(200).json({ success: true, data: user });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 6. EDIT SUB-ITEM (Fixed logic)
+const editUserSubItem = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { type, itemId } = req.params; // type: address/family/emergency
+        const updateData = req.body;
+
+        const fieldMap = { address: 'userAddress', family: 'familyMember', emergency: 'emergencyContact' };
+        const fieldName = fieldMap[type];
+
+        const user = await User.findById(userId);
+        const subDoc = user[fieldName].id(itemId); // <--- Mongoose method to find by sub-ID
+        
+        if (!subDoc) return res.status(404).json({ message: "Item not found" });
+
+        Object.assign(subDoc, updateData); // Merge changes
+        await user.save();
+
+        res.json({ success: true, user });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// 7. REMOVE SUB-ITEM
+const removeUserSubItem = async (req, res) => {
+    try {
+        const { type, itemId } = req.params;
+        const fieldMap = { address: 'userAddress', family: 'familyMember', emergency: 'emergencyContact' };
+        const fieldName = fieldMap[type];
+
+        const user = await User.findById(req.user.id);
+        user[fieldName].pull({ _id: itemId }); // <--- Fixed Pull logic
+        await user.save();
+
+        res.json({ success: true, message: "Removed successfully", user });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 
 module.exports = { 
     registerUser, 
@@ -293,5 +322,8 @@ module.exports = {
     updateUserProfile,
     forgotPassword,
     verifyOtp,
-    resetPassword
+    resetPassword,
+    getUserProfile,
+    removeUserSubItem,
+    editUserSubItem
 };

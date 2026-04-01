@@ -4,8 +4,10 @@ const Coupon = require('../../../models/Coupon');
 const createCoupon = async (req, res) => {
     try {
         const coupon = await Coupon.create({ 
+            creatorId: req.user.id,
             vendorId: req.user.id, 
-            vendorType: req.user.role, 
+            vendorType: req.user.role,
+            isAdminCreated: false, 
             ...req.body 
         });
         res.status(201).json({ success: true, message: "Coupon created", data: coupon });
@@ -16,8 +18,19 @@ const createCoupon = async (req, res) => {
 const getMyCoupons = async (req, res) => {
     try {
         const list = await Coupon.find({ 
-            $or: [{ vendorId: req.user.id }, { vendorType: 'Admin' }]
+            $or: [
+                // Condition 1: Vendor ke apne coupons
+                { vendorId: req.user.id }, 
+                
+                // Condition 2: Admin ke banaye coupons jo is vendor ke type ke hain
+                { 
+                    isAdminCreated: true, 
+                    vendorType: req.user.role, // e.g., 'Lab'
+                    vendorId: null             // Global ones
+                }
+            ]
         }).sort({ createdAt: -1 });
+
         res.json({ success: true, data: list });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
@@ -25,8 +38,23 @@ const getMyCoupons = async (req, res) => {
 // 3. ADMIN: CREATE GLOBAL COUPON
 const createAdminCoupon = async (req, res) => {
     try {
-        const coupon = await Coupon.create({ vendorType: 'Admin', ...req.body });
-        res.status(201).json({ success: true, message: "Admin Global Coupon created", data: coupon });
+        const { vendorType, ...couponDetails } = req.body; 
+
+        // Optional: Enum check
+        const allowedTypes = ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance'];
+        if (!allowedTypes.includes(vendorType)) {
+            return res.status(400).json({ message: "Invalid Vendor Type selected" });
+        }
+
+        const coupon = await Coupon.create({ 
+            creatorId: req.user.id,
+            vendorType: vendorType, 
+            vendorId: null,          
+            isAdminCreated: true,    
+            ...couponDetails 
+        });
+
+        res.status(201).json({ success: true, data: coupon });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 

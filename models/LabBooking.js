@@ -72,7 +72,13 @@ const labBookingSchema = new mongoose.Schema({
     billSummary: {
         itemTotal: { type: Number, default: 0 },       // Sum of all tests/packages
         itemDiscount: { type: Number, default: 0 },    // Lab side discount
-        couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon', default: null },
+appliedCoupon: {
+            couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
+            couponName: String,
+            discountPercentage: Number,
+            maxDiscount: Number,
+            minOrderAmount: Number
+        },
         couponDiscount: { type: Number, default: 0 },  // Calculated from Coupon Model
         
         // Charges logic:

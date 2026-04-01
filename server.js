@@ -27,6 +27,7 @@ app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
 app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
 app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
 app.use('/admin/doctor-data', require('./routes/admin/others/doctorDataRoute'));
+app.use('/admin/user/insurance', require('./routes/admin/user/insruranceAdd'));
 app.use('/admin/roles', require('./routes/subAdmin/RoleRoute')); // Role Management Route
 
 app.use('/api/homepage', require('./routes/admin/user/home/HomePageRoute')); // HomePage Content Management Route
