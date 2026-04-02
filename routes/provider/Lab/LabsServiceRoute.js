@@ -31,7 +31,7 @@ router.get('/packages/master-details/:id', protect('lab'), getMasterPackageDetai
 
 
 // --- LAB TESTS (Pathology/Radiology) ---
-router.post('/tests/save', protect('lab'), labServiceUploads, saveLabTest);
+router.post('/tests/save', protect('lab'), labServiceUploads, saveLabTest);  
 router.get('/tests/my-tests', protect('lab'), getMyTests);
 
 // --- LAB PACKAGES ---
@@ -43,4 +43,4 @@ router.delete('/delete/:type/:id', protect('lab'), deleteService);
 
 router.post('/suggest-new', protect('lab'), submitNewMasterRequest);
 
-module.exports = router;
+module.exports = router;  

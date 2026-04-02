@@ -1,24 +1,25 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-
 const { 
     addInsuranceType, 
     getInsuranceTypes, 
     addInsurance, 
     getInsuranceList, 
-    updateInsuranceStatus 
+    updateInsuranceStatus,
+    updateInsurance,
+    deleteInsurance
 } = require('../../../controllers/admin/user/insuranceAdd');
 
-// Base URL: /admin/user/insurance
-
-// --- Master Types (Enum Alternative) ---
+// Master Types
 router.post('/add-type', protect('admin'), addInsuranceType);
-router.get('/insurance-types', getInsuranceTypes); // Frontend dropdown ke liye
+router.get('/insurance-types', getInsuranceTypes);
 
-// --- Main Insurance ---
+// Main Insurance APIs
 router.post('/add-insurance', protect('admin'), addInsurance);
 router.get('/insurance-list', getInsuranceList);
 router.patch('/update-status/:id', protect('admin'), updateInsuranceStatus);
+router.put('/update/:id', protect('admin'), updateInsurance);
+router.delete('/delete/:id', protect('admin'), deleteInsurance);
 
-module.exports = router;
+module.exports = router; 
