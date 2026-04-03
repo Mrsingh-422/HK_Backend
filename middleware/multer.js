@@ -200,6 +200,70 @@ const prescriptionUploads = multer({
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
+// ==========================================
+// 12. BANNER CONFIGURATION
+// ==========================================
+const bannerDir = 'public/uploads/banners';
+ensureDir(bannerDir);
+
+const bannerUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, 'public/uploads/banners'),
+        filename: (req, file, cb) => cb(null, `banner-${Date.now()}-${file.originalname}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).array('image', 10);
+
+
+// ==========================================
+// 13. ARTICLES admin CONFIGURATION
+// ==========================================
+const articleDir = 'public/uploads/articles';
+ensureDir(articleDir);
+
+const articleUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, articleDir),
+        filename: (req, file, cb) => cb(null, `art-${Date.now()}-${file.originalname}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).array('image', 10); // Multiple images key: 'images'
+
+
+// ==========================================
+// 14. ADS admin CONFIGURATION
+// ==========================================
+const adDir = 'public/uploads/ads';
+ensureDir(adDir);
+
+const adUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, adDir),
+        filename: (req, file, cb) => cb(null, `ad-${Date.now()}-${file.originalname}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).array('image', 5); // Max 5 images per ad
+
+
+
+// ==========================================
+// 15. USER CONFIGURATION
+// ==========================================
+
+const userDir = 'public/uploads/users';
+ensureDir(userDir);
+const userProfileUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, userDir),
+        filename: (req, file, cb) => cb(null, `user-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 2 * 1024 * 1024 } // 2MB limit
+}).single('profilePic');
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -212,5 +276,9 @@ module.exports = {
     labServiceUploads,     // For Lab Tests/Packages
     driverDocUploads,
     prescriptionUploads,
+    bannerUploads,
+    articleUploads,
+    adUploads,
+    userProfileUpload,
     uploadExcel
 }; 

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware.js'); 
+const { userProfileUpload } = require('../../middleware/multer');
 const { 
     registerUser, 
     loginUser, 
@@ -25,7 +26,7 @@ router.post('/verify-otp', verifyOtp);           // Verifies OTP
 router.post('/reset-password', resetPassword);   // Sets New Password
 
 // Protected
-router.put('/update', protect('user'), updateUserProfile);
+router.put('/update', protect('user'), userProfileUpload, updateUserProfile);
 
 router.get('/profile', protect('user'), getUserProfile);
 

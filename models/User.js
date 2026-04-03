@@ -5,6 +5,8 @@ const userSchema = new mongoose.Schema({
     email: { type: String, unique: true, sparse: true },
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
+
+    profilePic: { type: String, default: null }, 
     
     // --- New Fields from Figma ---
     country: { type: String }, // ID or Name store kar sakte hain

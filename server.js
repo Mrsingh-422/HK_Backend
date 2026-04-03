@@ -27,6 +27,12 @@ app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
 app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
 app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
 app.use('/admin/doctor-data', require('./routes/admin/others/doctorDataRoute'));
+app.use('/admin/banners', require('./routes/admin/others/BannerRoute')); // Banner Management Route
+app.use('/admin/emergency-contacts', require('./routes/admin/others/EmergencyContactRoute'));
+app.use('/admin/articles', require('./routes/admin/others/AdminArticleRoute'));
+app.use('/admin/ads', require('./routes/admin/others/AdManagerRoute')) // Ad Management Route
+app.use('/admin/drivers/vendor', require('./routes/admin/others/DriverVendorRoute'));
+app.use('/admin/users', require('./routes/admin/user/UserRoute'));
 app.use('/admin/user/insurance', require('./routes/admin/user/insruranceAdd'));
 app.use('/admin/roles', require('./routes/subAdmin/RoleRoute')); // Role Management Route
 

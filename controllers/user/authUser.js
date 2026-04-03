@@ -222,12 +222,17 @@ const resetPassword = async (req, res) => {
 const updateUserProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { name, phone, email, country, state, city, insuranceId, addressData, familyData, emergencyData } = req.body;
-
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        // Basic Info update
+        // 1. Agar Image upload hui hai toh path update karein
+        if (req.file) {
+            user.profilePic = `/uploads/users/${req.file.filename}`;
+        }
+
+        // 2. Baaki fields update karein
+        const { name, phone, email, country, state, city, insuranceId, addressData, familyData, emergencyData } = req.body;
+
         if (name) user.name = name;
         if (phone) user.phone = phone;
         if (email) user.email = email;
@@ -236,22 +241,13 @@ const updateUserProfile = async (req, res) => {
         if (city) user.city = city;
         if (insuranceId) user.insuranceId = insuranceId;
 
-        // PUSH logic: Mongoose automatically _id create karega har naye item ke liye
-        if (addressData) {
-            const data = Array.isArray(addressData) ? addressData : [addressData];
-            user.userAddress.push(...data);
-        }
-        if (familyData) {
-            const data = Array.isArray(familyData) ? familyData : [familyData];
-            user.familyMember.push(...data);
-        }
-        if (emergencyData) {
-            const data = Array.isArray(emergencyData) ? emergencyData : [emergencyData];
-            user.emergencyContact.push(...data);
-        }
+        // Push nested data if provided
+        if (addressData) user.userAddress.push(...(Array.isArray(addressData) ? addressData : [addressData]));
+        if (familyData) user.familyMember.push(...(Array.isArray(familyData) ? familyData : [familyData]));
+        if (emergencyData) user.emergencyContact.push(...(Array.isArray(emergencyData) ? emergencyData : [emergencyData]));
 
-        await user.save(); // <--- Is point par IDs generate ho jayengi
-        res.json({ success: true, message: "Profile Updated", user });
+        await user.save();
+        res.json({ success: true, message: "Profile Updated", data: user });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

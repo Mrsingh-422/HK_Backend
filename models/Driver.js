@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const driverSchema = new mongoose.Schema({
     // Dynamic Reference
     vendorId: { type: mongoose.Schema.Types.ObjectId, required: true, refPath: 'vendorType' },
-    vendorType: { type: String, enum: ['Lab', 'Pharmacy', 'Nurse'], required: true },
+    vendorType: { type: String, enum: ['Lab', 'Pharmacy', 'Nurse','Hospital', 'Ambulance'], required: true },
 
     name: { type: String, required: true },
     phone: { type: String, required: true },

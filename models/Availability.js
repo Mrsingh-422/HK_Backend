@@ -24,6 +24,10 @@ const availabilitySchema = new mongoose.Schema({
     // Sirf Lab aur Nurse ke liye use hoga
     slotDuration: { type: Number, default: 30 }, 
     maxClientsPerSlot: { type: Number, default: 0 }, // 0 means unlimited bookings
+    premiumSlots: [{
+        time: String,
+        extraFee: { type: Number, default: 0 }
+    }],
 
     // "Delete" option ke liye: Vendor jin slots ko hide karna chahta hai
     unavailableSlots: [String], // Example: ["10:30", "14:15"]
