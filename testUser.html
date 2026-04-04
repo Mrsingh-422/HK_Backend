@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Smart Lab Diagnostic Flow</title>
+    <title>Health Kangaroo | Professional Lab Flow</title>
     
+    <!-- External Libraries -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -12,61 +13,136 @@
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
     <style>
-        :root { --primary: #00a651; --secondary: #ff9f00; --bg: #f8f9fa; --danger: #ff3b30; }
-        body { background-color: var(--bg); font-family: 'Poppins', sans-serif; padding-top: 85px; }
-        
-        /* Navbar */
-        .navbar-custom { background: white; border-bottom: 2px solid var(--primary); position: fixed; top: 0; width: 100%; z-index: 1050; height: 75px; }
-        .cart-badge { position: absolute; top: 0; right: 0; background: var(--danger); color: white; border-radius: 50%; padding: 2px 7px; font-size: 11px; border: 2px solid white; }
-        
-        /* Cards */
-        .card-common { border: none; border-radius: 18px; transition: 0.3s; background: white; height: 100%; box-shadow: 0 5px 15px rgba(0,0,0,0.05); }
-        .card-common:hover { transform: translateY(-5px); box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-        .card-catalog { cursor: pointer; border: 1px solid #eee; }
-        .card-catalog:hover { border-color: var(--primary); }
-        
-        .price-text { color: var(--primary); font-size: 1.4rem; font-weight: 800; }
+        :root {
+            --primary: #00a651;
+            --primary-dark: #008542;
+            --secondary: #ff9f00;
+            --bg-light: #f4f7f6;
+            --white: #ffffff;
+            --text-dark: #2d3436;
+            --text-muted: #636e72;
+            --danger: #d63031;
+            --shadow: 0 10px 30px rgba(0,0,0,0.08);
+        }
+
+        body {
+            background-color: var(--bg-light);
+            font-family: 'Poppins', sans-serif;
+            color: var(--text-dark);
+            padding-top: 90px;
+            scroll-behavior: smooth;
+        }
+
+        /* --- Navbar --- */
+        .navbar-custom {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 2px solid var(--primary);
+            position: fixed;
+            top: 0; width: 100%; z-index: 1050;
+            height: 80px;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 40px;
+        }
+
+        .cart-icon-wrapper { position: relative; cursor: pointer; padding: 10px; transition: 0.3s; }
+        .cart-badge {
+            position: absolute; top: 0; right: 0; background: var(--danger);
+            color: white; border-radius: 50%; padding: 2px 7px;
+            font-size: 11px; font-weight: 700; border: 2px solid white;
+        }
+
+        /* --- Global Components --- */
         .hidden { display: none !important; }
+        .card-common {
+            border: none; border-radius: 20px; background: var(--white);
+            box-shadow: var(--shadow); transition: all 0.3s ease; height: 100%;
+        }
+        .card-common:hover { transform: translateY(-8px); box-shadow: 0 15px 40px rgba(0,0,0,0.12); }
 
-        /* Checkout Specific */
-        .patient-card { border: 2px solid #eee; border-radius: 15px; padding: 15px; cursor: pointer; transition: 0.2s; background: white; position: relative; }
+        /* --- Discovery & Comparison --- */
+        .card-catalog { cursor: pointer; border: 1px solid #eee; }
+        .category-chip {
+            background: #e8f5e9; color: var(--primary-dark);
+            padding: 5px 15px; border-radius: 50px; font-size: 0.75rem;
+            font-weight: 600; border: 1px solid #c8e6c9; display: inline-block;
+        }
+        .lab-compare-row {
+            background: white; border-radius: 18px; padding: 20px;
+            margin-bottom: 15px; border-left: 6px solid var(--primary);
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .lab-logo { width: 65px; height: 65px; border-radius: 50%; object-fit: cover; border: 1px solid #eee; }
+
+        /* --- Slot Selection --- */
+        .slot-item {
+            border: 1px solid #ddd; border-radius: 12px; padding: 12px;
+            text-align: center; cursor: pointer; background: white; transition: 0.2s;
+            display: flex; flex-direction: column; justify-content: center;
+        }
+        .slot-item:hover { border-color: var(--primary); background: #f0fdf4; }
+        .slot-item.selected { background: var(--primary); color: white; border-color: var(--primary); }
+        .slot-item.selected small { color: #fff !important; }
+        .slot-item.full { background: #f1f1f1; color: #ccc; cursor: not-allowed; opacity: 0.6; }
+        .premium-tag { font-size: 10px; color: var(--danger); font-weight: 700; }
+
+        /* --- Checkout --- */
+        .patient-card {
+            border: 2px solid #eee; border-radius: 15px; padding: 15px;
+            cursor: pointer; transition: 0.3s; position: relative;
+        }
         .patient-card.active { border-color: var(--primary); background: #f0fdf4; }
-        .patient-card.active::after { content: '\f058'; font-family: 'Font Awesome 6 Free'; font-weight: 900; position: absolute; top: 10px; right: 10px; color: var(--primary); }
+        .patient-card.active::after {
+            content: '\f058'; font-family: 'Font Awesome 6 Free'; font-weight: 900;
+            position: absolute; top: 10px; right: 10px; color: var(--primary);
+        }
 
-        .slot-pill { cursor: pointer; border: 1px solid #ddd; border-radius: 10px; padding: 10px; text-align: center; background: white; font-weight: 600; font-size: 0.85rem; }
-        .slot-pill.selected { background: var(--primary); color: white; border-color: var(--primary); }
-        .slot-pill.full { background: #eee; color: #aaa; cursor: not-allowed; }
+        .price-summary { background: #fff; border-radius: 20px; padding: 25px; position: sticky; top: 100px; }
+        .bill-row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 0.9rem; }
+        .total-row { border-top: 2px dashed #eee; padding-top: 15px; font-weight: 800; font-size: 1.3rem; color: var(--primary); }
 
-        .coupon-card { border: 2px dashed #ddd; border-radius: 12px; padding: 12px; cursor: pointer; transition: 0.3s; background: #fff; }
-        .coupon-card:hover { border-color: var(--primary); background: #f0fdf4; }
+        /* --- Modal Custom --- */
+        .modal-content { border-radius: 25px; border: none; }
+        .inclusion-tag {
+            display: inline-block; background: #f0f2f5; padding: 4px 12px;
+            border-radius: 20px; font-size: 0.75rem; margin: 0 5px 5px 0; color: #444;
+        }
         
-        .bill-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem; }
-        .total-row { border-top: 2px dashed #eee; padding-top: 10px; font-weight: 800; font-size: 1.2rem; color: var(--primary); }
+        /* --- Cart Sidebar --- */
+        .offcanvas { width: 420px !important; }
+        .cart-item-box { background: #f9f9f9; border-radius: 12px; padding: 15px; margin-bottom: 10px; border: 1px solid #eee; }
+        .qty-btn { width: 28px; height: 28px; border-radius: 50%; border: 1px solid #ddd; background: white; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <!-- NAVBAR -->
-    <nav class="navbar-custom d-flex align-items-center px-4 justify-content-between shadow-sm">
-        <h3 class="m-0 fw-bold text-success" style="cursor:pointer" onclick="switchView('discoveryPage')">
-            <i class="fas fa-hand-holding-medical me-2"></i>Health Kangaroo
-        </h3>
-        <div class="d-flex gap-3 align-items-center">
-            <button class="btn btn-sm btn-light rounded-pill px-4 fw-bold shadow-sm" onclick="switchView('historyPage')">My Orders</button>
-            <div class="position-relative p-2" style="cursor:pointer" data-bs-toggle="offcanvas" data-bs-target="#cartSidebar" onclick="loadCart()">
-                <i class="fas fa-shopping-basket fa-lg text-dark"></i>
-                <span class="cart-badge" id="cartCount">0</span>
+    <header class="navbar-custom shadow-sm">
+        <div class="d-flex align-items-center">
+            <h3 class="m-0 fw-bold text-success" style="cursor:pointer" onclick="switchView('discoveryPage')">
+                <i class="fas fa-hand-holding-medical me-2"></i>Health Kangaroo
+            </h3>
+            <div class="ms-5 d-none d-lg-flex gap-2">
+                <button id="nav-diag" class="btn btn-success rounded-pill px-4 fw-bold" onclick="switchView('discoveryPage')">Diagnostics</button>
+                <button id="nav-ord" class="btn btn-light rounded-pill px-4 fw-bold" onclick="switchView('historyPage')">My Orders</button>
             </div>
         </div>
-    </nav>
+        <div class="d-flex align-items-center gap-4">
+            <div class="cart-icon-wrapper" data-bs-toggle="offcanvas" data-bs-target="#cartSidebar" onclick="loadCart()">
+                <i class="fas fa-shopping-basket fa-lg"></i>
+                <span class="cart-badge" id="cartCount">0</span>
+            </div>
+            <img src="https://placehold.co/40x40?text=User" class="rounded-circle border">
+        </div>
+    </header>
 
     <main class="container py-4">
 
-        <!-- 1. CATALOG PAGE -->
+        <!-- 1. DISCOVERY PAGE -->
         <section id="discoveryPage">
             <div class="text-center mb-5">
-                <h2 class="fw-bold">Book Lab Tests</h2>
-                <p class="text-muted">Pick a standard test and find the best lab prices</p>
+                <h1 class="fw-bold">Verified Lab Tests</h1>
+                <p class="text-muted">Compare and book diagnostics from top-rated centers</p>
                 <div class="d-flex justify-content-center mt-4">
                     <button id="btn-cat-test" class="btn btn-success rounded-pill px-5 fw-bold me-2" onclick="setCatalogType('test')">Individual Tests</button>
                     <button id="btn-cat-pkg" class="btn btn-light rounded-pill px-5 fw-bold" onclick="setCatalogType('package')">Health Packages</button>
@@ -77,14 +153,15 @@
 
         <!-- 2. COMPARISON PAGE -->
         <section id="comparisonPage" class="hidden">
-            <button class="btn btn-sm btn-outline-dark mb-4 rounded-pill px-4 fw-bold" onclick="switchView('discoveryPage')">
+            <button class="btn btn-sm btn-outline-dark rounded-pill mb-4 px-4 fw-bold" onclick="switchView('discoveryPage')">
                 <i class="fas fa-chevron-left me-2"></i>Back to Catalog
             </button>
             <div class="row g-4">
-                <div class="col-md-4">
-                    <div id="masterInfoCard" class="card-common p-4 sticky-top" style="top:100px;"></div>
+                <div class="col-lg-4">
+                    <!-- FIX: ID changed to masterInfoCard to match JS -->
+                    <div id="masterInfoCard" class="card-common p-4 sticky-top" style="top:100px"></div>
                 </div>
-                <div class="col-md-8">
+                <div class="col-lg-8">
                     <h4 class="fw-bold mb-4">Labs providing this service</h4>
                     <div id="labsComparisonList"></div>
                 </div>
@@ -93,44 +170,44 @@
 
         <!-- 3. CHECKOUT PAGE -->
         <section id="checkoutPage" class="hidden">
-            <h2 class="fw-bold mb-4">Checkout Details</h2>
+            <h2 class="fw-bold mb-4">Complete Your Booking</h2>
             <div class="row g-4">
                 <div class="col-lg-8">
-                    <!-- Patient Select -->
+                    <!-- Step 1: Patient Selection -->
                     <div class="card-common p-4 mb-4">
-                        <h6 class="fw-bold text-uppercase text-muted small mb-3">1. Select Patient(s)</h6>
+                        <div class="h6 fw-bold mb-3"><i class="fas fa-user-plus me-2 text-success"></i>WHO IS THIS TEST FOR?</div>
                         <div class="row g-3" id="patientGrid"></div>
                     </div>
 
-                    <!-- Slot Select -->
+                    <!-- Step 2: Slot Selection -->
                     <div class="card-common p-4 mb-4">
-                        <h6 class="fw-bold text-uppercase text-muted small mb-3">2. Select Slot</h6>
-                        <input type="date" id="bookDate" class="form-control mb-3 w-50" onchange="fetchSlots()">
+                        <div class="h6 fw-bold mb-3"><i class="fas fa-calendar-alt me-2 text-success"></i>SELECT DATE & TIME</div>
+                        <input type="date" id="bookDate" class="form-control mb-3 w-50" onchange="fetchLabSlots()">
                         <div class="row g-2" id="slotsGrid">
-                            <p class="small text-muted">Select a date to view available timings.</p>
+                            <p class="small text-muted">Select a date above to see available timings.</p>
                         </div>
                     </div>
 
-                    <!-- Collection Type -->
+                    <!-- Step 3: Collection Method -->
                     <div class="card-common p-4 mb-4">
-                        <h6 class="fw-bold text-uppercase text-muted small mb-3">3. Collection Method</h6>
+                        <div class="h6 fw-bold mb-3"><i class="fas fa-truck-loading me-2 text-success"></i>COLLECTION METHOD</div>
                         <div class="row g-3">
                             <div class="col-6">
                                 <div class="patient-card active" id="typeVisit" onclick="setCollection('Visit Lab')">
-                                    <h6 class="fw-bold m-0"><i class="fas fa-hospital me-2 text-primary"></i>Walk-in to Lab</h6>
+                                    <h6 class="fw-bold m-0">Walk-in to Lab</h6>
                                     <small class="text-success">No Extra Charges</small>
                                 </div>
                             </div>
                             <div class="col-6">
                                 <div class="patient-card" id="typeHome" onclick="setCollection('Home Collection')">
-                                    <h6 class="fw-bold m-0"><i class="fas fa-home me-2 text-warning"></i>Home Collection</h6>
+                                    <h6 class="fw-bold m-0">Home Collection</h6>
                                     <small id="homePriceLabel" class="text-muted">+₹0</small>
                                 </div>
                             </div>
                         </div>
                         <div id="addressBox" class="mt-4 hidden p-3 rounded-4 bg-light">
-                            <h6 class="fw-bold small mb-3">Delivery Address</h6>
-                            <input type="text" id="addFull" class="form-control mb-2" placeholder="House/Flat No., Locality">
+                            <h6 class="fw-bold small mb-2">Delivery Address</h6>
+                            <textarea id="addFull" class="form-control mb-2" rows="2" placeholder="House/Flat No., Locality"></textarea>
                             <div class="row">
                                 <div class="col-6"><input type="text" id="addCity" class="form-control" placeholder="City"></div>
                                 <div class="col-6"><input type="text" id="addPin" class="form-control" placeholder="Pincode"></div>
@@ -139,9 +216,9 @@
                     </div>
                 </div>
 
-                <!-- Right Side: Order Summary -->
+                <!-- Step 4: Billing Sidebar -->
                 <div class="col-lg-4">
-                    <div class="card-common p-4 sticky-top" style="top:100px;">
+                    <div class="price-summary shadow-lg">
                         <h5 class="fw-bold mb-4">Order Summary</h5>
                         <div id="billDetails"></div>
 
@@ -149,14 +226,14 @@
                             <label class="small fw-bold">PROMO CODE</label>
                             <div class="input-group">
                                 <input type="text" id="couponInput" class="form-control" placeholder="Enter code">
-                                <button class="btn btn-dark" onclick="validateManualCoupon()">APPLY</button>
+                                <button class="btn btn-dark" onclick="validateManualCoupon()">Apply</button>
                             </div>
                             <div id="couponStatus" class="mt-2"></div>
-                            <div id="availableCoupons" class="mt-3" style="max-height:150px; overflow-y:auto;"></div>
+                            <div id="availableCoupons" class="mt-3"></div>
                         </div>
 
                         <div class="total-row d-flex justify-content-between mt-4">
-                            <span>To Pay</span>
+                            <span>Final Total</span>
                             <span id="finalAmount">₹0</span>
                         </div>
 
@@ -167,7 +244,7 @@
                                     🚀 Emergency Report (6 Hrs) <span class="text-success">+₹<span id="rapidPriceTag">0</span></span>
                                 </label>
                             </div>
-                            <button class="btn btn-success w-100 py-3 fw-bold rounded-pill shadow" onclick="submitBooking()">CONFIRM BOOKING</button>
+                            <button class="btn btn-success w-100 py-3 fw-bold rounded-pill shadow" onclick="submitBooking()">PLACE ORDER</button>
                         </div>
                     </div>
                 </div>
@@ -182,43 +259,66 @@
 
     </main>
 
-    <!-- CART OFFCANVAS -->
+    <!-- INFO MODAL -->
+    <div class="modal fade" id="infoModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header px-4 pt-4 border-0">
+                    <h5 class="modal-title fw-bold" id="modalTitle">Service Information</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body px-4 pb-5" id="modalContentBody"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CART SIDEBAR -->
     <div class="offcanvas offcanvas-end" id="cartSidebar">
         <div class="offcanvas-header border-bottom px-4">
             <h5 class="offcanvas-title fw-bold">Shopping Cart</h5>
             <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
         </div>
-        <div class="offcanvas-body">
+        <div class="offcanvas-body p-4">
             <div id="cartStatusArea"></div>
             <div id="cartItemsList"></div>
         </div>
         <div class="offcanvas-footer p-4 border-top bg-light">
-            <button class="btn btn-success w-100 py-3 fw-bold rounded-pill" onclick="switchView('checkoutPage')" data-bs-dismiss="offcanvas">CHECKOUT</button>
+            <button class="btn btn-success w-100 py-3 fw-bold rounded-pill" onclick="switchView('checkoutPage')" data-bs-dismiss="offcanvas">GO TO CHECKOUT</button>
         </div>
     </div>
 
     <script>
+        // ==========================================
+        // GLOBAL CONFIG & STATE
+        // ==========================================
         const BASE_URL = 'http://localhost:5002';
         const token = localStorage.getItem('token');
-        
+        let infoModalInstance = null;
+
         let currentCatalogType = 'test';
         let cartData = null;
         let labCharges = null;
         let selectedPatients = ['Self'];
         let activeSlot = '';
+        let activeSlotFee = 0;
         let activeCollType = 'Visit Lab';
         let appliedCoupon = null;
 
-        // --- VIEW CONTROLLER ---
+        // ==========================================
+        // NAVIGATION & VIEWS
+        // ==========================================
         function switchView(id) {
             ['discoveryPage', 'comparisonPage', 'checkoutPage', 'historyPage'].forEach(p => document.getElementById(p).classList.add('hidden'));
             document.getElementById(id).classList.remove('hidden');
+            
+            document.getElementById('nav-diag').classList.toggle('btn-success', id === 'discoveryPage');
+            document.getElementById('nav-ord').classList.toggle('btn-success', id === 'historyPage');
+
             if(id === 'discoveryPage') loadCatalog();
             if(id === 'checkoutPage') initCheckout();
             if(id === 'historyPage') loadHistory();
         }
 
-        // --- DISCOVERY ---
         function setCatalogType(type) {
             currentCatalogType = type;
             document.getElementById('btn-cat-test').className = `btn btn-${type==='test'?'success':'light'} rounded-pill px-5 fw-bold`;
@@ -226,75 +326,114 @@
             loadCatalog();
         }
 
+        // ==========================================
+        // DISCOVERY & COMPARISON
+        // ==========================================
         async function loadCatalog() {
-            const endpoint = currentCatalogType === 'test' ? '/provider/labs/services/tests/standard-catalog' : '/provider/labs/services/packages/standard-catalog';
-            const res = await fetch(`${BASE_URL}${endpoint}`);
-            const result = await res.json();
-            document.getElementById('catalogContainer').innerHTML = result.data.map(item => `
-                <div class="col-md-3">
-                    <div class="card-common card-catalog p-4" onclick="openComparison('${item._id}')">
-                        <span class="badge bg-light text-success border mb-2">${item.category || 'General'}</span>
-                        <h6 class="fw-bold">${item.testName || item.packageName}</h6>
-                        <div class="mt-3"><small class="text-muted">Standard Price</small><div class="fw-bold">₹${item.standardMRP}</div></div>
-                    </div>
-                </div>`).join('');
-            loadCart();
+            try {
+                const endpoint = currentCatalogType === 'test' ? '/provider/labs/services/tests/standard-catalog' : '/provider/labs/services/packages/standard-catalog';
+                const res = await fetch(`${BASE_URL}${endpoint}`);
+                const result = await res.json();
+                document.getElementById('catalogContainer').innerHTML = result.data.map(item => `
+                    <div class="col-md-3">
+                        <div class="card-common card-catalog p-4" onclick="openComparison('${item._id}')">
+                            <span class="category-chip mb-2">${item.category || 'General'}</span>
+                            <h6 class="fw-bold mb-1">${item.testName || item.packageName}</h6>
+                            <small class="text-muted">${currentCatalogType==='test' ? (item.sampleType || 'Blood') : (item.tests?.length || 0)+' Tests'}</small>
+                            <div class="mt-3 pt-2 border-top"><small class="text-muted d-block">Compare Prices</small><b class="h5 fw-bold">₹${item.standardMRP}</b></div>
+                        </div>
+                    </div>`).join('');
+                loadCart();
+            } catch (err) { console.error("Load Catalog Error:", err); }
         }
 
         async function openComparison(id) {
-            const detailUrl = currentCatalogType === 'test' ? `/user/labs/master-test/${id}` : `/user/labs/master-package/${id}`;
-            const master = (await (await fetch(`${BASE_URL}${detailUrl}`, { headers: { 'Authorization': `Bearer ${token}` }})).json()).data;
-            
-            document.getElementById('masterInfoCard').innerHTML = `<h4 class="fw-bold text-success">${master.testName || master.packageName}</h4><hr><p class="small text-muted">${master.shortDescription || 'Verified medical procedure.'}</p>`;
+            try {
+                // A. Get Master Info
+                const detailUrl = currentCatalogType === 'test' ? `/user/labs/master-test/${id}` : `/user/labs/master-package/${id}`;
+                const mRes = await fetch(`${BASE_URL}${detailUrl}`, { headers: { 'Authorization': `Bearer ${token}` }});
+                const mData = (await mRes.json()).data;
+                renderMasterSideCard(mData);
 
-            const compUrl = currentCatalogType === 'test' ? `/user/labs/comparison/test/${id}` : `/user/labs/comparison/package/${id}`;
-            const labs = (await (await fetch(`${BASE_URL}${compUrl}`, { headers: { 'Authorization': `Bearer ${token}` }})).json()).data;
+                // B. Get Labs Comparison
+                const compUrl = currentCatalogType === 'test' ? `/user/labs/comparison/test/${id}` : `/user/labs/comparison/package/${id}`;
+                const cRes = await fetch(`${BASE_URL}${compUrl}`, { headers: { 'Authorization': `Bearer ${token}` }});
+                const labs = (await cRes.json()).data;
 
-            document.getElementById('labsComparisonList').innerHTML = labs.map(entry => `
-                <div class="lab-compare-row shadow-sm">
-                    <div class="d-flex align-items-center">
-                        <img src="${entry.labId.profileImage || 'https://placehold.co/60'}" class="lab-logo me-3 shadow-sm" onerror="this.src='https://placehold.co/60'">
-                        <div><h6 class="fw-bold mb-0">${entry.labId.name}</h6><small class="text-muted">${entry.labId.city} | ${entry.reportTime} Hrs</small></div>
-                    </div>
-                    <div class="text-end">
-                        <div class="price-text">₹${entry.discountPrice || entry.offerPrice}</div>
-                        <button class="btn btn-success btn-sm mt-1 px-4 rounded-pill fw-bold" onclick="addToCart('${entry.labId._id}', '${entry._id}', '${currentCatalogType==='test'?'LabTest':'LabPackage'}')">ADD</button>
-                    </div>
-                </div>`).join('');
-            switchView('comparisonPage');
+                document.getElementById('labsComparisonList').innerHTML = labs.map(entry => `
+                    <div class="lab-compare-row shadow-sm">
+                        <div class="d-flex align-items-center">
+                            <img src="${entry.labId.profileImage || 'https://placehold.co/60'}" class="lab-logo me-3 shadow-sm" onerror="this.src='https://placehold.co/60'">
+                            <div><h6 class="fw-bold mb-0">${entry.labId.name}</h6><small class="text-muted">${entry.labId.city} | ${entry.reportTime} Hrs</small></div>
+                        </div>
+                        <div class="text-end">
+                            <div class="price-text">₹${currentCatalogType === 'test' ? entry.discountPrice : entry.offerPrice}</div>
+                            <button class="btn btn-success btn-sm mt-1 px-4 rounded-pill fw-bold" onclick="handleAddToCart('${entry.labId._id}', '${entry._id}', '${currentCatalogType==='test'?'LabTest':'LabPackage'}')">ADD</button>
+                        </div>
+                    </div>`).join('');
+                switchView('comparisonPage');
+            } catch (err) { console.error("Open Comparison Error:", err); }
         }
 
-        // --- CART ---
-        async function addToCart(labId, itemId, productType, forceReplace = false) {
+        function renderMasterSideCard(m) {
+            // Check if element exists before setting innerHTML
+            const cardEl = document.getElementById('masterInfoCard');
+            if(!cardEl) return;
+
+            const list = currentCatalogType === 'test' ? (m.parameters || []) : (m.tests || []).map(t => t.testName);
+            cardEl.innerHTML = `
+                <h6 class="text-success small fw-bold text-uppercase">${currentCatalogType} INFO</h6>
+                <h4 class="fw-bold mb-3">${m.testName || m.packageName}</h4>
+                <div class="p-3 bg-light rounded-4 small mb-3"><b>Instructions:</b> ${m.pretestPreparation || 'Standard guidelines apply.'}</div>
+                <h6 class="small fw-bold">INCLUSIONS (${list.length})</h6>
+                <div class="mb-3">${list.slice(0,8).map(l => `<span class="inclusion-tag">${l}</span>`).join('')}</div>
+                <button class="btn btn-dark w-100 rounded-pill py-2 small fw-bold" onclick='showDetailsModal(${JSON.stringify(m).replace(/'/g, "&apos;")})'>Full Service Info</button>
+            `;
+        }
+
+        // ==========================================
+        // CART LOGIC
+        // ==========================================
+        async function handleAddToCart(labId, itemId, productType, forceReplace = false) {
             const res = await fetch(`${BASE_URL}/user/cart/lab/add`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ labId, itemId, productType, forceReplace })
             });
             const result = await res.json();
-            if(result.success) { Swal.fire('Success', 'Added to Cart', 'success'); loadCart(); }
-            else if(result.canReplace) {
-                if(confirm(result.message)) addToCart(labId, itemId, productType, true);
+            if(result.success) { 
+                Swal.fire({title:'Success!', text:'Service added to cart', icon:'success', toast:true, position:'top-end', showConfirmButton:false, timer:1500}); 
+                loadCart(); 
             }
+            else if(result.canReplace) {
+                if(confirm(result.message)) handleAddToCart(labId, itemId, productType, true);
+            } else { Swal.fire('Notice', result.message, 'info'); }
         }
 
         async function loadCart() {
-            const res = await (await fetch(`${BASE_URL}/user/cart`, { headers: { 'Authorization': `Bearer ${token}` }})).json();
-            cartData = res.data?.labCart;
-            document.getElementById('cartCount').innerText = cartData?.items?.length || 0;
-            const list = document.getElementById('cartItemsList');
-            if(!cartData || cartData.items.length === 0) { list.innerHTML = '<p class="text-center py-5 text-muted">Cart is empty</p>'; return; }
-            
-            document.getElementById('cartStatusArea').innerHTML = `<div class="alert alert-warning small m-3 py-2 border-0">Locked: <b>${cartData.labId.name}</b></div>`;
-            list.innerHTML = cartData.items.map(i => `
-                <div class="p-3 border-bottom d-flex justify-content-between align-items-center">
-                    <div><div class="small fw-bold">${i.name}</div><div class="text-success small">₹${i.price * i.quantity}</div></div>
-                    <div class="d-flex align-items-center border rounded-pill px-2">
-                        <button class="btn btn-sm" onclick="updateQty('${i.itemId._id}', 'dec')">-</button>
-                        <span class="px-2 small">${i.quantity}</span>
-                        <button class="btn btn-sm" onclick="updateQty('${i.itemId._id}', 'inc')">+</button>
-                    </div>
-                </div>`).join('');
+            try {
+                const res = await fetch(`${BASE_URL}/user/cart`, { headers: { 'Authorization': `Bearer ${token}` }});
+                const result = await res.json();
+                cartData = result.data?.labCart;
+                document.getElementById('cartCount').innerText = cartData?.items?.length || 0;
+                
+                const list = document.getElementById('cartItemsList');
+                if(!cartData || cartData.items.length === 0) { 
+                    list.innerHTML = '<div class="text-center py-5 text-muted small"><i class="fas fa-shopping-basket fa-3x mb-3 opacity-25"></i><p>Your cart is empty</p></div>'; 
+                    return; 
+                }
+                
+                document.getElementById('cartStatusArea').innerHTML = `<div class="alert alert-warning small m-3 py-2 border-0"><i class="fas fa-hospital me-1"></i> Lab: <b>${cartData.labId.name}</b></div>`;
+                list.innerHTML = cartData.items.map(i => `
+                    <div class="p-3 border-bottom d-flex justify-content-between align-items-center">
+                        <div><div class="small fw-bold">${i.name}</div><div class="text-success small fw-bold">₹${i.price * i.quantity}</div></div>
+                        <div class="d-flex align-items-center border rounded-pill px-1 bg-white">
+                            <button class="btn btn-sm" onclick="updateQty('${i.itemId._id}', 'dec')">-</button>
+                            <span class="px-2 small fw-bold">${i.quantity}</span>
+                            <button class="btn btn-sm" onclick="updateQty('${i.itemId._id}', 'inc')">+</button>
+                        </div>
+                    </div>`).join('');
+            } catch (err) { console.error("Load Cart Error:", err); }
         }
 
         async function updateQty(itemId, action) {
@@ -306,58 +445,70 @@
             loadCart();
         }
 
-        // --- CHECKOUT ---
+        // ==========================================
+        // CHECKOUT FLOW
+        // ==========================================
         async function initCheckout() {
             if(!cartData || cartData.items.length === 0) return switchView('discoveryPage');
 
-            // 1. Load Lab Specific Delivery Charges
-            const charRes = await (await fetch(`${BASE_URL}/user/labs/delivery-charges`, { headers: { 'Authorization': `Bearer ${token}` }})).json();
-            labCharges = charRes.data;
-            document.getElementById('homePriceLabel').innerText = `+₹${labCharges.fixedPrice} Collection Fee`;
+            // 1. Fetch Charges
+            const charRes = await fetch(`${BASE_URL}/user/labs/delivery-charges`, { headers: { 'Authorization': `Bearer ${token}` }});
+            const cJson = await charRes.json();
+            labCharges = cJson.data;
+            document.getElementById('homePriceLabel').innerText = `+₹${labCharges.fixedPrice}`;
             document.getElementById('rapidPriceTag').innerText = labCharges.fastDeliveryExtra;
 
-            // 2. Radiology Lock
+            // 2. Radiology Check
             if(cartData.categoryType === 'Radiology') {
                 setCollection('Visit Lab');
-                document.getElementById('typeHome').style.display = 'none';
-            } else { document.getElementById('typeHome').style.display = 'block'; }
+                document.getElementById('typeHome').style.pointerEvents = 'none';
+                document.getElementById('typeHome').style.opacity = '0.5';
+            } else {
+                document.getElementById('typeHome').style.pointerEvents = 'auto';
+                document.getElementById('typeHome').style.opacity = '1';
+            }
 
-            // 3. Load Patients
-            const user = (await (await fetch(`${BASE_URL}/api/auth/user/profile`, { headers: { 'Authorization': `Bearer ${token}` }})).json()).data;
+            // 3. Load Patients (from user profile API)
+            const profRes = await fetch(`${BASE_URL}/api/auth/user/profile`, { headers: { 'Authorization': `Bearer ${token}` }});
+            const user = (await profRes.json()).data;
             document.getElementById('patientGrid').innerHTML = `
                 <div class="col-md-4"><div class="patient-card active" onclick="togglePatient('Self', this)"><h6>Self</h6><small>${user.name}</small></div></div>
                 ${user.familyMember.map(m => `<div class="col-md-4"><div class="patient-card" onclick="togglePatient('${m._id}', this)"><h6>${m.relation}</h6><small>${m.memberName}</small></div></div>`).join('')}
             `;
 
-            // 4. Load Coupons (Both Vendor & Admin)
-            const coupRes = await (await fetch(`${BASE_URL}/user/labs/coupons?labId=${cartData.labId._id}`, { headers: { 'Authorization': `Bearer ${token}` }})).json();
-            document.getElementById('availableCoupons').innerHTML = coupRes.data.map(c => `
+            // 4. Load Lab Coupons
+            const coupRes = await fetch(`${BASE_URL}/user/labs/coupons?labId=${cartData.labId._id}`, { headers: { 'Authorization': `Bearer ${token}` }});
+            const coupons = await coupRes.json();
+            document.getElementById('availableCoupons').innerHTML = coupons.data.map(c => `
                 <div class="coupon-card mb-2" onclick="applyCouponCode('${c.couponName}', ${c.discountPercentage}, ${c.maxDiscount}, ${c.minOrderAmount})">
-                    <div class="d-flex justify-content-between"><b>${c.couponName}</b> <span class="badge bg-success">${c.discountPercentage}% Off</span></div>
-                    <small class="text-muted">Min order: ₹${c.minOrderAmount}</small>
+                    <div class="d-flex justify-content-between align-items-center"><b class="text-success small">${c.couponName}</b> <span class="badge bg-success small" style="font-size:9px">${c.discountPercentage}% OFF</span></div>
+                    <small class="text-muted" style="font-size:10px">Min order: ₹${c.minOrderAmount}</small>
                 </div>`).join('');
             
             updateBillSummary();
         }
 
-        async function fetchSlots() {
+        async function fetchLabSlots() {
             const date = document.getElementById('bookDate').value;
             const res = await (await fetch(`${BASE_URL}/user/labs/slots?labId=${cartData.labId._id}&date=${date}`, { headers: { 'Authorization': `Bearer ${token}` }})).json();
-            document.getElementById('slotsGrid').innerHTML = res.slots.map(s => `
-                <div class="col-4"><div class="slot-pill ${s.isFull?'full':''}" onclick="setSlot('${s.time}', this)">${s.time}</div></div>`).join('');
+            
+            const grid = document.getElementById('slotsGrid');
+            if(res.isClosed) { grid.innerHTML = `<div class="alert alert-danger col-12 small">Lab is closed on this date.</div>`; return; }
+            
+            grid.innerHTML = res.slots.map(s => `
+                <div class="col-4 col-md-3">
+                    <div class="slot-item ${s.isFull?'full':''}" onclick="setSlot('${s.time}', ${s.extraFee}, this)">
+                        <b>${s.time}</b>
+                        ${s.extraFee > 0 ? `<span class="premium-tag">+₹${s.extraFee}</span>` : ''}
+                    </div>
+                </div>`).join('');
         }
 
-        function setSlot(time, el) {
+        function setSlot(time, extraFee, el) {
             if(el.classList.contains('full')) return;
-            document.querySelectorAll('.slot-pill').forEach(x => x.classList.remove('selected'));
-            el.classList.add('selected'); activeSlot = time;
-        }
-
-        function setCollection(type) {
-            activeCollType = type;
-            document.getElementById('typeVisit').classList.toggle('active', type === 'Visit Lab');
-            document.getElementById('typeHome').classList.toggle('active', type === 'Home Collection');
-            document.getElementById('addressBox').classList.toggle('hidden', type !== 'Home Collection');
+            document.querySelectorAll('.slot-item').forEach(x => x.classList.remove('selected'));
+            el.classList.add('selected');
+            activeSlot = time; activeSlotFee = extraFee;
             updateBillSummary();
         }
 
@@ -368,70 +519,51 @@
             updateBillSummary();
         }
 
+        function setCollection(type) {
+            activeCollType = type;
+            document.getElementById('typeVisit').classList.toggle('active', type === 'Visit Lab');
+            document.getElementById('typeHome').classList.toggle('active', type === 'Home Collection');
+            document.getElementById('addressBox').classList.toggle('hidden', type !== 'Home Collection');
+            updateBillSummary();
+        }
+
         function applyCouponCode(code, perc, max, min) {
-            const subtotal = cartData.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-            if(subtotal < min) return Swal.fire('Oops', `Min order for this coupon is ₹${min}`, 'info');
+            const currentSubtotal = cartData.items.reduce((acc, i) => acc + (i.price * i.quantity), 0) * selectedPatients.length;
+            if(currentSubtotal < min) return Swal.fire('Constraint', `Min order amount is ₹${min}`, 'info');
             appliedCoupon = { code, perc, max };
             document.getElementById('couponInput').value = code;
-            document.getElementById('couponStatus').innerHTML = `<p class="text-success small fw-bold">Coupon ${code} Applied!</p>`;
+            document.getElementById('couponStatus').innerHTML = `<p class="text-success small fw-bold">Coupon ${code} Applied Successfully!</p>`;
             updateBillSummary();
         }
 
         function updateBillSummary() {
-    if (!cartData) return;
+            if(!cartData) return;
+            const patientCount = selectedPatients.length;
+            const baseSubtotal = cartData.items.reduce((acc, i) => acc + (i.price * i.quantity), 0) * patientCount;
+            
+            const collectionFee = activeCollType === 'Home Collection' ? (labCharges?.fixedPrice || 0) : 0;
+            const isRapid = document.getElementById('rapidCheck').checked;
+            const rapidFee = isRapid ? (labCharges?.fastDeliveryExtra || 0) * patientCount : 0;
+            const slotFee = activeSlotFee || 0;
+            
+            let discount = 0;
+            if(appliedCoupon) discount = Math.min((baseSubtotal * appliedCoupon.perc) / 100, appliedCoupon.max);
 
-    const patientCount = selectedPatients.length; // Count of selected people
-    
-    // 1. Base price of items in cart
-    const cartUnitTotal = cartData.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-    
-    // 2. Multiply items by patient count
-    const totalItemsPrice = cartUnitTotal * patientCount;
+            const total = (baseSubtotal - discount) + collectionFee + rapidFee + slotFee;
 
-    // 3. Collection Fee (FLAT - Only once)
-    const deliveryCharge = activeCollType === 'Home Collection' ? (labCharges?.fixedPrice || 0) : 0;
-
-    // 4. Rapid Fee (PER PATIENT)
-    const isRapid = document.getElementById('rapidCheck').checked;
-    const rapidCharge = isRapid ? (labCharges?.fastDeliveryExtra || 0) * patientCount : 0;
-    
-    // 5. Coupon Discount Calculation
-    let discountAmount = 0;
-    if (appliedCoupon) {
-        // Discount is calculated on the multiplied total items price
-        discountAmount = Math.min((totalItemsPrice * appliedCoupon.perc) / 100, appliedCoupon.max);
-    }
-
-    // Update UI
-    document.getElementById('billDetails').innerHTML = `
-        <div class="bill-row">
-            <span>Items Subtotal (${patientCount} Patient${patientCount > 1 ? 's' : ''})</span>
-            <span>₹${totalItemsPrice}</span>
-        </div>
-        <div class="bill-row text-success">
-            <span>Promo Discount</span>
-            <span>-₹${discountAmount}</span>
-        </div>
-        <div class="bill-row">
-            <span>Collection Charges (Flat)</span>
-            <span>₹${deliveryCharge}</span>
-        </div>
-        <div class="bill-row">
-            <span>Rapid Processing (Per Patient)</span>
-            <span>₹${rapidCharge}</span>
-        </div>
-    `;
-
-    const finalPayable = (totalItemsPrice - discountAmount) + deliveryCharge + rapidCharge;
-    document.getElementById('finalAmount').innerText = `₹${finalPayable}`;
-    
-    // Static tags update
-    document.getElementById('rapidPriceTag').innerText = labCharges?.fastDeliveryExtra || 0;
-}
+            document.getElementById('billDetails').innerHTML = `
+                <div class="bill-row"><span>Items (${patientCount} Patients)</span><span>₹${baseSubtotal}</span></div>
+                ${discount > 0 ? `<div class="bill-row text-success"><span>Promo Discount</span><span>-₹${discount}</span></div>` : ''}
+                <div class="bill-row"><span>Collection Charge (Flat)</span><span>₹${collectionFee}</span></div>
+                <div class="bill-row"><span>Emergency Processing</span><span>₹${rapidFee}</span></div>
+                <div class="bill-row"><span>Slot Premium Fee</span><span>₹${slotFee}</span></div>
+            `;
+            document.getElementById('finalAmount').innerText = `₹${total}`;
+        }
 
         async function submitBooking() {
-            if(!activeSlot) return Swal.fire('Wait', 'Please select a time slot', 'warning');
-            const body = {
+            if(!activeSlot) return Swal.fire('Select Slot', 'Please pick a time to proceed', 'warning');
+            const payload = {
                 appointmentDate: document.getElementById('bookDate').value,
                 appointmentTime: activeSlot,
                 collectionType: activeCollType,
@@ -441,23 +573,42 @@
                 paymentMethod: 'COD',
                 address: { houseNo: document.getElementById('addFull').value, city: document.getElementById('addCity').value, pincode: document.getElementById('addPin').value }
             };
-            const res = await fetch(`${BASE_URL}/user/labs/checkout`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body)});
+            const res = await fetch(`${BASE_URL}/user/labs/checkout`, { 
+                method: 'POST', 
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, 
+                body: JSON.stringify(payload)
+            });
             const result = await res.json();
-            if(result.success) { Swal.fire('Order Placed!', `ID: ${result.data.bookingId}`, 'success'); switchView('historyPage'); }
+            if(result.success) { Swal.fire('Order Placed!', `Booking ID: ${result.data.bookingId}`, 'success'); switchView('historyPage'); }
+            else { Swal.fire('Checkout Failed', result.message, 'error'); }
         }
 
+        // ==========================================
+        // HELPERS & MODALS
+        // ==========================================
         async function loadHistory() {
-            const res = await (await fetch(`${BASE_URL}/user/labs/my-bookings`, { headers: { 'Authorization': `Bearer ${token}` }})).json();
-            document.getElementById('historyContainer').innerHTML = res.data.map(b => `
-                <div class="col-md-6"><div class="card-common p-4 border-start border-success border-4">
-                    <div class="d-flex justify-content-between mb-2"><span class="small fw-bold">ID: ${b.bookingId}</span> <span class="badge bg-success">${b.status}</span></div>
-                    <h6 class="fw-bold">${b.labId.name}</h6>
-                    <small class="text-muted"><i class="far fa-calendar"></i> ${new Date(b.appointmentDate).toDateString()} | ${b.appointmentTime}</small>
-                    <div class="mt-3 pt-2 border-top d-flex justify-content-between align-items-center"><b class="text-success h5">₹${b.billSummary.totalAmount}</b> <button class="btn btn-sm btn-dark rounded-pill">Track</button></div>
-                </div></div>`).join('');
+            try {
+                const res = await (await fetch(`${BASE_URL}/user/labs/my-bookings`, { headers: { 'Authorization': `Bearer ${token}` }})).json();
+                document.getElementById('historyContainer').innerHTML = res.data.map(b => `
+                    <div class="col-md-6"><div class="card-common p-4 border-start border-4 border-success">
+                        <div class="d-flex justify-content-between mb-2 small fw-bold"><span>ID: ${b.bookingId}</span><span class="text-success">${b.status}</span></div>
+                        <h6 class="fw-bold m-0">${b.labId.name}</h6>
+                        <small class="text-muted"><i class="far fa-calendar"></i> ${new Date(b.appointmentDate).toDateString()} at ${b.appointmentTime}</small>
+                        <div class="mt-3 pt-2 border-top d-flex justify-content-between align-items-center"><b class="text-success h5">₹${b.billSummary.totalAmount}</b> <button class="btn btn-sm btn-dark rounded-pill">Details</button></div>
+                    </div></div>`).join('');
+            } catch (err) { console.error("Load History Error:", err); }
         }
 
-        window.onload = loadCatalog;
+        function showDetailsModal(data) {
+            document.getElementById('modalTitle').innerText = data.testName || data.packageName;
+            document.getElementById('modalContentBody').innerHTML = `<div class="p-3 bg-light rounded-4 mb-3">${data.longDescription || 'Professional medical checkup service provided by our certified lab partners.'}</div><div class="mt-3"><b>Category:</b> ${data.category || 'General'}</div>`;
+            if(!infoModalInstance) infoModalInstance = new bootstrap.Modal(document.getElementById('infoModal'));
+            infoModalInstance.show();
+        }
+
+        window.onload = () => {
+            loadCatalog();
+        };
     </script>
 </body>
 </html>

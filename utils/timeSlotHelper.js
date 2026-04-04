@@ -1,6 +1,6 @@
 // utils/timeSlotHelper.js
 const generateTimeSlots = (config) => {
-    const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots } = config;
+    const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots, premiumSlots } = config;
     
     if (!startTime || !endTime || !slotDuration) return [];
 
@@ -16,7 +16,6 @@ const generateTimeSlots = (config) => {
         let m = minutes % 60;
         let timeString = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
 
-        // Blocked slots check
         if (unavailableSlots && unavailableSlots.includes(timeString)) continue;
 
         let category = "";
@@ -29,7 +28,13 @@ const generateTimeSlots = (config) => {
                           (category === "Evening" && eveningSlots);
 
         if (isEnabled) {
-            slots.push({ time: timeString, category });
+            // Find if this specific slot has an extra fee
+            const premiumInfo = premiumSlots.find(ps => ps.time === timeString);
+            slots.push({ 
+                time: timeString, 
+                category, 
+                extraFee: premiumInfo ? premiumInfo.extraFee : 0 
+            });
         }
     }
     return slots;

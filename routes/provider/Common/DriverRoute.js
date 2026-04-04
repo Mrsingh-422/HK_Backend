@@ -1,16 +1,32 @@
+
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { driverDocUploads } = require('../../../middleware/multer'); // Ensure path is correct
-const { registerDriver, loginDriver } = require('../../../controllers/provider/Common/Driver');
+const { driverDocUploads } = require('../../../middleware/multer');
+const { 
+    registerDriver, 
+    loginDriver, 
+    getVendorDrivers, 
+    searchDrivers, 
+    getDriverById, 
+    updateDriver, 
+    deleteDriver,
+    toggleDriverStatus
+} = require('../../../controllers/provider/Common/Driver');
 
 // Base URL: /provider/driver 
 
-// 1. ADD DRIVER (Vendor Panel: Lab/Pharma/Nurse access this)
-// Vendor log-in hoga, tabhi driver add kar payega
-router.post('/add', protect('provider'), driverDocUploads, registerDriver);
 
-// 2. LOGIN DRIVER (Driver khud login karega)
+// --- Public ---
 router.post('/login', loginDriver);
+
+// --- Protected (Vendor Only) ---
+router.post('/add', protect('provider'), driverDocUploads, registerDriver);
+router.get('/list', protect('provider'), getVendorDrivers); // /list?page=1
+router.post('/search', protect('provider'), searchDrivers); // Search via POST body
+router.get('/details/:id', protect('provider'), getDriverById);
+router.put('/update/:id', protect('provider'), driverDocUploads, updateDriver); // Multi-role access
+router.delete('/delete/:id', protect('provider'), deleteDriver);
+router.patch('/status/:id', protect('provider'), toggleDriverStatus); // To change availability
 
 module.exports = router;
