@@ -3,6 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer'); // Ensure this handles 'prescriptionImages' key
 const { 
+    getStandardCatalogTests, getStandardPackages,
     getLabs, getLabDetails, getLabSlots, getLabDeliveryCharges,
     bookLabTest, uploadPrescriptionFlow,
     getMyBookings, getBookingDetails ,
@@ -16,6 +17,11 @@ const {
 } = require('../../../controllers/user/Lab/BookLab');
 
 // Base URL: /user/labs
+
+
+router.get('/standard-tests', getStandardCatalogTests);
+router.get('/standard-packages', getStandardPackages); 
+
 
 // Discovery
 router.get('/list', getLabs);

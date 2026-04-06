@@ -21,28 +21,36 @@ const mongoose = require('mongoose');
 // --- UPDATED HELPER: Bill Calculation with Slot Premium ---
 const calculateBill = async (labId, items, patientsCount, collectionType, couponCode, isRapid, userId, appointmentTime) => {
     let itemTotal = 0;
-    
-    // 1. Calculate Items Total
-    for (let t of items.tests) {
-        const test = await LabTest.findById(t.testId);
+
+    // Cart se aa raha hai toh items.items hoga, Direct booking hai toh items.tests/packages hoga
+    const tests = items.items ? items.items.filter(i => i.productType === 'LabTest') : (items.tests || []);
+    const packages = items.items ? items.items.filter(i => i.productType === 'LabPackage') : (items.packages || []);
+
+    // 1. Calculate Tests Total
+    for (let t of tests) {
+        // Cart mein 'itemId' hota hai, Direct booking mein 'testId'
+        const id = t.itemId || t.testId;
+        const test = await LabTest.findById(id);
         if (test) itemTotal += test.discountPrice || test.amount;
     }
-    for (let p of items.packages) {
-        const pkg = await LabPackage.findById(p.packageId);
+
+    // 2. Calculate Packages Total
+    for (let p of packages) {
+        const id = p.itemId || p.packageId;
+        const pkg = await LabPackage.findById(id);
         if (pkg) itemTotal += pkg.offerPrice || pkg.mrp;
     }
 
     // Multiply items by patient count
     itemTotal = itemTotal * patientsCount;
 
-    // 2. Delivery & Rapid Charges
+    // ... baaki logic (Delivery, Slot Charge, Coupon) same rahega ...
     let homeVisitCharge = 0;
     let rapidCharge = 0;
     const charges = await DeliveryCharge.findOne({ vendorId: labId });
     if (collectionType === 'Home Collection' && charges) homeVisitCharge = charges.fixedPrice || 0;
     if (isRapid && charges) rapidCharge = (charges.fastDeliveryExtra || 0) * patientsCount;
 
-    // 3. NAYA: Slot Specific Premium Charge
     let slotCharge = 0;
     const availConfig = await Availability.findOne({ vendorId: labId });
     if (availConfig && appointmentTime) {
@@ -50,7 +58,6 @@ const calculateBill = async (labId, items, patientsCount, collectionType, coupon
         if (premium) slotCharge = premium.extraFee || 0;
     }
 
-    // 4. Coupon Logic
     let couponDiscount = 0;
     let couponId = null;
     if (couponCode) {
@@ -92,6 +99,108 @@ const getLabDeliveryCharges = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// GET /user/labs/standard-tests?mainCategory=Pathology&search=Sugar
+const getStandardCatalogTests = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { search, mainCategory } = req.query;
+
+        let matchQuery = { isActive: true };
+        if (mainCategory) matchQuery.mainCategory = mainCategory;
+        if (search) matchQuery.testName = new RegExp(search, 'i');
+
+        const aggregate = MasterLabTest.aggregate([
+            { $match: matchQuery },
+            {
+                $lookup: {
+                    from: "labtests", // DB collection name
+                    localField: "_id",
+                    foreignField: "masterTestId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: { $min: "$vendorList.discountPrice" }
+                }
+            },
+            { $sort: { vendorCount: -1, testName: 1 } },
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- NEW: GET STANDARD CATALOG PACKAGES (For User Discovery) ---
+// GET /user/labs/standard-packages?category=Full Body Checkup
+const getStandardPackages = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { search, category } = req.query;
+
+        let matchQuery = { isActive: true };
+        if (search) matchQuery.packageName = new RegExp(search, 'i');
+        if (category) matchQuery.category = category;
+
+        const aggregate = MasterLabPackage.aggregate([
+            { $match: matchQuery },
+            {
+                $lookup: {
+                    from: "labpackages",
+                    localField: "_id",
+                    foreignField: "masterPackageId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: { $min: "$vendorList.offerPrice" }
+                }
+            },
+            { $sort: { vendorCount: -1, packageName: 1 } },
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 // 1. GET LABS LIST WITH FILTERS
 const getLabs = async (req, res) => {
@@ -561,6 +670,7 @@ const getMasterPackageDetails = async (req, res) => {
 };
 
 module.exports = { 
+        getStandardCatalogTests, getStandardPackages, 
     getLabs, getLabDetails, getLabSlots, getLabDeliveryCharges,
     bookLabTest, uploadPrescriptionFlow, 
     getMyBookings, getBookingDetails ,

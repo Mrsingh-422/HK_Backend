@@ -12,25 +12,22 @@ const calculateActualPrice = (amount, discountPercent) => {
 
 const getStandardCatalogTests = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
         const { search, mainCategory } = req.query;
 
         let matchQuery = { isActive: true };
         if (mainCategory) matchQuery.mainCategory = mainCategory;
         if (search) matchQuery.testName = new RegExp(search, 'i');
 
-        const aggregate = MasterLabTest.aggregate([
+        const tests = await MasterLabTest.aggregate([
             { $match: matchQuery },
             // Step 1: LabTest collection se link karo (Active vendors dhundne ke liye)
             {
                 $lookup: {
-                    from: "labtests", // Collection name in DB (usually lowercase plural)
+                    from: "labtests", 
                     localField: "_id",
                     foreignField: "masterTestId",
                     as: "vendorList",
-                    pipeline: [{ $match: { isActive: true } }] // Sirf active vendor listings
+                    pipeline: [{ $match: { isActive: true } }] 
                 }
             },
             // Step 2: Ginti karo kitne vendors hain
@@ -39,106 +36,81 @@ const getStandardCatalogTests = async (req, res) => {
                     vendorCount: { $size: "$vendorList" }
                 }
             },
-            // Step 3: Sorting - Jiske vendor zyada hain wo upar (DESC), jiske 0 hain wo niche
+            // Step 3: Sorting - Popularity first
             { $sort: { vendorCount: -1, testName: 1 } },
-            // Step 4: Pagination
+            // Step 4: Final Project (Data clean karne ke liye)
             {
-                $facet: {
-                    metadata: [{ $count: "total" }],
-                    data: [{ $skip: skip }, { $limit: limit }]
+                $project: {
+                    vendorList: 0, // Heavy array hata do
+                    __v: 0
                 }
             }
         ]);
 
-        const result = await aggregate;
-        const total = result[0].metadata[0]?.total || 0;
-
         res.json({
             success: true,
-            total,
-            currentPage: page,
-            totalPages: Math.ceil(total / limit),
-            data: result[0].data
+            count: tests.length,
+            data: tests
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 
 // endpoint: GET /provider/labs/services/packages/standard-catalog
 // Yeh seedha Master database se standard info dikhayega
 const getStandardPackages = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
         const { search, category } = req.query;
 
-        // Note: Packages ke liye hum 'LabPackage' se start karenge taaki Custom packages bhi aayein
-        // Phir hum 'packageName' par group karenge taaki unique list dikhe
-        
         let matchQuery = { isActive: true };
         if (search) matchQuery.packageName = new RegExp(search, 'i');
+        if (category) matchQuery.category = category;
 
-        const aggregate = LabPackage.aggregate([
+        const packages = await MasterLabPackage.aggregate([
             { $match: matchQuery },
-            // Step 1: Group by Master ID (for templates) or Name (for custom)
-            {
-                $group: {
-                    _id: { $ifNull: ["$masterPackageId", "$packageName"] },
-                    packageName: { $first: "$packageName" },
-                    masterPackageId: { $first: "$masterPackageId" },
-                    isCustom: { $first: "$isCustom" },
-                    sampleType: { $first: "$sampleType" },
-                    reportTime: { $first: "$reportTime" },
-                    tests: { $first: "$tests" },
-                    vendorCount: { $sum: 1 }, // Ginti kitne labs ne ye same package add kiya hai
-                    minPrice: { $min: "$offerPrice" }
-                }
-            },
-            // Step 2: Master information laane ke liye lookup (agar custom nahi hai)
+            
+            // Step 1: Lookup Vendor Listings
             {
                 $lookup: {
-                    from: "masterlabpackages",
-                    localField: "masterPackageId",
-                    foreignField: "_id",
-                    as: "masterInfo"
+                    from: "labpackages",
+                    localField: "_id",
+                    foreignField: "masterPackageId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
                 }
             },
-            { $unwind: { path: "$masterInfo", preserveNullAndEmptyArrays: true } },
-            // Step 3: Final Projection (Kya data user ko dikhega)
+
+            // Step 2: Calculate Counts & Min Price
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: { 
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: { $min: "$vendorList.offerPrice" },
+                            else: null
+                        }
+                    }
+                }
+            },
+
+            // Step 3: Sorting
+            { $sort: { vendorCount: -1, packageName: 1 } },
+
+            // Step 4: Final Projection
             {
                 $project: {
-                    packageName: 1,
-                    isCustom: 1,
-                    vendorCount: 1,
-                    minPrice: 1,
-                    sampleType: 1,
-                    tests: 1,
-                    // Agar template hai toh masterInfo se description lo, warna custom wali
-                    shortDescription: { $ifNull: ["$masterInfo.shortDescription", "Custom Lab Package"] },
-                    category: { $ifNull: ["$masterInfo.category", "General"] },
-                    standardMRP: { $ifNull: ["$masterInfo.standardMRP", "$minPrice"] }
-                }
-            },
-            // Step 4: Sorting (Popularity/Vendors first)
-            { $sort: { vendorCount: -1, packageName: 1 } },
-            {
-                $facet: {
-                    metadata: [{ $count: "total" }],
-                    data: [{ $skip: skip }, { $limit: limit }]
+                    vendorList: 0,
+                    __v: 0
                 }
             }
         ]);
 
-        // --- Step 5: Merge with Master Templates that have ZERO vendors ---
-        // (Yeh part ensure karta hai ki wo templates bhi dikhe jinhe kisi lab ne add nahi kiya)
-        const catalogResult = await aggregate;
-        
         res.json({
             success: true,
-            total: catalogResult[0].metadata[0]?.total || 0,
-            currentPage: page,
-            data: catalogResult[0].data
+            count: packages.length,
+            data: packages
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };

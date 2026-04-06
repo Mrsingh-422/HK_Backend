@@ -261,7 +261,7 @@ const userProfileUpload = multer({
         filename: (req, file, cb) => cb(null, `user-${Date.now()}${path.extname(file.originalname)}`)
     }),
     fileFilter: docFileFilter,
-    limits: { fileSize: 2 * 1024 * 1024 } // 2MB limit
+    limits: { fileSize: 20 * 1024 * 1024 } // 20MB limit
 }).single('profilePic');
 
 module.exports = { 
@@ -281,4 +281,4 @@ module.exports = {
     adUploads,
     userProfileUpload,
     uploadExcel
-}; 
+};  

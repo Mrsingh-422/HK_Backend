@@ -31,6 +31,7 @@ app.use('/admin/banners', require('./routes/admin/others/BannerRoute')); // Bann
 app.use('/admin/emergency-contacts', require('./routes/admin/others/EmergencyContactRoute'));
 app.use('/admin/articles', require('./routes/admin/others/AdminArticleRoute'));
 app.use('/admin/ads', require('./routes/admin/others/AdManagerRoute')) // Ad Management Route
+app.use('/admin/medical-masters', require('./routes/admin/others/MedicalMasterRoute'));
 app.use('/admin/drivers/vendor', require('./routes/admin/others/DriverVendorRoute'));
 app.use('/admin/users', require('./routes/admin/user/UserRoute'));
 app.use('/admin/user/insurance', require('./routes/admin/user/insruranceAdd'));
@@ -98,6 +99,7 @@ app.use('/provider/labs/driver', require('./routes/provider/Lab/LabDriverRoute')
 
 // --- Provider Pharmacy Routes ---
 app.use('/provider/pharmacy/driver', require('./routes/provider/Pharmacy/DriverPharmacyRoute')); // Lab Test Management
+app.use('/provider/pharmacy/profile', require('./routes/provider/Pharmacy/PharmacyProfileRoute'));
 
 
 // --- Provider Nurse Routes ---

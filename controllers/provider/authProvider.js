@@ -3,6 +3,8 @@ const Pharmacy = require('../../models/Pharmacy');
 const Nurse = require('../../models/Nurse');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto'); 
+const sendEmailOTP = require('../../utils/emailService'); // Email sending utility
 
 // Helper: Token Generation (Lifetime for Dev, 30d for Prod)
 const generateToken = (id, role) => {
@@ -297,4 +299,66 @@ const uploadNurseDocs = async (req, res) => {
     }
 };
 
-module.exports = { registerProvider, loginProvider, uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs };
+// Helper to find provider across any model by Email
+const findProviderByEmail = async (email) => {
+    const models = [Lab, Pharmacy, Nurse];
+    for (let Model of models) {
+        const provider = await Model.findOne({ email: email.toLowerCase() });
+        if (provider) return { provider, Model };
+    }
+    return null;
+};
+
+// ==========================================
+// FORGOT PASSWORD (Common for all Providers)
+// ==========================================
+const forgotPasswordProvider = async (req, res) => {
+    try {
+        const { email } = req.body;
+        const result = await findProviderByEmail(email);
+
+        if (!result) return res.status(404).json({ message: 'Provider not found' });
+
+        const { provider } = result;
+
+        // OTP Logic (Development vs Production)
+        let otp = process.env.NODE_ENV === 'development' ? '1111' : Math.floor(100000 + Math.random() * 900000).toString();
+
+        provider.resetPasswordOtp = otp;
+        provider.resetPasswordExpires = Date.now() + 10 * 60 * 1000;
+        await provider.save();
+
+        if (process.env.NODE_ENV === 'production') {
+            await sendEmailOTP(email, otp);
+        }
+
+        res.json({ success: true, message: 'OTP sent to your registered email' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// ==========================================
+// RESET PASSWORD (Common for all Providers)
+// ==========================================
+const resetPasswordProvider = async (req, res) => {
+    try {
+        const { email, otp, newPassword } = req.body;
+        const result = await findProviderByEmail(email);
+
+        if (!result) return res.status(404).json({ message: 'Provider not found' });
+        const { provider } = result;
+
+        if (provider.resetPasswordOtp !== otp || provider.resetPasswordExpires < Date.now()) {
+            return res.status(400).json({ message: 'Invalid or Expired OTP' });
+        }
+
+        provider.password = await bcrypt.hash(newPassword, 10);
+        provider.resetPasswordOtp = undefined;
+        provider.resetPasswordExpires = undefined;
+        await provider.save();
+
+        res.json({ success: true, message: 'Password reset successful. Please login.' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+module.exports = { registerProvider, loginProvider, uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs,forgotPasswordProvider, resetPasswordProvider };

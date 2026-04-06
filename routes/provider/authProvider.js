@@ -5,7 +5,8 @@ const { labDocUploads, pharmacyDocUploads, nurseDocUploads } = require('../../mi
 const { 
     registerProvider, 
     loginProvider, 
-    uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs // Naya function jo documents handle karega
+    uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs,
+    forgotPasswordProvider, resetPasswordProvider 
 } = require('../../controllers/provider/authProvider.js');
 
 // Base route: /api/auth/provider
@@ -16,6 +17,9 @@ router.post('/register', registerProvider);
 // 2. Step 2: Login (Get Token & check profileStatus)
 router.post('/login', loginProvider);
 
+router.post('/forgot-password', forgotPasswordProvider);
+router.post('/reset-password', resetPasswordProvider);
+
 // 3. Step 3: Complete Profile (Upload Documents)
 // Lab
 router.put('/upload-docs/lab', protect('lab'), labDocUploads, uploadLabDocs);
@@ -23,5 +27,7 @@ router.put('/upload-docs/lab', protect('lab'), labDocUploads, uploadLabDocs);
 router.put('/upload-docs/pharmacy', protect('pharmacy'), pharmacyDocUploads, uploadPharmacyDocs);
 // Nurse
 router.put('/upload-docs/nurse', protect('nurse'), nurseDocUploads, uploadNurseDocs);
+
+
 
 module.exports = router;

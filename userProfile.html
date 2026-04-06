@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo | Conditions & Allergies</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <style>
+        :root { --hk-primary: #00b894; --hk-bg: #f8f9fa; }
+        body { background-color: var(--hk-bg); font-family: 'Plus Jakarta Sans', sans-serif; }
+        .figma-screen { max-width: 450px; margin: 30px auto; background: white; border-radius: 30px; padding: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .header-title { font-weight: 700; font-size: 1.2rem; margin-bottom: 25px; }
+        .section-label { font-size: 0.9rem; color: #636e72; margin-bottom: 10px; font-weight: 600; margin-top: 15px;}
+        .medical-box { background: #fff; border: 1px solid #eee; border-radius: 15px; padding: 15px; margin-bottom: 12px; }
+        .condition-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 8px; }
+        .radio-group { display: flex; gap: 30px; }
+        .form-check-input:checked { background-color: var(--hk-primary); border-color: var(--hk-primary); }
+        .add-btn { background: white; border: 1.5px solid var(--hk-primary); color: var(--hk-primary); width: 100%; border-radius: 12px; padding: 12px; font-weight: 600; margin-bottom: 10px; transition: 0.3s; }
+        .add-btn:hover { background: var(--hk-primary); color: white; }
+        .selection-tag { display: inline-block; background: #e3fcef; color: #00b894; padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; margin: 3px; font-weight: 500; }
+        .save-btn { background: var(--hk-primary); color: white; border: none; width: 100%; border-radius: 15px; padding: 15px; font-weight: 700; margin-top: 20px; }
+        .admin-panel { border-top: 3px dashed #ddd; margin-top: 50px; padding: 30px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container pb-5">
+    
+    <!-- USER FIGMA SCREEN -->
+    <div class="figma-screen" id="userView">
+        <div class="d-flex align-items-center mb-4">
+            <i class="fas fa-chevron-left me-3"></i>
+            <span class="header-title m-0">Conditions & Allergies</span>
+        </div>
+
+        <p class="section-label">Condition Status (Major)</p>
+        <div id="majorConditionsArea">
+            <p class="small text-muted text-center">Fetching from /major-conditions...</p>
+        </div>
+
+        <p class="section-label">Added Conditions</p>
+        <div id="userSelectedConditions" class="mb-2"></div>
+        <button class="add-btn" onclick="openMasterModal('condition')">+ Add Condition</button>
+
+        <p class="section-label">Added Allergies</p>
+        <div id="userSelectedAllergies" class="mb-2"></div>
+        <button class="add-btn" onclick="openMasterModal('allergy')">+ Add Allergy</button>
+
+        <button class="save-btn" onclick="saveUserMedical()">Save Selection</button>
+    </div>
+
+    <!-- ADMIN PANEL -->
+    <div class="max-width-600 mx-auto admin-panel">
+        <h5 class="fw-bold mb-4">Admin: Master Data Management</h5>
+        <div class="row">
+            <div class="col-md-6 mb-3">
+                <div class="card p-3 border-0 shadow-sm">
+                    <h6>Add Condition</h6>
+                    <input type="text" id="newCondName" class="form-control mb-2" placeholder="Fever, UTI...">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="isMajorCheck">
+                        <label class="form-check-label small">Is Major (True/False)?</label>
+                    </div>
+                    <button class="btn btn-dark w-100" onclick="addAdminData('condition')">Upload</button>
+                </div>
+            </div>
+            <div class="col-md-6 mb-3">
+                <div class="card p-3 border-0 shadow-sm">
+                    <h6>Add Allergy</h6>
+                    <input type="text" id="newAllergyName" class="form-control mb-2" placeholder="Egg, Apple...">
+                    <button class="btn btn-dark w-100" onclick="addAdminData('allergy')">Upload</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- SELECTION MODAL -->
+<div class="modal fade" id="masterListModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content" style="border-radius: 20px;">
+            <div class="modal-header border-bottom-0"><h6 class="modal-title fw-bold" id="modalTitle">Select</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body p-0"><div class="list-group list-group-flush" id="masterItemsList"></div></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API_BASE = "http://localhost:5002"; 
+    const ADMIN_TOKEN = "YOUR_ADMIN_TOKEN"; 
+    const USER_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5OTg0MDcxM2UzMzNhMzQyMjI3ZWRjOCIsImlhdCI6MTc3Mjc4NTY0MCwiZXhwIjoxNzc1Mzc3NjQwfQ.S6NwZoh6CIgEswdCnFzyqTAwEPODOVx-BqpTIvh-rKk";
+
+    let masterData = { major: [], conditions: [], allergies: [] };
+    let userSelection = {
+        conditionStatus: {}, // { asthma: false, diabetes: true }
+        addedConditions: [],
+        addedAllergies: []
+    };
+
+    // 1. Fetch 3 Different List APIs
+    async function loadAllMasterLists() {
+        try {
+            const [majors, conds, algs] = await Promise.all([
+                fetch(`${API_BASE}/admin/medical-masters/major-conditions`).then(r => r.json()),
+                fetch(`${API_BASE}/admin/medical-masters/conditions`).then(r => r.json()),
+                fetch(`${API_BASE}/admin/medical-masters/allergies`).then(r => r.json())
+            ]);
+
+            masterData.major = majors.data;
+            masterData.conditions = conds.data;
+            masterData.allergies = algs.data;
+
+            renderMajorUI();
+        } catch (e) { console.error("API Load Error", e); }
+    }
+
+    // 2. Render Major Conditions (Boolean Radio Buttons)
+    function renderMajorUI() {
+        const area = document.getElementById('majorConditionsArea');
+        area.innerHTML = masterData.major.map(c => {
+            // Key ko lowercase kar rahe hain schema match karne ke liye (e.g. "Asthma" -> "asthma")
+            const key = c.name.toLowerCase();
+            if (!(key in userSelection.conditionStatus)) userSelection.conditionStatus[key] = false;
+
+            return `
+            <div class="medical-box">
+                <div class="condition-title">${c.name}</div>
+                <div class="radio-group">
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="${key}" id="${key}_false" 
+                               onchange="setBooleanStatus('${key}', false)" checked>
+                        <label class="form-check-label small" for="${key}_false">None</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="${key}" id="${key}_true" 
+                               onchange="setBooleanStatus('${key}', true)">
+                        <label class="form-check-label small" for="${key}_true">Yes</label>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    function setBooleanStatus(key, val) {
+        userSelection.conditionStatus[key] = val;
+    }
+
+    // 3. Selection Modal
+    function openMasterModal(type) {
+        const listArea = document.getElementById('masterItemsList');
+        document.getElementById('modalTitle').innerText = type === 'condition' ? "Select Condition" : "Select Allergy";
+        
+        let items = type === 'condition' ? masterData.conditions : masterData.allergies;
+
+        listArea.innerHTML = items.map(item => `
+            <button class="list-group-item list-group-item-action border-0 py-3 small" 
+                    onclick="addItem('${type}', '${item.name}')">${item.name}</button>
+        `).join('');
+        new bootstrap.Modal(document.getElementById('masterListModal')).show();
+    }
+
+    function addItem(type, name) {
+        const target = type === 'condition' ? userSelection.addedConditions : userSelection.addedAllergies;
+        if (!target.includes(name)) target.push(name);
+        
+        document.getElementById(`userSelected${type === 'condition' ? 'Conditions' : 'Allergies'}`).innerHTML = 
+            target.map(n => `<span class="selection-tag">${n}</span>`).join('');
+        
+        bootstrap.Modal.getInstance(document.getElementById('masterListModal')).hide();
+    }
+
+    // 4. Save User Medical Data (PUT API)
+    async function saveUserMedical() {
+        try {
+            const res = await fetch(`${API_BASE}/api/auth/user/update-medical-conditions`, {
+                method: 'PUT',
+                headers: { 'Authorization': `Bearer ${USER_TOKEN}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(userSelection)
+            });
+            const result = await res.json();
+            if(result.success) Swal.fire('Saved', 'Medical status updated as Boolean values', 'success');
+        } catch (e) { Swal.fire('Error', 'Save failed', 'error'); }
+    }
+
+    // 5. Admin Upload
+    async function addAdminData(type) {
+        const name = type === 'condition' ? document.getElementById('newCondName').value : document.getElementById('newAllergyName').value;
+        const isMajor = type === 'condition' ? document.getElementById('isMajorCheck').checked : false;
+        const endpoint = type === 'condition' ? 'add-condition' : 'add-allergy';
+
+        const res = await fetch(`${API_BASE}/admin/medical-masters/${endpoint}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, isMajor })
+        });
+        if (res.ok) { Swal.fire('Success', 'Added to master', 'success'); loadAllMasterLists(); }
+    }
+
+    loadAllMasterLists();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
