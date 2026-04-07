@@ -56,6 +56,8 @@ app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // M
 
 /////////////  User Routes /////////////////////////
 app.use('/api/auth/user', require('./routes/user/authUser')); 
+app.use('/api/user/abha', require('./routes/user/others/AbhaCardRoute')); // ABHA Card Management Route
+app.use('/api/user/locker', require('./routes/user/others/HealthLockerRoute')); // Locker Management Route
 // --- user doctor ---
 app.use('/user/doctor/pills', require('./routes/user/Doctor/PillsRoute')); // Doctor's Prescription Management
 app.use('/user/health-records', require('./routes/user/Doctor/HealthRoute')); // Health Records Management

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo | ABHA Creation</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        body { background: #f4f7f6; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .abha-card {
+            max-width: 500px; margin: 50px auto; background: white;
+            border-radius: 20px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+        }
+        .header-bg { background: #00b894; color: white; padding: 20px; border-radius: 15px 15px 0 0; text-align: center; }
+        .btn-abha { background: #00b894; color: white; border-radius: 50px; padding: 12px; font-weight: 700; width: 100%; border: none; }
+        .btn-abha:disabled { background: #ccc; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="abha-card">
+        <div class="header-bg mb-4">
+            <h4 class="m-0">Create/View ABHA Account</h4>
+            <small>Ayushman Bharat Digital Mission</small>
+        </div>
+
+        <!-- STEP 1: Aadhaar Input -->
+        <div id="step1">
+            <div class="mb-3">
+                <label class="form-label fw-bold">Enter Your Aadhaar Number</label>
+                <input type="text" id="aadhaarInput" class="form-control form-control-lg text-center" placeholder="XXXX XXXX XXXX" maxlength="12">
+            </div>
+            <div class="form-check mb-4">
+                <input class="form-check-input" type="checkbox" id="consentCheck">
+                <label class="form-check-label small" for="consentCheck">
+                    I agree with the terms and conditions and allow Health Kangaroo to create my ABHA ID.
+                </label>
+            </div>
+            <button class="btn-abha" id="btnSendOtp" onclick="handleGenerateOtp()">Create/View your ABHA &rarr;</button>
+        </div>
+
+        <!-- STEP 2: OTP Input -->
+        <div id="step2" class="hidden">
+            <div class="alert alert-info small">OTP has been sent to your Aadhaar linked mobile number.</div>
+            <div class="mb-3">
+                <label class="form-label fw-bold">Enter 6-Digit OTP</label>
+                <input type="text" id="otpInput" class="form-control form-control-lg text-center" placeholder="000000" maxlength="6">
+            </div>
+            <button class="btn-abha" onclick="handleVerifyOtp()">Verify OTP & Create ID</button>
+        </div>
+
+        <!-- STEP 3: Result -->
+        <div id="step3" class="hidden text-center">
+            <div class="alert alert-success fw-bold">ABHA Linked Successfully!</div>
+            <div class="border p-3 rounded bg-light">
+                <p class="mb-1 text-muted small">ABHA Number</p>
+                <h5 id="resAbhaNo" class="text-success fw-bold"></h5>
+                <p class="mb-1 text-muted small mt-3">ABHA Address</p>
+                <h6 id="resAbhaAddr" class="fw-bold"></h6>
+            </div>
+            <button class="btn btn-outline-dark mt-4 rounded-pill px-4" onclick="location.reload()">Back to Locker</button>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = "http://localhost:5002/api/user/abha";
+        const TOKEN = localStorage.getItem('token'); // User Login Token
+        let activeTxnId = "";
+
+        async function handleGenerateOtp() {
+            const aadhaar = document.getElementById('aadhaarInput').value;
+            const consent = document.getElementById('consentCheck').checked;
+
+            if (aadhaar.length !== 12) return Swal.fire('Error', 'Invalid Aadhaar Number', 'error');
+            if (!consent) return Swal.fire('Error', 'Please accept consent', 'warning');
+
+            try {
+                const res = await fetch(`${API_BASE}/generate-otp`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+                    body: JSON.stringify({ aadhaarNumber: aadhaar, consent: true })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    activeTxnId = data.txnId;
+                    document.getElementById('step1').classList.add('hidden');
+                    document.getElementById('step2').classList.remove('hidden');
+                    Swal.fire('Success', data.message, 'success');
+                } else {
+                    Swal.fire('Error', data.message, 'error');
+                }
+            } catch (e) { Swal.fire('Error', 'Server Error', 'error'); }
+        }
+
+        async function handleVerifyOtp() {
+            const otp = document.getElementById('otpInput').value;
+            try {
+                const res = await fetch(`${API_BASE}/verify-otp`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+                    body: JSON.stringify({ otp: otp, txnId: activeTxnId })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('step2').classList.add('hidden');
+                    document.getElementById('step3').classList.remove('hidden');
+                    document.getElementById('resAbhaNo').innerText = data.data.abhaNumber;
+                    document.getElementById('resAbhaAddr').innerText = data.data.abhaAddress;
+                } else {
+                    Swal.fire('Error', data.message, 'error');
+                }
+            } catch (e) { Swal.fire('Error', 'Server Error', 'error'); }
+        }
+    </script>
+</body>
+</html>

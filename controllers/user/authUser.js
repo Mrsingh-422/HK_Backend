@@ -262,6 +262,24 @@ const resetPassword = async (req, res) => {
     }
 };
 
+
+// 5. GET PROFILE (Fixed Populate)
+// endpoint: GET /api/auth/user/profile
+const getUserProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        // NOTE: populate sirf insuranceId par chalega kyunki baaki sab user ke andar hi hain
+        const user = await User.findById(userId)
+            .select('-password -token')
+            .populate('insuranceId', 'name'); 
+
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        res.status(200).json({ success: true, data: user });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 // Update Profile (Existing Code)
 // endpoint: PUT /api/auth/user/update
 const updateUserProfile = async (req, res) => {
@@ -323,7 +341,222 @@ const updateUserProfile = async (req, res) => {
     }
 };
 
-// --- 9. ADD NEW ADDRESS ---
+
+// --- 1. UPDATE WORK DETAILS (Figma Screen 16) ---
+const updateWorkDetails = async (req, res) => {
+    try {
+        const user = await User.findByIdAndUpdate(
+            req.user.id,
+            { workDetails: req.body },
+            { new: true }
+        );
+        res.json({ success: true, message: "Work details updated", data: user.workDetails });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+
+// --- 10. ADD FAMILY MEMBER ---
+// endpoint: POST /api/auth/user/add-family
+const addUserFamilyMember = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { 
+            memberName, relation, dob, phone, gender, 
+            height, weight, insuranceNo, insuranceId, hasInsurance 
+        } = req.body;
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        const newMember = {
+            memberName,
+            relation,
+            dob,
+            phone,
+            gender,
+            height,
+            weight,
+            insuranceNo,
+            insuranceId: insuranceId || null, // Dropdown se aayi ID
+            hasInsurance: hasInsurance === 'true' || hasInsurance === true,
+            profilePic: req.file ? `/uploads/users/${req.file.filename}` : null
+        };
+
+        user.familyMember.push(newMember);
+        await user.save();
+
+        res.status(201).json({ success: true, data: user.familyMember[user.familyMember.length - 1] });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+// --- 18. GET FAMILY MEMBERS LIST (Figma Screen 4) ---
+// endpoint: GET /api/auth/user/family-list
+const getFamilyMembers = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id)
+            .select('familyMember')
+            .populate({
+                path: 'familyMember.insuranceId',
+                select: 'insuranceName provider type' // Sirf ye fields dikhayega
+            });
+        
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        res.json({ success: true, count: user.familyMember.length, data: user.familyMember });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+// endpoint: GET /api/auth/user/family-count
+const getFamilyMemberCount = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // Hum sirf familyMember array ko select karenge performance ke liye
+        const user = await User.findById(userId).select('familyMember');
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        res.json({ 
+            success: true, 
+            totalMembers: user.familyMember.length 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+// endpoint: PUT /api/auth/user/edit-family/:itemId
+// --- 19. EDIT FAMILY MEMBER (Updated) ---
+const editFamilyMember = async (req, res) => {
+    try {
+        const { itemId } = req.params;
+        const user = await User.findById(req.user.id);
+        const member = user.familyMember.id(itemId);
+
+        if (!member) return res.status(404).json({ message: "Not found" });
+
+        const { insuranceId, hasInsurance, ...rest } = req.body;
+
+        // Update Text Fields
+        Object.assign(member, rest);
+
+        // Update ID from Dropdown
+        if (insuranceId) member.insuranceId = insuranceId;
+
+        // Update Boolean
+        if (hasInsurance !== undefined) {
+            member.hasInsurance = hasInsurance === 'true' || hasInsurance === true;
+        }
+
+        if (req.file) member.profilePic = `/uploads/users/${req.file.filename}`;
+
+        await user.save();
+        res.json({ success: true, data: member });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// --- 20. DELETE FAMILY MEMBER ---
+// endpoint: DELETE /api/auth/user/remove-family/:itemId
+const removeFamilyMember = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { itemId } = req.params;
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        // Mongoose pull method se array item remove karein
+        user.familyMember.pull({ _id: itemId });
+        await user.save();
+
+        res.json({ 
+            success: true, 
+            message: "Family member removed successfully" 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+
+// endpoint: PUT /api/auth/user/update-insurance
+const updateInsuranceDetails = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        // Destructure text data from req.body
+        const { 
+            hasInsurance, insuranceNumber, companyName, 
+            insuranceType, startDate, endDate, masterInsuranceId 
+        } = req.body;
+
+        // Create update object
+        let updateData = {
+            "insuranceDetails.hasInsurance": hasInsurance === 'true' || hasInsurance === true,
+            "insuranceDetails.insuranceNumber": insuranceNumber,
+            "insuranceDetails.companyName": companyName,
+            "insuranceDetails.insuranceType": insuranceType,
+            "insuranceDetails.startDate": startDate,
+            "insuranceDetails.endDate": endDate,
+            "insuranceDetails.masterInsuranceId": (companyName === 'other' || !masterInsuranceId) ? null : masterInsuranceId
+        };
+
+        // File handling (Multer)
+        if (req.file) {
+            updateData["insuranceDetails.insuranceDocument"] = `/uploads/insurance/${req.file.filename}`;
+        }
+
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Insurance details updated successfully", 
+            data: user.insuranceDetails 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+// endpoint: GET /api/auth/user/my-insurance
+// for user
+const getMyInsurance = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id)
+            .select('insuranceDetails')
+            .populate({
+                path: 'insuranceDetails.masterInsuranceId',
+                select: 'insuranceName provider type' // Flutter display ke liye
+            });
+
+        if (!user || !user.insuranceDetails) {
+            return res.status(404).json({ success: false, message: "No data found" });
+        }
+
+        res.json({ 
+            success: true, 
+            data: user.insuranceDetails 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+
+
 // endpoint: POST /api/auth/user/add-address
 const addUserAddress = async (req, res) => {
     try {
@@ -350,33 +583,6 @@ const addUserAddress = async (req, res) => {
     }
 };
 
-// --- 10. ADD FAMILY MEMBER ---
-// endpoint: POST /api/auth/user/add-family
-const addUserFamilyMember = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const familyData = req.body;
-
-        // Agar image upload hui hai
-        if (req.file) {
-            familyData.profilePic = `/uploads/users/${req.file.filename}`;
-        }
-
-        const user = await User.findById(userId);
-        user.familyMember.push(familyData);
-        await user.save();
-
-        res.status(201).json({ 
-            success: true, 
-            message: "Family member added successfully", 
-            data: user.familyMember[user.familyMember.length - 1] 
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-// --- 11. ADD EMERGENCY CONTACT ---
 // endpoint: POST /api/auth/user/add-emergency
 const addUserEmergencyContact = async (req, res) => {
     try {
@@ -397,17 +603,7 @@ const addUserEmergencyContact = async (req, res) => {
     }
 };
 
-// --- 1. UPDATE WORK DETAILS (Figma Screen 16) ---
-const updateWorkDetails = async (req, res) => {
-    try {
-        const user = await User.findByIdAndUpdate(
-            req.user.id,
-            { workDetails: req.body },
-            { new: true }
-        );
-        res.json({ success: true, message: "Work details updated", data: user.workDetails });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+
 
 // --- 2. UPDATE FAMILY HISTORY (Figma Screen 17) ---
 const updateFamilyHistory = async (req, res) => {
@@ -482,17 +678,13 @@ const updateMedicalConditions = async (req, res) => {
     }
 };
 
-// --- 4. UPDATE INSURANCE DETAILS (Figma Screen 2, 5, 10) ---
-const updateInsuranceDetails = async (req, res) => {
-    try {
-        const user = await User.findByIdAndUpdate(
-            req.user.id,
-            { insuranceDetails: req.body },
-            { new: true }
-        );
-        res.json({ success: true, message: "Insurance details saved", data: user.insuranceDetails });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+
+
+
+
+
+
+
 
 // --- 5. CHANGE PASSWORD / PIN (Figma Screen 6, 15) ---
 const changePassword = async (req, res) => {
@@ -510,22 +702,7 @@ const changePassword = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 5. GET PROFILE (Fixed Populate)
-const getUserProfile = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        // NOTE: populate sirf insuranceId par chalega kyunki baaki sab user ke andar hi hain
-        const user = await User.findById(userId)
-            .select('-password -token')
-            .populate('insuranceId', 'name'); 
 
-        if (!user) return res.status(404).json({ success: false, message: "User not found" });
-
-        res.status(200).json({ success: true, data: user });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
 
 // 6. EDIT SUB-ITEM (Fixed logic)
 const editUserSubItem = async (req, res) => {
@@ -627,6 +804,55 @@ const deleteAccount = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// --- 16. CHANGE HEALTH LOCKER PIN (Figma Screen 15) ---
+const updateLockerPin = async (req, res) => {
+    try {
+        const { oldPin, newPin } = req.body;
+        const user = await User.findById(req.user.id).select('+healthLockerPin');
+
+        // Agar pehli baar set kar raha hai toh oldPin ki zarurat nahi
+        if (user.healthLockerPin) {
+            const isMatch = (oldPin === user.healthLockerPin); // PIN usually simple string compare ya hash
+            if (!isMatch) return res.status(400).json({ message: 'Incorrect old PIN' });
+        }
+
+        user.healthLockerPin = newPin;
+        await user.save();
+        res.json({ success: true, message: 'Health Locker PIN updated' });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 17. GET REFERRAL DETAILS (Figma Screen 14 - Invite Friends) ---
+const getReferralDetails = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('referralCode');
+        
+        // Agar code nahi hai toh generate karein (User's Name + Random String)
+        if (!user.referralCode) {
+            user.referralCode = user.name.split(' ')[0].toUpperCase() + Math.floor(1000 + Math.random() * 9000);
+            await user.save();
+        }
+
+        res.json({ 
+            success: true, 
+            referralCode: user.referralCode,
+            shareMessage: `Join Health Kangaroo using my code ${user.referralCode} and manage your health records!`
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 18. GET FAMILY ACCOUNTS (Figma Screen 4 & 11) ---
+const getFamilyAccounts = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('familyMember');
+        res.json({ 
+            success: true, 
+            count: user.familyMember.length, 
+            data: user.familyMember 
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 module.exports = { 
     registerUser, 
     loginUser, 
@@ -640,6 +866,11 @@ module.exports = {
     logoutUser,
     addUserAddress,
     addUserFamilyMember,
+    getFamilyMembers,
+    getFamilyMemberCount,
+    editFamilyMember,
+    removeFamilyMember,
+    getMyInsurance,
     addUserEmergencyContact,
     setDefaultAddress,
     uploadProfilePic,
@@ -649,4 +880,7 @@ module.exports = {
     updateMedicalConditions,
     updateInsuranceDetails,
     changePassword,
+    updateLockerPin,
+    getReferralDetails,
+    getFamilyAccounts
 };

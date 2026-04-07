@@ -21,7 +21,7 @@ const userSchema = new mongoose.Schema({
     state: { type: String },
     city: { type: String },
 
-     workDetails: {
+    workDetails: {
         companyName: { type: String },
         address: { type: String },
         city: { type: String },
@@ -66,16 +66,17 @@ const userSchema = new mongoose.Schema({
     },
 
     // --- Health Insurance Details (Figma Screen: Health Insurance Edit/Add) ---
-    insuranceDetails: {
-        hasInsurance: { type: Boolean, default: false },
-        insuranceNumber: { type: String },
-        companyName: { type: String },
-        insuranceType: { type: String }, // e.g., "Individual", "Family Float"
-        startDate: { type: String },
-        endDate: { type: String },
-        // Reference if needed for master data
-        masterInsuranceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Insurance', default: null }
-    },
+   insuranceDetails: {
+    hasInsurance: { type: Boolean, default: false },
+    insuranceNumber: { type: String },
+    companyName: { type: String }, // First Dropdown: "HDFC", "LICC" or "other"
+    insuranceType: { type: String }, // Used when companyName is "other" (e.g., "Cashless")
+    startDate: { type: String },
+    endDate: { type: String },
+    insuranceDocument: { type: String }, // URL of the uploaded policy file (PDF/Image)
+    // Reference to specific master plan (Dropdown 2 when not "other")
+    masterInsuranceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Insurance', default: null }
+},
 
  
     userAddress: [{
@@ -100,7 +101,12 @@ const userSchema = new mongoose.Schema({
         height: { type: String },
         weight: { type: String },
         insuranceNo: { type: String },
-        profilePic: { type: String, default: null }
+        insuranceId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Insurance'  // <--- Yeh 'Insurance' model se link hona chahiye
+    },
+        profilePic: { type: String, default: null },
+        hasInsurance: { type: Boolean, default: false }
     }],
 
     
@@ -116,11 +122,20 @@ const userSchema = new mongoose.Schema({
         ref: 'Insurance',
         default: null
     },
+    abhaDetails: {
+    abhaNumber: { type: String }, // 14 digits
+    abhaAddress: { type: String }, // user@abdm
+    txnId: { type: String }, // Tracking ID for OTP steps
+    isAbhaVerified: { type: Boolean, default: false },
+    consent: { type: Boolean, default: false } // Checkbox from UI
+},
 
 
     role: { type: String, default: 'user' },
     profileStatus: { type: String, default: 'Approved' },
 
+    healthLockerPin: { type: String, select: false }, // 4-6 Digit PIN
+    referralCode: { type: String, unique: true },     // User's unique code
     // --- OTP Fields for Forgot Password ---
     resetPasswordOtp: { type: String, select: false },
     resetPasswordExpires: { type: Date, select: false },

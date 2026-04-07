@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware.js'); 
-const { userProfileUpload } = require('../../middleware/multer');
+const { userProfileUpload, insuranceUpload } = require('../../middleware/multer');
 const { 
     registerUser, 
     loginUser, 
@@ -15,12 +15,17 @@ const {
     logoutUser,
     addUserAddress,
     addUserFamilyMember,
+    getFamilyMembers,
+    getFamilyMemberCount,
+    editFamilyMember,
+    removeFamilyMember,
+    getMyInsurance,
     updateWorkDetails,
     updateFamilyHistory,
     updateMedicalConditions,
     updateInsuranceDetails,
     changePassword,
-    addUserEmergencyContact, setDefaultAddress,uploadProfilePic,deleteAccount
+    addUserEmergencyContact, setDefaultAddress,uploadProfilePic,deleteAccount, updateLockerPin, getReferralDetails, getFamilyAccounts
 } = require('../../controllers/user/authUser.js'); 
 
 // Base route: /api/auth/user
@@ -39,11 +44,27 @@ router.post('/reset-password', resetPassword);   // Sets New Password
 
 router.get('/profile', protect('user'), getUserProfile); //get profile
 router.put('/update', protect('user'), userProfileUpload, updateUserProfile);
+
+// My Work
+router.put('/update-work', protect('user'), updateWorkDetails);
+
 // Add Address
 router.post('/add-address', protect('user'), addUserAddress);
 
 // Add Family Member (With Profile Pic support)
 router.post('/add-family', protect('user'), userProfileUpload, addUserFamilyMember);
+router.get('/family-members', protect('user'), getFamilyMembers); // get family members
+router.get('/family-member-count', protect('user'), getFamilyMemberCount);
+router.put('/edit-family-member/:itemId', protect('user'), userProfileUpload, editFamilyMember);  // edit family member
+router.delete('/remove-family-member/:itemId', protect('user'), removeFamilyMember); // remove family member
+
+
+router.put('/update-insurance', protect('user'), insuranceUpload.single('insuranceDocument'), updateInsuranceDetails);
+router.get('/my-insurance', protect('user'), getMyInsurance);
+
+
+
+
 
 // Add Emergency Contact
 router.post('/add-emergency', protect('user'), addUserEmergencyContact);
@@ -58,15 +79,12 @@ router.post('/upload-profile-pic',protect('user'), userProfileUpload, uploadProf
 router.delete('/delete-account',protect('user'),deleteAccount); // Delete Account
 
 
-// My Work
-router.put('/update-work', protect('user'), updateWorkDetails);
 
 // Medical Details
 router.put('/update-family-history', protect('user'), updateFamilyHistory);
 router.put('/update-medical-conditions', protect('user'), updateMedicalConditions);
 
 // Insurance
-router.put('/update-insurance', protect('user'), updateInsuranceDetails);
 
 // Security
 router.put('/change-password', protect('user'), changePassword);
@@ -74,5 +92,12 @@ router.put('/change-password', protect('user'), changePassword);
 // Add Family Member (Figma Screen 4, 11)
 // Note: Isme height, weight, dob, insuranceNo keys add hongi body mein
 router.post('/add-family', protect('user'), userProfileUpload, addUserFamilyMember);
+
+// Locker
+router.put('/update-locker-pin', protect('user'), updateLockerPin);
+
+// Referral
+router.get('/referral-details', protect('user'), getReferralDetails);
+router.get('/family-accounts', protect('user'), getFamilyAccounts);
 
 module.exports = router;

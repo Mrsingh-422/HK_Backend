@@ -264,6 +264,48 @@ const userProfileUpload = multer({
     limits: { fileSize: 20 * 1024 * 1024 } // 20MB limit
 }).single('profilePic');
 
+// ==========================================
+// 16. LOCKER CONFIGURATION
+// ==========================================
+const lockerDir = 'public/uploads/locker';
+ensureDir(lockerDir);
+
+const lockerUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, lockerDir),
+        filename: (req, file, cb) => cb(null, `locker-${Date.now()}${path.extname(file.originalname)}`)
+    })
+});
+
+
+// ==========================================
+// 17. INSURANCE DOCUMENT CONFIGURATION
+// ==========================================
+const insuranceDir = 'public/uploads/insurance';
+ensureDir(insuranceDir);
+
+const insuranceUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, insuranceDir),
+        filename: (req, file, cb) => cb(null, `insurance-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        // Allowing Images, PDF, and DOC files as per Flutter UI requirements
+        const allowedMimes = [
+            'image/jpeg', 'image/jpg', 'image/png', 
+            'application/pdf', 
+            'application/msword', 
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        ];
+        
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only Images, PDF, and Word documents are allowed!'), false);
+        }
+    },
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -280,5 +322,7 @@ module.exports = {
     articleUploads,
     adUploads,
     userProfileUpload,
+    insuranceUpload,
+    lockerUpload,
     uploadExcel
 };  
