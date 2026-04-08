@@ -603,6 +603,59 @@ const addUserEmergencyContact = async (req, res) => {
     }
 };
 
+// --- GET ADDRESS LIST ---
+// endpoint: GET /api/auth/user/addresses
+const getAddressList = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('userAddress');
+        res.json({ success: true, data: user.userAddress });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- GET EMERGENCY CONTACTS LIST ---
+// endpoint: GET /api/auth/user/emergency-contacts
+const getEmergencyList = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('emergencyContact');
+        res.json({ success: true, data: user.emergencyContact });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+// --- DELETE ADDRESS ---
+// endpoint: DELETE /api/auth/user/remove-address/:itemId
+const removeAddress = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        user.userAddress.pull({ _id: req.params.itemId });
+        await user.save();
+
+        res.json({ success: true, message: "Address deleted successfully" });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// --- DELETE EMERGENCY CONTACT ---
+// endpoint: DELETE /api/auth/user/remove-emergency/:itemId
+const removeEmergency = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        user.emergencyContact.pull({ _id: req.params.itemId });
+        await user.save();
+
+        res.json({ success: true, message: "Emergency contact deleted successfully" });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+
+
+
 
 
 // --- 2. UPDATE FAMILY HISTORY (Figma Screen 17) ---
@@ -638,6 +691,29 @@ const updateFamilyHistory = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// endpoint: GET /api/auth/user/get-family-history
+const getFamilyHistory = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // Hum sirf familyHistory object ko select karenge
+        const user = await User.findById(userId).select('familyHistory');
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        // Agar user naya hai aur familyHistory abhi tak set nahi hui, 
+        // toh schema ke default values automatic mil jayenge
+        res.json({ 
+            success: true, 
+            data: user.familyHistory 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // --- 3. UPDATE MEDICAL CONDITIONS & ALLERGIES (Figma Screen 8, 12, 13) ---
 const updateMedicalConditions = async (req, res) => {
@@ -763,20 +839,45 @@ const logoutUser = async (req, res) => {
     }
 };
 
-// --- 13. SET DEFAULT ADDRESS ---
+
+// --- 13. SET DEFAULT ADDRESS (Logic: One True, Others False) ---
+// endpoint: PATCH /api/auth/user/set-default-address/:addressId
 const setDefaultAddress = async (req, res) => {
     try {
         const { addressId } = req.params;
-        const user = await User.findById(req.user.id);
+        const userId = req.user.id;
 
-        user.userAddress.forEach(addr => {
-            addr.isDefault = addr._id.toString() === addressId;
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        // Check karne ke liye variable ki kya addressId exist karti hai
+        let addressExists = false;
+
+        // Loop through all addresses
+        user.userAddress.forEach((addr) => {
+            if (addr._id.toString() === addressId) {
+                addr.isDefault = true;
+                addressExists = true;
+            } else {
+                addr.isDefault = false; // Baaki sabko false kar do
+            }
         });
 
+        if (!addressExists) {
+            return res.status(404).json({ success: false, message: "Address ID not found" });
+        }
+
         await user.save();
-        res.json({ success: true, message: 'Default address updated', data: user.userAddress });
+
+        res.json({ 
+            success: true, 
+            message: "Default address updated successfully", 
+            data: user.userAddress 
+        });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -877,10 +978,15 @@ module.exports = {
     deleteAccount,
     updateWorkDetails,
     updateFamilyHistory,
+    getFamilyHistory,
     updateMedicalConditions,
     updateInsuranceDetails,
     changePassword,
     updateLockerPin,
     getReferralDetails,
-    getFamilyAccounts
+    getFamilyAccounts,
+      getAddressList,
+    getEmergencyList,
+    removeAddress,
+    removeEmergency,
 };

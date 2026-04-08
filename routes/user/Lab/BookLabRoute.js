@@ -3,8 +3,10 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer'); // Ensure this handles 'prescriptionImages' key
 const { 
-    getStandardCatalogTests, getStandardPackages,
-    getLabs, getLabDetails, getLabSlots, getLabDeliveryCharges,
+    getStandardCatalogTests,searchStandardTests, getStandardPackages,searchStandardPackages,getFemaleStandardPackages,
+    getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
+    
+    getLabSlots, getLabDeliveryCharges,
     bookLabTest, uploadPrescriptionFlow,
     getMyBookings, getBookingDetails ,
     getLabsByMasterTest, getLabsByMasterPackage,
@@ -20,12 +22,28 @@ const {
 
 
 router.get('/standard-tests', getStandardCatalogTests);
+router.post('/standard-tests/search', searchStandardTests); ///user/labs/standard-tests/search?page=1
+
 router.get('/standard-packages', getStandardPackages); 
+router.post('/standard-packages/search', searchStandardPackages); ///user/labs/standard-packages/search?page=1
+router.get('/standard-packages/female', getFemaleStandardPackages);
+
 
 
 // Discovery
 router.get('/list', getLabs);
 router.get('/details/:id', getLabDetails);
+// 2. Inventory - Tests
+router.get('/:labId/inventory-tests', getLabInventoryTests); // GET with ?page=1
+router.post('/:labId/inventory-tests/search', searchLabInventoryTests); // POST with body {query: ""}
+// 3. Inventory - Packages
+router.get('/:labId/inventory-packages', getLabInventoryPackages);
+router.post('/:labId/inventory-packages/search', searchLabInventoryPackages);
+
+
+
+
+
 router.get('/slots', getLabSlots);
 
 router.get('/master-test/:id', protect('user'), getMasterTestDetails);

@@ -22,10 +22,15 @@ const {
     getMyInsurance,
     updateWorkDetails,
     updateFamilyHistory,
+    getFamilyHistory,
     updateMedicalConditions,
     updateInsuranceDetails,
     changePassword,
-    addUserEmergencyContact, setDefaultAddress,uploadProfilePic,deleteAccount, updateLockerPin, getReferralDetails, getFamilyAccounts
+    addUserEmergencyContact, setDefaultAddress,uploadProfilePic,deleteAccount, updateLockerPin, getReferralDetails, getFamilyAccounts,
+    getAddressList,
+    getEmergencyList,
+    removeAddress,
+    removeEmergency,
 } = require('../../controllers/user/authUser.js'); 
 
 // Base route: /api/auth/user
@@ -50,6 +55,18 @@ router.put('/update-work', protect('user'), updateWorkDetails);
 
 // Add Address
 router.post('/add-address', protect('user'), addUserAddress);
+router.get('/addresses', protect('user'), getAddressList); // Naya GET endpoint
+router.patch('/set-default-address', protect('user'), setDefaultAddress); // Sets Default Address
+router.delete('/remove-address/:itemId', protect('user'), removeAddress);
+
+// Add Emergency Contact
+router.post('/add-emergency', protect('user'), addUserEmergencyContact);
+router.get('/emergency-contacts', protect('user'), getEmergencyList); // Naya GET endpoint
+router.delete('/remove-emergency/:itemId', protect('user'), removeEmergency);
+
+
+
+
 
 // Add Family Member (With Profile Pic support)
 router.post('/add-family', protect('user'), userProfileUpload, addUserFamilyMember);
@@ -66,15 +83,12 @@ router.get('/my-insurance', protect('user'), getMyInsurance);
 
 
 
-// Add Emergency Contact
-router.post('/add-emergency', protect('user'), addUserEmergencyContact);
 
 // Example: /api/auth/user/edit-sub-item/family/65a123...
 router.put('/edit-sub-item/:type/:itemId', protect('user'), editUserSubItem);  // type: address/family/emergency
 router.delete('/remove-sub-item/:type/:itemId', protect('user'), removeUserSubItem); // type: address/family/emergency
 
 
-router.patch('/set-default-address', protect('user'), setDefaultAddress); // Sets Default Address
 router.post('/upload-profile-pic',protect('user'), userProfileUpload, uploadProfilePic); // Profile Pic
 router.delete('/delete-account',protect('user'),deleteAccount); // Delete Account
 
@@ -82,6 +96,7 @@ router.delete('/delete-account',protect('user'),deleteAccount); // Delete Accoun
 
 // Medical Details
 router.put('/update-family-history', protect('user'), updateFamilyHistory);
+router.get('/get-family-history', protect('user'), getFamilyHistory);
 router.put('/update-medical-conditions', protect('user'), updateMedicalConditions);
 
 // Insurance

@@ -20,13 +20,39 @@ const createArticle = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. GET ALL ARTICLES (Admin List)
+// 1. ADMIN LIST (Draft + Published)
+const getAdminArticles = async (req, res) => {
+    try {
+        const { category, status } = req.query;
+        let query = {}; // Khali object yaani sab kuch
+        
+        if (category) query.category = category;
+        if (status) query.status = status;
+
+        const articles = await AdminArticle.find(query).sort({ createdAt: -1 });
+        res.json({ success: true, count: articles.length, data: articles });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+// 2. USER/APP LIST (Sirf Published)
 const getAllArticles = async (req, res) => {
     try {
-        const articles = await AdminArticle.find().sort({ createdAt: -1 });
-        res.json({ success: true, data: articles });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const { category, subCategory } = req.query;
+        
+        // Logic: Hamesha status 'Published' hi hona chahiye
+        let query = { status: 'Published' }; 
+
+        if (category) query.category = category;
+        if (subCategory) query.subCategory = subCategory;
+
+        const articles = await AdminArticle.find(query).sort({ createdAt: -1 });
+        res.json({ success: true, count: articles.length, data: articles });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 // 3. UPDATE ARTICLE
 const updateArticle = async (req, res) => {
@@ -64,4 +90,49 @@ const deleteArticle = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { createArticle, getAllArticles, updateArticle, deleteArticle };
+// 1. GET ENUMS FOR DROPDOWNS (Category & SubCategory)
+const getArticleEnums = async (req, res) => {
+    try {
+        const categories = AdminArticle.schema.path('category').enumValues;
+        const subCategories = AdminArticle.schema.path('subCategory').enumValues;
+
+        res.json({
+            success: true,
+            data: { categories, subCategories }
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// 2. GET SINGLE ARTICLE DETAILS (For Edit/View)
+const getArticleById = async (req, res) => {
+    try {
+        const article = await AdminArticle.findById(req.params.id);
+        if (!article) return res.status(404).json({ message: "Article not found" });
+        res.json({ success: true, data: article });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// 3. TOGGLE STATUS (Published <-> Draft)
+const toggleArticleStatus = async (req, res) => {
+    try {
+        const article = await AdminArticle.findById(req.params.id);
+        if (!article) return res.status(404).json({ message: "Article not found" });
+
+        article.status = article.status === 'Published' ? 'Draft' : 'Published';
+        await article.save();
+
+        res.json({ 
+            success: true, 
+            message: `Article is now ${article.status}`, 
+            status: article.status 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+module.exports = { createArticle, getAdminArticles,getAllArticles, updateArticle, deleteArticle, getArticleEnums, getArticleById, toggleArticleStatus };

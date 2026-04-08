@@ -99,6 +99,10 @@ const getLabDeliveryCharges = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+
+
+
 // GET /user/labs/standard-tests?mainCategory=Pathology&search=Sugar
 const getStandardCatalogTests = async (req, res) => {
     try {
@@ -149,6 +153,57 @@ const getStandardCatalogTests = async (req, res) => {
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+// 1. SEARCH STANDARD TESTS (POST - Master Catalog)
+const searchStandardTests = async (req, res) => {
+    try {
+        const { query, mainCategory } = req.body; // Search string aur Category body se
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        let matchQuery = { isActive: true };
+        if (mainCategory) matchQuery.mainCategory = mainCategory;
+        if (query) matchQuery.testName = new RegExp(query, 'i');
+
+        const aggregate = MasterLabTest.aggregate([
+            { $match: matchQuery },
+            {
+                $lookup: {
+                    from: "labtests", // Lab specific prices check karne ke liye
+                    localField: "_id",
+                    foreignField: "masterTestId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: { $min: "$vendorList.discountPrice" }
+                }
+            },
+            { $sort: { vendorCount: -1, testName: 1 } }, // Popularity (vendor count) ke hisab se sort
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.json({
+            success: true,
+            total,
+            page,
+            pages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 
 // --- NEW: GET STANDARD CATALOG PACKAGES (For User Discovery) ---
 // GET /user/labs/standard-packages?category=Full Body Checkup
@@ -201,6 +256,116 @@ const getStandardPackages = async (req, res) => {
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+// 2. SEARCH STANDARD PACKAGES (POST - Master Catalog)
+const searchStandardPackages = async (req, res) => {
+    try {
+        const { query, category } = req.body;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        let matchQuery = { isActive: true };
+        if (query) matchQuery.packageName = new RegExp(query, 'i');
+        if (category) matchQuery.category = category;
+
+        const aggregate = MasterLabPackage.aggregate([
+            { $match: matchQuery },
+            {
+                $lookup: {
+                    from: "labpackages",
+                    localField: "_id",
+                    foreignField: "masterPackageId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: { $min: "$vendorList.offerPrice" }
+                }
+            },
+            { $sort: { vendorCount: -1, packageName: 1 } },
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.json({
+            success: true,
+            total,
+            page,
+            pages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+// GET STANDARD PACKAGES FOR FEMALE
+// Endpoint: GET /user/labs/standard-packages/female?page=1
+const getFemaleStandardPackages = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+        const { search } = req.query; // Optional Search
+
+        // FILTER LOGIC: Gender should be 'Female' OR 'Both'
+        let matchQuery = { 
+            isActive: true, 
+            gender: { $in: ['Female'] } 
+        };
+
+        if (search) matchQuery.packageName = new RegExp(search, 'i');
+
+        const aggregate = MasterLabPackage.aggregate([
+            { $match: matchQuery },
+            {
+                $lookup: {
+                    from: "labpackages", // Check availability in labs
+                    localField: "_id",
+                    foreignField: "masterPackageId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: { $min: "$vendorList.offerPrice" }
+                }
+            },
+            { $sort: { gender: 1, vendorCount: -1 } }, // 'Female' specific ones can come first
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+
 
 // 1. GET LABS LIST WITH FILTERS
 const getLabs = async (req, res) => {
@@ -218,27 +383,109 @@ const getLabs = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. GET LAB DETAILS (Updated with Deep Population)
-// 2. GET LAB DETAILS (Lab-wise Inventory)
+// 1. GET LAB PROFILE (Sirf Lab ki basic info)
 const getLabDetails = async (req, res) => {
     try {
-        const { id } = req.params;
-        const [tests, packages, lab] = await Promise.all([
-            // Tests with master details
-            LabTest.find({ labId: id, isActive: true }).populate('masterTestId'),
-            // Packages with nested test and their master details
-            LabPackage.find({ labId: id, isActive: true }).populate({
-                path: 'tests',
-                model: 'MasterLabTest'
-            }),
-            Lab.findById(id)
-        ]);
+        const lab = await Lab.findById(req.params.id)
+            .select('name city address profileImage rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable about');
         
         if (!lab) return res.status(404).json({ success: false, message: "Lab not found" });
-        
-        res.json({ success: true, lab, tests, packages });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+        res.json({ success: true, data: lab });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+// 2. GET LAB TESTS (Paginated - 20 per page)
+const getLabInventoryTests = async (req, res) => {
+    try {
+        const { labId } = req.params;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        const total = await LabTest.countDocuments({ labId, isActive: true });
+        const tests = await LabTest.find({ labId, isActive: true })
+            .populate('masterTestId')
+            .sort({ testName: 1 })
+            .skip(skip)
+            .limit(limit);
+
+        res.json({
+            success: true,
+            total,
+            page,
+            pages: Math.ceil(total / limit),
+            data: tests
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 3. SEARCH LAB TESTS (POST API - Paginated)
+const searchLabInventoryTests = async (req, res) => {
+    try {
+        const { labId } = req.params;
+        const { query } = req.body;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+
+        const searchCriteria = {
+            labId,
+            isActive: true,
+            testName: { $regex: query, $options: 'i' }
+        };
+
+        const total = await LabTest.countDocuments(searchCriteria);
+        const tests = await LabTest.find(searchCriteria)
+            .populate('masterTestId')
+            .limit(limit)
+            .skip((page - 1) * limit);
+
+        res.json({ success: true, total, data: tests });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 4. GET LAB PACKAGES (Paginated - 20 per page)
+const getLabInventoryPackages = async (req, res) => {
+    try {
+        const { labId } = req.params;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+
+        const total = await LabPackage.countDocuments({ labId, isActive: true });
+        const packages = await LabPackage.find({ labId, isActive: true })
+            .populate({ path: 'tests', model: 'MasterLabTest' })
+            .skip((page - 1) * limit)
+            .limit(limit);
+
+        res.json({ success: true, total, page, pages: Math.ceil(total / limit), data: packages });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 5. SEARCH LAB PACKAGES (POST API - Paginated)
+const searchLabInventoryPackages = async (req, res) => {
+    try {
+        const { labId } = req.params;
+        const { query } = req.body;
+        
+        const searchCriteria = {
+            labId,
+            isActive: true,
+            packageName: { $regex: query, $options: 'i' }
+        };
+
+        const packages = await LabPackage.find(searchCriteria)
+            .populate({ path: 'tests', model: 'MasterLabTest' })
+            .limit(20);
+
+        res.json({ success: true, count: packages.length, data: packages });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+
+
+
+
+
 
 // 3. GET AVAILABLE SLOTS
 const getLabSlots = async (req, res) => {
@@ -670,8 +917,10 @@ const getMasterPackageDetails = async (req, res) => {
 };
 
 module.exports = { 
-        getStandardCatalogTests, getStandardPackages, 
-    getLabs, getLabDetails, getLabSlots, getLabDeliveryCharges,
+        getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,
+    getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
+    
+    getLabSlots, getLabDeliveryCharges,
     bookLabTest, uploadPrescriptionFlow, 
     getMyBookings, getBookingDetails ,
     checkoutLabBooking,

@@ -1,17 +1,46 @@
 const HealthLocker = require('../../../models/HealthLocker');
-const mongoose = require('mongoose');
+const User = require('../../../models/User');
 
-const uploadToLocker = async (req, res) => {
+// --- 1. UNLOCK LOCKER (Figma Screen 8/12) ---
+const verifyLockerPin = async (req, res) => {
     try {
-        const { folderName, title, doctorName, notes } = req.body;
-        if (!req.files || req.files.length === 0) return res.status(400).json({ message: "Upload at least one image" });
+        const { pin } = req.body;
+        const user = await User.findById(req.user.id).select('+healthLockerPin');
+        
+        if (!user.healthLockerPin || user.healthLockerPin !== pin) {
+            return res.status(401).json({ success: false, message: "Invalid PIN" });
+        }
+        res.json({ success: true, message: "Vault Unlocked" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 2. CREATE FOLDER (Figma: Jab user + dabake folder chunega) ---
+const createFolder = async (req, res) => {
+    try {
+        const { name, parentId } = req.body; // parentId optional hai (nesting ke liye)
+        const folder = await HealthLocker.create({
+            userId: req.user.id,
+            type: 'folder',
+            name,
+            parentId: parentId || null
+        });
+        res.status(201).json({ success: true, data: folder });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 3. UPLOAD FILE (Figma Screen 10) ---
+const uploadFile = async (req, res) => {
+    try {
+        const { title, parentId, doctorName, notes } = req.body;
+        if (!req.files || req.files.length === 0) return res.status(400).json({ message: "No images selected" });
 
         const filePaths = req.files.map(f => `/uploads/locker/${f.filename}`);
 
         const file = await HealthLocker.create({
             userId: req.user.id,
-            folderName, // User jo bhi name dega wahi folder ban jayega
-            title,
+            type: 'file',
+            name: title, // File name title hi hai
+            parentId: parentId || null,
             doctorName,
             notes,
             images: filePaths,
@@ -21,43 +50,64 @@ const uploadToLocker = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. GET FOLDERS SUMMARY (Dashboard)
-const getLockerSummary = async (req, res) => {
+// --- 4. GET CONTENT (Root ya Kisi Folder ke andar ka data) ---
+const getLockerContent = async (req, res) => {
     try {
-        const summary = await HealthLocker.aggregate([
-            { $match: { userId: new mongoose.Types.ObjectId(req.user.id) } },
-            { $group: { 
-                _id: "$folderName", 
-                totalRecords: { $sum: 1 }, // Folder ke andar kitne reports hain
-                totalImages: { $sum: "$fileCount" }, // Total kitne pages hain
-                lastUpdated: { $max: "$updatedAt" }
-            }},
-            { $sort: { lastUpdated: -1 } }
-        ]);
-        res.json({ success: true, data: summary });
+        const { parentId } = req.query; // Agar query me parentId nahi hai to root dikhayega
+        const query = { 
+            userId: req.user.id, 
+            parentId: parentId || null 
+        };
+
+        const items = await HealthLocker.find(query).sort({ type: 1, createdAt: -1 });
+        
+        // Count details for UI badges
+        const formattedItems = await Promise.all(items.map(async (item) => {
+            if (item.type === 'folder') {
+                const childCount = await HealthLocker.countDocuments({ parentId: item._id });
+                return { ...item._doc, childCount };
+            }
+            return item;
+        }));
+
+        res.json({ success: true, data: formattedItems });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. RENAME FOLDER (Bulk update all records in that folder)
-const renameFolder = async (req, res) => {
+// --- 5. RENAME ITEM (Folder ya File) ---
+const renameItem = async (req, res) => {
     try {
-        const { oldName, newName } = req.body;
-        await HealthLocker.updateMany(
-            { userId: req.user.id, folderName: oldName },
-            { $set: { folderName: newName } }
+        const updated = await HealthLocker.findOneAndUpdate(
+            { _id: req.params.id, userId: req.user.id },
+            { name: req.body.newName },
+            { new: true }
         );
-        res.json({ success: true, message: "Folder renamed successfully" });
+        res.json({ success: true, data: updated });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 4. ADD MORE PAGES TO EXISTING RECORD (Figma Screen 11)
+// --- 6. DELETE ITEM (Recursive: Agar folder hai to andar ka sab delete) ---
+const deleteItem = async (req, res) => {
+    try {
+        const item = await HealthLocker.findOne({ _id: req.params.id, userId: req.user.id });
+        if (!item) return res.status(404).json({ message: "Not found" });
+
+        if (item.type === 'folder') {
+            // Folder ke andar ke saare nested items delete karein
+            await HealthLocker.deleteMany({ parentId: item._id });
+        }
+        
+        await HealthLocker.findByIdAndDelete(item._id);
+        res.json({ success: true, message: "Deleted successfully" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 7. ADD MORE PAGES (Figma Screen 11) ---
 const addMorePages = async (req, res) => {
     try {
-        const { recordId } = req.params;
         const newImages = req.files.map(f => `/uploads/locker/${f.filename}`);
-
         const updated = await HealthLocker.findByIdAndUpdate(
-            recordId,
+            req.params.id,
             { 
                 $push: { images: { $each: newImages } },
                 $inc: { fileCount: newImages.length }
@@ -68,26 +118,7 @@ const addMorePages = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 5. GET FILES BY FOLDER
-const getFilesByFolder = async (req, res) => {
-    try {
-        const files = await HealthLocker.find({ 
-            userId: req.user.id, 
-            folderName: req.params.folderName 
-        }).sort({ createdAt: -1 });
-        res.json({ success: true, data: files });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-// 6. DELETE RECORD
-const deleteRecord = async (req, res) => {
-    try {
-        await HealthLocker.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
-        res.json({ success: true, message: "Record deleted" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
 module.exports = { 
-    uploadToLocker, getLockerSummary, getFilesByFolder, 
-    deleteRecord, renameFolder, addMorePages 
+    verifyLockerPin, createFolder, uploadFile, 
+    getLockerContent, renameItem, deleteItem, addMorePages 
 };

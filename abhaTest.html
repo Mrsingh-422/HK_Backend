@@ -3,116 +3,339 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | ABHA Creation</title>
+    <title>Health Kangaroo | Comprehensive User Dashboard</title>
+    
+    <!-- External Dependencies -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
     <style>
-        body { background: #f4f7f6; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .abha-card {
-            max-width: 500px; margin: 50px auto; background: white;
-            border-radius: 20px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+        :root {
+            --hk-success: #00b894;
+            --hk-primary-dark: #009475;
+            --hk-dark: #2d3436;
+            --hk-bg: #f4f7f6;
+            --hk-orange: #fab1a0;
+            --hk-border: #edf2f7;
+            --hk-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            --step-inactive: #dfe6e9;
         }
-        .header-bg { background: #00b894; color: white; padding: 20px; border-radius: 15px 15px 0 0; text-align: center; }
-        .btn-abha { background: #00b894; color: white; border-radius: 50px; padding: 12px; font-weight: 700; width: 100%; border: none; }
-        .btn-abha:disabled { background: #ccc; }
-        .hidden { display: none; }
+
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--hk-bg); color: var(--hk-dark); min-height: 100vh; display: flex; overflow-x: hidden; }
+
+        /* --- Sidebar --- */
+        .sidebar { width: 280px; background: white; height: 100vh; position: fixed; border-right: 1px solid var(--hk-border); padding: 30px 20px; z-index: 1050; }
+        .sidebar-brand { font-weight: 800; font-size: 1.5rem; color: var(--hk-success); margin-bottom: 50px; display: flex; align-items: center; gap: 12px; }
+        .nav-link-custom { color: #636e72; padding: 14px 20px; border-radius: 18px; margin-bottom: 10px; cursor: pointer; transition: 0.3s; font-weight: 600; display: flex; align-items: center; text-decoration: none; }
+        .nav-link-custom:hover, .nav-link-custom.active { background: #e3fcef; color: var(--hk-success); }
+        .nav-link-custom i { width: 35px; font-size: 1.2rem; }
+
+        /* --- Layout --- */
+        .main-content { margin-left: 280px; width: calc(100% - 280px); padding: 40px 60px; min-height: 100vh; }
+
+        /* --- Cards --- */
+        .hk-card { background: white; border-radius: 25px; border: 1px solid transparent; box-shadow: var(--hk-shadow); padding: 25px; transition: all 0.3s ease; height: 100%; position: relative; }
+        .hk-card:hover { transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.08); border-color: var(--hk-success); }
+        .item-icon { font-size: 50px; margin-bottom: 15px; }
+        .icon-folder { color: var(--hk-orange); }
+        .icon-file { color: var(--hk-success); }
+        .card-action-btn { position: absolute; top: 20px; right: 20px; color: #ccc; cursor: pointer; padding: 5px; }
+
+        /* --- ABHA Steps --- */
+        .step-indicator { display: flex; justify-content: space-between; padding: 20px 0; border-bottom: 1px solid #eee; margin-bottom: 30px; }
+        .dot { width: 35px; height: 35px; background: var(--step-inactive); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; color: #636e72; }
+        .dot.active { background: var(--hk-success); color: white; }
+        .method-box { border: 2px solid #eee; border-radius: 15px; padding: 20px; margin-bottom: 15px; cursor: pointer; transition: 0.3s; }
+        .method-box:hover, .method-box.selected { border-color: var(--hk-success); background: #f0fdf4; }
+
+        /* --- Buttons --- */
+        .btn-hk { background: var(--hk-success); color: white; border-radius: 50px; padding: 12px 35px; border: none; font-weight: 700; transition: 0.3s; }
+        .btn-hk:hover { background: var(--hk-primary-dark); transform: translateY(-2px); }
+
+        /* --- Utility --- */
+        .hidden { display: none !important; }
+        .fw-800 { font-weight: 800; }
+        .breadcrumb-link { color: var(--hk-success); text-decoration: none; font-weight: 600; cursor: pointer; }
+        .file-preview-img { width: 100%; border-radius: 20px; border: 2px solid var(--hk-border); margin-bottom: 20px; }
     </style>
 </head>
 <body>
 
-    <div class="abha-card">
-        <div class="header-bg mb-4">
-            <h4 class="m-0">Create/View ABHA Account</h4>
-            <small>Ayushman Bharat Digital Mission</small>
-        </div>
-
-        <!-- STEP 1: Aadhaar Input -->
-        <div id="step1">
-            <div class="mb-3">
-                <label class="form-label fw-bold">Enter Your Aadhaar Number</label>
-                <input type="text" id="aadhaarInput" class="form-control form-control-lg text-center" placeholder="XXXX XXXX XXXX" maxlength="12">
-            </div>
-            <div class="form-check mb-4">
-                <input class="form-check-input" type="checkbox" id="consentCheck">
-                <label class="form-check-label small" for="consentCheck">
-                    I agree with the terms and conditions and allow Health Kangaroo to create my ABHA ID.
-                </label>
-            </div>
-            <button class="btn-abha" id="btnSendOtp" onclick="handleGenerateOtp()">Create/View your ABHA &rarr;</button>
-        </div>
-
-        <!-- STEP 2: OTP Input -->
-        <div id="step2" class="hidden">
-            <div class="alert alert-info small">OTP has been sent to your Aadhaar linked mobile number.</div>
-            <div class="mb-3">
-                <label class="form-label fw-bold">Enter 6-Digit OTP</label>
-                <input type="text" id="otpInput" class="form-control form-control-lg text-center" placeholder="000000" maxlength="6">
-            </div>
-            <button class="btn-abha" onclick="handleVerifyOtp()">Verify OTP & Create ID</button>
-        </div>
-
-        <!-- STEP 3: Result -->
-        <div id="step3" class="hidden text-center">
-            <div class="alert alert-success fw-bold">ABHA Linked Successfully!</div>
-            <div class="border p-3 rounded bg-light">
-                <p class="mb-1 text-muted small">ABHA Number</p>
-                <h5 id="resAbhaNo" class="text-success fw-bold"></h5>
-                <p class="mb-1 text-muted small mt-3">ABHA Address</p>
-                <h6 id="resAbhaAddr" class="fw-bold"></h6>
-            </div>
-            <button class="btn btn-outline-dark mt-4 rounded-pill px-4" onclick="location.reload()">Back to Locker</button>
-        </div>
+    <!-- SIDEBAR -->
+    <div class="sidebar shadow-sm">
+        <div class="sidebar-brand"><i class="fas fa-hand-holding-medical"></i><span>HK.User</span></div>
+        <nav>
+            <div class="nav-link-custom active" onclick="switchSection('lockerSec')"><i class="fas fa-vault"></i><span>Health Locker</span></div>
+            <div class="nav-link-custom" onclick="switchSection('abhaSec')"><i class="fas fa-id-card"></i><span>ABHA ID</span></div>
+            <div class="nav-link-custom" onclick="switchSection('profileSec')"><i class="fas fa-user-circle"></i><span>My Profile</span></div>
+            <hr class="my-4" style="opacity: 0.1;">
+            <div class="nav-link-custom text-danger" onclick="handleLogout()"><i class="fas fa-sign-out-alt"></i><span>Sign Out</span></div>
+        </nav>
     </div>
 
+    <!-- MAIN AREA -->
+    <div class="main-content">
+        
+        <!-- LOCKER SECTION -->
+        <section id="lockerSec" class="tab-content">
+            <div id="locker-auth-view" class="py-5 text-center">
+                <div class="hk-card mx-auto" style="max-width: 450px; padding: 60px;">
+                    <i class="fas fa-shield-halved fa-4x text-success mb-4"></i>
+                    <h3 class="fw-800 mb-2">Vault Locked</h3>
+                    <input type="password" id="lockerPin" class="form-control form-control-lg text-center rounded-4 mb-4" placeholder="----" maxlength="4" style="letter-spacing: 15px;">
+                    <button class="btn-hk w-100 py-3" onclick="verifyVaultPin()">UNLOCK VAULT</button>
+                </div>
+            </div>
+
+            <div id="locker-main-view" class="hidden">
+                <div class="d-flex justify-content-between align-items-end mb-5">
+                    <div><h2 class="fw-800 m-0">Locker Content</h2><nav><ol class="breadcrumb mt-2" id="dynamicBreadcrumbs"></ol></nav></div>
+                    <div class="d-flex gap-3">
+                        <button class="btn btn-outline-dark rounded-pill px-4 fw-bold" onclick="showFolderModal()">+ Folder</button>
+                        <button class="btn btn-hk shadow-sm" onclick="showFileUploadModal()">Upload File</button>
+                    </div>
+                </div>
+                <div class="row g-4" id="lockerItemsGrid"></div>
+            </div>
+        </section>
+
+        <!-- ABHA SECTION (With Integrated Get Logic) -->
+        <section id="abhaSec" class="tab-content hidden">
+            <div class="hk-card mx-auto" style="max-width: 700px; padding: 0;">
+                <div id="abha-loading" class="p-5 text-center">
+                    <div class="spinner-border text-success" role="status"></div>
+                    <p class="mt-3 text-muted">Checking ABHA status...</p>
+                </div>
+
+                <div id="abha-container" class="hidden">
+                    <div class="p-5 bg-light border-bottom text-center">
+                        <h3 class="fw-800 text-success m-0">Ayushman Bharat Account</h3>
+                        <p class="text-muted small m-0">Manage your digital health identity</p>
+                    </div>
+
+                    <div class="step-indicator px-5" id="stepIndicatorUI">
+                        <div class="dot active">1</div><div class="dot">2</div><div class="dot">3</div><div class="dot">4</div><div class="dot">5</div>
+                    </div>
+
+                    <div class="p-5 pt-0" id="abhaContentArea">
+                        <!-- Step 1 -->
+                        <div id="abhaStep1">
+                            <h5>Step 1: Welcome</h5><p class="text-muted">Register to digitize medical records.</p>
+                            <img src="https://tatvacare.in/abha/static/media/abha-card.2066f194.png" class="img-fluid rounded-4 my-4 border">
+                            <button class="btn-hk" onclick="moveAbhaStep(2)">Get Started &rarr;</button>
+                        </div>
+                        <!-- Step 2 -->
+                        <div id="abhaStep2" class="hidden">
+                            <h5>Step 2: Choose Method</h5>
+                            <div class="method-box selected"><h6><i class="fas fa-address-card me-2"></i> Aadhaar Card</h6></div>
+                            <button class="btn-hk mt-3" onclick="moveAbhaStep(3)">Next Step</button>
+                        </div>
+                        <!-- Step 3 -->
+                        <div id="abhaStep3" class="hidden">
+                            <h5>Step 3: Details</h5>
+                            <input type="text" id="aadhaarNum" class="form-control form-control-lg rounded-4 mb-4" placeholder="12-Digit Aadhaar">
+                            <div class="form-check p-3 bg-light rounded-4 mb-4"><input class="form-check-input ms-0 me-2" type="checkbox" id="consentAbha"><label class="form-check-label small">I agree to terms.</label></div>
+                            <button class="btn-hk" onclick="abhaGenerateOtp()">Generate OTP &rarr;</button>
+                        </div>
+                        <!-- Step 4 -->
+                        <div id="abhaStep4" class="hidden text-center">
+                            <h5>Step 4: Verify OTP</h5><input type="text" id="otpAbha" class="form-control form-control-lg text-center mb-4 rounded-4" placeholder="------" maxlength="6">
+                            <button class="btn-hk" onclick="abhaVerifyOtp()">Verify & Link</button>
+                        </div>
+                        <!-- Step 5: Final Result (Also used for GET API) -->
+                        <div id="abhaStep5" class="hidden text-center py-4">
+                            <div class="mb-4"><i class="fas fa-circle-check text-success fa-5x"></i></div>
+                            <h2 class="fw-800 text-success">Your ABHA ID Card</h2>
+                            <div class="p-4 border rounded-4 bg-light mt-4 text-start">
+                                <div class="mb-3"><small class="text-muted">ABHA Number</small><h5 class="fw-800 m-0" id="finalAbhaNo"></h5></div>
+                                <div><small class="text-muted">ABHA Address</small><h6 class="fw-bold m-0" id="finalAbhaAddr"></h6></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PROFILE SECTION -->
+        <section id="profileSec" class="tab-content hidden"><h2 class="fw-800 mb-4">My Account</h2><div class="hk-card" id="profileViewArea"></div></section>
+    </div>
+
+    <!-- MODALS -->
+    <div class="modal fade" id="fileDetailsModal" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content border-0 rounded-5"><div class="modal-header border-0 p-4 pb-0"><h4 class="fw-800 m-0" id="mdlTitle"></h4><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body p-4"><div class="row g-4"><div class="col-lg-4"><div class="p-3 bg-light rounded-4 mb-3"><small class="fw-bold text-muted">DOCTOR</small><h6 id="mdlDoc" class="m-0 fw-800"></h6></div><div class="p-3 bg-light rounded-4 mb-3"><small class="fw-bold text-muted">NOTES</small><p id="mdlNotes" class="small m-0"></p></div><button class="btn btn-hk w-100" onclick="showAddMoreModal()">+ Add More Pages</button></div><div class="col-lg-8"><div id="mdlGallery" class="row g-3"></div></div></div></div></div></div></div>
+    <div class="modal fade" id="folderCreateModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content p-4 rounded-4 border-0 shadow"><h5 class="fw-800 mb-4">New Folder</h5><input type="text" id="folderNameInput" class="form-control rounded-3 mb-4"><button class="btn-hk" onclick="submitCreateFolder()">CREATE</button></div></div></div>
+    <div class="modal fade" id="fileUploadModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><form id="fileUploadForm" class="modal-content p-4 rounded-4 border-0 shadow"><h5 class="fw-800 mb-4">Upload File</h5><input type="text" name="title" class="form-control mb-3" placeholder="Title" required><input type="text" name="doctorName" class="form-control mb-3" placeholder="Doctor"><input type="file" name="images" class="form-control mb-3" multiple required><textarea name="notes" class="form-control mb-4" placeholder="Notes"></textarea><button type="submit" class="btn-hk">UPLOAD</button></form></div></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
     <script>
-        const API_BASE = "http://localhost:5002/api/user/abha";
-        const TOKEN = localStorage.getItem('token'); // User Login Token
-        let activeTxnId = "";
+        const API_BASE = "http://localhost:5002/api";
+        const ABHA_URL = "http://localhost:5002/api/user/abha";
+        const TOKEN = localStorage.getItem('token');
+        const SERVER = "http://localhost:5002";
 
-        async function handleGenerateOtp() {
-            const aadhaar = document.getElementById('aadhaarInput').value;
-            const consent = document.getElementById('consentCheck').checked;
+        let currentParentId = null;
+        let navStack = [{id: null, name: "Root"}];
+        let items = [];
+        let activeFileId = null;
+        let abhaTxn = "";
 
-            if (aadhaar.length !== 12) return Swal.fire('Error', 'Invalid Aadhaar Number', 'error');
-            if (!consent) return Swal.fire('Error', 'Please accept consent', 'warning');
+        // --- NAVIGATION & GET ABHA STATUS ---
+        function switchSection(id) {
+            document.querySelectorAll('.tab-content').forEach(s => s.classList.add('hidden'));
+            document.querySelectorAll('.nav-link-custom').forEach(l => l.classList.remove('active'));
+            document.getElementById(id).classList.remove('hidden');
+            event.target.closest('.nav-link-custom').classList.add('active');
 
-            try {
-                const res = await fetch(`${API_BASE}/generate-otp`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
-                    body: JSON.stringify({ aadhaarNumber: aadhaar, consent: true })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    activeTxnId = data.txnId;
-                    document.getElementById('step1').classList.add('hidden');
-                    document.getElementById('step2').classList.remove('hidden');
-                    Swal.fire('Success', data.message, 'success');
-                } else {
-                    Swal.fire('Error', data.message, 'error');
-                }
-            } catch (e) { Swal.fire('Error', 'Server Error', 'error'); }
+            if(id === 'abhaSec') checkAbhaStatus();
+            if(id === 'profileSec') loadProfile();
         }
 
-        async function handleVerifyOtp() {
-            const otp = document.getElementById('otpInput').value;
+        async function checkAbhaStatus() {
+            document.getElementById('abha-loading').classList.remove('hidden');
+            document.getElementById('abha-container').classList.add('hidden');
+            
             try {
-                const res = await fetch(`${API_BASE}/verify-otp`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
-                    body: JSON.stringify({ otp: otp, txnId: activeTxnId })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    document.getElementById('step2').classList.add('hidden');
-                    document.getElementById('step3').classList.remove('hidden');
-                    document.getElementById('resAbhaNo').innerText = data.data.abhaNumber;
-                    document.getElementById('resAbhaAddr').innerText = data.data.abhaAddress;
+                const res = await fetch(`${ABHA_URL}/details`, { headers: {'Authorization': `Bearer ${TOKEN}`} });
+                const result = await res.json();
+                
+                document.getElementById('abha-loading').classList.add('hidden');
+                document.getElementById('abha-container').classList.remove('hidden');
+
+                if(result.isLinked) {
+                    document.getElementById('finalAbhaNo').innerText = result.data.abhaNumber;
+                    document.getElementById('finalAbhaAddr').innerText = result.data.abhaAddress;
+                    document.getElementById('stepIndicatorUI').classList.add('hidden'); // Hide dots if already linked
+                    moveAbhaStep(5);
                 } else {
-                    Swal.fire('Error', data.message, 'error');
+                    document.getElementById('stepIndicatorUI').classList.remove('hidden');
+                    moveAbhaStep(1);
                 }
-            } catch (e) { Swal.fire('Error', 'Server Error', 'error'); }
+            } catch (e) { Swal.fire('Error', 'Check ABHA Status Failed', 'error'); }
         }
+
+        // --- ABHA FLOW LOGIC ---
+        function moveAbhaStep(s) {
+            document.querySelectorAll('#abhaContentArea > div').forEach(d => d.classList.add('hidden'));
+            document.getElementById('abhaStep' + s).classList.remove('hidden');
+            document.querySelectorAll('.dot').forEach((d, i) => { 
+                if(i < s) d.classList.add('active'); else d.classList.remove('active'); 
+            });
+        }
+
+        async function abhaGenerateOtp() {
+            const aadhaar = document.getElementById('aadhaarNum').value;
+            if(!document.getElementById('consentAbha').checked) return Swal.fire('Wait', 'Consent Required', 'warning');
+            const res = await fetch(`${ABHA_URL}/step3-generate-otp`, {
+                method: 'POST',
+                headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${TOKEN}`},
+                body: JSON.stringify({ aadhaarNumber: aadhaar, consent: true })
+            });
+            const data = await res.json();
+            if(data.success) { abhaTxn = data.txnId; moveAbhaStep(4); } else Swal.fire('Error', data.message, 'error');
+        }
+
+        async function abhaVerifyOtp() {
+            const otp = document.getElementById('otpAbha').value;
+            const res = await fetch(`${ABHA_URL}/step4-verify-otp`, {
+                method: 'POST',
+                headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${TOKEN}`},
+                body: JSON.stringify({ otp, txnId: abhaTxn })
+            });
+            const data = await res.json();
+            if(data.success) { finalizeAbha(data.nextTxnId); } else Swal.fire('Error', data.message, 'error');
+        }
+
+        async function finalizeAbha(txn) {
+            const res = await fetch(`${ABHA_URL}/step5-finalize`, {
+                method: 'POST',
+                headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${TOKEN}`},
+                body: JSON.stringify({ txnId: txn })
+            });
+            const data = await res.json();
+            if(data.success) {
+                document.getElementById('finalAbhaNo').innerText = data.data.abhaNumber;
+                document.getElementById('finalAbhaAddr').innerText = data.data.abhaAddress;
+                moveAbhaStep(5);
+            }
+        }
+
+        // --- LOCKER LOGIC (RESERVED) ---
+        async function verifyVaultPin() {
+            const pin = document.getElementById('lockerPin').value;
+            const res = await fetch(`${API_BASE}/user/locker/verify-pin`, { method: 'POST', headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${TOKEN}`}, body: JSON.stringify({ pin }) });
+            if((await res.json()).success) { document.getElementById('locker-auth-view').classList.add('hidden'); document.getElementById('locker-main-view').classList.remove('hidden'); loadContent(null); } else alert("Wrong PIN");
+        }
+
+        async function loadContent(pid) {
+            currentParentId = pid;
+            const res = await fetch(`${API_BASE}/user/locker/content${pid ? `?parentId=${pid}` : ''}`, { headers: {'Authorization': `Bearer ${TOKEN}`} });
+            items = (await res.json()).data;
+            document.getElementById('lockerItemsGrid').innerHTML = items.map(i => `
+                <div class="col-md-3">
+                    <div class="hk-card text-center" onclick="${i.type==='folder' ? `enterF('${i._id}', '${i.name}')` : `viewF('${i._id}')`}">
+                        <div class="dropdown card-action-btn" onclick="event.stopPropagation()"><i class="fas fa-ellipsis-v" data-bs-toggle="dropdown"></i><ul class="dropdown-menu"><li><a class="dropdown-item" href="#" onclick="handleRename('${i._id}', '${i.name}')">Rename</a></li><li><a class="dropdown-item text-danger" href="#" onclick="handleDelete('${i._id}')">Delete</a></li></ul></div>
+                        <div class="item-icon ${i.type==='folder'?'icon-folder':'icon-file'}"><i class="fas ${i.type==='folder'?'fa-folder':'fa-file-medical'}"></i></div>
+                        <h6 class="fw-800 text-truncate">${i.name}</h6>
+                        <small class="text-muted">${i.type==='folder' ? (i.childCount||0)+' items' : (i.fileCount||0)+' pages'}</small>
+                    </div>
+                </div>`).join('');
+            renderBC();
+        }
+
+        function enterF(id, name) { navStack.push({id, name}); loadContent(id); }
+        function renderBC() { document.getElementById('dynamicBreadcrumbs').innerHTML = navStack.map((s, i) => `<li class="breadcrumb-item"><span class="breadcrumb-link" onclick="jump(${i})">${s.name}</span></li>`).join(''); }
+        function jump(i) { navStack = navStack.slice(0, i+1); loadContent(navStack[i].id); }
+
+        function viewF(id) {
+            const f = items.find(x => x._id === id); activeFileId = id;
+            document.getElementById('mdlTitle').innerText = f.name;
+            document.getElementById('mdlDoc').innerText = f.doctorName || 'N/A';
+            document.getElementById('mdlNotes').innerText = f.notes || 'No notes';
+            document.getElementById('mdlGallery').innerHTML = f.images.map(img => `<div class="col-6"><img src="${SERVER}${img}" class="file-preview-img shadow-sm" onclick="window.open('${SERVER}${img}')"></div>`).join('');
+            new bootstrap.Modal('#fileDetailsModal').show();
+        }
+
+        async function handleRename(id, old) {
+            const {value: name} = await Swal.fire({title: 'Rename', input: 'text', inputValue: old});
+            if(name) { await fetch(`${API_BASE}/user/locker/rename/${id}`, { method: 'PATCH', headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${TOKEN}`}, body: JSON.stringify({newName: name}) }); loadContent(currentParentId); }
+        }
+
+        async function handleDelete(id) {
+            if((await Swal.fire({title:'Delete?', showCancelButton:true})).isConfirmed) { await fetch(`${API_BASE}/user/locker/delete/${id}`, { method: 'DELETE', headers: {'Authorization': `Bearer ${TOKEN}`} }); loadContent(currentParentId); }
+        }
+
+        async function showAddMoreModal() {
+            const {value: files} = await Swal.fire({title: 'Select Images', input: 'file', inputAttributes: {'multiple':'multiple'}});
+            if(files) {
+                const fd = new FormData(); for(let f of files) fd.append('images', f);
+                await fetch(`${API_BASE}/user/locker/add-pages/${activeFileId}`, { method: 'PUT', headers: {'Authorization': `Bearer ${TOKEN}`}, body: fd });
+                bootstrap.Modal.getInstance('#fileDetailsModal').hide(); loadContent(currentParentId);
+            }
+        }
+
+        document.getElementById('fileUploadForm').onsubmit = async (e) => {
+            e.preventDefault(); const fd = new FormData(e.target); if(currentParentId) fd.append('parentId', currentParentId);
+            await fetch(`${API_BASE}/user/locker/upload-file`, { method: 'POST', headers: {'Authorization': `Bearer ${TOKEN}`}, body: fd });
+            bootstrap.Modal.getInstance('#fileUploadModal').hide(); loadContent(currentParentId);
+        };
+
+        async function submitCreateFolder() {
+            const name = document.getElementById('folderNameInput').value;
+            await fetch(`${API_BASE}/user/locker/create-folder`, { method: 'POST', headers: {'Content-Type':'application/json','Authorization': `Bearer ${TOKEN}`}, body: JSON.stringify({name, parentId: currentParentId}) });
+            bootstrap.Modal.getInstance('#folderCreateModal').hide(); loadContent(currentParentId);
+        }
+
+        function showFolderModal() { new bootstrap.Modal('#folderCreateModal').show(); }
+        function showFileUploadModal() { new bootstrap.Modal('#fileUploadModal').show(); }
+        async function loadProfile() {
+            const res = await fetch(`${API_BASE}/auth/user/profile`, { headers: {'Authorization': `Bearer ${TOKEN}`} });
+            const u = (await res.json()).data;
+            document.getElementById('profileViewArea').innerHTML = `<h4>${u.name}</h4><p>${u.email}</p><p><b>ABHA Verified:</b> ${u.abhaDetails?.isAbhaVerified ? 'YES' : 'NO'}</p>`;
+        }
+        function handleLogout() { localStorage.clear(); location.reload(); }
+        window.onload = () => { if(!TOKEN) Swal.fire('Auth', 'Login required', 'info'); };
     </script>
 </body>
 </html>
