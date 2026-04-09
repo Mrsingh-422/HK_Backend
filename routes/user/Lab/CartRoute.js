@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity } = require('../../../controllers/user/Lab/Cart');
+const { addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity,
+    compareCartOnMap
+ } = require('../../../controllers/user/Lab/Cart');
 
 // Base URL: /user/cart
 
@@ -10,5 +12,7 @@ router.post('/lab/add', protect('user'), addToLabCart);
 router.post('/lab/clear', protect('user'), clearLabCart);
 router.delete('/item/:itemId', protect('user'), removeItem);
 router.put('/quantity', protect('user'), updateCartQuantity);
+
+router.post('/compare', protect('user'), compareCartOnMap);
 
 module.exports = router;

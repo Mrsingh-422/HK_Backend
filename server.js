@@ -33,6 +33,7 @@ app.use('/admin/articles', require('./routes/admin/others/AdminArticleRoute'));
 app.use('/admin/ads', require('./routes/admin/others/AdManagerRoute')) // Ad Management Route
 app.use('/admin/medical-masters', require('./routes/admin/others/MedicalMasterRoute'));
 app.use('/admin/drivers/vendor', require('./routes/admin/others/DriverVendorRoute'));
+app.use('/admin/vendor-km-limit', require('./routes/admin/others/VendorKMLimitRoute'));
 app.use('/admin/users', require('./routes/admin/user/UserRoute'));
 app.use('/admin/user/insurance', require('./routes/admin/user/insruranceAdd'));
 app.use('/admin/roles', require('./routes/subAdmin/RoleRoute')); // Role Management Route
@@ -58,6 +59,7 @@ app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // M
 app.use('/api/auth/user', require('./routes/user/authUser')); 
 app.use('/api/user/abha', require('./routes/user/others/AbhaCardRoute')); // ABHA Card Management Route
 app.use('/api/user/locker', require('./routes/user/others/HealthLockerRoute')); // Locker Management Route
+app.use('/api/user/review', require('./routes/user/others/ReviewRoute')); // Review Management Route
 // --- user doctor ---
 app.use('/user/doctor/pills', require('./routes/user/Doctor/PillsRoute')); // Doctor's Prescription Management
 app.use('/user/health-records', require('./routes/user/Doctor/HealthRoute')); // Health Records Management
@@ -72,6 +74,7 @@ app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
 //////////////// Doctor Routes ///////////////////////
 app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
 app.use('/doctor/appointments', require('./routes/doctor/AppointmentRoute')); // Doctor Appointments Route
+app.use('/doctor/availability', require('./routes/doctor/DoctorSlotsRoute')); // Doctor Availability Route
 
 
 

@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer'); // Ensure this handles 'prescriptionImages' key
 const { 
-    getStandardCatalogTests,searchStandardTests, getStandardPackages,searchStandardPackages,getFemaleStandardPackages,
+    getStandardCatalogTests,searchStandardTests, getStandardPackages,searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
     
     getLabSlots, getLabDeliveryCharges,
@@ -14,7 +14,8 @@ const {
     checkoutLabBooking,
     confirmPrescriptionBooking,
     rateLabOrder,cancelBooking,
-    getAvailableCoupons 
+    getAvailableCoupons ,
+    getPreparationGuide, suggestPersonalizedPackage
     
 } = require('../../../controllers/user/Lab/BookLab');
 
@@ -27,11 +28,12 @@ router.post('/standard-tests/search', searchStandardTests); ///user/labs/standar
 router.get('/standard-packages', getStandardPackages); 
 router.post('/standard-packages/search', searchStandardPackages); ///user/labs/standard-packages/search?page=1
 router.get('/standard-packages/female', getFemaleStandardPackages);
+router.get('/standard-tests/female', getFemaleStandardTests);
 
 
 
 // Discovery
-router.get('/list', getLabs);
+router.post('/list', getLabs);
 router.get('/details/:id', getLabDetails);
 // 2. Inventory - Tests
 router.get('/:labId/inventory-tests', getLabInventoryTests); // GET with ?page=1
@@ -41,10 +43,14 @@ router.get('/:labId/inventory-packages', getLabInventoryPackages);
 router.post('/:labId/inventory-packages/search', searchLabInventoryPackages);
 
 
-
-
-
 router.get('/slots', getLabSlots);
+
+// --- Guidance & Suggestion ---
+router.get('/prep-guide', protect('user'), getPreparationGuide); // For Fasting/Instructions modal
+router.post('/suggest-package', protect('user'), suggestPersonalizedPackage); // Figma Personalized Flow
+
+
+
 
 router.get('/master-test/:id', protect('user'), getMasterTestDetails);
 router.get('/master-package/:id', protect('user'), getMasterPackageDetails);

@@ -8,13 +8,73 @@ const Availability = require('../../../models/Availability');
 const Coupon = require('../../../models/Coupon');
 const MasterLabTest = require('../../../models/MasterLabTest');
 const MasterLabPackage = require('../../../models/MasterLabPackage');
+const MasterRequest = require('../../../models/MasterRequest');
+const VendorKMLimit = require('../../../models/VendorKMLimit');
 
 const Cart = require('../../../models/Cart'); // Import check karein
 const User = require('../../../models/User');
 const moment = require('moment');
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
+const { getDistance } = require('../../../utils/helpers');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+
+
+// --- UPDATED: CALCULATE BILL (Per Patient Rapid Charge Logic) ---
+const calculateBillHelper = async (labId, items, patientsCount, collectionType, couponCode, isRapid, userId, appointmentTime) => {
+    let itemTotal = 0;
+    const tests = items.items ? items.items.filter(i => i.productType === 'LabTest') : (items.tests || []);
+    const packages = items.items ? items.items.filter(i => i.productType === 'LabPackage') : (items.packages || []);
+
+    for (let t of tests) {
+        const id = t.itemId || t.testId;
+        const test = await LabTest.findById(id);
+        if (test) itemTotal += test.discountPrice || test.amount;
+    }
+    for (let p of packages) {
+        const id = p.itemId || p.packageId;
+        const pkg = await LabPackage.findById(id);
+        if (pkg) itemTotal += pkg.offerPrice || pkg.mrp;
+    }
+
+    itemTotal = itemTotal * patientsCount;
+
+    let homeVisitCharge = 0;
+    let rapidCharge = 0;
+    const charges = await DeliveryCharge.findOne({ vendorId: labId });
+
+    if (collectionType === 'Home Collection' && charges) homeVisitCharge = charges.fixedPrice || 0;
+    
+    // Figma Logic: Rapid delivery +29 per patient
+    if (isRapid && charges) {
+        rapidCharge = (charges.fastDeliveryExtra || 29) * patientsCount;
+    }
+
+    let slotCharge = 0;
+    const availConfig = await Availability.findOne({ vendorId: labId });
+    if (availConfig && appointmentTime) {
+        const premium = availConfig.premiumSlots?.find(ps => ps.time === appointmentTime);
+        if (premium) slotCharge = premium.extraFee || 0;
+    }
+
+    let couponDiscount = 0;
+    if (couponCode) {
+        const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+        if (coupon && itemTotal >= coupon.minOrderAmount) {
+            couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+        }
+    }
+
+    const totalAmount = (itemTotal - couponDiscount) + homeVisitCharge + rapidCharge + slotCharge;
+    return { 
+        itemTotal, 
+        couponDiscount, 
+        homeVisitCharge, 
+        rapidDeliveryCharge: rapidCharge, 
+        slotCharge, 
+        totalAmount 
+    };
+};
 
 // --- HELPER: Pricing Logic (Production Level) ---
 // --- UPDATED HELPER: Pricing Logic with Slot Charges ---
@@ -205,7 +265,7 @@ const searchStandardTests = async (req, res) => {
 };
 
 
-// --- NEW: GET STANDARD CATALOG PACKAGES (For User Discovery) ---
+// --- NEW: GET STANDARD CATALOG PACKAGES (For User Discovery) --- // pagination 20
 // GET /user/labs/standard-packages?category=Full Body Checkup
 const getStandardPackages = async (req, res) => {
     try {
@@ -220,6 +280,18 @@ const getStandardPackages = async (req, res) => {
 
         const aggregate = MasterLabPackage.aggregate([
             { $match: matchQuery },
+            
+            // 1. POPULATE TESTS (MasterLabTest collection se data laane ke liye)
+            {
+                $lookup: {
+                    from: "masterlabtests", // Aapki MasterLabTest collection ka asli naam (usually plural/lowercase)
+                    localField: "tests",
+                    foreignField: "_id",
+                    as: "tests"
+                }
+            },
+
+            // 2. LOOKUP VENDORS (LabPackage details)
             {
                 $lookup: {
                     from: "labpackages",
@@ -229,13 +301,18 @@ const getStandardPackages = async (req, res) => {
                     pipeline: [{ $match: { isActive: true } }]
                 }
             },
+            
+            // 3. FIELDS CALCULATE KAREIN
             {
                 $addFields: {
                     vendorCount: { $size: "$vendorList" },
                     minPrice: { $min: "$vendorList.offerPrice" }
                 }
             },
+            
             { $sort: { vendorCount: -1, packageName: 1 } },
+            
+            // 4. PAGINATION
             {
                 $facet: {
                     metadata: [{ $count: "total" }],
@@ -254,7 +331,9 @@ const getStandardPackages = async (req, res) => {
             totalPages: Math.ceil(total / limit),
             data: result[0].data
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 // 2. SEARCH STANDARD PACKAGES (POST - Master Catalog)
 const searchStandardPackages = async (req, res) => {
@@ -363,35 +442,223 @@ const getFemaleStandardPackages = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+// GET /user/labs/standard-tests/female
+const getFemaleStandardTests = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        // FILTER: Female ya Both tests dikhao
+        let matchQuery = { 
+            isActive: true, 
+            gender: { $in: ['Female'] } 
+        };
+
+        const aggregate = MasterLabTest.aggregate([
+            { $match: matchQuery },
+            {
+                $lookup: {
+                    from: "labtests",
+                    localField: "_id",
+                    foreignField: "masterTestId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: { $min: "$vendorList.discountPrice" }
+                }
+            },
+            { $sort: { testName: 1 } },
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        res.json({
+            success: true,
+            total: result[0].metadata[0]?.total || 0,
+            data: result[0].data
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 
 
 
-// 1. GET LABS LIST WITH FILTERS
+
+// POST /user/labs/list
 const getLabs = async (req, res) => {
     try {
-        const { city, isHomeCollection, isRapid, search } = req.query;
+        const { lat, lng, city, search } = req.body;
+        
+        // 1. KM Limit Check
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Lab', isActive: true });
+        const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
+
         let query = { profileStatus: 'Approved', isActive: true };
-        
         if (city) query.city = new RegExp(city, 'i');
-        if (isHomeCollection === 'true') query.isHomeCollectionAvailable = true;
-        if (isRapid === 'true') query.isRapidServiceAvailable = true;
         if (search) query.name = new RegExp(search, 'i');
+
+        // 2. Fetch Labs
+        const labs = await Lab.find(query)
+            .select('name profileImage city rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable location is24x7 isInsuranceAccepted acceptedInsurances labImages')
+            .lean();
+
+        const filteredLabs = [];
         
-        const labs = await Lab.find(query).select('name city profileImage rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable');
-        res.json({ success: true, data: labs });
+        for (let lab of labs) {
+            let distance = 0;
+            if (lat && lng && lab.location?.lat) {
+                distance = await getDistance(lat, lng, lab.location.lat, lab.location.lng);
+            }
+
+            // KM Limit Filter
+            if (!lat || distance <= maxRadius) {
+                
+                // 3. FETCH TOP 5 RADIOLOGY TESTS (Existing)
+                const radiologyTests = await LabTest.find({ 
+                    labId: lab._id, 
+                    mainCategory: 'Radiology',
+                    isActive: true 
+                }).select('testName').limit(5).lean();
+
+                // 4. NAYA: CALCULATE STARTING PRICE (Test aur Package dono mein se min price)
+                const [minTest, minPackage] = await Promise.all([
+                    LabTest.findOne({ labId: lab._id, isActive: true }).sort({ discountPrice: 1 }).select('discountPrice'),
+                    LabPackage.findOne({ labId: lab._id, isActive: true }).sort({ offerPrice: 1 }).select('offerPrice')
+                ]);
+
+                let startingPrice = 0;
+                const testPrice = minTest ? minTest.discountPrice : Infinity;
+                const packagePrice = minPackage ? minPackage.offerPrice : Infinity;
+                
+                // Dono mein se jo kam ho
+                startingPrice = Math.min(testPrice, packagePrice);
+                
+                // Agar lab mein na koi test hai na package, toh 0
+                if (startingPrice === Infinity) startingPrice = 0;
+
+                filteredLabs.push({
+                    _id: lab._id,
+                    name: lab.name,
+                    profileImage: lab.profileImage || (lab.labImages && lab.labImages[0]),
+                    city: lab.city,
+                    rating: lab.rating,
+                    totalReviews: lab.totalReviews,
+                    isHomeCollectionAvailable: lab.isHomeCollectionAvailable,
+                    isRapidServiceAvailable: lab.isRapidServiceAvailable,
+                    is24x7: lab.is24x7,
+                    isInsuranceAccepted: lab.isInsuranceAccepted,
+                    acceptedInsurances: lab.acceptedInsurances || [],
+                    distance: distance,
+                    topRadiologyTests: radiologyTests.map(t => t.testName),
+                    startingPrice: startingPrice // Figma: "Starting From ₹399"
+                });
+            }
+        }
+
+        // 5. SORT: Najdeek wali pehle
+        if (lat && lng) {
+            filteredLabs.sort((a, b) => a.distance - b.distance);
+        }
+
+        res.json({ success: true, count: filteredLabs.length, data: filteredLabs });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // 1. GET LAB PROFILE (Sirf Lab ki basic info)
 const getLabDetails = async (req, res) => {
     try {
-        const lab = await Lab.findById(req.params.id)
-            .select('name city address profileImage rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable about');
+        const { id } = req.params;
+
+        // 1. Fetch Lab Basic Info (Including Images for Gallery)
+        const lab = await Lab.findById(id)
+            .select('name country state city address profileImage rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable isInsuranceAccepted acceptedInsurances about location documents.labImages is24x7')
+            .lean();
         
         if (!lab) return res.status(404).json({ success: false, message: "Lab not found" });
-        res.json({ success: true, data: lab });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        // 2. Fetch Lab Availability/Slots Configuration
+        const config = await Availability.findOne({ vendorId: id });
+        
+        let openStatus = "Closed";
+        let timingLabel = "Timings not set";
+        let nextSlot = null;
+
+        if (config) {
+            const now = moment();
+            const dayName = now.format('YYYY-MM-DD');
+            const dayOfWeek = now.format('Status'); // e.g., "Monday"
+
+            // A. Timing Label (Figma: Open 7 AM - 9 PM)
+            timingLabel = `Open ${config.startTime} - ${config.endTime}`;
+
+            // B. Calculate Open/Closed Status
+            const isOffDay = config.offDays.includes(now.format('dddd'));
+            const startTime = moment(config.startTime, "HH:mm");
+            const endTime = moment(config.endTime, "HH:mm");
+            
+            if (!isOffDay && now.isBetween(startTime, endTime)) {
+                openStatus = "Open Now";
+            }
+
+            // C. Calculate Next Available Slot (Figma: Next Available Slot Today - 4:00 PM)
+            const allSlots = generateTimeSlots(config);
+            
+            // Aaj ke liye booked slots ginti karein
+            const bookedCounts = await LabBooking.aggregate([
+                { $match: { labId: lab._id, appointmentDate: new Date(now.startOf('day')), status: { $ne: 'Cancelled' } } },
+                { $group: { _id: "$appointmentTime", count: { $sum: 1 } } }
+            ]);
+
+            // Current time ke baad wala pehla slot dhoondein jo full na ho
+            for (let slot of allSlots) {
+                const slotTime = moment(slot.time, "hh:mm A");
+                if (slotTime.isAfter(now)) {
+                    const booking = bookedCounts.find(b => b._id === slot.time);
+                    const isFull = config.maxClientsPerSlot !== 0 && (booking ? booking.count : 0) >= config.maxClientsPerSlot;
+                    
+                    if (!isFull) {
+                        nextSlot = {
+                            date: "Today",
+                            time: slot.time
+                        };
+                        break;
+                    }
+                }
+            }
+
+            // Agar aaj koi slot nahi mila, toh kal ka pehla slot de dein
+            if (!nextSlot) {
+                nextSlot = {
+                    date: "Tomorrow",
+                    time: allSlots[0]?.time || "N/A"
+                };
+            }
+        }
+
+        // 3. Final Response matching Figma
+        res.json({ 
+            success: true, 
+            data: {
+                ...lab,
+                openStatus,           // Figma: "Open Now"
+                timingLabel,          // Figma: "Open 7 AM - 9 PM"
+                gallery: lab.documents?.labImages || [], // Figma Gallery
+                nextAvailableSlot: nextSlot // Figma: "Today - 4:00 PM"
+            } 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 2. GET LAB TESTS (Paginated - 20 per page)
@@ -487,6 +754,7 @@ const searchLabInventoryPackages = async (req, res) => {
 
 
 
+
 // 3. GET AVAILABLE SLOTS
 const getLabSlots = async (req, res) => {
     try {
@@ -503,6 +771,7 @@ const getLabSlots = async (req, res) => {
         res.json({ success: true, slots });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 // --- INTERNAL HELPER: Delivery Calculation ---
 const calculateDeliveryFee = (distance, orderTotal, charges) => {
@@ -594,44 +863,49 @@ const getAvailableCoupons = async (req, res) => {
 // 2. CHECKOUT (Integrating Slot Charge)
 const checkoutLabBooking = async (req, res) => {
     try {
-        const { appointmentDate, appointmentTime, address, paymentMethod, couponCode, isRapid, selectedPatientIds, collectionType } = req.body;
-        const userId = req.user.id;
+        const { 
+            appointmentDate, appointmentTime, address, 
+            paymentMethod, couponCode, isRapid, 
+            selectedPatientIds, collectionType 
+        } = req.body;
 
-        const cart = await Cart.findOne({ userId });
+        const cart = await Cart.findOne({ userId: req.user.id });
         if (!cart || cart.labCart.items.length === 0) return res.status(400).json({ message: "Cart is empty" });
 
-        // Bill calculation (Now includes appointmentTime for slot pricing)
-        const bill = await calculateBill(
+        const bill = await calculateBillHelper(
             cart.labCart.labId, 
             cart.labCart, 
             selectedPatientIds.length, 
             collectionType, 
             couponCode, 
             isRapid, 
-            userId,
+            req.user.id,
             appointmentTime 
         );
 
         const booking = await LabBooking.create({
             bookingId: `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
-            userId,
+            userId: req.user.id,
             labId: cart.labCart.labId,
-            patients: await mapPatients(userId, selectedPatientIds),
+            patients: await mapPatients(req.user.id, selectedPatientIds),
             items: {
                 tests: cart.labCart.items.filter(i => i.productType === 'LabTest').map(i => ({ testId: i.itemId, price: i.price, name: i.name })),
                 packages: cart.labCart.items.filter(i => i.productType === 'LabPackage').map(i => ({ packageId: i.itemId, price: i.price, name: i.name }))
             },
-            collectionType, address, appointmentDate, appointmentTime,
-            billSummary: {
-                ...bill,
-                slotCharge: bill.slotCharge // Ensure slotCharge is stored
-            },
+            collectionType, 
+            address, 
+            appointmentDate, 
+            appointmentTime,
+            billSummary: bill,
             paymentMethod,
+            isRapid,
             status: 'Confirmed'
         });
 
-        await Cart.findOneAndUpdate({ userId }, { $set: { "labCart.items": [], "labCart.labId": null, "labCart.categoryType": null } });
-        res.status(201).json({ success: true, data: booking });
+        // Clear Cart
+        await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null, "labCart.categoryType": null } });
+
+        res.status(201).json({ success: true, message: "Booking confirmed!", data: booking });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -916,8 +1190,47 @@ const getMasterPackageDetails = async (req, res) => {
     }
 };
 
+// --- NEW: GET PREPARATION GUIDE (Figma: Okay, I understand modal) ---
+const getPreparationGuide = async (req, res) => {
+    try {
+        const { itemId, type } = req.query; // type: 'LabTest' or 'LabPackage'
+        let data;
+        if (type === 'LabTest') {
+            data = await LabTest.findById(itemId).select('testName precaution');
+        } else {
+            data = await LabPackage.findById(itemId).select('packageName precaution');
+        }
+        res.json({ success: true, data });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- NEW: PERSONALIZE PACKAGE SUGGESTION (Figma: Step 1, 2, 3 flow) ---
+// POST /user/labs/suggest-package
+const suggestPersonalizedPackage = async (req, res) => {
+    try {
+        const { ageGroup, gender, symptoms, lifestyle } = req.body;
+        // AgeGroup: 'Below 30', '30-55', 'Above 55'
+        // Logic: Master Packages mein se filter karega jo best match ho
+        
+        let query = { isActive: true };
+        if (gender) query.gender = { $in: [gender, 'Both'] };
+        if (ageGroup) query.ageGroup = ageGroup;
+
+        // Simple match logic (Industry standard is to match tags)
+        const packages = await MasterLabPackage.find(query)
+            .limit(3)
+            .populate('tests');
+
+        res.json({ 
+            success: true, 
+            message: "Based on your inputs, we suggest these packages", 
+            data: packages 
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { 
-        getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,
+        getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
     
     getLabSlots, getLabDeliveryCharges,
@@ -927,5 +1240,5 @@ module.exports = {
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
     cancelBooking, confirmPrescriptionBooking, rateLabOrder ,
-    getAvailableCoupons, getLabSlots
+    getAvailableCoupons, getLabSlots,getPreparationGuide,suggestPersonalizedPackage
 };

@@ -58,8 +58,14 @@
         isInsuranceAccepted: { type: Boolean, default: false },
         about: String,
         rating: { type: Number, default: 4.5 },
-        totalReviews: { type: Number, default: 0 }
-
+        totalReviews: { type: Number, default: 0 },
+        location: {
+            lat: { type: Number, default: 0 },
+            lng: { type: Number, default: 0 }
+        },
+isInsuranceAccepted: { type: Boolean, default: false },
+acceptedInsurances: [{ type: String }], // e.g. ["RGHS", "ECHS", "Ayushman Bharat"]
+is24x7: { type: Boolean, default: false },
         
         
 

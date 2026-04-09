@@ -21,6 +21,11 @@ const masterLabTestSchema = new mongoose.Schema({
         question: String,
         answer: String
     }],
+    gender: { 
+        type: String, 
+        enum: ['Male', 'Female', 'Both'], 
+        default: 'Both' 
+    },
 
     pretestPreparation: { type: String }, // Generic precaution: "Fasting required"
     standardMRP: { type: Number }, // Admin suggested price
