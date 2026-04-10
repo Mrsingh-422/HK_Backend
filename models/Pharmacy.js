@@ -47,10 +47,16 @@ const pharmacySchema = new mongoose.Schema({
     // Pharmacy Specific (Potential future fields)
     isHomeDeliveryAvailable: { type: Boolean, default: true },
     is24x7: { type: Boolean, default: false },
-    about: { type: String, default: "" }
+    about: { type: String, default: "" },
+    location: {
+        lat: { type: Number, default: 0 },
+        lng: { type: Number, default: 0 }
+    },
 
 
 
 }, { timestamps: true });
+pharmacySchema.index({ location: "2dsphere" });
+
 
 module.exports = mongoose.model('Pharmacy', pharmacySchema);

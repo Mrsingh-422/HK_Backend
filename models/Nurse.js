@@ -40,8 +40,16 @@ const nurseSchema = new mongoose.Schema({
     // Nurse Specific
     experienceYears: { type: Number, default: 0 },
     speciality: { type: String, default: null }, // e.g., ICU, Pediatric
-    gender: { type: String, enum: ['Male', 'Female', 'Other'] }
+    gender: { type: String, enum: ['Male', 'Female', 'Other'] },
+    about: { type: String, default: "" },
+    location: {
+            lat: { type: Number, default: 0 },
+            lng: { type: Number, default: 0 }
+        },
+
 
 }, { timestamps: true });
+nurseSchema.index({ location: "2dsphere" });
+
 
 module.exports = mongoose.model('Nurse', nurseSchema);

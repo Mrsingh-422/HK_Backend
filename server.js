@@ -68,7 +68,10 @@ app.use('/user/review', require('./routes/user/Doctor/ReviewDoctorRoute')); // D
 // --- user lab ---
 app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
 app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
-
+// --- user nurse ---
+app.use('/user/nurse', require('./routes/user/Nurse/BookNurseRoute'));
+// --- user pharmacy ---
+app.use('/user/pharmacy', require('./routes/user/Pharmacy/BookPharmacyRoute'));
  
 
 //////////////// Doctor Routes ///////////////////////
@@ -97,6 +100,7 @@ app.use('/provider/driver', require('./routes/provider/Common/DriverRoute')); //
 app.use('/provider/delivery-charges', require('./routes/provider/Common/DeliveryRoute')); // Delivery Charges Management Route
 
 // --- Provider Lab Routes ---
+app.use('/provider/labs/profile', require('./routes/provider/Lab/LabProfileRoute'));
 app.use('/provider/labs', require('./routes/provider/Lab/LabOrderRoute')); // Lab Order Management
 app.use('/provider/labs/services', require('./routes/provider/Lab/LabsServiceRoute')); // Lab Test Management
 app.use('/provider/labs/driver', require('./routes/provider/Lab/LabDriverRoute')); // Lab Test Management
@@ -108,6 +112,7 @@ app.use('/provider/pharmacy/profile', require('./routes/provider/Pharmacy/Pharma
 
 
 // --- Provider Nurse Routes ---
+app.use('/provider/nurse/dash', require('./routes/provider/Nurse/NurseDashboardRoute'));
 app.use('/provider/nurse/driver', require('./routes/provider/Nurse/NurseDriverRoute')); // Lab Test Management
 
 
