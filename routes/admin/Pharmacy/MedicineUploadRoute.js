@@ -1,11 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
-const { uploadExcel } = require('../../../middleware/multer');
+
+// Note: Agar aapne multer config me sirf '.xlsx' allowed rakha tha, 
+// toh usme '.csv' / '.txt' allow zaroor kar dena.
+const { uploadExcel } = require('../../../middleware/multer'); 
+
 const { 
-    uploadMedicinesExcel, 
+    uploadMedicinesCSV, // Name updated for clarity
     getMedicinesList, 
-    searchMedicines, // Nayi Search API
+    searchMedicines, 
     createMedicine, 
     updateMedicine, 
     deleteMedicine, 
@@ -14,16 +18,23 @@ const {
 
 // base URL: /admin/pharmacy/medicines
 
-// --- Create ---
-router.post('/upload', protect('admin'), checkRoleAccess(28), uploadExcel.single('file'), uploadMedicinesExcel);
+// --- Create (Bulk & Single) ---
+// File upload for bulk processing (CSV/TSV recommended for large data)
+router.post('/upload', protect('admin'), checkRoleAccess(28), uploadExcel.single('file'), uploadMedicinesCSV);
+
+// Manual single creation
 router.post('/create', protect('admin'), checkRoleAccess(28), createMedicine);
 
 // --- Read (GET for List & Details) ---
-router.get('/list', getMedicinesList); // Example: /list?page=1 (Limit fixed to 20)
+// Pagination with fixed limit = 20 (Example: /list?page=1)
+router.get('/list', getMedicinesList); 
+
+// Get Details of a single medicine
 router.get('/details/:id', getMedicineDetails);
 
 // --- Search (POST for advanced filtering) ---
-router.post('/search', searchMedicines); // Body: { "search": "paracetamol", "page": 1 }
+// Body: { "search": "paracetamol", "page": 1 }
+router.post('/search', searchMedicines); 
 
 // --- Update & Delete ---
 router.put('/update/:id', protect('admin'), checkRoleAccess(28), updateMedicine);

@@ -18,6 +18,10 @@ const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const countries = require('../../../data/countries.json');
+const states = require('../../../data/states.json');
+const cities = require('../../../data/cities.json');
+
 
 
 // --- UPDATED: CALCULATE BILL (Per Patient Rapid Charge Logic) ---
@@ -493,86 +497,169 @@ const getFemaleStandardTests = async (req, res) => {
 
 
 
+// Default Location: Delhi (Coordinates)
+const DEFAULT_LAT = 28.6139;
+const DEFAULT_LNG = 77.2090;
+
+// endpoint: GET /api/user/labs/suggestions?query=Del
+const getSearchSuggestions = (req, res) => {
+    try {
+        const { query } = req.query;
+        if (!query || query.length < 2) return res.json({ success: true, data: [] });
+
+        const search = query.toLowerCase();
+
+        // 1. Search in Cities (City, State, Country)
+        const matchedCities = cities
+            .filter(c => c.name.toLowerCase().includes(search))
+            .slice(0, 10); // Performance: Sirf 10 results
+
+        const suggestions = matchedCities.map(city => {
+            const state = states.find(s => s.id == city.state_id);
+            const country = countries.find(c => c.id == state?.country_id);
+            
+            return {
+                city: city.name,
+                state: state?.name || "",
+                country: country?.name || "",
+                display: `${city.name}, ${state?.name || ''}, ${country?.name || ''}`
+            };
+        });
+
+        res.json({ success: true, data: suggestions });
+    } catch (error) {
+        res.status(500).json({ message: "Error fetching suggestions" });
+    }
+};
+// endpoint: GET /api/user/labs/lab-suggestions?query=Mud
+// searchbar ke liye in Labs
+const getLabSuggestions = async (req, res) => {
+    try {
+        const { query } = req.query;
+        if (!query || query.length < 2) return res.json({ success: true, data: [] });
+
+        const searchRegex = new RegExp(query, 'i');
+
+        // Database mein Lab names dhoondein
+        const labs = await Lab.find({
+            name: searchRegex,
+            profileStatus: 'Approved',
+            isActive: true
+        })
+        .select('name city profileImage') // Sirf zaroori data uthayein
+        .limit(10)
+        .lean();
+
+        const suggestions = labs.map(lab => ({
+            id: lab._id,
+            name: lab.name,
+            city: lab.city,
+            image: lab.profileImage,
+            display: lab.name // Frontend display ke liye
+        }));
+
+        res.json({ success: true, data: suggestions });
+    } catch (error) {
+        res.status(500).json({ message: "Error fetching lab suggestions" });
+    }
+};
+
 
 // POST /user/labs/list
 const getLabs = async (req, res) => {
     try {
-        const { lat, lng, city, search } = req.body;
-        
-        // 1. KM Limit Check
+        let { lat, lng, search, city, state, country } = req.body;
+
+        // 1. Coordinates Fallback: Agar user ne GPS coordinates nahi diye, toh Delhi base manein
+        const filterLat = lat || DEFAULT_LAT;
+        const filterLng = lng || DEFAULT_LNG;
+
+        // 2. Default State Check: Jab app pehli baar khule (No search, No city select, No GPS)
+        const isInitialLoad = (!lat || !lng) && !search && !city;
+
+        let query = { profileStatus: 'Approved', isActive: true };
+
+        // 3. Strict Location Matching (Dropdown selection logic)
+        if (city) query.city = new RegExp(`^${city}$`, 'i');
+        if (state) query.state = new RegExp(`^${state}$`, 'i');
+        if (country) query.country = new RegExp(`^${country}$`, 'i');
+
+        // 4. Lab Name Search Logic
+        if (search) {
+            const searchRegex = new RegExp(search, 'i');
+            if (city) {
+                // Agar city chuni hai toh sirf us city ke andar name search karein
+                query.name = searchRegex;
+            } else {
+                // Agar city nahi chuni toh global search (Name, City ya State match ho)
+                query.$or = [
+                    { name: searchRegex },
+                    { city: searchRegex },
+                    { state: searchRegex }
+                ];
+            }
+        }
+
+        // 5. Fetch Labs
+        const labs = await Lab.find(query).select('name profileImage city state country address rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable location is24x7 isInsuranceAccepted acceptedInsurances labImages').lean();
+
+        let finalLabs = [];
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Lab', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
-        let query = { profileStatus: 'Approved', isActive: true };
-        if (city) query.city = new RegExp(city, 'i');
-        if (search) query.name = new RegExp(search, 'i');
-
-        // 2. Fetch Labs
-        const labs = await Lab.find(query)
-            .select('name profileImage city rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable location is24x7 isInsuranceAccepted acceptedInsurances labImages')
-            .lean();
-
-        const filteredLabs = [];
-        
         for (let lab of labs) {
-            let distance = 0;
-            if (lat && lng && lab.location?.lat) {
-                distance = await getDistance(lat, lng, lab.location.lat, lab.location.lng);
+            let distance = null;
+
+            // Distance calculation using provided GPS or Delhi Fallback
+            if (lab.location?.lat) {
+                distance = await getDistance(filterLat, filterLng, lab.location.lat, lab.location.lng);
             }
 
-            // KM Limit Filter
-            if (!lat || distance <= maxRadius) {
-                
-                // 3. FETCH TOP 5 RADIOLOGY TESTS (Existing)
-                const radiologyTests = await LabTest.find({ 
-                    labId: lab._id, 
-                    mainCategory: 'Radiology',
-                    isActive: true 
-                }).select('testName').limit(5).lean();
+            // --- IMPROVED FILTER LOGIC ---
+            // Case A: User ne suggestions se city select ki hai -> Radius ignore karein.
+            // Case B: User ne Lab Name search kiya hai -> Radius ignore karein (Global search).
+            // Case C: Initial load ya GPS tracking -> Sirf 'maxRadius' ke andar wali dikhayein.
+            
+            const isBroadSearch = !!(city || search);
 
-                // 4. NAYA: CALCULATE STARTING PRICE (Test aur Package dono mein se min price)
+            if (isBroadSearch || distance <= maxRadius) {
+                
+                // Fetch Min Pricing
                 const [minTest, minPackage] = await Promise.all([
                     LabTest.findOne({ labId: lab._id, isActive: true }).sort({ discountPrice: 1 }).select('discountPrice'),
                     LabPackage.findOne({ labId: lab._id, isActive: true }).sort({ offerPrice: 1 }).select('offerPrice')
                 ]);
 
-                let startingPrice = 0;
-                const testPrice = minTest ? minTest.discountPrice : Infinity;
-                const packagePrice = minPackage ? minPackage.offerPrice : Infinity;
-                
-                // Dono mein se jo kam ho
-                startingPrice = Math.min(testPrice, packagePrice);
-                
-                // Agar lab mein na koi test hai na package, toh 0
-                if (startingPrice === Infinity) startingPrice = 0;
+                const startingPrice = Math.min(minTest?.discountPrice || Infinity, minPackage?.offerPrice || Infinity);
 
-                filteredLabs.push({
-                    _id: lab._id,
-                    name: lab.name,
-                    profileImage: lab.profileImage || (lab.labImages && lab.labImages[0]),
-                    city: lab.city,
-                    rating: lab.rating,
-                    totalReviews: lab.totalReviews,
-                    isHomeCollectionAvailable: lab.isHomeCollectionAvailable,
-                    isRapidServiceAvailable: lab.isRapidServiceAvailable,
-                    is24x7: lab.is24x7,
-                    isInsuranceAccepted: lab.isInsuranceAccepted,
-                    acceptedInsurances: lab.acceptedInsurances || [],
-                    distance: distance,
-                    topRadiologyTests: radiologyTests.map(t => t.testName),
-                    startingPrice: startingPrice // Figma: "Starting From ₹399"
+                finalLabs.push({
+                    ...lab,
+                    distance: distance ? distance.toFixed(1) : "N/A",
+                    startingPrice: startingPrice === Infinity ? 0 : startingPrice
                 });
             }
         }
 
-        // 5. SORT: Najdeek wali pehle
-        if (lat && lng) {
-            filteredLabs.sort((a, b) => a.distance - b.distance);
-        }
+        // 6. Sorting: Nearest First
+        finalLabs.sort((a, b) => {
+            if (a.distance === "N/A") return 1;
+            if (b.distance === "N/A") return -1;
+            return parseFloat(a.distance) - parseFloat(b.distance);
+        });
 
-        res.json({ success: true, count: filteredLabs.length, data: filteredLabs });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            count: finalLabs.length, 
+            locationApplied: (!lat || !lng) ? "Delhi (Default Base)" : "User GPS Base",
+            isGlobalSearch: !!(city || search),
+            data: finalLabs 
+        });
+
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 // 1. GET LAB PROFILE (Sirf Lab ki basic info)
 const getLabDetails = async (req, res) => {
@@ -758,102 +845,142 @@ const searchLabInventoryPackages = async (req, res) => {
 // 3. GET AVAILABLE SLOTS
 const getLabSlots = async (req, res) => {
     try {
-        const { labId, date } = req.query;
-        const config = await Availability.findOne({ vendorId: labId });
-        if (!config) return res.status(404).json({ message: "Slots not configured by Lab" });
-
-        const dayName = new Date(date).toLocaleString('en-us', { weekday: 'long' });
-        if (config.offDays.includes(dayName)) {
-            return res.json({ success: true, message: "Lab is closed on this day", slots: [] });
+        const { labId, date } = req.query; // date format: YYYY-MM-DD
+        
+        if (!labId || !date) {
+            return res.status(400).json({ success: false, message: "Lab ID and Date are required" });
         }
 
-        const slots = generateTimeSlots(config);
-        res.json({ success: true, slots });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-
-// --- INTERNAL HELPER: Delivery Calculation ---
-const calculateDeliveryFee = (distance, orderTotal, charges) => {
-    if (!charges) return 50; // Default fallback
-    if (orderTotal >= charges.freeDeliveryThreshold) return 0;
-    
-    if (distance <= charges.fixedDistance) {
-        return charges.fixedPrice;
-    } else {
-        const extraDistance = distance - charges.fixedDistance;
-        return charges.fixedPrice + (extraDistance * charges.pricePerKM);
-    }
-};
-
-// 1. GET AVAILABLE SLOTS (For User Slot Selection)
-// 1. GET AVAILABLE SLOTS (Ab price ke saath aayenge)
-const getLabSlotsForUser = async (req, res) => {
-    try {
-        const { labId, date } = req.query;
         const config = await Availability.findOne({ vendorId: labId });
-        if (!config) return res.status(404).json({ message: "Availability not set" });
+        if (!config) return res.status(404).json({ success: false, message: "Slots not configured by Lab" });
 
-        const dayName = new Date(date).toLocaleString('en-us', { weekday: 'long' });
-        if (config.offDays.includes(dayName)) return res.json({ success: true, isClosed: true, slots: [] });
+        // 1. Check for Weekly Off-days (e.g., Sunday)
+        const dayName = moment(date).format('dddd');
+        if (config.offDays.includes(dayName)) {
+            return res.json({ success: true, isClosed: true, message: "Lab is closed (Weekly Off)", slots: [] });
+        }
 
+        // 2. Check for Specific Blocked Dates (Holidays/Emergency)
+        if (config.blockedDates && config.blockedDates.includes(date)) {
+            return res.json({ success: true, isClosed: true, message: "Lab is closed on this specific date", slots: [] });
+        }
+
+        // 3. Generate base slots using helper
         const allGeneratedSlots = generateTimeSlots(config);
 
+        // 4. Capacity Logic: Calculate existing bookings for this date
+        // Hum un bookings ko count karenge jo 'Cancelled' nahi hain
         const bookedCounts = await LabBooking.aggregate([
-            { $match: { labId: new mongoose.Types.ObjectId(labId), appointmentDate: new Date(date), status: { $ne: 'Cancelled' } } },
-            { $group: { _id: "$appointmentTime", count: { $sum: 1 } } }
+            { 
+                $match: { 
+                    labId: new mongoose.Types.ObjectId(labId), 
+                    appointmentDate: new Date(date), 
+                    status: { $ne: 'Cancelled' } 
+                } 
+            },
+            { 
+                $group: { 
+                    _id: "$appointmentTime", 
+                    count: { $sum: 1 } 
+                } 
+            }
         ]);
 
+        // 5. Merge Booking count with Generated Slots
         const finalSlots = allGeneratedSlots.map(slot => {
             const booking = bookedCounts.find(b => b._id === slot.time);
+            const currentCount = booking ? booking.count : 0;
+
             return {
-                ...slot, // Isme ab 'extraFee' automatic aa raha hai helper se
-                isFull: config.maxClientsPerSlot !== 0 && (booking ? booking.count : 0) >= config.maxClientsPerSlot
+                ...slot, // includes time, category, and extraFee from helper
+                currentBookings: currentCount,
+                // Agar maxClientsPerSlot 0 hai toh unlimited, warna limit check karein
+                isFull: config.maxClientsPerSlot !== 0 && currentCount >= config.maxClientsPerSlot
             };
         });
 
-        res.json({ success: true, slots: finalSlots });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            isClosed: false, 
+            labName: config.vendorType, 
+            slots: finalSlots 
+        });
+
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 2. GET AVAILABLE COUPONS (Admin Global + Specific Vendor)
 const getAvailableCoupons = async (req, res) => {
     try {
-        // 1. User ki cart find karein
-        const cart = await Cart.findOne({ userId: req.user.id });
+        const userId = req.user.id;
+
+        // 1. User ki cart find karein aur Item Total calculate karein
+        const cart = await Cart.findOne({ userId });
         
-        if (!cart || !cart.labCart || !cart.labCart.labId) {
-            return res.status(400).json({ success: false, message: "No lab in cart" });
+        if (!cart || !cart.labCart || !cart.labCart.labId || cart.labCart.items.length === 0) {
+            return res.status(400).json({ success: false, message: "Cart empty or No lab selected" });
         }
 
         const labId = cart.labCart.labId;
+        const itemTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
         const today = new Date();
 
-        // 2. Coupons search karein
-        const list = await Coupon.find({ 
+        // 2. Base Coupons Fetch karein (Active + Not Expired + Vendor Match)
+        const allCoupons = await Coupon.find({ 
             isActive: true,
-            // Expiry date aaj se badi ya barabar honi chahiye
             expiryDate: { $gte: today }, 
             $or: [
-                // CASE 1: Us specific Lab ka apna coupon
-                { vendorId: labId }, 
-                
-                // CASE 2: Admin ka banaya Global coupon jo 'Lab' ke liye hai
+                { vendorId: labId },       // Specific Lab ke coupons
                 { 
                     isAdminCreated: true, 
-                    vendorType: 'Lab', // Make sure 'Lab' matches Schema Enum exactly
+                    vendorType: { $in: ['Lab', 'All'] }, // Admin ke Global coupons (Lab ya All category)
                     vendorId: null 
                 }
             ]
         }).sort({ createdAt: -1 });
 
-        // DEBUGGING: Agar coupons nahi aa rahe toh console check karein
-        console.log("Searching coupons for LabId:", labId);
-        console.log("Found Coupons Count:", list.length);
+        // 3. Logic Implementation: Har coupon ko current user/cart ke liye validate karein
+        const validatedCoupons = allCoupons.map(coupon => {
+            let isApplicable = true;
+            let reason = "Coupon is available";
+            let amountToCollect = 0;
 
-        res.json({ success: true, count: list.length, data: list });
+            // A. Check Min Order Amount
+            if (itemTotal < coupon.minOrderAmount) {
+                isApplicable = false;
+                amountToCollect = coupon.minOrderAmount - itemTotal;
+                reason = `Add ₹${amountToCollect} more to apply this coupon.`;
+            }
+
+            // B. Check Max Usage for this specific User
+            // Note: usedBy array se user ki ID aur usageCount match karein
+            const userUsage = coupon.usedBy.find(u => u.userId.toString() === userId.toString());
+            if (userUsage && userUsage.usageCount >= coupon.maxUsagePerUser) {
+                isApplicable = false;
+                reason = "You have reached the maximum usage limit for this coupon.";
+            }
+
+            // C. Return coupon details with status flags (Frontend help ke liye)
+            return {
+                ...coupon._doc, // Mongoose document se data extract karein
+                isApplicable,
+                validationMessage: reason,
+                amountShort: amountToCollect,
+                potentialDiscount: Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount)
+            };
+        });
+
+        res.json({ 
+            success: true, 
+            count: validatedCoupons.length, 
+            cartTotal: itemTotal,
+            data: validatedCoupons 
+        });
+
     } catch (error) { 
-        console.error("Coupon Error:", error);
+        console.error("Coupon Validation Error:", error);
         res.status(500).json({ message: error.message }); 
     }
 };
@@ -1230,7 +1357,7 @@ const suggestPersonalizedPackage = async (req, res) => {
 };
 
 module.exports = { 
-        getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,
+        getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
     
     getLabSlots, getLabDeliveryCharges,

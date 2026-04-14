@@ -160,11 +160,29 @@ const frontendDir = 'public/uploads/homepage';
 const userReportDir = 'public/uploads/user_reports';
 ensureDir(excelDir); ensureDir(frontendDir); ensureDir(userReportDir);
 
-const uploadExcel = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, excelDir), filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`) }) });
+// 🔒 File Filter add kiya gaya hai taaki sirf CSV, TSV, aur Excel allow ho
+const excelCsvFilter = (req, file, cb) => {
+    const allowedExtensions = ['.csv', '.tsv', '.xlsx', '.xls'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    
+    if (allowedExtensions.includes(ext) || file.mimetype.includes('csv') || file.mimetype.includes('excel') || file.mimetype.includes('spreadsheetml')) {
+        cb(null, true); // File accepted
+    } else {
+        cb(new Error('Invalid file type! Only CSV, TSV, and Excel files are allowed.'), false); // File rejected
+    }
+};
+
+// Updated uploadExcel with filter
+const uploadExcel = multer({ 
+    storage: multer.diskStorage({ 
+        destination: (req, file, cb) => cb(null, excelDir), 
+        filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`) 
+    }),
+    fileFilter: excelCsvFilter // 👈 Ye add karna best practice hai
+});
+
 const contentUploads = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, frontendDir), filename: (req, file, cb) => cb(null, `content-${Date.now()}${path.extname(file.originalname)}`) }) }).array('images', 10);
 const userReportUploads = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => cb(null, userReportDir), filename: (req, file, cb) => cb(null, `report-${Date.now()}${path.extname(file.originalname)}`) }) }).single('medicalReport');
-
-
 // ==========================================
 // 10. DRIVER DOCUMENT CONFIGURATION
 // ==========================================

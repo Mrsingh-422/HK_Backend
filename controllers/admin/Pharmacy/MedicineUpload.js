@@ -1,64 +1,127 @@
 const Medicine = require('../../../models/Medicine');
-const xlsx = require('xlsx');
 const fs = require('fs');
+const csv = require('csv-parser'); // xlsx ki jagah csv-parser use karenge for large files
 
-// --- 1. UPLOAD EXCEL (Pehle jaisa hi hai) ---
-const uploadMedicinesExcel = async (req, res) => {
+// --- 1. UPLOAD CSV / EXCEL (Optimized for 150MB+ Files & 8 Lakh Data) ---
+
+const uploadMedicinesCSV = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "Please upload an Excel file" });
-        const workbook = xlsx.readFile(req.file.path);
-        const sheetName = workbook.SheetNames[0];
-        const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+        if (!req.file) return res.status(400).json({ message: "Please upload a file" });
 
-        if (jsonData.length === 0) return res.status(400).json({ message: "Excel file is empty" });
+        let batch = [];
+        const BATCH_SIZE = 1000;
+        let totalInserted = 0;
+        let lastValidBreadCrumb = "Others";
 
-        const formattedData = jsonData.map(row => ({
-            originalId: row['Id'] ? String(row['Id']) : null,
-            bread_crumb: row['bread_crumb'],
-            url: row['url'],
-            name: row['name'],
-            manufacturers: row['manufacturers'],
-            salt_composition: row['salt_composition'],
-            packaging: row['packaging'],
-            mrp: row['mrp'] ? String(row['mrp']) : null,
-            best_price: row['best_price'] ? String(row['best_price']) : null,
-            discont_percent: row['discont_percent'],
-            prescription_required: row['prescription_required'],
-            image_url: row['image_url'] ? row['image_url'].split('|').map(img => img.trim()) : [],
-            primary_use: row['primary_use'],
-            description: row['description'],
-            salt_synonmys: row['salt_synonmys'],
-            storage: row['storage'],
-            introduction: row['introduction'],
-            use_of: row['use_of'],
-            benefits: row['benefits'],
-            side_effect: row['side_effect'],
-            how_to_use: row['how_to_use'],
-            how_works: row['how_works'],
-            safety_advise: row['safety_advise'],
-            if_miss: row['if_miss'],
-            alternate_brand: row['alternate_brand'],
-            manufaturer_address: row['manufaturer_address'],
-            for_sale: row['for_sale']
+        console.log(`🚀 Processing Started: ${req.file.path}`);
+
+        // 1. Create Read Stream
+        const readStream = fs.createReadStream(req.file.path).pipe(csv({
+            mapHeaders: ({ header }) => header.trim().replace(/["']/g, '')
         }));
 
-        await Medicine.insertMany(formattedData);
-        fs.unlinkSync(req.file.path);
-        res.status(201).json({ success: true, message: `${formattedData.length} Medicines added!` });
+        // 2. Use 'for await' loop (Best for Async tasks like DB insert)
+        for await (const row of readStream) {
+            
+            // Breadcrumb inheritance logic
+            let currentBread = row['bread_crumb'] || row['breadcrumb'] || row['Bread_crumb'];
+            if (currentBread && currentBread.trim() !== "") {
+                lastValidBreadCrumb = currentBread.trim();
+            }
+
+            const formattedData = {
+                Id: row['Id'] || row['id'] || row['ID'],
+                bread_crumb: lastValidBreadCrumb,
+                url: row['url'],
+                name: row['name'] || row['Name'],
+                manufacturers: row['manufacturers'] || row['Manufacturers'],
+                salt_composition: row['salt_composition'],
+                packaging: row['packaging'],
+                mrp: row['mrp'],
+                best_price: row['best_price'],
+                discont_percent: row['discont_percent'] || row['discount_percent'],
+                prescription_required: row['prescription_required'],
+                image_url: row['image_url'] ? row['image_url'].split('|').map(img => img.trim()) : [],
+                primary_use: row['primary_use'],
+                description: row['description'],
+                salt_synonmys: row['salt_synonmys'],
+                storage: row['storage'],
+                introduction: row['introduction'],
+                use_of: row['use_of'],
+                benefits: row['benefits'],
+                side_effect: row['side_effect'],
+                how_crop_side_effects: row['how_crop_side_effects'],
+                how_to_use: row['how_to_use'],
+                how_works: row['how_works'],
+                safety_advise: row['safety_advise'],
+                if_miss: row['if_miss'],
+                alternate_brand: row['alternate_brand'],
+                manufaturer_address: row['manufaturer_address'],
+                for_sale: row['for_sale']
+            };
+
+            if (formattedData.name) {
+                batch.push(formattedData);
+            }
+
+            // Batch insert when size reached
+            if (batch.length >= BATCH_SIZE) {
+                try {
+                    const result = await Medicine.insertMany(batch, { ordered: false });
+                    totalInserted += result.length;
+                    console.log(`📑 Batch saved: ${totalInserted} records so far...`);
+                    batch = [];
+                } catch (err) {
+                    // Unique ID collisions handle karne ke liye
+                    if (err.insertedDocs) totalInserted += err.insertedDocs.length;
+                    batch = [];
+                }
+            }
+        }
+
+        // Final batch processing
+        if (batch.length > 0) {
+            try {
+                const result = await Medicine.insertMany(batch, { ordered: false });
+                totalInserted += result.length;
+            } catch (err) {
+                if (err.insertedDocs) totalInserted += err.insertedDocs.length;
+                // Agar 0 records inserted aaye hain, iska matlab saare duplicates the
+                else if (err.code === 11000) console.log("⚠️ All records in this batch were duplicates.");
+            }
+        }
+
+        // 3. Cleanup: Delete file
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+
+        console.log(`🎉 COMPLETED! Final Count Inserted: ${totalInserted}`);
+        
+        if (totalInserted === 0) {
+            return res.status(200).json({ 
+                success: true, 
+                message: "No new medicines added. They might already exist in the database (Duplicate IDs)." 
+            });
+        }
+
+        res.status(201).json({ success: true, message: `${totalInserted} Medicines added successfully!` });
+
     } catch (error) {
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        console.error("❌ ERROR:", error);
         res.status(500).json({ message: error.message });
     }
 };
 
-// --- 2. GET ALL MEDICINES LIST (GET Method - Pagination 20 per page) ---
+
+// --- 2. GET ALL MEDICINES LIST (Pagination 20 per page) ---
 const getMedicinesList = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 20; // Fixed 20 per page as requested
+        const limit = 20; 
         const skip = (page - 1) * limit;
 
         const medicines = await Medicine.find()
-            .sort({ createdAt: -1 })
+            .sort({ createdAt: -1 }) // Latest pehle
             .skip(skip)
             .limit(limit);
 
@@ -76,8 +139,7 @@ const getMedicinesList = async (req, res) => {
     }
 };
 
-// --- 3. SEARCH MEDICINES (POST Method) ---
-// Body: { "search": "paracetamol", "page": 1 }
+// --- 3. SEARCH MEDICINES ---
 const searchMedicines = async (req, res) => {
     try {
         const { search, page = 1 } = req.body;
@@ -88,13 +150,14 @@ const searchMedicines = async (req, res) => {
             return res.status(400).json({ message: "Search term is required" });
         }
 
-        // Search logic for multiple fields
+        // Multiple fields me search (Name, Salt, Brand, Use)
         const query = {
             $or: [
                 { name: { $regex: search, $options: 'i' } },
                 { salt_composition: { $regex: search, $options: 'i' } },
                 { manufacturers: { $regex: search, $options: 'i' } },
-                { primary_use: { $regex: search, $options: 'i' } }
+                { primary_use: { $regex: search, $options: 'i' } },
+                { bread_crumb: { $regex: search, $options: 'i' } }
             ]
         };
 
@@ -122,12 +185,13 @@ const createMedicine = async (req, res) => {
         const { name, image_url } = req.body;
         if (!name) return res.status(400).json({ message: "Medicine name is required" });
 
-        const images = Array.isArray(image_url) ? image_url : (image_url ? image_url.split(',') : []);
+        // Images array form me handle karein
+        const images = Array.isArray(image_url) ? image_url : (image_url ? image_url.split(',').map(i => i.trim()) : []);
 
         const newMedicine = await Medicine.create({
             ...req.body,
             image_url: images,
-            originalId: "MANUAL-" + Date.now()
+            Id: "MANUAL-" + Date.now() // Unique ID assign
         });
 
         res.status(201).json({ success: true, data: newMedicine });
@@ -170,7 +234,7 @@ const deleteMedicine = async (req, res) => {
     }
 };
 
-// --- 7. DETAILS ---
+// --- 7. GET MEDICINE DETAILS ---
 const getMedicineDetails = async (req, res) => {
     try {
         const medicine = await Medicine.findById(req.params.id);
@@ -181,7 +245,12 @@ const getMedicineDetails = async (req, res) => {
     }
 };
 
-module.exports = { 
-    uploadMedicinesExcel, getMedicinesList, searchMedicines, 
-    createMedicine, updateMedicine, deleteMedicine, getMedicineDetails 
+module.exports = {
+    uploadMedicinesCSV,
+    getMedicinesList,
+    searchMedicines,
+    createMedicine,
+    updateMedicine,
+    deleteMedicine,
+    getMedicineDetails
 };

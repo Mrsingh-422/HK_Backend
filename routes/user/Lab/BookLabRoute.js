@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer'); // Ensure this handles 'prescriptionImages' key
 const { 
-    getStandardCatalogTests,searchStandardTests, getStandardPackages,searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,
+    getStandardCatalogTests,searchStandardTests, getStandardPackages,searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
     
     getLabSlots, getLabDeliveryCharges,
@@ -32,6 +32,8 @@ router.get('/standard-tests/female', getFemaleStandardTests);
 
 
 
+router.get('/suggestions', getSearchSuggestions);
+router.get('/lab-suggestions', getLabSuggestions);
 // Discovery
 router.post('/list', getLabs);
 router.get('/details/:id', getLabDetails);

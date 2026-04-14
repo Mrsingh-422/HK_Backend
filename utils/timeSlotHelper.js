@@ -2,7 +2,8 @@
 const generateTimeSlots = (config) => {
     const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots, premiumSlots } = config;
     
-    if (!startTime || !endTime || !slotDuration) return [];
+    // Gap Fix: Infinite loop protection & missing config check
+    if (!startTime || !endTime || !slotDuration || slotDuration <= 0) return [];
 
     let slots = [];
     let [startHour, startMin] = startTime.split(':').map(Number);
@@ -28,8 +29,7 @@ const generateTimeSlots = (config) => {
                           (category === "Evening" && eveningSlots);
 
         if (isEnabled) {
-            // Find if this specific slot has an extra fee
-            const premiumInfo = premiumSlots.find(ps => ps.time === timeString);
+            const premiumInfo = premiumSlots ? premiumSlots.find(ps => ps.time === timeString) : null;
             slots.push({ 
                 time: timeString, 
                 category, 

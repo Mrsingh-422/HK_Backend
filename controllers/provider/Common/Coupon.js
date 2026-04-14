@@ -3,6 +3,16 @@ const Coupon = require('../../../models/Coupon');
 // 1. CREATE VENDOR COUPON (Specific Vendor)
 const createCoupon = async (req, res) => {
     try {
+        const { discountPercentage, expiryDate, minOrderAmount } = req.body;
+
+        // Gap Fix: Data Validation
+        if (discountPercentage > 100 || discountPercentage <= 0) {
+            return res.status(400).json({ message: "Percentage must be between 1 and 100" });
+        }
+        if (new Date(expiryDate) <= new Date()) {
+            return res.status(400).json({ message: "Expiry date must be in the future" });
+        }
+
         const coupon = await Coupon.create({ 
             creatorId: req.user.id,
             vendorId: req.user.id, 
@@ -19,18 +29,14 @@ const getMyCoupons = async (req, res) => {
     try {
         const list = await Coupon.find({ 
             $or: [
-                // Condition 1: Vendor ke apne coupons
-                { vendorId: req.user.id }, 
-                
-                // Condition 2: Admin ke banaye coupons jo is vendor ke type ke hain
+                { vendorId: req.user.id }, // Vendor's own
                 { 
                     isAdminCreated: true, 
-                    vendorType: req.user.role, // e.g., 'Lab'
-                    vendorId: null             // Global ones
+                    vendorType: { $in: [req.user.role, 'All'] }, // Gap Fix: 'All' check
+                    vendorId: null 
                 }
             ]
         }).sort({ createdAt: -1 });
-
         res.json({ success: true, data: list });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
