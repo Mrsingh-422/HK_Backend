@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const {getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getStandardMedicineCatalog,
-    checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder } = require('../../../controllers/user/Pharmacy/BookPharmacy');
+    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
 
@@ -14,6 +14,9 @@ router.get('/pharmacy-suggestions', getPharmacyNameSuggestions);
 router.post('/list', getPharmacies); // Search & Filter
 router.get('/details/:id', getPharmacyDetails); // Profile Detail
 
+
+router.get('/slots', protect('user'), getPharmacySlots); // Naya Endpoint
+router.get('/delivery-charges', protect('user'), getPharmacyDeliveryCharges); // Re-use lab delivery logic if same
 
 router.post('/checkout',protect('user'),checkoutMedicineOrder);
 router.post('/validate-coupon',protect('user'),validateCoupon);
