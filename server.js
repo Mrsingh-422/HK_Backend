@@ -72,6 +72,7 @@ app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
 app.use('/user/nurse', require('./routes/user/Nurse/BookNurseRoute'));
 // --- user pharmacy ---
 app.use('/user/pharmacy', require('./routes/user/Pharmacy/BookPharmacyRoute'));
+app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserRoute'));
  
 
 //////////////// Doctor Routes ///////////////////////
@@ -103,17 +104,19 @@ app.use('/provider/delivery-charges', require('./routes/provider/Common/Delivery
 app.use('/provider/labs/profile', require('./routes/provider/Lab/LabProfileRoute'));
 app.use('/provider/labs', require('./routes/provider/Lab/LabOrderRoute')); // Lab Order Management
 app.use('/provider/labs/services', require('./routes/provider/Lab/LabsServiceRoute')); // Lab Test Management
-app.use('/provider/labs/driver', require('./routes/provider/Lab/LabDriverRoute')); // Lab Test Management
+// app.use('/provider/labs/driver', require('./routes/provider/Lab/LabDriverRoute')); // Lab Test Management
 
 
 // --- Provider Pharmacy Routes ---
-app.use('/provider/pharmacy/driver', require('./routes/provider/Pharmacy/DriverPharmacyRoute')); // Lab Test Management
+// app.use('/provider/pharmacy/driver', require('./routes/provider/Pharmacy/DriverPharmacyRoute')); // Lab Test Management
 app.use('/provider/pharmacy/profile', require('./routes/provider/Pharmacy/PharmacyProfileRoute'));
+app.use('/provider/pharmacy/inventory', require('./routes/provider/Pharmacy/MedicineInventoryRoute'));
+app.use('/provider/pharmacy/orders', require('./routes/provider/Pharmacy/PharmacyOrdersRoute'));
 
 
 // --- Provider Nurse Routes ---
 app.use('/provider/nurse/dash', require('./routes/provider/Nurse/NurseDashboardRoute'));
-app.use('/provider/nurse/driver', require('./routes/provider/Nurse/NurseDriverRoute')); // Lab Test Management
+// app.use('/provider/nurse/driver', require('./routes/provider/Nurse/NurseDriverRoute')); // Lab Test Management
 
 
 

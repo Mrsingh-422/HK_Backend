@@ -2,7 +2,12 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity,
-    compareCartOnMap
+    compareCartOnMap,
+    addToPharmacyCart,
+    updatePharmacyQuantity,checkBetterOptions,
+    getAvailableSlots,
+    getAvailableCoupons
+
  } = require('../../../controllers/user/Lab/Cart');
 
 // Base URL: /user/cart
@@ -15,4 +20,17 @@ router.put('/quantity', protect('user'), updateCartQuantity);
 
 router.post('/compare', protect('user'), compareCartOnMap);
 
-module.exports = router;
+
+// pharmcacy
+// Pharmacy Cart Endpoints
+router.post('/pharmacy/add', protect('user'), addToPharmacyCart);
+router.put('/pharmacy/quantity', protect('user'), updatePharmacyQuantity);
+router.post('/check-better-options', protect('user'), checkBetterOptions);
+
+
+
+
+router.get('/available-slots', protect('user'), getAvailableSlots);
+router.get('/available-coupons', protect('user'), getAvailableCoupons);
+
+module.exports = router; 

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo | Buy Medicines</title>
+    
+    <!-- Dependencies -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --hk-success: #00b894;
+            --hk-dark: #2d3436;
+            --hk-bg: #f4f7f6;
+            --hk-border: #edf2f7;
+            --hk-shadow: 0 10px 30px rgba(0,0,0,0.05);
+        }
+
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--hk-bg); color: var(--hk-dark); min-height: 100vh; display: flex; overflow-x: hidden; }
+
+        /* Sidebar */
+        .sidebar { width: 280px; background: white; height: 100vh; position: fixed; border-right: 1px solid var(--hk-border); padding: 30px 20px; z-index: 1050; }
+        .sidebar-brand { font-weight: 800; font-size: 1.5rem; color: var(--hk-success); margin-bottom: 50px; display: flex; align-items: center; gap: 12px; }
+        .nav-link-custom { color: #636e72; padding: 14px 20px; border-radius: 18px; margin-bottom: 10px; cursor: pointer; transition: 0.3s; font-weight: 600; display: flex; align-items: center; text-decoration: none; }
+        .nav-link-custom:hover, .nav-link-custom.active { background: #e3fcef; color: var(--hk-success); }
+        .nav-link-custom i { width: 35px; font-size: 1.2rem; }
+
+        /* Main Content */
+        .main-content { margin-left: 280px; width: calc(100% - 280px); padding: 40px 60px; min-height: 100vh; }
+
+        /* Search & Categories */
+        .search-container { position: relative; margin-bottom: 30px; }
+        .category-pill { 
+            padding: 10px 25px; border-radius: 50px; background: white; border: 1px solid var(--hk-border); 
+            cursor: pointer; transition: 0.3s; font-weight: 600; white-space: nowrap; margin-right: 10px;
+        }
+        .category-pill.active { background: var(--hk-success); color: white; border-color: var(--hk-success); }
+
+        /* Medicine Cards */
+        .med-card { background: white; border-radius: 25px; padding: 20px; box-shadow: var(--hk-shadow); transition: 0.3s; height: 100%; border: 1px solid transparent; position: relative; }
+        .med-card:hover { transform: translateY(-5px); border-color: var(--hk-success); }
+        .med-img { width: 100%; height: 180px; object-fit: contain; border-radius: 15px; margin-bottom: 15px; }
+        
+        .rx-tag { position: absolute; top: 15px; left: 15px; background: #ffeaa7; color: #d63031; font-size: 10px; font-weight: 800; padding: 4px 10px; border-radius: 5px; }
+        .discount-badge { background: #e3fcef; color: var(--hk-success); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 5px; }
+
+        .mrp-text { text-decoration: line-through; color: #b2bec3; font-size: 13px; }
+        .price-text { font-size: 20px; font-weight: 800; color: var(--hk-dark); }
+        
+        .btn-add { border: 2px solid var(--hk-success); color: var(--hk-success); border-radius: 50px; font-weight: 800; padding: 5px 25px; transition: 0.3s; background: transparent; }
+        .btn-add:hover { background: var(--hk-success); color: white; }
+
+        .hidden { display: none !important; }
+        .fw-800 { font-weight: 800; }
+        
+        /* Pagination */
+        .page-link { border-radius: 10px !important; margin: 0 5px; color: var(--hk-dark); font-weight: 600; border: none; }
+        .page-item.active .page-link { background-color: var(--hk-success); border: none; }
+    </style>
+</head>
+<body>
+
+    <!-- SIDEBAR -->
+    <div class="sidebar shadow-sm">
+        <div class="sidebar-brand"><i class="fas fa-hand-holding-medical"></i><span>HK.Admin</span></div>
+        <nav>
+            <div class="nav-link-custom active" onclick="location.reload()">
+                <i class="fas fa-pills"></i><span>Medicines</span>
+            </div>
+            <div class="nav-link-custom" onclick="openUploadModal()">
+                <i class="fas fa-file-upload"></i><span>Bulk Upload</span>
+            </div>
+            <hr class="my-4" style="opacity: 0.1;">
+            <div class="nav-link-custom text-danger" onclick="handleLogout()">
+                <i class="fas fa-sign-out-alt"></i><span>Sign Out</span>
+            </div>
+        </nav>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div class="main-content">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 class="fw-800 m-0">Buy Medicines</h2>
+            <button class="btn btn-hk px-4 bg-success text-white rounded-pill fw-bold" onclick="openCreateModal()">+ Add New</button>
+        </div>
+
+        <!-- SEARCH BAR -->
+        <div class="search-container">
+            <div class="input-group input-group-lg shadow-sm border rounded-pill overflow-hidden bg-white">
+                <span class="input-group-text bg-transparent border-0"><i class="fas fa-search text-muted"></i></span>
+                <input type="text" id="searchInput" class="form-control border-0" placeholder="Search medicines, salts, or brands..." onkeyup="handleSearch(this.value)">
+            </div>
+        </div>
+
+        <!-- CATEGORIES (Figma Styles) -->
+        <div class="d-flex overflow-auto pb-3 mb-4 no-scrollbar">
+            <div class="category-pill active" onclick="filterCategory('All', this)">All</div>
+            <div class="category-pill" onclick="filterCategory('Medicines', this)">Medicines</div>
+            <div class="category-pill" onclick="filterCategory('Cardiac Care', this)">Cardiac Care</div>
+            <div class="category-pill" onclick="filterCategory('Baby Care', this)">Baby Care</div>
+            <div class="category-pill" onclick="filterCategory('Diabetes', this)">Diabetes Control</div>
+            <div class="category-pill" onclick="filterCategory('Ayurveda', this)">Ayurveda</div>
+            <div class="category-pill" onclick="filterCategory('Devices', this)">Devices</div>
+            <div class="category-pill" onclick="filterCategory('Personal Care', this)">Personal Care</div>
+        </div>
+
+        <!-- LOADING -->
+        <div id="loader" class="text-center py-5 hidden">
+            <div class="spinner-border text-success"></div>
+            <p class="mt-2 fw-bold text-muted">Loading Medicines...</p>
+        </div>
+
+        <!-- MEDICINE GRID -->
+        <div class="row g-4" id="medicineGrid"></div>
+
+        <!-- PAGINATION -->
+        <nav class="mt-5">
+            <ul class="pagination justify-content-center" id="paginationUI"></ul>
+        </nav>
+    </div>
+
+    <!-- UPLOAD MODAL -->
+    <div class="modal fade" id="uploadModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0" style="border-radius: 30px; padding: 20px;">
+                <div class="modal-header border-0">
+                    <h5 class="fw-800">Bulk Upload (CSV/TSV)</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <div class="p-5 border-dashed rounded-4 mb-3" style="border: 2px dashed #ddd; background: #f9f9f9;">
+                        <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
+                        <input type="file" id="csvFile" class="form-control rounded-pill">
+                        <small class="text-muted d-block mt-2">Max File Size: 150MB</small>
+                    </div>
+                    <button class="btn btn-success w-100 rounded-pill fw-bold py-3" onclick="processUpload()">Start Upload</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        const API_BASE = "http://localhost:5002/admin/pharmacy/medicine";
+        const TOKEN = localStorage.getItem('token');
+        let currentPage = 1;
+        let activeCategory = "All";
+
+        // --- 1. FETCH & LIST ---
+        async function loadMedicines(page = 1) {
+            const grid = document.getElementById('medicineGrid');
+            const loader = document.getElementById('loader');
+            grid.innerHTML = "";
+            loader.classList.remove('hidden');
+
+            try {
+                // Agar search ya category active hai toh search API hit hogi
+                const res = await fetch(`${API_BASE}/list?page=${page}`, {
+                    headers: { 'Authorization': `Bearer ${TOKEN}` }
+                });
+                const result = await res.json();
+                renderUI(result);
+            } catch (err) { console.error(err); }
+            loader.classList.add('hidden');
+        }
+
+        // --- 2. SEARCH & FILTER ---
+        let searchTimer;
+        function handleSearch(term) {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(async () => {
+                if(term.length < 2) { loadMedicines(); return; }
+                
+                const grid = document.getElementById('medicineGrid');
+                grid.innerHTML = "";
+                
+                try {
+                    const res = await fetch(`${API_BASE}/search`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${TOKEN}` 
+                        },
+                        body: JSON.stringify({ search: term, page: 1 })
+                    });
+                    const result = await res.json();
+                    renderUI(result);
+                } catch (err) { console.error(err); }
+            }, 500);
+        }
+
+        async function filterCategory(cat, el) {
+            document.querySelectorAll('.category-pill').forEach(p => p.classList.remove('active'));
+            el.classList.add('active');
+            
+            if(cat === "All") { loadMedicines(); return; }
+            
+            // Re-using search API to filter by category (breadcrumb)
+            handleSearch(cat);
+        }
+
+        // --- 3. RENDER UI ---
+        function renderUI(result) {
+            const grid = document.getElementById('medicineGrid');
+            const meds = result.data || [];
+            
+            if(meds.length === 0) {
+                grid.innerHTML = `<div class="col-12 text-center py-5"><h3>No Medicines Found</h3></div>`;
+                return;
+            }
+
+            grid.innerHTML = meds.map(m => `
+                <div class="col-md-3">
+                    <div class="med-card d-flex flex-column">
+                        ${m.prescription_required === 'YES' ? '<div class="rx-tag">Rx REQUIRED</div>' : ''}
+                        
+                        <img src="${m.image_url[0] || 'https://placehold.co/200?text=Medicine'}" class="med-img" onerror="this.src='https://placehold.co/200'">
+                        
+                        <div class="flex-grow-1">
+                            <h6 class="fw-800 mb-1 text-truncate">${m.name}</h6>
+                            <p class="text-muted small mb-2" style="font-size: 11px;">${m.manufacturers}</p>
+                            
+                            <div class="d-flex align-items-center gap-2 mb-3">
+                                <span class="price-text">₹${m.best_price.split(' ')[0]}</span>
+                                <span class="mrp-text">₹${m.mrp}</span>
+                                <span class="discount-badge">${m.discont_percent} OFF</span>
+                            </div>
+                        </div>
+
+                        <div class="mt-auto d-flex justify-content-between align-items-center">
+                            <div class="small fw-bold text-success">
+                                <i class="fas fa-star me-1"></i>4.4
+                            </div>
+                            <button class="btn btn-add btn-sm">ADD</button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            renderPagination(result.totalPages, result.currentPage);
+        }
+
+        function renderPagination(total, current) {
+            const ui = document.getElementById('paginationUI');
+            ui.innerHTML = "";
+            for(let i=1; i<=total; i++) {
+                ui.innerHTML += `<li class="page-item ${i === current ? 'active' : ''}">
+                    <button class="page-link shadow-sm" onclick="loadMedicines(${i})">${i}</button>
+                </li>`;
+                if(i > 5) break; // Limit for UI
+            }
+        }
+
+        // --- 4. BULK UPLOAD LOGIC ---
+        function openUploadModal() { new bootstrap.Modal(document.getElementById('uploadModal')).show(); }
+
+        async function processUpload() {
+            const fileInput = document.getElementById('csvFile');
+            if(!fileInput.files[0]) return alert("Select file");
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            Swal.fire({ title: 'Processing 8 Lakh Records...', text: 'Please wait, this might take a minute', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+
+            try {
+                const res = await fetch(`${API_BASE}/upload`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${TOKEN}` },
+                    body: formData
+                });
+                const result = await res.json();
+                Swal.fire('Success!', result.message, 'success').then(() => location.reload());
+            } catch (err) { Swal.fire('Error', 'Upload failed', 'error'); }
+        }
+
+        window.onload = () => {
+            if(!TOKEN) window.location.href = "login.html";
+            loadMedicines();
+        };
+
+        function handleLogout() { localStorage.clear(); window.location.href = "login.html"; }
+    </script>
+</body>
+</html>

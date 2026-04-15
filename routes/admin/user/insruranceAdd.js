@@ -11,6 +11,8 @@ const {
     deleteInsurance
 } = require('../../../controllers/admin/user/insuranceAdd');
 
+// Base URL: /admin/user/insurance
+
 // Master Types
 router.post('/add-type', protect('admin'), addInsuranceType);
 router.get('/insurance-types', getInsuranceTypes);

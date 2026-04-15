@@ -16,7 +16,7 @@ const {
     getMedicineDetails 
 } = require('../../../controllers/admin/Pharmacy/MedicineUpload');
 
-// base URL: /admin/pharmacy/medicines
+// base URL: /admin/pharmacy/medicine
 
 // --- Create (Bulk & Single) ---
 // File upload for bulk processing (CSV/TSV recommended for large data)

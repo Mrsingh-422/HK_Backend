@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HK | Enterprise Ecosystem</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        :root { --hk-success: #00b894; --hk-dark: #1e272e; --hk-bg: #f4f7f6; --hk-primary: #0984e3; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--hk-bg); color: var(--hk-dark); display: flex; min-height: 100vh; overflow-x: hidden; }
+        
+        .sidebar { width: 260px; background: var(--hk-dark); color: white; position: fixed; height: 100vh; padding: 30px 20px; z-index: 1000; }
+        .sidebar .nav-link { color: #84817a; padding: 12px 20px; border-radius: 15px; margin-bottom: 8px; cursor: pointer; font-weight: 600; }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active { background: rgba(255,255,255,0.1); color: var(--hk-success); }
+        
+        .main-content { margin-left: 260px; width: calc(100% - 260px); padding: 30px; }
+        .token-area { background: #2d3436; padding: 10px; border-radius: 12px; font-size: 9px; color: #00d8d6; height: 45px; width: 100%; border: 1px solid #444; margin-bottom: 10px; }
+        
+        .card { border-radius: 25px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        .med-img { height: 100px; object-fit: contain; }
+        .suggestion-box { position: absolute; background: white; width: 100%; z-index: 100; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); top: 100%; max-height: 200px; overflow-y: auto; }
+        .suggestion-item { padding: 10px 20px; cursor: pointer; border-bottom: 1px solid #eee; }
+        .suggestion-item:hover { background: #f1f2f6; }
+
+        .hidden { display: none !important; }
+        .scroll-y { max-height: 500px; overflow-y: auto; padding-right: 10px; }
+        .btn-hk { background: var(--hk-dark); color: white; border-radius: 50px; padding: 8px 20px; }
+        .btn-hk:hover { background: var(--hk-success); color: white; }
+    </style>
+</head>
+<body>
+
+    <!-- 🛠️ SIDEBAR NAV -->
+    <div class="sidebar">
+        <h3 class="fw-800 text-success mb-4"><i class="fas fa-hand-holding-medical me-2"></i>HK Test</h3>
+        
+        <small class="text-muted text-uppercase mb-2 d-block">Identity Management</small>
+        <textarea id="vToken" class="token-area" placeholder="Vendor Token"></textarea>
+        <textarea id="uToken" class="token-area" placeholder="User Token"></textarea>
+        <button class="btn btn-success btn-sm w-100 rounded-pill mb-4" onclick="updateIdentity()">Apply Tokens</button>
+
+        <nav class="nav flex-column">
+            <div class="nav-link active" onclick="showSection('userMarket', this)"><i class="fas fa-shopping-bag me-2"></i>Marketplace</div>
+            <div class="nav-link" onclick="showSection('pharmaDiscovery', this)"><i class="fas fa-hospital me-2"></i>Find Pharmacy</div>
+            <div class="nav-link" onclick="showSection('orderTrack', this)"><i class="fas fa-truck me-2"></i>My Orders</div>
+            <div class="nav-link" onclick="showSection('vendorInventory', this)"><i class="fas fa-boxes me-2"></i>Shop Admin</div>
+            <div class="nav-link" onclick="openCombinedCart()"><i class="fas fa-shopping-cart me-2"></i>Cart <span id="cartCount" class="badge bg-danger">0</span></div>
+        </nav>
+    </div>
+
+    <!-- 🚀 MAIN CONTENT -->
+    <div class="main-content">
+        
+        <div id="userMarket" class="content-section">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2 class="fw-800">Shop Medicines</h2>
+                <div class="badge bg-white text-dark p-2 shadow-sm rounded-pill px-3">Sort: Most Sellers First</div>
+            </div>
+            <div id="catalogGrid" class="row g-4 scroll-y"></div>
+        </div>
+
+        <div id="pharmaDiscovery" class="content-section hidden">
+            <div class="card p-4 mb-4">
+                <h5 class="fw-800 mb-3">Discover Nearby Pharmacies</h5>
+                <div class="row g-3">
+                    <div class="col-md-5 position-relative">
+                        <input type="text" id="citySearch" class="form-control rounded-pill" placeholder="Enter City/Area..." onkeyup="getCitySuggestions(this.value)">
+                        <div id="citySugBox" class="suggestion-box hidden"></div>
+                    </div>
+                    <div class="col-md-5 position-relative">
+                        <input type="text" id="pharmaSearch" class="form-control rounded-pill" placeholder="Search Pharmacy by Name..." onkeyup="getPharmaSuggestions(this.value)">
+                        <div id="pharmaSugBox" class="suggestion-box hidden"></div>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-dark w-100 rounded-pill" onclick="loadPharmacyList()">Search</button>
+                    </div>
+                </div>
+            </div>
+            <div id="pharmaGrid" class="row g-4 scroll-y"></div>
+        </div>
+
+        <div id="orderTrack" class="content-section hidden">
+            <h2 class="fw-800 mb-4">Track My Orders</h2>
+            <div id="orderListArea" class="row g-4 scroll-y" style="max-height: 70vh;"></div>
+        </div>
+
+        <div id="vendorInventory" class="content-section hidden">
+            <div class="card p-4">
+                <h4 class="fw-800 mb-3">Shop Inventory Management</h4>
+                <div id="vMyList"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🛒 COMBINED CART MODAL -->
+    <div class="modal fade" id="cartModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content rounded-5 p-4 border-0 shadow-lg">
+                <div class="d-flex justify-content-between mb-4 align-items-center">
+                    <h4 class="fw-800 m-0">Your Shopping Cart</h4>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 border-end">
+                        <h6 class="fw-bold text-success mb-3"><i class="fas fa-pills me-2"></i>Medicine Cart</h6>
+                        <div id="cartMedArea" style="min-height: 100px; max-height: 300px; overflow-y: auto;"></div>
+                        <div class="p-3 bg-light rounded-4 mt-3">
+                            <div class="d-flex justify-content-between"><span>Items Subtotal</span><b id="cmItemTotal">₹0</b></div>
+                            <div class="d-flex justify-content-between mt-2"><span class="text-primary" onclick="applyCoupon('Pharmacy')" style="cursor:pointer">Apply Coupon</span><b id="cmCoupon">- ₹0</b></div>
+                            <hr>
+                            <div class="d-flex justify-content-between"><h5>Total</h5><h5 id="cmGrandTotal" class="fw-800 text-success">₹0</h5></div>
+                        </div>
+                        <button class="btn btn-success w-100 rounded-pill fw-bold mt-3" id="btnMedsCheckout" onclick="placeOrder('Pharmacy')">Checkout Meds</button>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="fw-bold text-primary mb-3"><i class="fas fa-vial me-2"></i>Lab Test Cart</h6>
+                        <div id="cartLabArea" style="min-height: 100px; max-height: 300px; overflow-y: auto;"></div>
+                        <div class="p-3 bg-light rounded-4 mt-3">
+                            <div class="d-flex justify-content-between"><span>Tests Subtotal</span><b id="clItemTotal">₹0</b></div>
+                            <div class="d-flex justify-content-between mt-2"><span class="text-primary" onclick="applyCoupon('Lab')" style="cursor:pointer">Apply Coupon</span><b id="clCoupon">- ₹0</b></div>
+                            <hr>
+                            <div class="d-flex justify-content-between"><h5>Total</h5><h5 id="clGrandTotal" class="fw-800 text-primary">₹0</h5></div>
+                        </div>
+                        <button class="btn btn-primary w-100 rounded-pill fw-bold mt-3" id="btnLabCheckout" onclick="placeOrder('Lab')">Checkout Lab Tests</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 💊 MEDICINE DETAIL MODAL -->
+    <div class="modal fade" id="medDetailModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content rounded-5 p-5 border-0">
+                <div class="row">
+                    <div class="col-md-4 text-center border-end">
+                        <img id="mImg" src="" class="img-fluid mb-4" style="height:200px;">
+                        <div class="card bg-light p-3 mb-4 text-start">
+                            <div class="d-flex justify-content-between mb-1"><small>MRP</small><b id="mMRP"></b></div>
+                            <div class="d-flex justify-content-between"><small>Starting from</small><h3 id="mStarting" class="text-success fw-800"></h3></div>
+                        </div>
+                        <button class="btn btn-hk w-100" onclick="handleRxUpload()">Upload Prescription</button>
+                    </div>
+                    <div class="col-md-8 ps-md-5">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <h2 id="mName" class="fw-800"></h2>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <p id="mManuf" class="text-success fw-bold mb-4"></p>
+                        <ul class="nav nav-tabs mb-3">
+                            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabOffers">Sellers</button></li>
+                            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabInfo">Info</button></li>
+                        </ul>
+                        <div class="tab-content scroll-y" style="height: 350px;">
+                            <div class="tab-pane fade show active" id="tabOffers"><div id="offersListUI"></div></div>
+                            <div class="tab-pane fade" id="tabInfo"><div id="fullInfoUI"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let V_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YmQxNmE4MjAzODM5ZmZjOTk5YmQ5NSIsInJvbGUiOiJQaGFybWFjeSIsImlhdCI6MTc3Mzk5OTc4NCwiZXhwIjo0OTI3NTk5Nzg0fQ.hYjp9dGpYICmR_xlU7QZuHgPT3UXVi-sU16pHAzgi_M";
+        let U_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5OTg0MDcxM2UzMzNhMzQyMjI3ZWRjOCIsImlhdCI6MTc3Mjc4NTY0MCwiZXhwIjoxNzc1Mzc3NjQwfQ.S6NwZoh6CIgEswdCnFzyqTAwEPODOVx-BqpTIvh-rKk";
+        const API_BASE = "http://localhost:5002";
+        const getUHead = () => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${U_TOKEN}` });
+
+        function updateIdentity() {
+            V_TOKEN = document.getElementById('vToken').value;
+            U_TOKEN = document.getElementById('uToken').value;
+            loadStandardCatalog();
+            syncCartBadge();
+            Swal.fire('Updated', '', 'success');
+        }
+
+        // --- 1. CATALOG WITH STARTING FROM PRICE ---
+        async function loadStandardCatalog() {
+            try {
+                const res = await fetch(`${API_BASE}/user/pharmacy/standard-list`, { headers: getUHead() });
+                const r = await res.json();
+                document.getElementById('catalogGrid').innerHTML = r.data.map(m => `
+                    <div class="col-md-3">
+                        <div class="card p-3 h-100" onclick="openMedDetails('${m._id}')" style="cursor:pointer">
+                            <img src="${m.image_url[0]}" class="med-img mx-auto mb-2">
+                            <h6 class="small fw-800 text-truncate m-0">${m.name}</h6>
+                            <small class="text-muted d-block mb-2">Available at ${m.vendorCount} sellers</small>
+                            <div class="mt-auto">
+                                <small class="text-muted d-block" style="font-size:10px">Starting from</small>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="text-success fw-bold">₹${m.minPrice || m.mrp}</span>
+                                    <button class="btn btn-sm btn-outline-success rounded-pill px-3">View</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) { console.log(e); }
+        }
+
+        async function openMedDetails(id) {
+            const res = await fetch(`${API_BASE}/admin/pharmacy/medicine/details/${id}`);
+            const r = await res.json();
+            const m = r.data;
+            document.getElementById('mName').innerText = m.name;
+            document.getElementById('mImg').src = m.image_url[0];
+            document.getElementById('mMRP').innerText = "₹" + m.mrp;
+            document.getElementById('mStarting').innerText = "₹" + (m.minPrice || m.mrp);
+            
+            const resOffers = await fetch(`${API_BASE}/user/medicine/sellers/${id}`, { headers: getUHead() });
+            const rOffers = await resOffers.json();
+            document.getElementById('offersListUI').innerHTML = rOffers.data.map(o => `
+                <div class="card p-3 mb-2 border-start border-4 border-success d-flex flex-row justify-content-between align-items-center">
+                    <div><b>${o.pharmacyId.name}</b><br><small>${o.pharmacyId.city}</small></div>
+                    <div class="text-end">
+                        <h4 class="m-0 text-success">₹${o.vendor_price}</h4>
+                        <button class="btn btn-sm btn-dark mt-1 rounded-pill" onclick="addToCart('${o.pharmacyId._id}', '${id}')">Add</button>
+                    </div>
+                </div>`).join('') || "No sellers";
+            new bootstrap.Modal(document.getElementById('medDetailModal')).show();
+        }
+
+        async function addToCart(pId, mId) {
+            const res = await fetch(`${API_BASE}/user/cart/pharmacy/add`, { 
+                method: 'POST', headers: getUHead(), 
+                body: JSON.stringify({ pharmacyId: pId, medicineId: mId, quantity: 1 }) 
+            });
+            const r = await res.json();
+            if(r.success) { Swal.fire('Added', '', 'success'); syncCartBadge(); }
+        }
+
+        async function openCombinedCart() {
+            const res = await fetch(`${API_BASE}/user/cart/`, { headers: getUHead() });
+            const r = await res.json();
+            const d = r.data;
+            
+            document.getElementById('cartMedArea').innerHTML = (d.pharmacyCart?.items || []).map(i => `
+                <div class="d-flex justify-content-between border-bottom py-2">
+                    <span>${i.name} x${i.quantity}</span><b>₹${i.price * i.quantity}</b>
+                </div>`).join('') || "Empty";
+            document.getElementById('cmItemTotal').innerText = "₹" + (d.pharmacyCartTotal || 0);
+            document.getElementById('cmGrandTotal').innerText = "₹" + (d.pharmacyCartTotal || 0);
+
+            document.getElementById('cartLabArea').innerHTML = (d.labCart?.items || []).map(i => `
+                <div class="d-flex justify-content-between border-bottom py-2">
+                    <span>${i.name || i.testName}</span><b>₹${i.price}</b>
+                </div>`).join('') || "Empty";
+            document.getElementById('clItemTotal').innerText = "₹" + (d.labCartTotal || 0);
+            document.getElementById('clGrandTotal').innerText = "₹" + (d.labCartTotal || 0);
+
+            new bootstrap.Modal(document.getElementById('cartModal')).show();
+        }
+
+        // --- 2. UPDATED CHECKOUT ENDPOINT ---
+        async function placeOrder(type) {
+            Swal.fire({ title: 'Placing Order...', didOpen: () => Swal.showLoading() });
+            try {
+                const endpoint = type === 'Pharmacy' ? '/user/pharmacy/checkout' : '/user/cart/lab/checkout';
+                const res = await fetch(`${API_BASE}${endpoint}`, {
+                    method: 'POST', headers: getUHead(),
+                    body: JSON.stringify({ paymentMethod: 'COD', address: 'Home Address' })
+                });
+                const r = await res.json();
+                if(r.success) {
+                    Swal.fire('Success', 'Order Placed!', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('cartModal')).hide();
+                    syncCartBadge();
+                } else { Swal.fire('Error', r.message, 'error'); }
+            } catch (e) { Swal.fire('Error', 'Server Error', 'error'); }
+        }
+
+        // --- 3. UPDATED ORDER HISTORY (USING NEW API) ---
+        async function loadMyOrders() {
+            const area = document.getElementById('orderListArea');
+            area.innerHTML = '<div class="text-center w-100 py-5"><div class="spinner-border"></div></div>';
+            try {
+                const res = await fetch(`${API_BASE}/user/pharmacy/order-history`, { headers: getUHead() });
+                const r = await res.json();
+                if(r.success && r.data.length > 0) {
+                    area.innerHTML = r.data.map(o => `
+                        <div class="col-md-6 mb-3">
+                            <div class="card p-3 shadow-sm border-start border-4 ${o.status==='Delivered'?'border-success':'border-warning'}">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <small class="text-muted">#${o.orderId || o._id.slice(-6)}</small>
+                                    <span class="badge ${o.status==='Placed'?'bg-primary':'bg-success'}">${o.status}</span>
+                                </div>
+                                <h6 class="fw-bold mb-1">${o.pharmacyId?.name || 'Pharmacy Order'}</h6>
+                                <p class="small text-muted mb-2">Total Amount: ₹${o.billSummary?.totalAmount || o.totalAmount}</p>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <small>${new Date(o.createdAt).toLocaleDateString()}</small>
+                                    <button class="btn btn-sm btn-dark rounded-pill" onclick="Swal.fire('Tracking', 'Order is ${o.status}', 'info')">Track</button>
+                                </div>
+                            </div>
+                        </div>`).join('');
+                } else { area.innerHTML = '<p class="text-center py-5">No orders yet.</p>'; }
+            } catch (e) { area.innerHTML = '<p class="text-danger text-center py-5">Error loading orders.</p>'; }
+        }
+
+        async function syncCartBadge() {
+            try {
+                const res = await fetch(`${API_BASE}/user/cart/`, { headers: getUHead() });
+                const r = await res.json();
+                const count = (r.data.pharmacyCart?.items?.length || 0) + (r.data.labCart?.items?.length || 0);
+                document.getElementById('cartCount').innerText = count;
+            } catch (e) {}
+        }
+
+        function showSection(id, el) {
+            document.querySelectorAll('.content-section').forEach(s => s.classList.add('hidden'));
+            document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
+            document.getElementById(id).classList.remove('hidden');
+            el.classList.add('active');
+            if(id === 'orderTrack') loadMyOrders();
+        }
+
+        async function getCitySuggestions(q) {
+            if(q.length < 2) return;
+            const res = await fetch(`${API_BASE}/user/pharmacy/search-suggestions?query=${q}`, { headers: getUHead() });
+            const r = await res.json();
+            const box = document.getElementById('citySugBox');
+            box.classList.remove('hidden');
+            box.innerHTML = r.data.map(s => `<div class="suggestion-item" onclick="document.getElementById('citySearch').value='${s.city}';this.parentElement.classList.add('hidden');loadPharmacyList()">${s.display}</div>`).join('');
+        }
+
+        async function loadPharmacyList() {
+            const body = { city: document.getElementById('citySearch').value, search: document.getElementById('pharmaSearch').value };
+            const res = await fetch(`${API_BASE}/user/pharmacy/list`, { method: 'POST', headers: getUHead(), body: JSON.stringify(body) });
+            const r = await res.json();
+            document.getElementById('pharmaGrid').innerHTML = r.data.map(p => `
+                <div class="col-md-4"><div class="card p-3 h-100">
+                    <img src="${p.profileImage || 'https://via.placeholder.com/150'}" class="rounded-4 mb-3" style="height:120px; object-fit:cover;">
+                    <h6 class="fw-800 m-0">${p.name}</h6>
+                    <small class="text-muted"><i class="fas fa-map-marker-alt"></i> ${p.city} | ${p.distance} KM</small>
+                    <button class="btn btn-sm btn-hk mt-3">Visit Store</button>
+                </div></div>`).join('');
+        }
+
+        function handleRxUpload() { Swal.fire('Prescription', 'Upload feature triggered', 'info'); }
+
+        window.onload = () => {
+            document.getElementById('vToken').value = V_TOKEN;
+            document.getElementById('uToken').value = U_TOKEN;
+            loadStandardCatalog();
+            syncCartBadge();
+        };
+    </script>
+</body>
+</html>

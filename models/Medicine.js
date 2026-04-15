@@ -12,7 +12,7 @@ const medicineSchema = new mongoose.Schema({
     best_price: { type: String },
     discont_percent: { type: String },
     prescription_required: { type: String },
-    image_url: [String], // 👈 CHANGE: Isko Array kar diya taaki images save ho sakein
+    image_url: [String], 
     primary_use: { type: String },
     description: { type: String },
     salt_synonmys: { type: String },

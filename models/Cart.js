@@ -31,7 +31,10 @@ const cartSchema = new mongoose.Schema({
             medicineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Medicine' },
             name: String,
             price: Number,
-            quantity: { type: Number, default: 1 }
+            quantity: { type: Number, default: 1 },
+            duration: String, // "5 Days"
+            startDate: Date
+
         }]
     }
 
