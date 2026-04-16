@@ -53,7 +53,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
         couponDiscount: { type: Number, default: 0 },
         couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
         totalAmount: { type: Number, required: true }
-    },
+    }, 
 
     // --- PAYMENT & STATUS ---
     paymentMethod: { type: String, enum: ['COD', 'Online', 'Wallet'], default: 'COD' },

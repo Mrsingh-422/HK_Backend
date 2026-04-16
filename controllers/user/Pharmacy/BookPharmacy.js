@@ -15,7 +15,7 @@ const Coupon = require('../../../models/Coupon');
 const Prescription = require('../../../models/Prescription');
 const MedicineOrder = require('../../../models/PharmacyBooking');
 const crypto = require('crypto');
-
+const mongoose = require('mongoose');
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const moment = require('moment');
 
@@ -28,48 +28,57 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
 
     let deliveryCharge = 0;
     let rapidCharge = 0;
+    let slotCharge = 0;
     
-    // DeliveryCharge model se data nikalna
+    // 1. Delivery Charges Fetching
     const charges = await DeliveryCharge.findOne({ vendorId: pharmacyId });
-
-    // IMPORTANT: Frontend se 'Home Delivery' aana chahiye
     if (collectionType === 'Home Delivery') {
-        deliveryCharge = charges ? charges.fixedPrice : 40; // Default 40 if not set
+        deliveryCharge = charges ? charges.fixedPrice : 40;
     }
     
-    // Rapid charge logic
     if (isRapid) {
-        rapidCharge = charges ? charges.fastDeliveryExtra : 29; // Default 29
+        rapidCharge = charges ? charges.fastDeliveryExtra : 29;
     }
 
-    let slotCharge = 0; // Pharmacy slots are usually free, but added for schema compatibility
-    const availConfig = await Availability.findOne({ vendorId: pharmacyId });
+    // 2. Premium Slot Charge Calculation (ADDON Logic)
+    // Ensure we lookup the config using ObjectId
+    const availConfig = await Availability.findOne({ vendorId: new mongoose.Types.ObjectId(pharmacyId) });
+    
     if (availConfig && appointmentTime) {
+        // Find the selected time in premiumSlots array
         const premium = availConfig.premiumSlots?.find(ps => ps.time === appointmentTime);
-        if (premium) slotCharge = premium.extraFee || 0;
+        if (premium) {
+            slotCharge = Number(premium.extraFee) || 0; // Extra fee added if slot is premium
+        }
     }
 
+    // 3. Coupon Logic
     let couponDiscount = 0;
     let couponId = null;
     if (couponCode) {
         const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
         if (coupon && itemTotal >= coupon.minOrderAmount) {
+            // Logic: Min(Percentage based discount, Max limit)
             couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
             couponId = coupon._id;
         }
     }
 
+    // 4. Final Total Calculation
+    // formula: (Items - Discount) + Standard Delivery + Rapid Delivery + Premium Slot Charge
     const totalAmount = (itemTotal - couponDiscount) + deliveryCharge + rapidCharge + slotCharge;
+
     return { 
         itemTotal, 
         couponDiscount, 
         couponId, 
         deliveryCharge, 
         rapidDeliveryCharge: rapidCharge, 
-        slotCharge,
-        totalAmount 
+        slotCharge, // Ye field schema mein "Extra/Rapid Charge" ki tarah dikhega
+        totalAmount: Math.round(totalAmount)
     };
 };
+
 // Helper for mapping patients (Aapke code se uthaya gaya)
 async function mapPatients(userId, pids) {
     const User = require('../../../models/User');
@@ -274,14 +283,19 @@ const getStandardMedicineCatalog = async (req, res) => {
             {
                 $addFields: {
                     vendorCount: { $size: "$sellers" },
-                    // Agar sellers hain toh minimum price nikalega, warna MRP dikhayega
                     minPrice: {
                         $cond: {
                             if: { $gt: [{ $size: "$sellers" }, 0] },
                             then: { $min: "$sellers.vendor_price" },
-                            else: "$mrp" 
+                            else: null 
                         }
                     }
+                }
+            },
+            { 
+                // Sirf zaroori data bhejna, sellers array ko remove karna
+                $project: {
+                    sellers: 0 // Isse sellers ki badi list remove ho jayegi
                 }
             },
             { $sort: { vendorCount: -1, name: 1 } },
@@ -303,23 +317,183 @@ const getStandardMedicineCatalog = async (req, res) => {
     }
 };
 
+// 2. GET VENDORS FOR A SPECIFIC MEDICINE
+// endpoint: GET /user/medicine/vendors/:medicineId?lat=28.6&lng=77.2
+const getMedicineVendors = async (req, res) => {
+    try {
+        const { medicineId } = req.params;
+        const { lat, lng } = req.query;
+
+        // 1. Medicine ki basic details find karein
+        const medicine = await Medicine.findById(medicineId).lean();
+        if (!medicine) {
+            return res.status(404).json({ success: false, message: "Medicine not found" });
+        }
+
+        // 2. Inventory se data nikalna (For Vendor List and Summary)
+        const inventoryRecords = await MedicineInventory.find({
+            medicineId: medicineId,
+            stock_quantity: { $gt: 0 },
+            is_available: true
+        })
+        .populate({
+            path: 'pharmacyId', 
+            select: 'name profileImage rating totalReviews address location city isHomeDeliveryAvailable is24x7 profileStatus isActive'
+        })
+        .lean();
+
+        // 3. Distance & Radius Logic
+        const userLat = parseFloat(lat) || DEFAULT_LAT;
+        const userLng = parseFloat(lng) || DEFAULT_LNG;
+        
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
+        const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
+
+        let formattedVendors = [];
+        let minPrice = null;
+
+        for (let record of inventoryRecords) {
+            const pharmacy = record.pharmacyId;
+            
+            // Pharmacy validation
+            if (!pharmacy || pharmacy.profileStatus !== 'Approved' || pharmacy.isActive === false) continue;
+
+            // Track Min Price (Standard list logic ki tarah)
+            if (minPrice === null || record.vendor_price < minPrice) {
+                minPrice = record.vendor_price;
+            }
+
+            let distance = null;
+            if (pharmacy.location?.lat && pharmacy.location?.lng) {
+                distance = await getDistance(userLat, userLng, pharmacy.location.lat, pharmacy.location.lng);
+            }
+
+            // Radius filter
+            if (distance === null || distance <= maxRadius) {
+                formattedVendors.push({
+                    pharmacyId: pharmacy._id,
+                    pharmacyName: pharmacy.name,
+                    profileImage: pharmacy.profileImage,
+                    rating: pharmacy.rating,
+                    totalReviews: pharmacy.totalReviews,
+                    address: pharmacy.address,
+                    city: pharmacy.city,
+                    distance: distance ? distance.toFixed(1) : "N/A",
+                    price: record.vendor_price,
+                    mrp: medicine.mrp,
+                    discount: medicine.mrp > record.vendor_price ? 
+                        Math.round(((medicine.mrp - record.vendor_price) / medicine.mrp) * 100) : 0,
+                    stock: record.stock_quantity,
+                    isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
+                    isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now"
+                });
+            }
+        }
+
+        // Sorting: Cheapest vendor first
+        formattedVendors.sort((a, b) => a.price - b.price);
+
+        // 4. Combine Response: Exact same as Standard List structure
+        res.json({
+            success: true,
+            medicineData: {
+                ...medicine,           // Saare purane fields (bread_crumb, salt, etc.)
+                vendorCount: inventoryRecords.length,
+                minPrice: minPrice     // Lowest price among sellers
+            },
+            totalVendors: formattedVendors.length,
+            vendors: formattedVendors
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 
 
 // --- NEW: GET PHARMACY SLOTS (Mirroring Lab) ---
 const getPharmacySlots = async (req, res) => {
     try {
-        const { pharmacyId, date } = req.query;
+        const { pharmacyId, date } = req.query; // date format: YYYY-MM-DD
+        
+        if (!pharmacyId || !date) {
+            return res.status(400).json({ success: false, message: "Pharmacy ID and Date are required" });
+        }
+
+        // 1. Fetch Availability Configuration
         const config = await Availability.findOne({ vendorId: pharmacyId });
-        if (!config) return res.status(404).json({ message: "Pharmacy timings not configured" });
+        if (!config) {
+            return res.status(404).json({ success: false, message: "Pharmacy timings not configured" });
+        }
 
+        // 2. Check for Weekly Off-days (e.g., Sunday)
         const dayName = moment(date).format('dddd');
-        if (config.offDays.includes(dayName)) return res.json({ success: true, isClosed: true, slots: [] });
+        if (config.offDays.includes(dayName)) {
+            return res.json({ 
+                success: true, 
+                isClosed: true, 
+                message: `Pharmacy is closed on ${dayName}s`, 
+                slots: [] 
+            });
+        }
 
-        const slots = generateTimeSlots(config);
-        // Yahan occupancy check bhi add kar sakte hain (Lab ki tarah)
-        res.json({ success: true, slots });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 3. Check for Specific Blocked Dates (Holidays)
+        if (config.blockedDates && config.blockedDates.includes(date)) {
+            return res.json({ 
+                success: true, 
+                isClosed: true, 
+                message: "Pharmacy is closed on this specific date", 
+                slots: [] 
+            });
+        }
+
+        // 4. Generate base slots using helper
+        const allGeneratedSlots = generateTimeSlots(config);
+
+        // 5. Occupancy/Capacity Logic: Calculate existing bookings for this pharmacy on this date
+        // PharmacyBooking (MedicineOrder) model ka use karke booked slots nikalna
+        const bookedCounts = await PharmacyBooking.aggregate([
+            {
+                $match: {
+                    pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
+                    appointmentDate: date, // Agar DB mein string format hai toh direct match, warna format adjust karein
+                    status: { $ne: 'Cancelled' }
+                }
+            },
+            {
+                $group: {
+                    _id: "$appointmentTime",
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        // 6. Merge Booking count with Generated Slots
+        const finalSlots = allGeneratedSlots.map(slot => {
+            const booking = bookedCounts.find(b => b._id === slot.time);
+            const currentCount = booking ? booking.count : 0;
+
+            return {
+                ...slot, // Includes time, category, extraFee from helper
+                currentBookings: currentCount,
+                // Agar maxClientsPerSlot 0 hai toh unlimited, warna check karein
+                isFull: config.maxClientsPerSlot !== 0 && currentCount >= config.maxClientsPerSlot
+            };
+        });
+
+        res.json({
+            success: true,
+            isClosed: false,
+            pharmacyId,
+            slots: finalSlots
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 const getPharmacyDeliveryCharges = async (req, res) => {
     try {
@@ -358,65 +532,65 @@ const getPharmacyDeliveryCharges = async (req, res) => {
 };
 
 
+// BookPharmacy.js mein checkoutMedicineOrder update karein
 const checkoutMedicineOrder = async (req, res, next) => {
     try {
         const { 
             appointmentDate, appointmentTime, address, 
             paymentMethod, couponCode, isRapid, 
-            selectedPatientIds, collectionType 
+            collectionType 
         } = req.body;
 
         const userId = req.user.id;
         const cart = await Cart.findOne({ userId });
 
-        // 1. Basic Validation
         if (!cart || !cart.pharmacyCart || cart.pharmacyCart.items.length === 0) {
             return res.status(400).json({ success: false, message: "Cart is empty" });
         }
-        if (!selectedPatientIds || selectedPatientIds.length === 0) {
-            return res.status(400).json({ success: false, message: "Please select at least one patient" });
-        }
 
-        // 2. Map Patients (Backend needs this to save in DB)
-        const mappedPatients = await mapPatients(userId, selectedPatientIds);
+        const pharmacyId = cart.pharmacyCart.pharmacyId;
 
-        // 3. Calculate Bill (Format it exactly as per Schema)
+        // Bill Calculation with Slot Charge Addon
         const bill = await calculatePharmacyBillHelper(
-            cart.pharmacyCart.pharmacyId, 
+            pharmacyId, 
             cart.pharmacyCart.items, 
-            selectedPatientIds.length, 
+            1, 
             collectionType, 
             couponCode, 
             isRapid, 
-            appointmentTime
+            appointmentTime // Pass the selected time to calculate slot fee
         );
 
-        // 4. Create Order
         const order = await PharmacyBooking.create({
             orderId: `MED-${require('crypto').randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
-            pharmacyId: cart.pharmacyCart.pharmacyId,
-            patients: mappedPatients,
+            pharmacyId: pharmacyId,
             items: cart.pharmacyCart.items,
-            collectionType, // Ensure this matches Enum: 'Home Delivery' or 'Self Pickup'
+            collectionType, 
             address, 
             appointmentDate, 
             appointmentTime,
-            billSummary: bill,
+            billSummary: bill, // Yahan slotCharge store hoga
             paymentMethod: paymentMethod || 'COD',
             isRapid: isRapid || false,
             status: 'Placed'
         });
 
-        // 5. Clear Cart Pharmacy Section
-        await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
+        // Clear Pharmacy Cart Only
+        await Cart.findOneAndUpdate(
+            { userId }, 
+            { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } }
+        );
 
-        res.status(201).json({ success: true, message: "Order placed successfully!", data: order });
+        res.status(201).json({ 
+            success: true, 
+            message: "Order placed successfully!", 
+            slotFeeApplied: bill.slotCharge, // Debugging ke liye response mein bhi bhej rahe hain
+            data: order 
+        });
 
     } catch (error) {
-        console.error("CRITICAL CHECKOUT ERROR:", error);
-                if (next) return next(error); // Agar next hai toh use karein
-
+        if (next) return next(error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -533,5 +707,5 @@ const trackOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = {getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,
+module.exports = {getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder };

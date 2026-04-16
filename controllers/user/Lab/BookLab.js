@@ -748,6 +748,10 @@ const getLabDetails = async (req, res) => {
     }
 };
 
+
+
+
+
 // 2. GET LAB TESTS (Paginated - 20 per page)
 const getLabInventoryTests = async (req, res) => {
     try {
@@ -983,6 +987,23 @@ const getAvailableCoupons = async (req, res) => {
         console.error("Coupon Validation Error:", error);
         res.status(500).json({ message: error.message }); 
     }
+};
+const validateLabCoupon = async (req, res) => {
+    try {
+        const { couponName, labId, totalAmount } = req.body;
+        const coupon = await Coupon.findOne({ 
+            couponName: couponName.toUpperCase(), 
+            $or: [{ vendorId: labId }, { vendorType: 'Lab' }, { vendorType: 'All' }],
+            isActive: true,
+            expiryDate: { $gte: new Date() }
+        });
+
+        if (!coupon) return res.status(404).json({ message: "Invalid or expired coupon" });
+        if (totalAmount < coupon.minOrderAmount) return res.status(400).json({ message: `Min order ₹${coupon.minOrderAmount} required` });
+
+        const discount = Math.min((totalAmount * coupon.discountPercentage) / 100, coupon.maxDiscount);
+        res.json({ success: true, discount });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 
@@ -1367,5 +1388,5 @@ module.exports = {
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
     cancelBooking, confirmPrescriptionBooking, rateLabOrder ,
-    getAvailableCoupons, getLabSlots,getPreparationGuide,suggestPersonalizedPackage
+    getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage
 };

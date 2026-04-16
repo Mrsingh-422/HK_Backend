@@ -1,18 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const {getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getStandardMedicineCatalog,
+const {getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getStandardMedicineCatalog,getMedicineVendors,
     getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
 
 router.get('/standard-list', getStandardMedicineCatalog);
+router.get('/medicine-details/:medicineId', getMedicineVendors);
 
 router.get('/search-suggestions', getPharmacySearchSuggestions);
 router.get('/pharmacy-suggestions', getPharmacyNameSuggestions);
-
 router.post('/list', getPharmacies); // Search & Filter
 router.get('/details/:id', getPharmacyDetails); // Profile Detail
+
+
 
 
 router.get('/slots', protect('user'), getPharmacySlots); // Naya Endpoint

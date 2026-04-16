@@ -65,33 +65,29 @@ const addToLabCart = async (req, res) => {
         let itemData, newItemCategory;
         if (productType === 'LabTest') {
             itemData = await LabTest.findById(itemId);
-            newItemCategory = itemData.mainCategory;
+            if (!itemData) return res.status(404).json({ success: false, message: "Lab Test not found" });
+            newItemCategory = itemData.mainCategory || 'Pathology';
         } else {
             itemData = await LabPackage.findById(itemId);
+            if (!itemData) return res.status(404).json({ success: false, message: "Lab Package not found" });
             newItemCategory = 'Package';
         }
 
         let cart = await Cart.findOne({ userId });
         if (!cart) cart = new Cart({ userId, labCart: { items: [] } });
 
-        // LOGIC: Check for Mismatch
         const hasItems = cart.labCart.items.length > 0;
-        const isDifferentLab = hasItems && cart.labCart.labId.toString() !== labId;
-        const isDifferentCat = hasItems && cart.labCart.categoryType !== newItemCategory;
+        const isDifferentLab = hasItems && cart.labCart.labId && cart.labCart.labId.toString() !== labId;
 
-        // Agar mismatch hai aur user ne "forceReplace" nahi bheja, toh error bhejo
-        if ((isDifferentLab || isDifferentCat) && !forceReplace) {
+        if (isDifferentLab && !forceReplace) {
             return res.status(400).json({ 
                 success: false, 
-                canReplace: true, // Frontend ko batane ke liye ki "Replace" button dikhao
-                message: isDifferentLab ? "Different Lab detected." : `Cart already has ${cart.labCart.categoryType} items.`
+                canReplace: true, 
+                message: "Cart already has items from another lab. Replace them?"
             });
         }
 
-        // Agar forceReplace true hai, toh purana labCart khali karo
-        if (forceReplace) {
-            cart.labCart.items = [];
-        }
+        if (forceReplace) { cart.labCart.items = []; }
 
         cart.labCart.labId = labId;
         cart.labCart.categoryType = newItemCategory;
