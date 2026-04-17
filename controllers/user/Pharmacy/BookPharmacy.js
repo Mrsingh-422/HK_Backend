@@ -23,6 +23,9 @@ const moment = require('moment');
 
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
 const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime) => {
+    console.log("--- Bill Calculation Start ---");
+    console.log("PharmacyID:", pharmacyId, "Time:", appointmentTime, "Type:", collectionType);
+
     let itemTotal = 0;
     items.forEach(item => { itemTotal += (item.price * item.quantity); });
 
@@ -30,25 +33,39 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     let rapidCharge = 0;
     let slotCharge = 0;
     
-    // 1. Delivery Charges Fetching
-    const charges = await DeliveryCharge.findOne({ vendorId: pharmacyId });
-    if (collectionType === 'Home Delivery') {
-        deliveryCharge = charges ? charges.fixedPrice : 40;
+    // ID normalize karein (Object ya String handle karne ke liye)
+    const cleanPharmaId = pharmacyId.toString();
+
+    // 1. Delivery/Rapid Charges Logic
+    const charges = await DeliveryCharge.findOne({ vendorId: cleanPharmaId });
+    if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
+        // Agar charges milte hain toh fixedPrice, nahi toh default 40
+        deliveryCharge = charges ? Number(charges.fixedPrice) : 40;
     }
     
     if (isRapid) {
-        rapidCharge = charges ? charges.fastDeliveryExtra : 29;
+        rapidCharge = charges ? Number(charges.fastDeliveryExtra) : 29;
     }
 
-    // 2. Premium Slot Charge Calculation (ADDON Logic)
-    // Ensure we lookup the config using ObjectId
-    const availConfig = await Availability.findOne({ vendorId: new mongoose.Types.ObjectId(pharmacyId) });
-    
-    if (availConfig && appointmentTime) {
-        // Find the selected time in premiumSlots array
-        const premium = availConfig.premiumSlots?.find(ps => ps.time === appointmentTime);
-        if (premium) {
-            slotCharge = Number(premium.extraFee) || 0; // Extra fee added if slot is premium
+    // 2. Premium Slot Charge Logic
+    if (appointmentTime && appointmentTime !== 'Immediate') {
+        const availConfig = await Availability.findOne({ vendorId: cleanPharmaId });
+
+        if (availConfig && availConfig.premiumSlots && availConfig.premiumSlots.length > 0) {
+            const selectedTimeClean = appointmentTime.trim();
+            // Case-insensitive match aur trim logic
+            const premiumSlot = availConfig.premiumSlots.find(ps => 
+                ps.time.trim() === selectedTimeClean
+            );
+            
+            if (premiumSlot) {
+                slotCharge = Number(premiumSlot.extraFee) || 0;
+                console.log(`Bingo! Slot Charge Added: ${slotCharge}`);
+            } else {
+                console.log("Time matched standard slot, no extra fee.");
+            }
+        } else {
+            console.log("No premium slot config found for this pharmacy.");
         }
     }
 
@@ -58,15 +75,15 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     if (couponCode) {
         const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
         if (coupon && itemTotal >= coupon.minOrderAmount) {
-            // Logic: Min(Percentage based discount, Max limit)
             couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
             couponId = coupon._id;
         }
     }
 
-    // 4. Final Total Calculation
-    // formula: (Items - Discount) + Standard Delivery + Rapid Delivery + Premium Slot Charge
     const totalAmount = (itemTotal - couponDiscount) + deliveryCharge + rapidCharge + slotCharge;
+    
+    console.log("ItemTotal:", itemTotal, "DelCharge:", deliveryCharge, "SlotCharge:", slotCharge, "Final:", totalAmount);
+    console.log("--- Bill Calculation End ---");
 
     return { 
         itemTotal, 
@@ -74,8 +91,8 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         couponId, 
         deliveryCharge, 
         rapidDeliveryCharge: rapidCharge, 
-        slotCharge, // Ye field schema mein "Extra/Rapid Charge" ki tarah dikhega
-        totalAmount: Math.round(totalAmount)
+        slotCharge, 
+        totalAmount: Math.round(totalAmount) 
     };
 };
 
@@ -532,68 +549,6 @@ const getPharmacyDeliveryCharges = async (req, res) => {
 };
 
 
-// BookPharmacy.js mein checkoutMedicineOrder update karein
-const checkoutMedicineOrder = async (req, res, next) => {
-    try {
-        const { 
-            appointmentDate, appointmentTime, address, 
-            paymentMethod, couponCode, isRapid, 
-            collectionType 
-        } = req.body;
-
-        const userId = req.user.id;
-        const cart = await Cart.findOne({ userId });
-
-        if (!cart || !cart.pharmacyCart || cart.pharmacyCart.items.length === 0) {
-            return res.status(400).json({ success: false, message: "Cart is empty" });
-        }
-
-        const pharmacyId = cart.pharmacyCart.pharmacyId;
-
-        // Bill Calculation with Slot Charge Addon
-        const bill = await calculatePharmacyBillHelper(
-            pharmacyId, 
-            cart.pharmacyCart.items, 
-            1, 
-            collectionType, 
-            couponCode, 
-            isRapid, 
-            appointmentTime // Pass the selected time to calculate slot fee
-        );
-
-        const order = await PharmacyBooking.create({
-            orderId: `MED-${require('crypto').randomBytes(3).toString('hex').toUpperCase()}`,
-            userId,
-            pharmacyId: pharmacyId,
-            items: cart.pharmacyCart.items,
-            collectionType, 
-            address, 
-            appointmentDate, 
-            appointmentTime,
-            billSummary: bill, // Yahan slotCharge store hoga
-            paymentMethod: paymentMethod || 'COD',
-            isRapid: isRapid || false,
-            status: 'Placed'
-        });
-
-        // Clear Pharmacy Cart Only
-        await Cart.findOneAndUpdate(
-            { userId }, 
-            { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } }
-        );
-
-        res.status(201).json({ 
-            success: true, 
-            message: "Order placed successfully!", 
-            slotFeeApplied: bill.slotCharge, // Debugging ke liye response mein bhi bhej rahe hain
-            data: order 
-        });
-
-    } catch (error) {
-        if (next) return next(error);
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
 
 
 
@@ -617,6 +572,96 @@ const validateCoupon = async (req, res) => {
         res.json({ success: true, discount: finalDiscount });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+// BookPharmacy.js mein checkoutMedicineOrder update karein
+const checkoutMedicineOrder = async (req, res) => {
+    try {
+        const { 
+            appointmentDate, 
+            appointmentTime, 
+            address, 
+            paymentMethod, 
+            couponCode, 
+            isRapid, 
+            collectionType 
+        } = req.body;
+
+        const userId = req.user.id;
+        // User check
+        const User = require('../../../models/User');
+        const user = await User.findById(userId);
+
+        const cart = await Cart.findOne({ userId });
+
+        if (!cart || !cart.pharmacyCart || cart.pharmacyCart.items.length === 0) {
+            return res.status(400).json({ success: false, message: "Cart is empty" });
+        }
+
+        const pharmacyId = cart.pharmacyCart.pharmacyId;
+
+        // Bill Helper Call
+        const bill = await calculatePharmacyBillHelper(
+            pharmacyId, 
+            cart.pharmacyCart.items, 
+            1, 
+            collectionType, 
+            couponCode, 
+            isRapid, 
+            appointmentTime
+        );
+
+        // Naya Order Create
+        const order = await PharmacyBooking.create({
+            orderId: `MED-${require('crypto').randomBytes(3).toString('hex').toUpperCase()}`,
+            userId,
+            pharmacyId,
+            items: cart.pharmacyCart.items,
+            collectionType, 
+            address, 
+            appointmentDate, 
+            appointmentTime,
+            billSummary: bill,
+            paymentMethod: paymentMethod || 'COD',
+            isRapid: isRapid || false,
+            patients: [], // Patients array required in schema
+            status: 'Placed'
+        });
+
+        // Clear Cart
+        await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
+
+        res.status(201).json({ success: true, message: "Order placed successfully!", data: order });
+    } catch (error) {
+        console.error("CRITICAL CHECKOUT ERROR:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+const placeOrder = async (req, res) => {
+    try {
+        const cart = await Cart.findOne({ userId: req.user.id });
+        if (!cart || cart.pharmacyCart.items.length === 0) return res.status(400).json({ message: "Cart is empty" });
+
+        const orderId = `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        
+        const order = await PharmacyBooking.create({
+            userId: req.user.id,
+            pharmacyId: cart.pharmacyCart.pharmacyId,
+            items: cart.pharmacyCart.items,
+            billSummary: req.body.billSummary,
+            deliveryAddress: req.body.deliveryAddress,
+            orderId
+        });
+
+        // Clear Cart
+        cart.pharmacyCart = { items: [], pharmacyId: null };
+        await cart.save();
+
+        res.status(201).json({ success: true, message: "Order Placed", data: order });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+
+
 
 const uploadPrescription = async (req, res) => {
     try {
@@ -656,29 +701,7 @@ const cancelMedicineOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-const placeOrder = async (req, res) => {
-    try {
-        const cart = await Cart.findOne({ userId: req.user.id });
-        if (!cart || cart.pharmacyCart.items.length === 0) return res.status(400).json({ message: "Cart is empty" });
 
-        const orderId = `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        
-        const order = await PharmacyBooking.create({
-            userId: req.user.id,
-            pharmacyId: cart.pharmacyCart.pharmacyId,
-            items: cart.pharmacyCart.items,
-            billSummary: req.body.billSummary,
-            deliveryAddress: req.body.deliveryAddress,
-            orderId
-        });
-
-        // Clear Cart
-        cart.pharmacyCart = { items: [], pharmacyId: null };
-        await cart.save();
-
-        res.status(201).json({ success: true, message: "Order Placed", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
 
 const getOrderHistory = async (req, res) => {
     try {

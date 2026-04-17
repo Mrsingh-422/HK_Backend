@@ -561,22 +561,35 @@ const getMyInsurance = async (req, res) => {
 const addUserAddress = async (req, res) => {
     try {
         const userId = req.user.id;
-        const addressData = req.body;
+        const { name, addressType, phone, pincode, houseNo, city, state, isDefault, sector, landmark } = req.body;
 
         const user = await User.findById(userId);
 
-        // Agar naya address default hai, toh purane saare addresses ko isDefault: false kar do
-        if (addressData.isDefault) {
+        if (isDefault) {
             user.userAddress.forEach(addr => addr.isDefault = false);
         }
 
-        user.userAddress.push(addressData);
+        // Naya address object create karna name ke saath
+        const newAddress = {
+            name, // Aapka naya field
+            addressType,
+            phone,
+            pincode,
+            houseNo,
+            sector,
+            landmark,
+            city,
+            state,
+            isDefault: isDefault || false
+        };
+
+        user.userAddress.push(newAddress);
         await user.save();
 
         res.status(201).json({ 
             success: true, 
             message: "Address added successfully", 
-            data: user.userAddress[user.userAddress.length - 1] // Bheja gaya naya address
+            data: user.userAddress[user.userAddress.length - 1] 
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

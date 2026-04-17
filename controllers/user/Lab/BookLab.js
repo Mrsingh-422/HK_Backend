@@ -33,50 +33,64 @@ const calculateBillHelper = async (labId, items, patientsCount, collectionType, 
     for (let t of tests) {
         const id = t.itemId || t.testId;
         const test = await LabTest.findById(id);
-        if (test) itemTotal += test.discountPrice || test.amount;
+        if (test) itemTotal += (test.discountPrice || test.amount);
     }
     for (let p of packages) {
         const id = p.itemId || p.packageId;
         const pkg = await LabPackage.findById(id);
-        if (pkg) itemTotal += pkg.offerPrice || pkg.mrp;
+        if (pkg) itemTotal += (pkg.offerPrice || pkg.mrp);
     }
 
     itemTotal = itemTotal * patientsCount;
 
     let homeVisitCharge = 0;
     let rapidCharge = 0;
-    const charges = await DeliveryCharge.findOne({ vendorId: labId });
+    let slotCharge = 0; // Initialize always
 
-    if (collectionType === 'Home Collection' && charges) homeVisitCharge = charges.fixedPrice || 0;
+    const cleanLabId = labId.toString();
+    const charges = await DeliveryCharge.findOne({ vendorId: cleanLabId });
+
+    if (collectionType === 'Home Collection') {
+        homeVisitCharge = charges ? Number(charges.fixedPrice) : 40;
+    }
     
-    // Figma Logic: Rapid delivery +29 per patient
-    if (isRapid && charges) {
-        rapidCharge = (charges.fastDeliveryExtra || 29) * patientsCount;
+    if (isRapid) {
+        rapidCharge = charges ? Number(charges.fastDeliveryExtra) : 100;
     }
 
-    let slotCharge = 0;
-    const availConfig = await Availability.findOne({ vendorId: labId });
-    if (availConfig && appointmentTime) {
-        const premium = availConfig.premiumSlots?.find(ps => ps.time === appointmentTime);
-        if (premium) slotCharge = premium.extraFee || 0;
+    // PREMIUM SLOT LOGIC
+    // Agar time "Immediate" nahi hai, tabhi Availability check karo
+    if (appointmentTime && appointmentTime !== 'Immediate') {
+        const availConfig = await Availability.findOne({ vendorId: cleanLabId });
+        if (availConfig && availConfig.premiumSlots) {
+            const selectedTimeClean = appointmentTime.trim();
+            const premiumSlotMatch = availConfig.premiumSlots.find(ps => ps.time.trim() === selectedTimeClean);
+            if (premiumSlotMatch) {
+                slotCharge = Number(premiumSlotMatch.extraFee) || 0;
+            }
+        }
     }
 
     let couponDiscount = 0;
+    let couponId = null;
     if (couponCode) {
         const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
         if (coupon && itemTotal >= coupon.minOrderAmount) {
             couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+            couponId = coupon._id;
         }
     }
 
     const totalAmount = (itemTotal - couponDiscount) + homeVisitCharge + rapidCharge + slotCharge;
+
     return { 
         itemTotal, 
         couponDiscount, 
+        couponId,
         homeVisitCharge, 
         rapidDeliveryCharge: rapidCharge, 
-        slotCharge, 
-        totalAmount 
+        slotCharge, // Yeh field ab hamesha return hogi
+        totalAmount: Math.round(totalAmount)
     };
 };
 
@@ -1018,8 +1032,11 @@ const checkoutLabBooking = async (req, res) => {
         } = req.body;
 
         const cart = await Cart.findOne({ userId: req.user.id });
-        if (!cart || cart.labCart.items.length === 0) return res.status(400).json({ message: "Cart is empty" });
+        if (!cart || cart.labCart.items.length === 0) {
+            return res.status(400).json({ success: false, message: "Cart is empty" });
+        }
 
+        // Bill Calculation logic call
         const bill = await calculateBillHelper(
             cart.labCart.labId, 
             cart.labCart, 
@@ -1044,17 +1061,20 @@ const checkoutLabBooking = async (req, res) => {
             address, 
             appointmentDate, 
             appointmentTime,
-            billSummary: bill,
+            billSummary: bill, // Yahan bill.slotCharge save ho raha hai
             paymentMethod,
-            isRapid,
+            isRapid: isRapid || false,
             status: 'Confirmed'
         });
 
-        // Clear Cart
-        await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null, "labCart.categoryType": null } });
+        // Clear Cart logic
+        await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
 
-        res.status(201).json({ success: true, message: "Booking confirmed!", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(201).json({ success: true, message: "Booking confirmed successfully!", data: booking });
+    } catch (error) { 
+        console.error("FATAL CHECKOUT ERROR:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 

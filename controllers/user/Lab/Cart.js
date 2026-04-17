@@ -136,19 +136,50 @@ const updateCartQuantity = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// // 2. GET CART
-// // endpoint: /user/cart
-// const getMyCart = async (req, res) => {
-//     try {
-//         const cart = await Cart.findOne({ userId: req.user.id })
-//             .populate('labCart.labId', 'name city address profileImage')
-//             .populate('labCart.items.itemId');
+// 3. GET COMBINED CART (Lab + Pharmacy)
+const getMyCart = async (req, res) => {
+    try {
+        const cart = await Cart.findOne({ userId: req.user.id })
+            .populate('labCart.labId', 'name city address profileImage')
+            .populate('pharmacyCart.pharmacyId', 'name address rating city')
+            .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp');
 
-//         if (!cart) return res.json({ success: true, message: "Cart is empty", data: { labCart: { items: [] }, pharmacyCart: { items: [] } } });
+        if (!cart) {
+            return res.json({ 
+                success: true, 
+                data: { 
+                    labCart: { items: [] }, 
+                    pharmacyCart: { items: [] },
+                    labCartTotal: 0,
+                    pharmacyCartTotal: 0,
+                    totalItems: 0 // Default zero count
+                } 
+            });
+        }
 
-//         res.json({ success: true, data: cart });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
+        // 1. Totals calculate karein (Price * Quantity)
+        let labTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+        let medTotal = cart.pharmacyCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+
+        // 2. Total Items Count calculate karein (Sum of all quantities)
+        let labItemCount = cart.labCart.items.reduce((acc, i) => acc + i.quantity, 0);
+        let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
+        
+        let totalItems = labItemCount + pharmacyItemCount;
+
+        res.json({ 
+            success: true, 
+            data: { 
+                ...cart._doc, 
+                labCartTotal: labTotal, 
+                pharmacyCartTotal: medTotal,
+                totalItems: totalItems // <-- Yeh rahi aapki nayi key
+            } 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
 
 // 3. REMOVE ITEM / CLEAR LAB CART
 // endpoint: /user/cart/lab/clear
@@ -392,26 +423,7 @@ const updatePharmacyQuantity = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. GET COMBINED CART (Lab + Pharmacy)
-const getMyCart = async (req, res) => {
-    try {
-        const cart = await Cart.findOne({ userId: req.user.id })
-            .populate('labCart.labId', 'name city address profileImage')
-            .populate('pharmacyCart.pharmacyId', 'name address rating city')
-            .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp');
 
-        if (!cart) return res.json({ success: true, data: { labCart: { items: [] }, pharmacyCart: { items: [] } } });
-
-        // Totals calculate karein
-        let labTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-        let medTotal = cart.pharmacyCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-
-        res.json({ 
-            success: true, 
-            data: { ...cart._doc, labCartTotal: labTotal, pharmacyCartTotal: medTotal } 
-        });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
 
 const checkBetterOptions = async (req, res) => {
     const { medicineId, currentPrice } = req.body;

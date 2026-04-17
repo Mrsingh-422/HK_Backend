@@ -80,6 +80,7 @@ const userSchema = new mongoose.Schema({
 
  
     userAddress: [{
+        name: String,
         addressType: { type: String, enum: ['Home', 'Work', 'Other'], default: 'Home' },
         phone: String,
         pincode: String,

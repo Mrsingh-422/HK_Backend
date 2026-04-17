@@ -37,10 +37,15 @@ const pharmacyBookingSchema = new mongoose.Schema({
 
     // --- ADDRESS SECTION ---
     address: {
+        name: String,        // Delivery Recipient Name
+        phone: String,       // Contact Number
         houseNo: String,
-        city: String,
-        pincode: String,
+        sector: String,
         landmark: String,
+        city: String,
+        state: String,
+        country: String,
+        pincode: String,
         addressType: { type: String, default: 'Home' }
     },
 

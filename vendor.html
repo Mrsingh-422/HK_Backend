@@ -109,7 +109,7 @@
 
         .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
         .slot-box { 
-            border: 2px solid var(--hk-border); border-radius: 18px; padding: 12px; 
+            border: 2px solid var(--hk-border); border-radius: 18px; padding: 14px; 
             text-align: center; cursor: pointer; background: white; font-weight: 700; transition: 0.2s; 
             display: flex; flex-direction: column; align-items: center; justify-content: center;
         }
@@ -214,6 +214,25 @@
 
                     <!-- LAB ONLY: Rapid Collection Toggle -->
                     <div id="labRapidFlowUI" class="d-none">
+                        <!-- Collection Mode Toggle (Home vs Walkin) -->
+                        <div class="hk-card p-4 mb-4">
+                            <h6 class="fw-800 mb-3"><i class="fas fa-truck-loading me-2 text-success"></i>Select Collection Mode</h6>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <div class="address-card active" id="labModeHome" onclick="setLabCollectionMode('Home Collection')">
+                                        <h6>Home Collection</h6>
+                                        <small class="text-muted">Technician visits your home</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="address-card" id="labModeVisit" onclick="setLabCollectionMode('Visit Lab')">
+                                        <h6>Visit Lab</h6>
+                                        <small class="text-success fw-bold">FREE (No service charge)</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="hk-card p-4 mb-4 border-primary">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
@@ -358,7 +377,7 @@
 
         let userCartState = null, currentLabType = 'test', currentCompCtx = 'Lab', currentChkCtx = 'Lab';
         let chkPatients = ['Self'], selectedAddr = null, chkSlot = null, ctxCharges = null, couponApplied = null;
-        let pharmaSpeed = 'standard';
+        let pharmaSpeed = 'standard', labCollMode = 'Home Collection';
 
         async function apiFetch(endpoint, method = 'GET', body = null) {
             const options = { method, headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }};
@@ -374,10 +393,8 @@
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
             const el = document.getElementById(id);
             if(el) el.classList.add('active');
-            
             const btnMap = { discoveryView:'btn-nav-labs', medicineMarketView:'btn-nav-meds', historyView:'btn-nav-orders' };
             if(btnMap[id] && document.getElementById(btnMap[id])) document.getElementById(btnMap[id]).classList.add('active');
-
             if(id === 'discoveryView') loadLabCatalog();
             if(id === 'medicineMarketView') loadMedicineMarket();
             if(id === 'historyView') loadOrderHistory();
@@ -425,6 +442,7 @@
 
         async function launchCheckoutFlow(type) {
             currentChkCtx = type;
+            document.getElementById('checkoutContextTitle').innerText = type;
             const [cartR, profR, addrR] = await Promise.all([apiFetch('/user/cart'), apiFetch('/api/auth/user/profile'), apiFetch('/api/auth/user/addresses')]);
             userCartState = cartR.data; couponApplied = null;
             const grid = document.getElementById('chkRecipientGridArea');
@@ -433,13 +451,20 @@
                 grid.innerHTML = `<div class="col-md-3"><div class="patient-card active" onclick="togglePatientSelection('Self', this)"><h6>Self</h6><small>${profR.data.name}</small></div></div>` + (profR.data.familyMember || []).map(m => `<div class="col-md-3"><div class="patient-card" onclick="togglePatientSelection('${m._id}', this)"><h6>${m.memberName}</h6></div></div>`).join('');
             } else {
                 document.getElementById('labRapidFlowUI').classList.add('d-none'); document.getElementById('pharmaSpeedFlowUI').classList.remove('d-none');
-                grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4"><div class="address-card ${a.isDefault?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)"><h6>${a.addressType}</h6><small>${a.houseNo}, ${a.city}</small></div></div>`).join('') || '<small>Add Address in Profile</small>';
+                grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4"><div class="address-card ${a.isDefault?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)"><h6>${a.name || 'Recipient'}</h6><span class="badge bg-light text-dark mb-2" style="font-size:0.65rem;">${a.addressType}</span><small class="d-block text-muted">${a.houseNo}, ${a.city}</small><small class="d-block fw-bold">${a.phone || ''}</small></div></div>`).join('') || '<div class="col-12 text-center text-muted"><p>No addresses found.</p></div>';
                 if(addrR.data?.find(x => x.isDefault)) selectedAddr = addrR.data.find(x => x.isDefault);
                 updatePharmaSpeed('standard');
             }
             const charges = await apiFetch(type === 'Lab' ? '/user/labs/delivery-charges' : '/user/pharmacy/delivery-charges');
-            ctxCharges = charges.data || { fixedPrice: 40, fastDeliveryExtra: 29 };
+            ctxCharges = charges.data || { fixedPrice: 40, fastDeliveryExtra: 100 };
             updateLiveBill(); switchView('checkoutView');
+        }
+
+        function setLabCollectionMode(mode) {
+            labCollMode = mode;
+            document.getElementById('labModeHome').classList.toggle('active', mode === 'Home Collection');
+            document.getElementById('labModeVisit').classList.toggle('active', mode === 'Visit Lab');
+            updateLiveBill();
         }
 
         function updatePharmaSpeed(mode) {
@@ -450,20 +475,13 @@
             updateLiveBill();
         }
 
-        // --- UPDATED SLOTS FETCH LOGIC ---
         async function fetchCheckoutSlots() {
             const date = document.getElementById('chkDateInp').value;
             if(!date) return;
             try {
                 const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
                 const r = await apiFetch(currentChkCtx === 'Lab' ? `/user/labs/slots?labId=${vId}&date=${date}` : `/user/pharmacy/slots?pharmacyId=${vId}&date=${date}`);
-                
-                document.getElementById('chkSlotGridUI').innerHTML = (r.slots || []).map(s => `
-                    <div class="slot-box ${s.isFull ? 'full' : ''}" 
-                         onclick="${s.isFull ? '' : `setSlotSelection('${s.time}', ${s.extraFee || 0}, this)`}">
-                        <span>${s.time}</span>
-                        ${s.extraFee > 0 ? `<span class="fee-tag">+₹${s.extraFee}</span>` : ''}
-                    </div>`).join('') || '<small class="text-muted">No slots available.</small>';
+                document.getElementById('chkSlotGridUI').innerHTML = (r.slots || []).map(s => `<div class="slot-box ${s.isFull ? 'full' : ''}" onclick="${s.isFull ? '' : `setSlotSelection('${s.time}', ${s.extraFee || 0}, this)`}"><span>${s.time}</span>${s.extraFee > 0 ? `<span class="fee-tag">+₹${s.extraFee}</span>` : ''}</div>`).join('') || '<small class="text-muted">No slots available.</small>';
             } catch(e) { console.error("Slot Error:", e); }
         }
 
@@ -478,10 +496,7 @@
             else chkPatients.push(id); updateLiveBill();
         }
 
-        function setOrderAddress(a, el) { 
-            document.querySelectorAll('.address-card').forEach(x => x.classList.remove('active'));
-            el.classList.add('active'); selectedAddr = a; 
-        }
+        function setOrderAddress(a, el) { document.querySelectorAll('.address-card').forEach(x => x.classList.remove('active')); el.classList.add('active'); selectedAddr = a; }
 
         function updateLiveBill() {
             if(!userCartState || !ctxCharges) return;
@@ -500,9 +515,12 @@
                 if(pharmaSpeed === 'rapid') rapFee = ctxCharges.fastDeliveryExtra;
                 if(pharmaSpeed !== 'standard' || billTotal < 500) delFee = ctxCharges.fixedPrice;
             } else {
-                delFee = ctxCharges.fixedPrice;
-                if(document.getElementById('labRapidCheck')?.checked) rapFee = ctxCharges.fastDeliveryExtra * pCount;
+                // Lab Mode Service Fee
+                if(labCollMode === 'Home Collection') delFee = ctxCharges.fixedPrice;
+                if(document.getElementById('labRapidCheck')?.checked) rapFee = ctxCharges.fastDeliveryExtra;
             }
+            
+            // INTEGRATED PREMIUM SLOT FEE (Addon with others)
             if(chkSlot?.fee) rapFee += chkSlot.fee;
 
             const final = (billTotal - (couponApplied?.amount || 0)) + delFee + rapFee;
@@ -512,7 +530,7 @@
             set('billDelFeeVal', `₹${delFee}`);
             set('savingsValueVal', `₹${(mrpTotal - billTotal + (couponApplied?.amount || 0)).toFixed(0)}`);
             set('billFinalValueFinal', `₹${final.toFixed(0)}`);
-            document.getElementById('billExtraChargesArea').innerHTML = rapFee > 0 ? `<div class="bill-row text-danger"><span>Extra/Rapid Charge</span><span>+₹${rapFee}</span></div>` : '';
+            document.getElementById('billExtraChargesArea').innerHTML = rapFee > 0 ? `<div class="bill-row text-danger"><span>Extra/Rapid/Slot Fee</span><span>+₹${rapFee}</span></div>` : '';
             const coupRow = document.getElementById('couponRowUI'); if(coupRow) coupRow.style.display = couponApplied ? 'flex' : 'none';
             set('billCouponVal', `-₹${couponApplied?.amount || 0}`);
         }
@@ -543,14 +561,23 @@
 
         async function processFinalBooking() {
             const isRapidCheck = currentChkCtx === 'Lab' ? document.getElementById('labRapidCheck').checked : pharmaSpeed === 'rapid';
-            if(!chkSlot && !isRapidCheck) return Swal.fire('Error', 'Select slot', 'error');
+            if(!chkSlot && !isRapidCheck) return Swal.fire('Error', 'Select slot or choose Express Collection', 'error');
+
+            // LOGIC FIX: Send specific time if selected, otherwise Immediate
+            let finalTime = 'Immediate';
+            if (chkSlot && chkSlot.time) {
+                finalTime = chkSlot.time;
+            } else if (isRapidCheck) {
+                finalTime = 'Immediate';
+            }
+
             const body = {
                 appointmentDate: document.getElementById('chkDateInp').value || new Date().toISOString().split('T')[0],
-                appointmentTime: isRapidCheck ? 'Immediate' : chkSlot?.time,
+                appointmentTime: finalTime,
                 selectedPatientIds: currentChkCtx === 'Lab' ? chkPatients : [],
-                collectionType: currentChkCtx === 'Lab' ? 'Home Collection' : (pharmaSpeed==='pickup'?'Self Pickup':'Home Delivery'),
+                collectionType: currentChkCtx === 'Lab' ? labCollMode : (pharmaSpeed==='pickup'?'Self Pickup':'Home Delivery'),
                 isRapid: isRapidCheck, couponCode: couponApplied?.couponName || null,
-                address: currentChkCtx === 'Pharmacy' ? selectedAddr : { houseNo: "N/A" }, paymentMethod: 'COD'
+                address: currentChkCtx === 'Pharmacy' ? selectedAddr : (selectedAddr || { houseNo: "Visit Lab" }), paymentMethod: 'COD'
             };
             try {
                 const res = await apiFetch(currentChkCtx === 'Lab' ? '/user/labs/checkout' : '/user/pharmacy/checkout', 'POST', body);
