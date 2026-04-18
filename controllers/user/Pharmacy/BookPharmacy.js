@@ -91,7 +91,7 @@ async function mapPatients(userId, pids) {
         return { patientId: id, name: m.memberName, age: m.age, gender: m.gender, relation: m.relation };
     });
 }
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyCZ4OQWcjaij3A8h_z7C11MUwmoGeS1uSs');
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // --- HELPER: AI Image Processing Logic ---
 const extractDataWithGemini = async (filePath) => {
