@@ -11,7 +11,8 @@ const {
     getDriverById, 
     updateDriver, 
     deleteDriver,
-    toggleDriverStatus
+    toggleDriverStatus,
+    vendorResetDriverPassword
 } = require('../../../controllers/provider/Common/Driver');
 
 // Base URL: /provider/driver 
@@ -28,5 +29,6 @@ router.get('/details/:id', protect('provider'), getDriverById);
 router.put('/update/:id', protect('provider'), driverDocUploads, updateDriver); // Multi-role access
 router.delete('/delete/:id', protect('provider'), deleteDriver);
 router.patch('/status/:id', protect('provider'), toggleDriverStatus); // To change availability
+router.put('/reset-password/:id', protect('provider'), vendorResetDriverPassword);
 
 module.exports = router;

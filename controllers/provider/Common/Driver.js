@@ -2,6 +2,7 @@ const Driver = require('../../../models/Driver');
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const generateToken = (id, role) => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
@@ -197,6 +198,34 @@ const toggleDriverStatus = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const vendorResetDriverPassword = async (req, res) => {
+    try {
+        const { id } = req.params; // Driver ID
+        const { newPassword } = req.body;
+        const vendorId = req.user.id; // Logged in Vendor ID
+
+        if (!newPassword) return res.status(400).json({ message: "New password is required" });
+
+        const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+
+        // Sirf wahi vendor update kar sake jisne driver add kiya tha
+        const driver = await Driver.findOneAndUpdate(
+            { _id: id, vendorId: vendorId },
+            { password: hashedPassword, token: null },
+            { new: true }
+        );
+
+        if (!driver) {
+            return res.status(404).json({ message: "Driver not found or you are not authorized" });
+        }
+
+        res.json({ success: true, message: "Driver password reset successfully" });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
 module.exports = { 
     registerDriver, 
     loginDriver, 
@@ -205,5 +234,6 @@ module.exports = {
     getDriverById, 
     updateDriver, 
     deleteDriver,
-    toggleDriverStatus 
+    toggleDriverStatus ,
+    vendorResetDriverPassword
 };

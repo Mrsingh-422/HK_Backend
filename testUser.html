@@ -3,556 +3,311 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Professional User Lab Suite</title>
-    
-    <!-- External Libraries -->
+    <title>HK Provider | Pharmacy Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+
     <style>
         :root {
             --hk-primary: #00b894;
-            --hk-primary-dark: #009475;
-            --hk-secondary: #6c5ce7;
-            --hk-dark: #2d3436;
-            --hk-light: #f9fbf9;
-            --hk-warning: #fdcb6e;
-            --hk-danger: #d63031;
-            --hk-gray: #636e72;
+            --hk-dark: #1e272e;
+            --hk-bg: #f8f9fa;
             --hk-border: #edf2f7;
-            --hk-shadow: 0 10px 30px rgba(0,0,0,0.05);
-            --hk-radius: 18px;
+            --hk-radius: 20px;
         }
 
-        body {
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            background-color: #f4f7f6;
-            color: var(--hk-dark);
-            padding-top: 85px;
-            overflow-x: hidden;
-        }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--hk-bg); color: var(--hk-dark); padding-top: 80px; }
 
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #f1f1f1; }
-        ::-webkit-scrollbar-thumb { background: var(--hk-primary); border-radius: 10px; }
-
+        /* Navigation */
         .hk-nav {
-            background: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(15px);
-            height: 80px;
-            border-bottom: 2px solid var(--hk-primary);
+            background: white; height: 75px; border-bottom: 2px solid var(--hk-primary);
             position: fixed; top: 0; width: 100%; z-index: 1050;
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 0 5%;
+            display: flex; align-items: center; justify-content: space-between; padding: 0 5%;
         }
+        .nav-link { font-weight: 700; color: #555; cursor: pointer; padding: 10px 20px; border-radius: 50px; transition: 0.3s; }
+        .nav-link.active { background: var(--hk-primary); color: white; }
 
-        .hk-logo {
-            font-weight: 800; font-size: 1.5rem; color: var(--hk-primary);
-            text-decoration: none; display: flex; align-items: center; gap: 10px;
-        }
-
-        .nav-menu { display: flex; gap: 15px; }
-        .nav-btn {
-            border: none; background: transparent; font-weight: 700; font-size: 0.9rem;
-            padding: 8px 20px; border-radius: 50px; transition: 0.3s; color: var(--hk-gray);
-        }
-        .nav-btn.active { background: var(--hk-primary); color: white; }
-
-        .view-section { display: none; animation: slideIn 0.5s ease forwards; }
-        .view-section.active { display: block; }
-        @keyframes slideIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-
-        .hk-card {
-            background: white; border-radius: var(--hk-radius); border: 1px solid var(--hk-border);
-            box-shadow: var(--hk-shadow); transition: all 0.3s ease; height: 100%;
-            overflow: hidden;
-        }
-        .hk-card:hover { transform: translateY(-7px); box-shadow: 0 15px 40px rgba(0,0,0,0.1); }
+        /* Cards */
+        .hk-card { background: white; border-radius: var(--hk-radius); border: 1px solid var(--hk-border); padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); height: 100%; }
+        .status-badge { padding: 5px 15px; border-radius: 50px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
         
-        .cat-toggle {
-            background: white; border-radius: 50px; padding: 5px;
-            display: inline-flex; border: 1px solid var(--hk-border);
-        }
-        .cat-toggle button {
-            border: none; padding: 8px 30px; border-radius: 50px; font-weight: 700;
-            font-size: 0.85rem; transition: 0.3s; background: transparent;
-        }
-        .cat-toggle .active { background: var(--hk-primary); color: white; }
+        /* Sidebar/Toggling */
+        .view-section { display: none; }
+        .view-section.active { display: block; }
 
-        .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; }
-        .slot-box {
-            border: 1.5px solid var(--hk-border); border-radius: 12px; padding: 12px;
-            text-align: center; cursor: pointer; transition: 0.2s; background: white;
-        }
-        .slot-box.selected { background: var(--hk-primary); color: white; border-color: var(--hk-primary); }
-        .slot-box.full { background: #f1f1f1; color: #ccc; cursor: not-allowed; }
+        /* Inventory Image */
+        .med-thumb { width: 50px; height: 50px; object-fit: contain; border-radius: 10px; background: #f1f1f1; }
+        
+        .btn-hk { background: var(--hk-primary); color: white; font-weight: 700; border-radius: 50px; padding: 10px 25px; border: none; }
+        .btn-hk:hover { background: #009475; color: white; }
 
-        .patient-card {
-            border: 2.5px solid var(--hk-border); border-radius: 15px; padding: 15px;
-            cursor: pointer; position: relative; transition: 0.3s; background: white;
-        }
-        .patient-card.active { border-color: var(--hk-primary); background: #f0fdf4; }
-        .patient-card.active::after {
-            content: '\f058'; font-family: 'Font Awesome 6 Free'; font-weight: 900;
-            position: absolute; top: 10px; right: 10px; color: var(--hk-primary);
-        }
-
-        .coupon-box {
-            border: 1.5px dashed #ccc; border-radius: 12px; padding: 10px;
-            margin-bottom: 10px; cursor: pointer; transition: 0.3s;
-        }
-        .coupon-box.applicable { border-color: var(--hk-primary); background: #f0fdf4; }
-        .coupon-box.disabled { opacity: 0.5; cursor: not-allowed; background: #fafafa; }
-
-        .cart-float {
-            position: fixed; bottom: 30px; right: 30px; width: 65px; height: 65px;
-            background: var(--hk-primary); color: white; border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            box-shadow: 0 10px 25px rgba(0,184,148,0.4); cursor: pointer; z-index: 1000;
-        }
-        .cart-badge {
-            position: absolute; top: 0; right: 0; background: var(--hk-danger);
-            color: white; font-size: 11px; padding: 3px 8px; border-radius: 50px;
-            border: 2px solid white;
-        }
-
-        .bill-row { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 5px; }
-        .inclusion-tag {
-            display: inline-block; background: #f0f2f5; padding: 4px 10px;
-            border-radius: 20px; font-size: 0.7rem; margin: 2px;
-        }
+        /* Tabs */
+        .hk-tabs { background: #eee; border-radius: 50px; padding: 5px; display: inline-flex; margin-bottom: 25px; }
+        .hk-tab-btn { border: none; padding: 8px 25px; border-radius: 50px; font-weight: 700; background: transparent; }
+        .hk-tab-btn.active { background: white; color: var(--hk-primary); box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
 
-    <!-- NAVBAR -->
-    <nav class="hk-nav">
-        <a href="#" class="hk-logo" onclick="switchView('discoveryView')">
-            <i class="fas fa-hand-holding-medical"></i> <span>Health Kangaroo</span>
-        </a>
-        <div class="nav-menu">
-            <button class="nav-btn active" id="btn-nav-catalog" onclick="switchView('discoveryView')">Standard Catalog</button>
-            <button class="nav-btn" id="btn-nav-labs" onclick="switchView('labListView')">Browse Labs</button>
-            <button class="nav-btn" id="btn-nav-orders" onclick="switchView('historyView')">My Bookings</button>
-        </div>
+    <nav class="hk-nav shadow-sm">
         <div class="d-flex align-items-center gap-3">
-            <div class="position-relative" style="cursor:pointer" data-bs-toggle="offcanvas" data-bs-target="#cartSidebar" onclick="loadCartDetails()">
-                <i class="fas fa-shopping-basket fa-lg text-dark"></i>
-                <span class="cart-badge" id="navCartBadge">0</span>
-            </div>
-            <img src="https://ui-avatars.com/api/?name=User&background=00b894&color=fff" class="rounded-circle border" width="35">
+            <span class="fw-800 fs-4 text-success"><i class="fas fa-pills me-2"></i>HK PHARMACY</span>
+        </div>
+        <div class="d-flex gap-2">
+            <div class="nav-link active" onclick="switchView('ordersView', this)">Orders</div>
+            <div class="nav-link" onclick="switchView('inventoryView', this)">My Store</div>
+            <div class="nav-link" onclick="switchView('masterSearchView', this)">Add Medicine</div>
+        </div>
+        <div class="dropdown">
+            <img src="https://ui-avatars.com/api/?name=Pharmacy&background=00b894&color=fff" class="rounded-circle border" width="40" style="cursor:pointer">
         </div>
     </nav>
 
     <div class="container py-4">
 
-        <!-- 1. DISCOVERY VIEW -->
-        <section id="discoveryView" class="view-section active">
-            <div class="row mb-5 align-items-center">
-                <div class="col-lg-6">
-                    <h1 class="fw-800 mb-1">Diagnostic Catalog</h1>
-                    <p class="text-muted">Compare prices for standard tests across all verified labs.</p>
-                </div>
-                <div class="col-lg-6 text-lg-end">
-                    <div class="cat-toggle">
-                        <button class="active" id="btn-cat-test" onclick="setCatalog('test')">Individual Tests</button>
-                        <button id="btn-cat-pkg" onclick="setCatalog('package')">Health Packages</button>
-                    </div>
+        <!-- SECTION 1: ORDERS DASHBOARD -->
+        <section id="ordersView" class="view-section active">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h3 class="fw-800 m-0">Incoming Orders</h3>
+                <div class="hk-tabs">
+                    <button class="hk-tab-btn active" id="tabGen" onclick="loadOrders('General')">General</button>
+                    <button class="hk-tab-btn" id="tabPres" onclick="loadOrders('Prescription')">Prescription</button>
                 </div>
             </div>
-            <div class="row g-4" id="catalogGrid"></div>
+            <div id="orderGrid" class="row g-4"></div>
         </section>
 
-        <!-- 2. COMPARISON VIEW -->
-        <section id="comparisonView" class="view-section">
-            <button class="btn btn-link text-dark fw-bold p-0 mb-4" onclick="switchView('discoveryView')">
-                <i class="fas fa-arrow-left me-2"></i> Back to Catalog
-            </button>
-            <div class="row g-4">
-                <div class="col-lg-4"><div id="masterServiceInfo" class="hk-card p-4 sticky-top" style="top:100px"></div></div>
-                <div class="col-lg-8"><h4 class="fw-800 mb-4">Labs providing this service</h4><div id="comparisonList"></div></div>
-            </div>
-        </section>
-
-        <!-- 3. LAB LIST VIEW -->
-        <section id="labListView" class="view-section">
-            <h2 class="fw-800 mb-4">Partner Laboratories</h2>
-            <div class="row g-4" id="labGrid"></div>
-        </section>
-
-        <!-- 4. LAB INVENTORY VIEW -->
-        <section id="labInventoryView" class="view-section">
-            <button class="btn btn-link text-dark fw-bold p-0 mb-4" onclick="switchView('labListView')">
-                <i class="fas fa-arrow-left me-2"></i> Back to All Labs
-            </button>
-            <div id="labProfileHeader" class="mb-4"></div>
-            <div class="row g-4">
-                <div class="col-lg-8">
-                    <div class="hk-card p-4">
-                        <ul class="nav nav-pills mb-4 gap-2">
-                            <li class="nav-item"><button class="nav-link active rounded-pill btn-sm" id="tab-inv-test" onclick="setInventoryType('tests')">Tests</button></li>
-                            <li class="nav-item"><button class="nav-link rounded-pill btn-sm" id="tab-inv-pkg" onclick="setInventoryType('packages')">Packages</button></li>
-                        </ul>
-                        <div id="inventoryContainer"></div>
-                    </div>
-                </div>
-                <div class="col-lg-4">
-                    <div id="labFeatureList" class="hk-card p-4 sticky-top" style="top:100px"></div>
+        <!-- SECTION 2: MY INVENTORY -->
+        <section id="inventoryView" class="view-section">
+            <h3 class="fw-800 mb-4">Store Inventory</h3>
+            <div class="hk-card">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Medicine</th>
+                                <th>MRP</th>
+                                <th>Your Price</th>
+                                <th>Stock</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventoryTableBody"></tbody>
+                    </table>
                 </div>
             </div>
         </section>
 
-        <!-- 5. CHECKOUT VIEW -->
-        <section id="checkoutView" class="view-section">
-            <h2 class="fw-800 mb-4">Finalize Order</h2>
-            <div class="row g-4">
-                <div class="col-lg-8">
-                    <!-- Step 1: Patients -->
-                    <div class="hk-card p-4 mb-4">
-                        <h6 class="fw-800 mb-3"><i class="fas fa-users me-2 text-success"></i>1. Select Patients</h6>
-                        <div class="row g-3" id="patientSelectGrid"></div>
-                    </div>
-
-                    <!-- Step 2: Slot Selection -->
-                    <div class="hk-card p-4 mb-4">
-                        <h6 class="fw-800 mb-3"><i class="fas fa-clock me-2 text-success"></i>2. Appointment Slot</h6>
-                        <div class="row">
-                            <div class="col-md-5"><input type="date" id="checkoutDate" class="form-control rounded-4 mb-3" onchange="fetchCheckoutSlots()"></div>
-                            <div class="col-md-7"><div class="slot-grid" id="checkoutSlotGrid"></div></div>
-                        </div>
-                    </div>
-
-                    <!-- Step 3: Collection -->
-                    <div class="hk-card p-4 mb-4">
-                        <h6 class="fw-800 mb-3"><i class="fas fa-truck me-2 text-success"></i>3. Collection Type</h6>
-                        <div class="row g-3">
-                            <div class="col-6"><div class="patient-card active" id="coll-lab" onclick="setCollectionMode('Visit Lab')"><h6>Walk-in</h6><small>Free</small></div></div>
-                            <div class="col-6"><div class="patient-card" id="coll-home" onclick="setCollectionMode('Home Collection')"><h6>Home Visit</h6><small id="homeChargeText">Fee: ₹0</small></div></div>
-                        </div>
-                        <div id="addressSection" class="mt-4 d-none p-3 bg-light rounded-4">
-                            <input type="text" id="addHouse" class="form-control mb-2" placeholder="House/Flat No.">
-                            <div class="row g-2"><div class="col-6"><input type="text" id="addCity" class="form-control" placeholder="City"></div><div class="col-6"><input type="text" id="addPin" class="form-control" placeholder="Pincode"></div></div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="col-lg-4">
-                    <div class="hk-card p-4 sticky-top" style="top:100px">
-                        <h5 class="fw-800 mb-4">Order Summary</h5>
-                        <div id="billItems" class="mb-3 border-bottom pb-2"></div>
-                        
-                        <div class="bill-row fw-bold"><span>Items Subtotal</span><span id="billBase">₹0</span></div>
-                        <div id="billExtraRows"></div>
-
-                        <div class="mt-4">
-                            <label class="small fw-bold mb-1">Coupon Code</label>
-                            <div class="input-group">
-                                <input type="text" id="couponInput" class="form-control" placeholder="CODE">
-                                <button class="btn btn-dark" onclick="applyManualCoupon()">Apply</button>
-                            </div>
-                            <div id="couponStatus" class="small mt-2"></div>
-                            <div id="availableCouponsList" class="mt-2" style="max-height: 150px; overflow-y: auto;"></div>
-                        </div>
-
-                        <div class="mt-4 pt-3 border-top d-flex justify-content-between align-items-center">
-                            <h5 class="fw-800 m-0">Final Total</h5>
-                            <h4 class="fw-800 text-success m-0" id="billFinal">₹0</h4>
-                        </div>
-
-                        <div class="mt-4">
-                            <div class="form-check mb-3">
-                                <input class="form-check-input" type="checkbox" id="checkRapid" onchange="updateBillDisplay()">
-                                <label class="form-check-label small fw-bold">🚀 Rapid Processing (+₹<span id="rapidVal">0</span> / Patient)</label>
-                            </div>
-                            <button class="btn btn-success w-100 py-3 rounded-pill fw-800 shadow-sm" onclick="processFinalBooking()">PLACE ORDER (COD)</button>
-                        </div>
-                    </div>
+        <!-- SECTION 3: MASTER SEARCH (ADD NEW) -->
+        <section id="masterSearchView" class="view-section">
+            <div class="hk-card mb-4">
+                <h4 class="fw-800">Add New Medicine to Store</h4>
+                <p class="text-muted">Search from our master database of 50k+ medicines</p>
+                <div class="input-group mb-3">
+                    <input type="text" id="masterSearchInp" class="form-control rounded-start-pill ps-4" placeholder="Search by name or salt...">
+                    <button class="btn btn-dark rounded-end-pill px-4" onclick="searchMaster()">Search</button>
                 </div>
             </div>
+            <div id="masterResults" class="row g-3"></div>
         </section>
 
-        <!-- 6. HISTORY VIEW -->
-        <section id="historyView" class="view-section">
-            <h2 class="fw-800 mb-4">My Bookings</h2>
-            <div id="orderList" class="row g-4"></div>
-        </section>
     </div>
 
-    <!-- CART SIDEBAR -->
-    <div class="offcanvas offcanvas-end" id="cartSidebar" style="width: 400px;">
-        <div class="offcanvas-header border-bottom"><h5 class="offcanvas-title fw-800">Your Basket</h5><button class="btn-close" data-bs-dismiss="offcanvas"></button></div>
-        <div class="offcanvas-body"><div id="cartLabInfo" class="mb-3"></div><div id="cartItems"></div></div>
-        <div class="p-4 border-top">
-            <div class="d-flex justify-content-between h5 fw-800 mb-3"><span>Cart Total</span><span id="cartTotal">₹0</span></div>
-            <button class="btn btn-success w-100 py-3 rounded-pill fw-800" onclick="goToCheckout()" data-bs-dismiss="offcanvas">CHECKOUT</button>
+    <!-- MODAL: ASSIGN DRIVER -->
+    <div class="modal fade" id="assignDriverModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content p-3 rounded-4">
+                <div class="modal-header border-0"><h5 class="fw-800">Assign Delivery Boy</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <div id="driverList" class="d-grid gap-3"></div>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- FLOAT BUTTON -->
-    <div class="cart-float" data-bs-toggle="offcanvas" data-bs-target="#cartSidebar" onclick="loadCartDetails()">
-        <i class="fas fa-shopping-basket fa-lg"></i>
-        <span class="cart-badge" id="floatCartBadge">0</span>
+    <!-- MODAL: ADD TO INVENTORY -->
+    <div class="modal fade" id="addInventoryModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content p-4 rounded-4">
+                <h5 class="fw-800 mb-3">Inventory Details</h5>
+                <input type="hidden" id="targetMedId">
+                <div class="mb-3"><label class="small fw-bold">Selling Price (₹)</label><input type="number" id="vPrice" class="form-control"></div>
+                <div class="mb-3"><label class="small fw-bold">Stock Quantity</label><input type="number" id="vStock" class="form-control"></div>
+                <div class="mb-3"><label class="small fw-bold">Expiry Date</label><input type="date" id="vExpiry" class="form-control"></div>
+                <button class="btn btn-hk w-100" onclick="submitToInventory()">Save to Store</button>
+            </div>
+        </div>
     </div>
 
-    <!-- SCRIPTS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
-
     <script>
-        const API_URL = 'http://localhost:5002';
-        const token = localStorage.getItem('token');
-        
-        let currentType = 'test', userCart = null, labCharges = null;
-        let selectedPatients = ['Self'], activeSlot = null, activeCollMode = 'Visit Lab';
-        let couponApplied = null, currentLabId = null, currentInvType = 'tests';
+        const API_BASE = "http://localhost:5002";
+        const TOKEN = localStorage.getItem('pharmacytoken'); // Variable storage
 
-        async function hkFetch(endpoint, method = 'GET', body = null) {
-            const options = { method, headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }};
+        // Global State
+        let currentOrderId = null;
+
+        async function apiFetch(endpoint, method = 'GET', body = null) {
+            const options = { 
+                method, 
+                headers: { 
+                    'Authorization': `Bearer ${TOKEN}`,
+                    'Content-Type': 'application/json'
+                }
+            };
             if(body) options.body = JSON.stringify(body);
-            const res = await fetch(`${API_URL}${endpoint}`, options);
-            return await res.json();
+            const res = await fetch(`${API_BASE}${endpoint}`, options);
+            const r = await res.json();
+            if(!res.ok) throw new Error(r.message || "Something went wrong");
+            return r;
         }
 
-        function switchView(id) {
+        function switchView(id, el) {
             document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
-            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
             document.getElementById(id).classList.add('active');
-            if(id === 'discoveryView') loadCatalog();
-            if(id === 'labListView') loadLabs();
-            if(id === 'historyView') loadMyOrders();
-            if(id === 'checkoutView') initCheckout();
-            window.scrollTo(0,0);
+            el.classList.add('active');
+
+            if(id === 'ordersView') loadOrders('General');
+            if(id === 'inventoryView') loadInventory();
         }
 
-        // ==========================================
-        // CATALOG & DISCOVERY
-        // ==========================================
-        function setCatalog(t) { currentType = t; loadCatalog(); }
-
-        async function loadCatalog() {
-            const endpoint = currentType === 'test' ? '/user/labs/standard-tests' : '/user/labs/standard-packages';
-            const res = await hkFetch(endpoint);
-            document.getElementById('catalogGrid').innerHTML = res.data.map(i => `
-                <div class="col-md-3">
-                    <div class="hk-card p-4" onclick="openComparison('${i._id}')" style="cursor:pointer">
-                        <span class="badge bg-light text-dark mb-2">${i.mainCategory || 'Diagnostic'}</span>
-                        <h6 class="fw-800 mb-1">${i.testName || i.packageName}</h6>
-                        <small class="text-muted d-block mb-3">Min Price: <b class="text-success">₹${i.minPrice}</b></small>
-                    </div>
-                </div>`).join('');
-            refreshBadge();
-        }
-
-        async function openComparison(masterId) {
-            const mUrl = currentType === 'test' ? `/user/labs/master-test/${masterId}` : `/user/labs/master-package/${masterId}`;
-            const cUrl = currentType === 'test' ? `/user/labs/comparison/test/${masterId}` : `/user/labs/comparison/package/${masterId}`;
-            const [mRes, cRes] = await Promise.all([hkFetch(mUrl), hkFetch(cUrl)]);
-            const m = mRes.data;
-            document.getElementById('masterServiceInfo').innerHTML = `<h4 class="fw-800 text-success">${m.testName || m.packageName}</h4><p class="small text-muted">${m.shortDescription || 'Verified procedure'}</p><hr><div class="d-flex flex-wrap gap-1">${(m.parameters || m.tests || []).map(p => `<span class="inclusion-tag border">${p.testName || p}</span>`).join('')}</div>`;
-            document.getElementById('comparisonList').innerHTML = cRes.data.map(l => `
-                <div class="lab-row">
-                    <div class="d-flex align-items-center gap-3"><img src="${l.labId.profileImage || 'https://placehold.co/50'}" class="rounded-circle border" width="50"><div><h6 class="fw-800 m-0">${l.labId.name}</h6><small class="text-muted">${l.labId.city}</small></div></div>
-                    <div class="text-end"><h5 class="fw-800 text-success m-0">₹${l.discountPrice || l.offerPrice}</h5><button class="btn btn-success btn-sm rounded-pill px-4 mt-2" onclick="addToCart('${l.labId._id}', '${l._id}', '${currentType==='test'?'LabTest':'LabPackage'}')">ADD</button></div>
-                </div>`).join('');
-            switchView('comparisonView');
-        }
-
-        // ==========================================
-        // LAB LIST & INVENTORY
-        // ==========================================
-        async function loadLabs() {
-            const res = await hkFetch('/user/labs/list', 'POST', { lat: localStorage.getItem('lat')||0, lng: localStorage.getItem('lng')||0 });
-            document.getElementById('labGrid').innerHTML = res.data.map(l => `
-                <div class="col-md-4">
-                    <div class="hk-card p-4 text-center" onclick="viewLabInventory('${l._id}')" style="cursor:pointer">
-                        <img src="${l.profileImage || 'https://placehold.co/70'}" class="rounded-circle border mb-3" width="70">
-                        <h5 class="fw-800 mb-1">${l.name}</h5><p class="small text-muted mb-2">${l.city}</p>
-                        <span class="badge bg-light text-warning border small"><i class="fas fa-star"></i> ${l.rating}</span>
-                    </div>
-                </div>`).join('');
-        }
-
-        async function viewLabInventory(id) {
-            currentLabId = id;
-            const res = await hkFetch(`/user/labs/details/${id}`);
-            document.getElementById('labProfileHeader').innerHTML = `<h2 class="fw-800">${res.data.name}</h2><p class="text-muted">${res.data.city}</p>`;
-            document.getElementById('labFeatureList').innerHTML = `<div class="small"><i class="fas fa-check text-success me-2"></i>24x7: ${res.data.is24x7?'Yes':'No'}</div>`;
-            setInventoryType('tests');
-            switchView('labInventoryView');
-        }
-
-        async function setInventoryType(type) {
-            currentInvType = type;
-            const endpoint = type === 'tests' ? `/user/labs/${currentLabId}/inventory-tests` : `/user/labs/${currentLabId}/inventory-packages`;
-            const res = await hkFetch(endpoint);
-            document.getElementById('inventoryContainer').innerHTML = res.data.map(i => `
-                <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
-                    <div><h6 class="m-0 fw-bold">${i.masterTestId?.testName || i.packageName}</h6><small class="text-muted">₹${i.discountPrice || i.offerPrice}</small></div>
-                    <button class="btn btn-outline-success btn-sm rounded-pill" onclick="addToCart('${currentLabId}', '${i._id}', '${type==='tests'?'LabTest':'LabPackage'}')">Add</button>
-                </div>`).join('');
-        }
-
-        // ==========================================
-        // CART & CHECKOUT
-        // ==========================================
-        async function addToCart(labId, itemId, productType, force = false) {
-            const res = await hkFetch('/user/cart/lab/add', 'POST', { labId, itemId, productType, forceReplace: force });
-            if(res.canReplace) {
-                if(confirm(res.message)) addToCart(labId, itemId, productType, true);
-            } else { Swal.fire('Added!', '', 'success'); refreshBadge(); }
-        }
-
-        async function refreshBadge() {
-            const res = await hkFetch('/user/cart');
-            document.getElementById('navCartBadge').innerText = res.data?.labCart?.items?.length || 0;
-            document.getElementById('floatCartBadge').innerText = res.data?.labCart?.items?.length || 0;
-        }
-
-        async function loadCartDetails() {
-            const res = await hkFetch('/user/cart');
-            userCart = res.data.labCart;
-            if(!userCart || userCart.items.length === 0) {
-                document.getElementById('cartItems').innerHTML = '<p class="text-center py-5">Empty</p>';
-                document.getElementById('cartTotal').innerText = '₹0'; return;
-            }
-            document.getElementById('cartLabInfo').innerHTML = `<h6 class="fw-800 text-success">Booking with: ${userCart.labId.name}</h6>`;
-            document.getElementById('cartItems').innerHTML = userCart.items.map(i => `
-                <div class="d-flex justify-content-between align-items-center mb-2 p-2 bg-light rounded-3">
-                    <div><div class="small fw-bold">${i.name}</div><div class="small">₹${i.price}</div></div>
-                    <button class="btn btn-sm text-danger" onclick="removeItem('${i.itemId._id}')"><i class="fas fa-trash"></i></button>
-                </div>`).join('');
-            const sub = userCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-            document.getElementById('cartTotal').innerText = `₹${sub}`;
-        }
-
-        async function removeItem(id) { await hkFetch(`/user/cart/item/${id}`, 'DELETE'); loadCartDetails(); refreshBadge(); }
-
-        function goToCheckout() { switchView('checkoutView'); }
-
-        async function initCheckout() {
-            const uRes = await hkFetch('/api/auth/user/profile');
-            const user = uRes.data;
-            document.getElementById('patientSelectGrid').innerHTML = `
-                <div class="col-md-3"><div class="patient-card active" onclick="togglePatient('Self', this)"><h6>Self</h6><small>${user.name}</small></div></div>
-                ${user.familyMember.map(m => `<div class="col-md-3"><div class="patient-card" onclick="togglePatient('${m._id}', this)"><h6>${m.relation}</h6><small>${m.memberName}</small></div></div>`).join('')}
-            `;
-
-            const [cRes, cpRes] = await Promise.all([hkFetch('/user/labs/delivery-charges'), hkFetch(`/user/labs/coupons?labId=${userCart.labId._id}`)]);
-            labCharges = cRes.data;
-            document.getElementById('homeChargeText').innerText = `Flat Fee: ₹${labCharges.fixedPrice}`;
-            document.getElementById('rapidVal').innerText = labCharges.fastDeliveryExtra;
+        // --- ORDER MANAGEMENT ---
+        async function loadOrders(type) {
+            document.getElementById('tabGen').classList.toggle('active', type === 'General');
+            document.getElementById('tabPres').classList.toggle('active', type === 'Prescription');
             
-            renderCoupons(cpRes.data);
-            updateBillDisplay();
+            try {
+                const res = await apiFetch(`/provider/pharmacy/orders/list?orderType=${type}`);
+                const grid = document.getElementById('orderGrid');
+                grid.innerHTML = res.data.map(o => `
+                    <div class="col-md-6 col-lg-4">
+                        <div class="hk-card">
+                            <div class="d-flex justify-content-between mb-3">
+                                <span class="fw-800 text-muted">#${o.orderId}</span>
+                                <span class="status-badge bg-light text-dark">${o.status}</span>
+                            </div>
+                            <h6 class="fw-800 mb-1">${o.userId?.name || 'Walk-in User'}</h6>
+                            <p class="small text-muted"><i class="fas fa-map-marker-alt me-1"></i> ${o.address?.city || 'N/A'}</p>
+                            <hr>
+                            <div class="mb-3">
+                                ${type === 'General' ? 
+                                    o.items.map(i => `<div class="small d-flex justify-content-between"><span>${i.name} x${i.quantity}</span><b>₹${i.price}</b></div>`).join('') :
+                                    `<div class="d-flex gap-2 overflow-auto">${o.prescriptionImages.map(img => `<img src="${img}" width="60" class="rounded">`).join('')}</div>`
+                                }
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                <h5 class="fw-800 text-success mb-0">₹${o.billSummary.totalAmount}</h5>
+                                ${o.deliveryStatus === 'PendingAssignment' ? 
+                                    `<button class="btn btn-sm btn-dark rounded-pill px-3" onclick="openDriverModal('${o._id}')">Assign Driver</button>` :
+                                    `<span class="small text-primary fw-bold"><i class="fas fa-truck me-1"></i> ${o.deliveryStatus}</span>`
+                                }
+                            </div>
+                        </div>
+                    </div>
+                `).join('') || '<div class="text-center py-5">No orders found</div>';
+            } catch (e) { console.error(e); }
         }
 
-        function togglePatient(id, el) {
-            el.classList.toggle('active');
-            if(selectedPatients.includes(id)) selectedPatients = selectedPatients.filter(p => p !== id);
-            else selectedPatients.push(id);
-            updateBillDisplay();
+        // --- DRIVER ASSIGNMENT ---
+        async function openDriverModal(orderId) {
+            currentOrderId = orderId;
+            const modal = new bootstrap.Modal(document.getElementById('assignDriverModal'));
+            modal.show();
+
+            try {
+                const res = await apiFetch('/provider/pharmacy/orders/available-drivers');
+                const list = document.getElementById('driverList');
+                list.innerHTML = res.data.map(d => `
+                    <div class="d-flex align-items-center justify-content-between p-3 border rounded-4">
+                        <div class="d-flex align-items-center gap-3">
+                            <img src="${d.profilePic || 'https://ui-avatars.com/api/?name='+d.name}" class="rounded-circle" width="45">
+                            <div><b class="d-block">${d.name}</b><small class="text-muted">${d.vehicleNumber}</small></div>
+                        </div>
+                        <button class="btn btn-sm btn-hk" onclick="assignDriver('${d._id}')">Assign</button>
+                    </div>
+                `).join('') || 'No drivers available online';
+            } catch (e) { }
         }
 
-        async function fetchCheckoutSlots() {
-            const date = document.getElementById('checkoutDate').value;
-            const res = await hkFetch(`/user/labs/slots?labId=${userCart.labId._id}&date=${date}`);
-            document.getElementById('checkoutSlotGrid').innerHTML = res.slots.map(s => `
-                <div class="slot-box ${s.isFull?'full':''}" onclick="selectSlot('${s.time}', ${s.extraFee || 0}, this)">
-                    <div class="small fw-bold">${s.time}</div>
-                    ${s.extraFee > 0 ? `<span class="slot-fee text-danger">+₹${s.extraFee}</span>` : ''}
-                </div>`).join('');
+        async function assignDriver(driverId) {
+            try {
+                await apiFetch('/provider/pharmacy/orders/assign-manual', 'POST', { orderId: currentOrderId, driverId });
+                Swal.fire('Success', 'Driver Assigned Successfully', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('assignDriverModal')).hide();
+                loadOrders('General');
+            } catch (e) { Swal.fire('Error', e.message, 'error'); }
         }
 
-        function selectSlot(time, fee, el) {
-            if(el.classList.contains('full')) return;
-            document.querySelectorAll('.slot-box').forEach(x => x.classList.remove('selected'));
-            el.classList.add('selected');
-            activeSlot = { time, fee };
-            updateBillDisplay();
+        // --- INVENTORY MANAGEMENT ---
+        async function loadInventory() {
+            try {
+                const res = await apiFetch('/provider/pharmacy/inventory/my-list');
+                const tbody = document.getElementById('inventoryTableBody');
+                tbody.innerHTML = res.data.map(i => `
+                    <tr>
+                        <td>
+                            <div class="d-flex align-items-center gap-3">
+                                <img src="${i.medicineId.image_url[0]}" class="med-thumb">
+                                <div><b class="d-block">${i.medicineId.name}</b><small class="text-muted">${i.medicineId.manufacturers}</small></div>
+                            </div>
+                        </td>
+                        <td>₹${i.medicineId.mrp}</td>
+                        <td class="fw-bold text-success">₹${i.vendor_price}</td>
+                        <td>${i.stock_quantity > 0 ? `<span class="badge bg-success">${i.stock_quantity}</span>` : `<span class="badge bg-danger">Out of Stock</span>`}</td>
+                        <td><button class="btn btn-sm btn-outline-dark" onclick="editInv('${i._id}', ${i.vendor_price}, ${i.stock_quantity})"><i class="fas fa-edit"></i></button></td>
+                    </tr>
+                `).join('');
+            } catch (e) { }
         }
 
-        function setCollectionMode(m) {
-            activeCollMode = m;
-            document.getElementById('coll-lab').classList.toggle('active', m === 'Visit Lab');
-            document.getElementById('coll-home').classList.toggle('active', m === 'Home Collection');
-            document.getElementById('addressSection').classList.toggle('d-none', m !== 'Home Collection');
-            updateBillDisplay();
+        // --- MASTER MEDICINE SEARCH ---
+        async function searchMaster() {
+            const query = document.getElementById('masterSearchInp').value;
+            if(!query) return;
+
+            try {
+                const res = await apiFetch(`/provider/pharmacy/inventory/getMaster?query=${query}`);
+                const resDiv = document.getElementById('masterResults');
+                resDiv.innerHTML = res.data.map(m => `
+                    <div class="col-md-6">
+                        <div class="hk-card d-flex flex-row align-items-center gap-3 p-3">
+                            <img src="${m.image_url[0]}" class="med-thumb">
+                            <div class="flex-grow-1">
+                                <b class="d-block">${m.name}</b>
+                                <small class="text-muted">MRP: ₹${m.mrp}</small>
+                            </div>
+                            <button class="btn btn-sm btn-hk" onclick="openAddInvModal('${m._id}')">Add to Store</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) { }
         }
 
-        function renderCoupons(coupons) {
-            document.getElementById('availableCouponsList').innerHTML = coupons.map(c => `
-                <div class="coupon-box ${c.isApplicable ? 'applicable' : 'disabled'}" onclick="${c.isApplicable ? `applyCoupon('${c.couponName}')` : ''}">
-                    <div class="d-flex justify-content-between"><b>${c.couponName}</b><span>${c.discountPercentage}% OFF</span></div>
-                    <div style="font-size: 10px;">${c.validationMessage}</div>
-                </div>`).join('');
+        function openAddInvModal(id) {
+            document.getElementById('targetMedId').value = id;
+            new bootstrap.Modal(document.getElementById('addInventoryModal')).show();
         }
 
-        function applyCoupon(code) { document.getElementById('couponInput').value = code; applyManualCoupon(); }
-
-        async function applyManualCoupon() {
-            const code = document.getElementById('couponInput').value.toUpperCase();
-            const res = await hkFetch(`/user/labs/coupons?labId=${userCart.labId._id}`);
-            const coupon = res.data.find(x => x.couponName === code);
-            if(coupon && coupon.isApplicable) { couponApplied = coupon; document.getElementById('couponStatus').innerHTML = '<span class="text-success">Applied!</span>'; }
-            else { couponApplied = null; document.getElementById('couponStatus').innerHTML = '<span class="text-danger">Not Applied</span>'; }
-            updateBillDisplay();
+        async function submitToInventory() {
+            const body = {
+                medicineId: document.getElementById('targetMedId').value,
+                vendor_price: document.getElementById('vPrice').value,
+                stock_quantity: document.getElementById('vStock').value,
+                expiry_date: document.getElementById('vExpiry').value
+            };
+            try {
+                await apiFetch('/provider/pharmacy/inventory/add', 'POST', body);
+                Swal.fire('Added', 'Medicine added to your inventory', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('addInventoryModal')).hide();
+                loadInventory();
+            } catch (e) { Swal.fire('Error', e.message, 'error'); }
         }
 
-        function updateBillDisplay() {
-            if(!userCart) return;
-            const pCount = selectedPatients.length;
-            const itemsBase = userCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-            const itemsTotal = itemsBase * pCount;
-
-            document.getElementById('billItems').innerHTML = userCart.items.map(i => `
-                <div class="bill-row"><span>${i.name} (x${pCount})</span><span>₹${i.price * pCount}</span></div>`).join('');
-
-            let total = itemsTotal;
-            let extraHtml = '';
-
-            if(activeCollMode === 'Home Collection') { total += labCharges.fixedPrice; extraHtml += `<div class="bill-row"><span>Delivery (Flat)</span><span>+₹${labCharges.fixedPrice}</span></div>`; }
-            if(document.getElementById('checkRapid').checked) { const r = labCharges.fastDeliveryExtra * pCount; total += r; extraHtml += `<div class="bill-row"><span>Express (x${pCount})</span><span>+₹${r}</span></div>`; }
-            if(activeSlot && activeSlot.fee > 0) { total += activeSlot.fee; extraHtml += `<div class="bill-row"><span>Premium Slot</span><span>+₹${activeSlot.fee}</span></div>`; }
-            
-            if(couponApplied) { 
-                const disc = Math.min((itemsTotal * couponApplied.discountPercentage) / 100, couponApplied.maxDiscount);
-                total -= disc; 
-                extraHtml += `<div class="bill-row text-success"><span>Coupon Discount</span><span>-₹${disc}</span></div>`;
-            }
-
-            document.getElementById('billBase').innerText = `₹${itemsTotal}`;
-            document.getElementById('billExtraRows').innerHTML = extraHtml;
-            document.getElementById('billFinal').innerText = `₹${total}`;
-        }
-
-        async function processFinalBooking() {
-            if(!activeSlot) return alert('Select Slot');
-            const res = await hkFetch('/user/labs/checkout', 'POST', {
-                appointmentDate: document.getElementById('checkoutDate').value,
-                appointmentTime: activeSlot.time,
-                selectedPatientIds: selectedPatients,
-                collectionType: activeCollMode,
-                isRapid: document.getElementById('checkRapid').checked,
-                couponCode: couponApplied ? couponApplied.couponName : null,
-                address: { houseNo: document.getElementById('addHouse').value, city: document.getElementById('addCity').value, pincode: document.getElementById('addPin').value },
-                paymentMethod: 'COD'
-            });
-            if(res.success) { switchView('historyView'); refreshBadge(); }
-        }
-
-        async function loadMyOrders() {
-            const res = await hkFetch('/user/labs/my-bookings');
-            document.getElementById('orderList').innerHTML = res.data.map(b => `
-                <div class="col-md-6"><div class="hk-card p-4">
-                    <div class="d-flex justify-content-between"><b>ID: ${b.bookingId}</b><span class="badge bg-success">${b.status}</span></div>
-                    <h6 class="mt-2">${b.labId.name}</h6>
-                    <div class="d-flex justify-content-between mt-3 pt-2 border-top"><b>₹${b.billSummary.totalAmount}</b><button class="btn btn-sm btn-dark">Track</button></div>
-                </div></div>`).join('');
-        }
-
-        window.onload = () => { if(token) loadCatalog(); };
+        window.onload = () => { if(TOKEN) loadOrders('General'); };
     </script>
 </body>
 </html>

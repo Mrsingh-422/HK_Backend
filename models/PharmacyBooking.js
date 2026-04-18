@@ -68,9 +68,25 @@ const pharmacyBookingSchema = new mongoose.Schema({
         default: 'Pending' 
     },
     
+    orderType: { type: String, enum: ['General', 'Prescription'], default: 'General' },
+    driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
+    
+    // Delivery Tracking Statuses
+    deliveryStatus: { 
+        type: String, 
+        enum: ['PendingAssignment', 'Assigned', 'Accepted', 'PickedUp', 'OutForDelivery', 'ReachedLocation', 'Delivered', 'CancelledByDriver', 'UserUnreachable', 'UserRefused'], 
+        default: 'PendingAssignment' 
+    },
+    
+    deliveryOTP: { type: String }, // For final verification
+    assignedAt: { type: Date },
+    rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }], // To avoid re-assigning to same driver
+    
+    // For Prescription orders
+    prescriptionImages: [String],
     status: { 
         type: String, 
-        enum: ['Placed', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Under Review'], 
+        enum: ['Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Cancelled'], 
         default: 'Placed' 
     },
 

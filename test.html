@@ -3,305 +3,200 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Manage Lab Services</title>
+    <title>HK Driver | Delivery Management</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+
     <style>
-        body { background-color: #f0f2f5; padding: 20px; font-family: 'Segoe UI', sans-serif; }
-        .form-container { max-width: 950px; margin: auto; background: white; padding: 35px; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); }
-        .tab-btn { cursor: pointer; padding: 12px 25px; border: none; background: #e9ecef; border-radius: 10px; margin-right: 10px; font-weight: 600; transition: 0.3s; }
-        .tab-btn.active { background: #198754; color: white; }
-        .hidden { display: none; }
-        .master-preview { background: #f8fdfa; border: 1px dashed #198754; padding: 20px; border-radius: 12px; margin-bottom: 25px; }
-        .tag { display: inline-block; background: #e8f5e9; color: #1b5e20; padding: 3px 12px; border-radius: 50px; font-size: 0.75rem; margin: 3px; font-weight: 600; }
-        .std-price-badge { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: bold; }
-        .scrollable-box { max-height: 200px; overflow-y: auto; background: #fff; border: 1px solid #dee2e6; padding: 15px; border-radius: 10px; }
+        :root {
+            --hk-primary: #00b894;
+            --hk-dark: #1e272e;
+            --hk-bg: #f8fafc;
+            --hk-card-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            --hk-radius: 24px;
+        }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--hk-bg); padding-bottom: 100px; }
+        .driver-nav { background: white; padding: 20px; border-bottom: 2px solid var(--hk-primary); position: sticky; top: 0; z-index: 100; }
+        .hk-card { background: white; border-radius: var(--hk-radius); border: none; box-shadow: var(--hk-card-shadow); margin-bottom: 20px; overflow: hidden; }
+        .status-badge { padding: 6px 16px; border-radius: 50px; font-weight: 800; font-size: 11px; text-transform: uppercase; }
+        .btn-hk { background: var(--hk-primary); color: white; border-radius: 50px; font-weight: 700; border: none; padding: 12px 25px; }
+        
+        /* Bottom Navigation for Driver */
+        .bottom-nav { position: fixed; bottom: 0; width: 100%; background: white; display: flex; justify-content: space-around; padding: 15px; border-top: 1px solid #eee; }
+        .nav-item { text-align: center; color: #94a3b8; cursor: pointer; text-decoration: none; }
+        .nav-item.active { color: var(--hk-primary); }
+        .nav-item i { font-size: 1.4rem; display: block; }
+        .nav-item span { font-size: 10px; font-weight: 700; }
+
+        .view-section { display: none; }
+        .view-section.active { display: block; }
     </style>
 </head>
 <body>
 
-<div class="form-container">
-    <h3 class="text-center mb-4 text-success fw-bold">Manage Lab Services</h3>
-    
-    <div class="d-flex justify-content-center mb-4">
-        <button class="tab-btn active" id="btn-test" onclick="switchTab('testForm')">Add Single Test</button>
-        <button class="tab-btn" id="btn-pkg" onclick="switchTab('packageForm')">Manage Packages</button>
+    <div class="driver-nav d-flex justify-content-between align-items-center">
+        <h5 class="fw-800 m-0">Driver Dashboard</h5>
+        <div id="driverStatusArea"><span class="status-badge bg-success text-white">Online</span></div>
     </div>
 
-    <!-- 1. ADD SINGLE TEST -->
-    <form id="testForm">
-        <div class="row">
-            <div class="col-md-6 mb-3">
-                <label class="form-label fw-bold">Main Category</label>
-                <select id="mainCategory" class="form-select" onchange="loadMasterTests()" required>
-                    <option value="">Select Category</option>
-                    <option value="Pathology">Pathology</option>
-                    <option value="Radiology">Radiology</option>
-                </select>
-            </div>
-            <div class="col-md-6 mb-3">
-                <label class="form-label fw-bold">Search Master Test</label>
-                <select id="masterTestId" class="form-select" onchange="autoFillTestDetails()" required>
-                    <option value="">Select Category First</option>
-                </select>
-            </div>
-        </div>
+    <div class="container mt-4">
+        <!-- 1. NEW TASKS (Assigned Status) -->
+        <section id="tasksView" class="view-section active">
+            <h6 class="fw-800 mb-3 text-muted">New Delivery Requests</h6>
+            <div id="newRequestsList"></div>
+        </section>
 
-        <div id="masterPreview" class="master-preview hidden">
-            <h6 class="text-success fw-bold"><i class="fas fa-info-circle me-2"></i>Master Info & Catalog Price</h6>
-            <div class="row mt-3">
-                <div class="col-md-4"><small class="text-muted">Sample Type:</small> <p id="prevSample" class="fw-bold">-</p></div>
-                <div class="col-md-4"><small class="text-muted">Catalog MRP:</small> <p class="text-danger fw-bold">₹<span id="prevMrp">-</span></p></div>
-                <div class="col-md-4"><small class="text-muted">Category:</small> <p id="prevCat" class="fw-bold">-</p></div>
-            </div>
-            <div class="mb-2"><small class="text-muted">Included Parameters:</small> <div id="prevParams"></div></div>
-            <div><small class="text-muted">Standard Preparation:</small> <p id="prevPrep" class="small italic">-</p></div>
-        </div>
+        <!-- 2. ACTIVE DELIVERIES (Accepted/Picked/OutForDelivery) -->
+        <section id="activeView" class="view-section">
+            <h6 class="fw-800 mb-3 text-muted">Active Deliveries</h6>
+            <div id="activeList"></div>
+        </section>
 
-        <div class="row">
-            <div class="col-md-4 mb-3">
-                <label class="form-label fw-bold">Your MRP (₹)</label>
-                <input type="number" id="amount" class="form-control" required>
-            </div>
-            <div class="col-md-4 mb-3"><label class="form-label fw-bold">Discount %</label><input type="number" id="discountPercent" class="form-control" value="0"></div>
-            <div class="col-md-4 mb-3"><label class="form-label fw-bold">Report Time (TAT)</label><input type="text" id="reportTime" class="form-control" placeholder="e.g. 12 Hours" required></div>
-        </div>
+        <!-- 3. HISTORY -->
+        <section id="historyView" class="view-section">
+            <h6 class="fw-800 mb-3 text-muted">Completed Tasks</h6>
+            <div id="completedList"></div>
+        </section>
+    </div>
 
-        <div class="row">
-            <div class="col-md-6 mb-3">
-                <label class="form-label fw-bold">Service Type</label>
-                <select id="testType" class="form-select">
-                    <option value="Both">Both (Home & Walk-In)</option>
-                    <option value="Home Collection">Home Collection Only</option>
-                    <option value="Walk-In">Walk-In Only</option>
-                </select>
-            </div>
-            <div class="col-md-6 mb-3"><label class="form-label fw-bold">Special Instructions</label><textarea id="precaution" class="form-control" rows="1"></textarea></div>
-        </div>
+    <nav class="bottom-nav">
+        <div class="nav-item active" onclick="switchDriverView('tasksView', this)"><i class="fas fa-list-ul"></i><span>New Tasks</span></div>
+        <div class="nav-item" onclick="switchDriverView('activeView', this)"><i class="fas fa-truck-loading"></i><span>Active</span></div>
+        <div class="nav-item" onclick="switchDriverView('historyView', this)"><i class="fas fa-history"></i><span>History</span></div>
+    </nav>
 
-        <button type="submit" class="btn btn-success btn-lg w-100 mt-3 fw-bold shadow-sm">LIST TEST IN MY LAB</button>
-    </form>
+    <script>
+        const API_URL = 'http://localhost:5002';
+        const AUTH_TOKEN = localStorage.getItem('pharmacydriver'); // Driver Token
 
-    <!-- 2. MANAGE PACKAGE -->
-    <form id="packageForm" class="hidden">
-        <div class="mb-4">
-            <label class="form-label fw-bold">Selection Mode</label>
-            <select id="pkgMode" class="form-select bg-light fw-bold" onchange="togglePackageMode()">
-                <option value="master">Pick from Admin Master Templates</option>
-                <option value="custom">Create My Own Custom Combo</option>
-            </select>
-        </div>
-
-        <!-- Master Section -->
-        <div id="masterPkgSection">
-            <div class="mb-3">
-                <label class="form-label fw-bold">Select Master Template</label>
-                <select id="masterPackageId" class="form-select" onchange="autoFillPkgDetails()" required>
-                    <option value="">Loading Templates...</option>
-                </select>
-            </div>
-            <div id="pkgMasterPreview" class="alert alert-info py-2 hidden">
-                <small><i class="fas fa-tag me-1"></i> Catalog MRP: <b>₹<span id="stdPkgMrp">0</span></b> | Suggested TAT: <b id="stdPkgTat">-</b></small>
-            </div>
-        </div>
-
-        <!-- Custom Section -->
-        <div id="customPkgSection" class="hidden">
-            <div class="mb-3">
-                <label class="form-label fw-bold">Custom Package Name</label>
-                <input type="text" id="customName" class="form-control" placeholder="e.g. Full Body Diamond Package">
-            </div>
-            <div class="mb-3">
-                <label class="form-label fw-bold">Select Master Tests to Combine</label>
-                <div id="testCheckboxes" class="scrollable-box"></div>
-            </div>
-        </div>
-
-        <div class="row mt-4">
-            <div class="col-md-6 mb-3">
-                <label class="form-label fw-bold">Package MRP (₹)</label>
-                <input type="number" id="pkgMrp" class="form-control border-primary" required>
-            </div>
-            <div class="col-md-6 mb-3"><label class="form-label fw-bold">Discount %</label><input type="number" id="pkgDiscount" class="form-control" value="0"></div>
-        </div>
-
-        <div class="row">
-            <div class="col-md-4 mb-3">
-                <label class="form-label fw-bold">Gender</label>
-                <select id="pkgGender" class="form-select">
-                    <option value="Both">Both</option>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                </select>
-            </div>
-            <div class="col-md-4 mb-3"><label class="form-label fw-bold">Age Group</label><input type="text" id="pkgAge" class="form-control" value="All Ages"></div>
-            <div class="col-md-4 mb-3"><label class="form-label fw-bold">Report TAT</label><input type="text" id="pkgTat" class="form-control" placeholder="e.g. 24 Hours" required></div>
-        </div>
-
-        <button type="submit" class="btn btn-primary btn-lg w-100 mt-3 fw-bold shadow-sm">LAUNCH PACKAGE</button>
-    </form>
-</div>
-
-<script>
-    const BASE_URL = 'http://localhost:5002';
-    const token = localStorage.getItem('labtoken');
-
-    function switchTab(formId) {
-        document.getElementById('testForm').classList.add('hidden');
-        document.getElementById('packageForm').classList.add('hidden');
-        document.getElementById(formId).classList.remove('hidden');
-        document.getElementById('btn-test').classList.toggle('active', formId === 'testForm');
-        document.getElementById('btn-pkg').classList.toggle('active', formId === 'packageForm');
-        
-        if(formId === 'packageForm') {
-            loadTemplates();
-            togglePackageMode(); // Ensure required fields are set correctly
-        }
-    }
-
-    // --- MODE TOGGLE (CRITICAL FIX FOR FOCUS ERROR) ---
-    function togglePackageMode() {
-        const mode = document.getElementById('pkgMode').value;
-        const isMaster = mode === 'master';
-        
-        document.getElementById('masterPkgSection').classList.toggle('hidden', !isMaster);
-        document.getElementById('customPkgSection').classList.toggle('hidden', isMaster);
-
-        // Required logic to prevent "Not Focusable" error
-        const masterSelect = document.getElementById('masterPackageId');
-        const customInput = document.getElementById('customName');
-
-        if(isMaster) {
-            masterSelect.setAttribute('required', 'required');
-            customInput.removeAttribute('required');
-        } else {
-            masterSelect.removeAttribute('required');
-            customInput.setAttribute('required', 'required');
-            loadTestCheckboxes();
-        }
-    }
-
-    // --- TEST LOGIC ---
-    async function loadMasterTests() {
-        const cat = document.getElementById('mainCategory').value;
-        const res = await fetch(`${BASE_URL}/provider/labs/services/tests/standard-catalog?mainCategory=${cat}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const json = await res.json();
-        const select = document.getElementById('masterTestId');
-        select.innerHTML = '<option value="">Select Test Name</option>';
-        json.data.forEach(t => select.innerHTML += `<option value="${t._id}">${t.testName}</option>`);
-    }
-
-    async function autoFillTestDetails() {
-        const id = document.getElementById('masterTestId').value;
-        if(!id) return;
-        const res = await fetch(`${BASE_URL}/provider/labs/services/tests/master-details/${id}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const json = await res.json();
-        const d = json.data;
-
-        document.getElementById('masterPreview').classList.remove('hidden');
-        document.getElementById('prevSample').innerText = d.sampleType || 'N/A';
-        document.getElementById('prevMrp').innerText = d.standardMRP || 0;
-        document.getElementById('prevCat').innerText = d.category || 'General';
-        document.getElementById('prevPrep').innerText = d.pretestPreparation || 'No special preparation';
-        document.getElementById('prevParams').innerHTML = d.parameters.map(p => `<span class="tag">${p}</span>`).join('');
-        
-        document.getElementById('amount').value = d.standardMRP || 0;
-        document.getElementById('precaution').value = d.pretestPreparation || '';
-    }
-
-    // --- PACKAGE LOGIC ---
-    async function loadTemplates() {
-        const res = await fetch(`${BASE_URL}/provider/labs/services/packages/standard-catalog`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const json = await res.json();
-        const select = document.getElementById('masterPackageId');
-        select.innerHTML = '<option value="">Choose Template</option>';
-        json.data.forEach(p => select.innerHTML += `<option value="${p._id}">${p.packageName}</option>`);
-    }
-
-    async function autoFillPkgDetails() {
-        const id = document.getElementById('masterPackageId').value;
-        if(!id) return;
-        const res = await fetch(`${BASE_URL}/provider/labs/services/packages/master-details/${id}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const json = await res.json();
-        const d = json.data;
-
-        document.getElementById('pkgMasterPreview').classList.remove('hidden');
-        document.getElementById('stdPkgMrp').innerText = d.standardMRP || 0;
-        document.getElementById('stdPkgTat').innerText = d.reportTime || '24 hrs';
-
-        document.getElementById('pkgMrp').value = d.standardMRP || 0;
-        document.getElementById('pkgTat').value = d.reportTime || '24 Hours';
-    }
-
-    async function loadTestCheckboxes() {
-        const res = await fetch(`${BASE_URL}/provider/labs/services/tests/standard-catalog`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const json = await res.json();
-        document.getElementById('testCheckboxes').innerHTML = json.data.map(t => `
-            <div class="form-check mb-2 border-bottom pb-1">
-                <input class="form-check-input pkg-cb" type="checkbox" value="${t._id}" id="chk${t._id}">
-                <label class="form-check-label small d-block" for="chk${t._id}">
-                    <b>${t.testName}</b> <br> <small class="text-muted">${t.mainCategory} | Sample: ${t.sampleType}</small>
-                </label>
-            </div>
-        `).join('');
-    }
-
-    // --- SUBMISSION LOGIC ---
-    document.getElementById('testForm').onsubmit = async (e) => {
-        e.preventDefault();
-        const body = {
-            masterTestId: document.getElementById('masterTestId').value,
-            amount: document.getElementById('amount').value,
-            discountPercent: document.getElementById('discountPercent').value,
-            reportTime: document.getElementById('reportTime').value,
-            precaution: document.getElementById('precaution').value,
-            testType: document.getElementById('testType').value
-        };
-        const res = await fetch(`${BASE_URL}/provider/labs/services/tests/save`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        if((await res.json()).success) { alert("Test Successfully Listed!"); location.reload(); }
-    };
-
-    document.getElementById('packageForm').onsubmit = async (e) => {
-        e.preventDefault();
-        const mode = document.getElementById('pkgMode').value;
-        const body = {
-            mrp: document.getElementById('pkgMrp').value,
-            discountPercent: document.getElementById('pkgDiscount').value,
-            reportTime: document.getElementById('pkgTat').value,
-            gender: document.getElementById('pkgGender').value,
-            ageGroup: document.getElementById('pkgAge').value
-        };
-
-        if(mode === 'master') {
-            body.masterPackageId = document.getElementById('masterPackageId').value;
-        } else {
-            body.packageName = document.getElementById('customName').value;
-            const selected = Array.from(document.querySelectorAll('.pkg-cb:checked')).map(c => c.value);
-            if(selected.length === 0) return alert("Please select at least one test");
-            body.tests = JSON.stringify(selected);
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            const options = {
+                method,
+                headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }
+            };
+            if(body) options.body = JSON.stringify(body);
+            const res = await fetch(`${API_URL}${endpoint}`, options);
+            return await res.json();
         }
 
-        const res = await fetch(`${BASE_URL}/provider/labs/services/packages/save`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        if((await res.json()).success) { alert("Package Successfully Launched!"); location.reload(); }
-    };
-</script>
+        function switchDriverView(id, el) {
+            document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            el.classList.add('active');
+            if(id === 'tasksView') loadTasks();
+            if(id === 'activeView') loadActive();
+            if(id === 'historyView') loadHistory();
+        }
+
+        // LOAD NEW REQUESTS (Figma: Accept/Reject logic)
+        async function loadTasks() {
+            const res = await apiCall('/driver/pharmacy/orders/list');
+            const data = res.data.filter(o => o.deliveryStatus === 'Assigned');
+            document.getElementById('newRequestsList').innerHTML = data.map(o => `
+                <div class="hk-card p-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="status-badge bg-warning text-dark">New Assigned</span>
+                        <b class="text-primary">#${o.orderId}</b>
+                    </div>
+                    <p class="mb-1"><b>Patient:</b> ${o.address.name}</p>
+                    <p class="mb-1 text-muted small"><i class="fas fa-map-marker-alt me-1"></i>${o.address.houseNo}, ${o.address.city}</p>
+                    <hr>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-danger flex-fill rounded-pill" onclick="respondOrder('${o._id}', 'Reject')">Reject</button>
+                        <button class="btn btn-hk flex-fill rounded-pill" onclick="respondOrder('${o._id}', 'Accept')">Accept</button>
+                    </div>
+                </div>
+            `).join('') || '<div class="text-center py-5 text-muted">No new tasks</div>';
+        }
+
+        async function respondOrder(orderId, action) {
+            const res = await apiCall('/driver/pharmacy/orders/respond', 'POST', { orderId, action });
+            if(res.success) {
+                Swal.fire('Success', `Order ${action}ed`, 'success');
+                loadTasks();
+            }
+        }
+
+        // LOAD ACTIVE (Figma Workflow: Pickup -> Out -> Reached -> OTP)
+        async function loadActive() {
+            const res = await apiCall('/driver/pharmacy/orders/list');
+            const data = res.data.filter(o => ['Accepted', 'PickedUp', 'OutForDelivery', 'ReachedLocation'].includes(o.deliveryStatus));
+            document.getElementById('activeList').innerHTML = data.map(o => {
+                let btnText = "Mark Picked Up", nextStatus = "PickedUp";
+                if(o.deliveryStatus === 'PickedUp') { btnText = "Start Delivery"; nextStatus = "OutForDelivery"; }
+                if(o.deliveryStatus === 'OutForDelivery') { btnText = "Reached Location"; nextStatus = "ReachedLocation"; }
+                
+                return `
+                    <div class="hk-card p-4">
+                        <div class="d-flex justify-content-between mb-2">
+                            <b class="text-primary">#${o.orderId}</b>
+                            <span class="status-badge bg-info text-white">${o.deliveryStatus}</span>
+                        </div>
+                        <p class="mb-1"><b>${o.address.name}</b> • <a href="tel:${o.address.phone}" class="text-success text-decoration-none">${o.address.phone}</a></p>
+                        <p class="small text-muted mb-3">${o.address.houseNo}, ${o.address.city}</p>
+                        
+                        ${o.deliveryStatus === 'ReachedLocation' ? 
+                            `<div class="mt-3">
+                                <input type="text" id="otp-${o._id}" class="form-control mb-2 text-center fw-bold" placeholder="Enter 4-Digit OTP">
+                                <button class="btn btn-success w-100 rounded-pill" onclick="verifyDelivery('${o._id}')">Complete Delivery</button>
+                            </div>` :
+                            `<button class="btn btn-hk w-100" onclick="updateStatus('${o._id}', '${nextStatus}')">${btnText}</button>`
+                        }
+                        
+                        <button class="btn btn-link text-danger w-100 btn-sm mt-2" onclick="reportIssue('${o._id}')">Report Issue</button>
+                    </div>
+                `;
+            }).join('') || '<div class="text-center py-5 text-muted">No active deliveries</div>';
+        }
+
+        async function updateStatus(orderId, status) {
+            const res = await apiCall('/driver/pharmacy/orders/update-progress', 'PATCH', { orderId, status });
+            if(res.success) {
+                if(status === 'ReachedLocation') Swal.fire('OTP Sent', 'An OTP has been sent to the patient.', 'info');
+                loadActive();
+            }
+        }
+
+        async function verifyDelivery(orderId) {
+            const otp = document.getElementById(`otp-${orderId}`).value;
+            const res = await apiCall('/driver/pharmacy/orders/verify-otp', 'POST', { orderId, otp });
+            if(res.success) {
+                Swal.fire('Delivered!', 'Order completed successfully', 'success');
+                loadActive();
+            } else {
+                Swal.fire('Error', 'Invalid OTP', 'error');
+            }
+        }
+
+        async function reportIssue(orderId) {
+            const { value: issue } = await Swal.fire({
+                title: 'Report Issue',
+                input: 'select',
+                inputOptions: { 'UserUnreachable': 'User Unreachable', 'UserRefused': 'User Refused' },
+                showCancelButton: true
+            });
+            if(issue) {
+                const res = await apiCall('/driver/pharmacy/orders/report-issue', 'POST', { orderId, issueType: issue });
+                if(res.success) loadActive();
+            }
+        }
+
+        async function loadHistory() {
+            const res = await apiCall('/driver/pharmacy/orders/list');
+            const data = res.data.filter(o => ['Delivered', 'CancelledByDriver', 'UserUnreachable'].includes(o.deliveryStatus));
+            document.getElementById('completedList').innerHTML = data.map(o => `
+                <div class="hk-card p-3 border-start border-4 ${o.deliveryStatus==='Delivered'?'border-success':'border-danger'}">
+                    <b>#${o.orderId}</b> - ${o.deliveryStatus}<br>
+                    <small class="text-muted">${moment(o.updatedAt).format('DD MMM YYYY, hh:mm A')}</small>
+                </div>
+            `).join('');
+        }
+
+        window.onload = loadTasks;
+    </script>
 </body>
 </html>

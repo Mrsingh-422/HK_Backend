@@ -18,14 +18,17 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const moment = require('moment');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { HarmCategory, HarmBlockThreshold } = require("@google/generative-ai");
+const fs = require('fs');
+const path = require('path');
+
+
 
 
 
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
 const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime) => {
-    console.log("--- Bill Calculation Start ---");
-    console.log("PharmacyID:", pharmacyId, "Time:", appointmentTime, "Type:", collectionType);
-
     let itemTotal = 0;
     items.forEach(item => { itemTotal += (item.price * item.quantity); });
 
@@ -33,43 +36,32 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     let rapidCharge = 0;
     let slotCharge = 0;
     
-    // ID normalize karein (Object ya String handle karne ke liye)
     const cleanPharmaId = pharmacyId.toString();
-
-    // 1. Delivery/Rapid Charges Logic
     const charges = await DeliveryCharge.findOne({ vendorId: cleanPharmaId });
+
+    // 1. Standard Delivery Charge (If Home Delivery)
     if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
-        // Agar charges milte hain toh fixedPrice, nahi toh default 40
         deliveryCharge = charges ? Number(charges.fixedPrice) : 40;
     }
     
-    if (isRapid) {
+    // 2. FIXED: Rapid charge sirf tab lagega jab isRapid true ho AUR koi slot selected na ho (Immediate mode)
+    if (isRapid && (!appointmentTime || appointmentTime === 'Immediate')) {
         rapidCharge = charges ? Number(charges.fastDeliveryExtra) : 29;
+    } else {
+        rapidCharge = 0; // 3 hrs or Custom slot mein rapid charge zero
     }
 
-    // 2. Premium Slot Charge Logic
+    // 3. Premium Slot Charge
     if (appointmentTime && appointmentTime !== 'Immediate') {
         const availConfig = await Availability.findOne({ vendorId: cleanPharmaId });
-
-        if (availConfig && availConfig.premiumSlots && availConfig.premiumSlots.length > 0) {
+        if (availConfig && availConfig.premiumSlots) {
             const selectedTimeClean = appointmentTime.trim();
-            // Case-insensitive match aur trim logic
-            const premiumSlot = availConfig.premiumSlots.find(ps => 
-                ps.time.trim() === selectedTimeClean
-            );
-            
-            if (premiumSlot) {
-                slotCharge = Number(premiumSlot.extraFee) || 0;
-                console.log(`Bingo! Slot Charge Added: ${slotCharge}`);
-            } else {
-                console.log("Time matched standard slot, no extra fee.");
-            }
-        } else {
-            console.log("No premium slot config found for this pharmacy.");
+            const premiumSlot = availConfig.premiumSlots.find(ps => ps.time.trim() === selectedTimeClean);
+            if (premiumSlot) slotCharge = Number(premiumSlot.extraFee) || 0;
         }
     }
 
-    // 3. Coupon Logic
+    // 4. Coupon Logic
     let couponDiscount = 0;
     let couponId = null;
     if (couponCode) {
@@ -82,19 +74,12 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
 
     const totalAmount = (itemTotal - couponDiscount) + deliveryCharge + rapidCharge + slotCharge;
     
-    console.log("ItemTotal:", itemTotal, "DelCharge:", deliveryCharge, "SlotCharge:", slotCharge, "Final:", totalAmount);
-    console.log("--- Bill Calculation End ---");
-
     return { 
-        itemTotal, 
-        couponDiscount, 
-        couponId, 
-        deliveryCharge, 
-        rapidDeliveryCharge: rapidCharge, 
-        slotCharge, 
+        itemTotal, couponDiscount, couponId, deliveryCharge, rapidDeliveryCharge: rapidCharge, slotCharge, 
         totalAmount: Math.round(totalAmount) 
     };
 };
+
 
 // Helper for mapping patients (Aapke code se uthaya gaya)
 async function mapPatients(userId, pids) {
@@ -106,6 +91,97 @@ async function mapPatients(userId, pids) {
         return { patientId: id, name: m.memberName, age: m.age, gender: m.gender, relation: m.relation };
     });
 }
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyCZ4OQWcjaij3A8h_z7C11MUwmoGeS1uSs');
+
+// --- HELPER: AI Image Processing Logic ---
+const extractDataWithGemini = async (filePath) => {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeType = ext === ".png" ? "image/png" : "image/jpeg";
+
+    const imageData = {
+        inlineData: {
+            data: Buffer.from(fs.readFileSync(filePath)).toString("base64"),
+            mimeType: mimeType,
+        },
+    };
+
+    const prompt = `Act as a professional pharmacist. Extract data in STRICT JSON format: {"doctorName": "string", "date": "string", "medicines": [{"name": "string", "dosage": "string", "duration": "string"}]}`;
+
+    const result = await model.generateContent([prompt, imageData]);
+    const response = await result.response;
+    const text = response.text();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("AI did not return valid JSON.");
+    return JSON.parse(jsonMatch[0]);
+};
+const scanPrescription = async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: "Please upload an image" });
+
+        let aiData;
+        
+        // CHECK ENVIRONMENT
+        if (process.env.NODE_ENV === 'production') {
+            console.log("Using REAL AI Logic...");
+            aiData = await extractDataWithGemini(req.file.path);
+        } else {
+            console.log("Using DEVELOPMENT MOCK Logic...");
+            // Mock Response for Dolo 650mg
+            aiData = {
+                doctorName: "Dr. Rajesh Sharma (Mock)",
+                date: moment().format('DD-MM-YYYY'),
+                medicines: [
+                    { name: "Dolo 650", dosage: "1-0-1", duration: "5 days" }
+                ]
+            };
+        }
+
+        const finalDetectedMeds = [];
+
+        // DATABASE MATCHING LOGIC
+        if (aiData.medicines && aiData.medicines.length > 0) {
+            for (let med of aiData.medicines) {
+                // Database mein Dolo 650 dhoondna
+                const dbMatch = await Medicine.findOne({
+                    name: { $regex: med.name.split(" ")[0], $options: 'i' }
+                }).select('name mrp packaging prescription_required image_url').lean();
+
+                if (dbMatch) {
+                    finalDetectedMeds.push({
+                        medicineId: dbMatch._id,
+                        name: dbMatch.name,
+                        mrp: dbMatch.mrp,
+                        packaging: dbMatch.packaging,
+                        prescriptionRequired: dbMatch.prescription_required,
+                        imageUrl: dbMatch.image_url[0] || null,
+                        aiInstruction: {
+                            dosage: med.dosage,
+                            duration: med.duration
+                        }
+                    });
+                }
+            }
+        }
+
+        res.json({
+            success: true,
+            message: process.env.NODE_ENV === 'production' ? "AI Scan Complete" : "Dev Mock Scan Complete",
+            data: {
+                doctorName: aiData.doctorName,
+                prescriptionDate: aiData.date,
+                prescriptionFile: req.file.path,
+                detectedMedicines: finalDetectedMeds
+            }
+        });
+
+    } catch (error) {
+        console.error("Scan API Error:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 // Default Location: Delhi (Coordinates)
 const DEFAULT_LAT = 28.6139;
@@ -576,62 +652,71 @@ const validateCoupon = async (req, res) => {
 const checkoutMedicineOrder = async (req, res) => {
     try {
         const { 
-            appointmentDate, 
-            appointmentTime, 
-            address, 
-            paymentMethod, 
-            couponCode, 
-            isRapid, 
-            collectionType 
+            appointmentDate, appointmentTime, address, 
+            paymentMethod, couponCode, isRapid, collectionType 
         } = req.body;
 
         const userId = req.user.id;
-        // User check
-        const User = require('../../../models/User');
-        const user = await User.findById(userId);
-
-        const cart = await Cart.findOne({ userId });
+        
+        const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
 
         if (!cart || !cart.pharmacyCart || cart.pharmacyCart.items.length === 0) {
             return res.status(400).json({ success: false, message: "Cart is empty" });
         }
 
-        const pharmacyId = cart.pharmacyCart.pharmacyId;
-
-        // Bill Helper Call
-        const bill = await calculatePharmacyBillHelper(
-            pharmacyId, 
-            cart.pharmacyCart.items, 
-            1, 
-            collectionType, 
-            couponCode, 
-            isRapid, 
-            appointmentTime
+        // FIXED: Added toUpperCase() to match your Database Reference "YES"
+        const rxMandatory = cart.pharmacyCart.items.some(item => 
+            item.medicineId && 
+            item.medicineId.prescription_required && 
+            item.medicineId.prescription_required.toUpperCase() === "YES"
         );
 
-        // Naya Order Create
+        let rxImages = [];
+        
+        if (rxMandatory) {
+            // Check if files exist in req.files
+            if (!req.files || !req.files['prescriptionImages'] || req.files['prescriptionImages'].length === 0) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "One or more medicines in your cart require a valid prescription. Please upload it." 
+                });
+            }
+            rxImages = req.files['prescriptionImages'].map(f => f.path);
+        }
+
+        const bill = await calculatePharmacyBillHelper(
+            cart.pharmacyCart.pharmacyId, 
+            cart.pharmacyCart.items, 
+            1, collectionType, couponCode, isRapid, appointmentTime
+        );
+
         const order = await PharmacyBooking.create({
             orderId: `MED-${require('crypto').randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
-            pharmacyId,
+            pharmacyId: cart.pharmacyCart.pharmacyId,
             items: cart.pharmacyCart.items,
             collectionType, 
-            address, 
+            address: typeof address === 'string' ? JSON.parse(address) : address, 
             appointmentDate, 
             appointmentTime,
             billSummary: bill,
             paymentMethod: paymentMethod || 'COD',
             isRapid: isRapid || false,
-            patients: [], // Patients array required in schema
-            status: 'Placed'
+            orderType: rxMandatory ? 'Prescription' : 'General',
+            prescriptionImages: rxImages,
+            status: rxMandatory ? 'Under Review' : 'Placed', 
+            deliveryStatus: 'PendingAssignment'
         });
 
-        // Clear Cart
         await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-        res.status(201).json({ success: true, message: "Order placed successfully!", data: order });
+        res.status(201).json({ 
+            success: true, 
+            message: rxMandatory ? "Order placed! Pharmacist will verify your prescription." : "Order placed successfully!", 
+            data: order 
+        });
+
     } catch (error) {
-        console.error("CRITICAL CHECKOUT ERROR:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -730,5 +815,5 @@ const trackOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = {getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
+module.exports = {scanPrescription,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder };

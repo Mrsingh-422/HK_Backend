@@ -7,6 +7,7 @@ const Lab = require('../models/Lab');
 const Pharmacy = require('../models/Pharmacy');
 const Nurse = require('../models/Nurse');
 const Ambulance = require('../models/Ambulance');
+const Driver = require('../models/Driver');
 const Tab = require('../models/Tab'); // Tab model for global tab status check
 
 
@@ -46,6 +47,9 @@ const protect = (modelType) => async (req, res, next) => {
                     break;
                 case 'nurse':
                     user = await Nurse.findById(decoded.id);
+                    break;
+                case 'driver':
+                    user = await Driver.findById(decoded.id);
                     break;
     case 'provider':
     // Hum teeno models ko check karenge (Priority order mein)

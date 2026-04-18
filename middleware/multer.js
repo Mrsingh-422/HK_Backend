@@ -324,6 +324,22 @@ const insuranceUpload = multer({
     },
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
+
+// ==========================================
+// 18. PHARMACY PRESCRIPTION CONFIGURATION
+// ==========================================
+const pharmaPrescriptionDir = 'public/uploads/pharmacy_prescriptions';
+ensureDir(pharmaPrescriptionDir);
+
+const pharmacyPrescriptionUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, pharmaPrescriptionDir),
+        filename: (req, file, cb) => cb(null, `pharma-rx-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter, // Images and PDF allowed
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -342,5 +358,6 @@ module.exports = {
     userProfileUpload,
     insuranceUpload,
     lockerUpload,
+    pharmacyPrescriptionUploads,
     uploadExcel
 };  

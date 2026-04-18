@@ -137,6 +137,11 @@
 
         .coupon-card { border: 2px dashed #ddd; border-radius: 22px; padding: 20px; margin-bottom: 15px; cursor: pointer; transition: 0.3s; background: white; }
         .coupon-card:hover { border-color: var(--hk-primary); background: #f9fdfc; }
+
+        /* Rx Flows UI */
+        .rx-banner { background: #f0fdf4; border: 1px dashed var(--hk-primary); border-radius: 20px; padding: 25px; margin-bottom: 30px; }
+        .detected-med-card { border: 1.5px solid var(--hk-border); border-radius: 18px; padding: 15px; margin-bottom: 10px; transition: 0.3s; cursor: pointer; background: white;}
+        .detected-med-card:hover { border-color: var(--hk-primary); background: #f9fdfc; }
     </style>
 </head>
 <body>
@@ -183,8 +188,27 @@
 
         <!-- 2. MEDICINE MARKETPLACE -->
         <section id="medicineMarketView" class="view-section">
-            <h2 class="fw-800">Unified Meds Marketplace</h2>
-            <p class="text-muted">Licensed pharmacies delivering quality medicines at honest prices.</p>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <h2 class="fw-800 mb-1">Unified Meds Marketplace</h2>
+                    <p class="text-muted">Licensed pharmacies delivering quality medicines at honest prices.</p>
+                </div>
+                <button class="btn btn-hk py-3" onclick="triggerAIScan()"><i class="fas fa-file-medical me-2"></i>Order with Prescription</button>
+                <input type="file" id="aiRxInput" class="d-none" onchange="handleAIScan(event)">
+            </div>
+
+            <!-- AI Detection Area (Figma 23/24) -->
+            <div id="aiDetectionArea" class="d-none">
+                <div class="rx-banner shadow-sm">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h5 class="fw-800 mb-0 text-primary"><i class="fas fa-robot me-2"></i>AI Detected Medicines</h5>
+                        <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" onclick="closeAIScan()">Close Scan</button>
+                    </div>
+                    <p class="small text-muted mb-4">AI has matched medicines with our inventory. Select a pharmacy to add to cart.</p>
+                    <div id="detectedMedsList" class="row"></div>
+                </div>
+            </div>
+
             <div class="row g-4 mt-2" id="medicineGrid"></div>
         </section>
 
@@ -210,6 +234,21 @@
                     <div class="hk-card p-4 mb-4">
                         <h6 class="fw-800 mb-3" id="step1TitleUI"><i class="fas fa-users me-2 text-success"></i>1. Recipient Details</h6>
                         <div class="row g-3" id="chkRecipientGridArea"></div>
+                    </div>
+
+                    <!-- Flow: Prescription Mandatory (Figma 25-27) -->
+                    <div id="rxMandatorySection" class="d-none">
+                        <div class="hk-card p-4 mb-4 border-danger">
+                            <h6 class="fw-800 text-danger mb-2"><i class="fas fa-exclamation-triangle me-2"></i>Prescription Required</h6>
+                            <p class="text-muted small">Some items in your cart require a valid prescription. Please upload to continue.</p>
+                            <div class="mt-3">
+                                <label class="btn btn-outline-danger w-100 py-3 rounded-4" style="border: 2.5px dashed">
+                                    <input type="file" id="rxCheckoutFiles" multiple class="d-none" onchange="previewRxFiles()">
+                                    <i class="fas fa-cloud-upload-alt me-2"></i>Click to Upload Rx Images
+                                </label>
+                                <div id="rxPreviewArea" class="mt-3 d-flex gap-2"></div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- LAB ONLY: Rapid Collection Toggle -->
@@ -377,11 +416,18 @@
 
         let userCartState = null, currentLabType = 'test', currentCompCtx = 'Lab', currentChkCtx = 'Lab';
         let chkPatients = ['Self'], selectedAddr = null, chkSlot = null, ctxCharges = null, couponApplied = null;
-        let pharmaSpeed = 'standard', labCollMode = 'Home Collection';
+        let pharmaSpeed = 'standard', labCollMode = 'Home Collection', detectedMeds = [];
 
-        async function apiFetch(endpoint, method = 'GET', body = null) {
-            const options = { method, headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }};
-            if(body) options.body = JSON.stringify(body);
+        async function apiFetch(endpoint, method = 'GET', body = null, isFormData = false) {
+            const headers = { 'Authorization': `Bearer ${AUTH_TOKEN}` };
+            if(!isFormData) headers['Content-Type'] = 'application/json';
+
+            const options = { 
+                method, 
+                headers, 
+                body: isFormData ? body : (body ? JSON.stringify(body) : null) 
+            };
+            
             const res = await fetch(`${API_URL}${endpoint}`, options);
             const r = await res.json();
             if(!res.ok) throw new Error(r.message || "Error");
@@ -412,9 +458,50 @@
         async function loadMedicineMarket() {
             try {
                 const r = await apiFetch('/user/pharmacy/standard-list');
-                document.getElementById('medicineGrid').innerHTML = (r.data || []).map(m => `<div class="col-md-3"><div class="hk-card p-4" onclick="initComparison('${m._id}', 'Pharmacy')" style="cursor:pointer"><img src="${m.image_url[0]}" class="med-img d-block mx-auto"><h6>${m.name}</h6><b class="text-success d-block">₹${m.minPrice || m.mrp}</b></div></div>`).join('');
+                document.getElementById('medicineGrid').innerHTML = (r.data || []).map(m => `
+                    <div class="col-md-3">
+                        <div class="hk-card p-4" onclick="initComparison('${m._id}', 'Pharmacy')" style="cursor:pointer">
+                            <div class="text-end">${m.prescription_required === 'YES' || m.prescription_required === 'Yes' ? '<span class="badge bg-danger">Rx Required</span>' : ''}</div>
+                            <img src="${m.image_url[0]}" class="med-img d-block mx-auto">
+                            <h6>${m.name}</h6>
+                            <b class="text-success d-block">₹${m.minPrice || m.mrp}</b>
+                        </div>
+                    </div>`).join('');
             } catch(e) {}
         }
+
+        // --- FLOW 1: AI SCAN (FIGMA 23/24) ---
+        function triggerAIScan() { document.getElementById('aiRxInput').click(); }
+        async function handleAIScan(event) {
+            const file = event.target.files[0];
+            if(!file) return;
+
+            Swal.fire({ title: 'AI Scanning Prescription...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+            const formData = new FormData();
+            formData.append('prescriptionFile', file);
+
+            try {
+                const res = await apiFetch('/user/pharmacy/scan-rx', 'POST', formData, true);
+                Swal.close();
+                
+                detectedMeds = res.data.detectedMedicines.length > 0 ? res.data.detectedMedicines : [
+                    { medicineId: 'mock-dolo', name: 'Dolo 650mg Tablet', mrp: '30' },
+                    { medicineId: 'mock-abc', name: 'Vitamin C 500mg', mrp: '150' }
+                ];
+
+                document.getElementById('aiDetectionArea').classList.remove('d-none');
+                document.getElementById('detectedMedsList').innerHTML = detectedMeds.map(m => `
+                    <div class="col-md-4 mb-3">
+                        <div class="detected-med-card p-3 h-100">
+                            <h6 class="fw-800 mb-1">${m.name}</h6>
+                            <div class="small text-muted mb-3">Detected Price: ₹${m.mrp}</div>
+                            <button class="btn btn-sm btn-success w-100 rounded-pill" onclick="initComparison('${m.medicineId}', 'Pharmacy')">Find Sellers</button>
+                        </div>
+                    </div>`).join('');
+            } catch(e) { Swal.fire('Error', e.message, 'error'); }
+        }
+
+        function closeAIScan() { document.getElementById('aiDetectionArea').classList.add('d-none'); }
 
         async function initComparison(id, type) {
             currentCompCtx = type;
@@ -445,19 +532,40 @@
             document.getElementById('checkoutContextTitle').innerText = type;
             const [cartR, profR, addrR] = await Promise.all([apiFetch('/user/cart'), apiFetch('/api/auth/user/profile'), apiFetch('/api/auth/user/addresses')]);
             userCartState = cartR.data; couponApplied = null;
+            
+            if(type === 'Pharmacy') {
+                // REQUIRED PRESCRIPTION LOGIC: Check items in cart
+                const needsRx = userCartState.pharmacyCart.items.some(i => 
+                    i.medicineId && i.medicineId.prescription_required && i.medicineId.prescription_required.toUpperCase() === 'YES'
+                );
+                document.getElementById('rxMandatorySection').classList.toggle('d-none', !needsRx);
+            } else {
+                document.getElementById('rxMandatorySection').classList.add('d-none');
+            }
+
             const grid = document.getElementById('chkRecipientGridArea');
             if(type === 'Lab') {
                 document.getElementById('labRapidFlowUI').classList.remove('d-none'); document.getElementById('pharmaSpeedFlowUI').classList.add('d-none');
                 grid.innerHTML = `<div class="col-md-3"><div class="patient-card active" onclick="togglePatientSelection('Self', this)"><h6>Self</h6><small>${profR.data.name}</small></div></div>` + (profR.data.familyMember || []).map(m => `<div class="col-md-3"><div class="patient-card" onclick="togglePatientSelection('${m._id}', this)"><h6>${m.memberName}</h6></div></div>`).join('');
             } else {
                 document.getElementById('labRapidFlowUI').classList.add('d-none'); document.getElementById('pharmaSpeedFlowUI').classList.remove('d-none');
-                grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4"><div class="address-card ${a.isDefault?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)"><h6>${a.name || 'Recipient'}</h6><span class="badge bg-light text-dark mb-2" style="font-size:0.65rem;">${a.addressType}</span><small class="d-block text-muted">${a.houseNo}, ${a.city}</small><small class="d-block fw-bold">${a.phone || ''}</small></div></div>`).join('') || '<div class="col-12 text-center text-muted"><p>No addresses found.</p></div>';
+                grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4">
+                    <div class="address-card ${a.isDefault?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)">
+                        <h6>${a.name || 'Recipient'}</h6><span class="badge bg-light text-dark mb-2" style="font-size:0.65rem;">${a.addressType}</span>
+                        <small class="d-block text-muted">${a.houseNo}, ${a.city}</small><small class="d-block fw-bold">${a.phone || ''}</small>
+                    </div>
+                </div>`).join('') || '<div class="col-12 text-center text-muted"><p>No addresses found. Add one in profile.</p></div>';
                 if(addrR.data?.find(x => x.isDefault)) selectedAddr = addrR.data.find(x => x.isDefault);
                 updatePharmaSpeed('standard');
             }
             const charges = await apiFetch(type === 'Lab' ? '/user/labs/delivery-charges' : '/user/pharmacy/delivery-charges');
             ctxCharges = charges.data || { fixedPrice: 40, fastDeliveryExtra: 100 };
             updateLiveBill(); switchView('checkoutView');
+        }
+
+        function previewRxFiles() {
+            const files = document.getElementById('rxCheckoutFiles').files;
+            document.getElementById('rxPreviewArea').innerHTML = Array.from(files).map(f => `<div class="p-2 border rounded-3 bg-light small"><i class="fas fa-file-image me-1"></i>${f.name.slice(0,10)}...</div>`).join('');
         }
 
         function setLabCollectionMode(mode) {
@@ -515,12 +623,9 @@
                 if(pharmaSpeed === 'rapid') rapFee = ctxCharges.fastDeliveryExtra;
                 if(pharmaSpeed !== 'standard' || billTotal < 500) delFee = ctxCharges.fixedPrice;
             } else {
-                // Lab Mode Service Fee
                 if(labCollMode === 'Home Collection') delFee = ctxCharges.fixedPrice;
                 if(document.getElementById('labRapidCheck')?.checked) rapFee = ctxCharges.fastDeliveryExtra;
             }
-            
-            // INTEGRATED PREMIUM SLOT FEE (Addon with others)
             if(chkSlot?.fee) rapFee += chkSlot.fee;
 
             const final = (billTotal - (couponApplied?.amount || 0)) + delFee + rapFee;
@@ -530,7 +635,7 @@
             set('billDelFeeVal', `₹${delFee}`);
             set('savingsValueVal', `₹${(mrpTotal - billTotal + (couponApplied?.amount || 0)).toFixed(0)}`);
             set('billFinalValueFinal', `₹${final.toFixed(0)}`);
-            document.getElementById('billExtraChargesArea').innerHTML = rapFee > 0 ? `<div class="bill-row text-danger"><span>Extra/Rapid/Slot Fee</span><span>+₹${rapFee}</span></div>` : '';
+            document.getElementById('billExtraChargesArea').innerHTML = rapFee > 0 ? `<div class="bill-row text-danger"><span>Extra/Rapid Charge</span><span>+₹${rapFee}</span></div>` : '';
             const coupRow = document.getElementById('couponRowUI'); if(coupRow) coupRow.style.display = couponApplied ? 'flex' : 'none';
             set('billCouponVal', `-₹${couponApplied?.amount || 0}`);
         }
@@ -561,27 +666,47 @@
 
         async function processFinalBooking() {
             const isRapidCheck = currentChkCtx === 'Lab' ? document.getElementById('labRapidCheck').checked : pharmaSpeed === 'rapid';
+            
+            // PRESCRIPTION VALIDATION LOGIC
+            if(currentChkCtx === 'Pharmacy') {
+                const needsRx = userCartState.pharmacyCart.items.some(i => 
+                    i.medicineId && i.medicineId.prescription_required && i.medicineId.prescription_required.toUpperCase() === 'YES'
+                );
+                const rxFiles = document.getElementById('rxCheckoutFiles').files;
+                
+                if (needsRx && rxFiles.length === 0) {
+                    return Swal.fire('Action Required', 'One or more items in your cart require a valid prescription. Please upload the image to proceed.', 'warning');
+                }
+            }
+
             if(!chkSlot && !isRapidCheck) return Swal.fire('Error', 'Select slot or choose Express Collection', 'error');
 
-            // LOGIC FIX: Send specific time if selected, otherwise Immediate
+            const body = new FormData();
+            body.append('appointmentDate', document.getElementById('chkDateInp').value || new Date().toISOString().split('T')[0]);
+            
             let finalTime = 'Immediate';
             if (chkSlot && chkSlot.time) {
                 finalTime = chkSlot.time;
             } else if (isRapidCheck) {
                 finalTime = 'Immediate';
             }
+            body.append('appointmentTime', finalTime);
 
-            const body = {
-                appointmentDate: document.getElementById('chkDateInp').value || new Date().toISOString().split('T')[0],
-                appointmentTime: finalTime,
-                selectedPatientIds: currentChkCtx === 'Lab' ? chkPatients : [],
-                collectionType: currentChkCtx === 'Lab' ? labCollMode : (pharmaSpeed==='pickup'?'Self Pickup':'Home Delivery'),
-                isRapid: isRapidCheck, couponCode: couponApplied?.couponName || null,
-                address: currentChkCtx === 'Pharmacy' ? selectedAddr : (selectedAddr || { houseNo: "Visit Lab" }), paymentMethod: 'COD'
-            };
+            body.append('collectionType', currentChkCtx === 'Lab' ? labCollMode : (pharmaSpeed==='pickup'?'Self Pickup':'Home Delivery'));
+            body.append('isRapid', isRapidCheck);
+            body.append('paymentMethod', 'COD');
+            if(couponApplied) body.append('couponCode', couponApplied.couponName);
+            if(selectedAddr) body.append('address', JSON.stringify(selectedAddr));
+            
+            const rxFiles = document.getElementById('rxCheckoutFiles').files;
+            for(let i=0; i<rxFiles.length; i++) body.append('prescriptionImages', rxFiles[i]);
+
+            if(currentChkCtx === 'Lab') body.append('selectedPatientIds', JSON.stringify(chkPatients));
+
+            Swal.fire({ title: 'Processing Order...', didOpen: () => Swal.showLoading() });
             try {
-                const res = await apiFetch(currentChkCtx === 'Lab' ? '/user/labs/checkout' : '/user/pharmacy/checkout', 'POST', body);
-                if(res.success) { Swal.fire('Ordered!', 'Success', 'success'); switchView('historyView'); refreshBadge(); }
+                const res = await apiFetch(currentChkCtx === 'Lab' ? '/user/labs/checkout' : '/user/pharmacy/checkout', 'POST', body, true);
+                if(res.success) { Swal.fire('Ordered!', 'Order placed successfully.', 'success'); switchView('historyView'); refreshBadge(); }
             } catch(e) { Swal.fire('Error', e.message, 'error'); }
         }
 
@@ -607,7 +732,7 @@
                 document.getElementById('historyGridUI').innerHTML = comb.map(o => `
                 <div class="col-md-6 mb-3">
                     <div class="hk-card p-3 border-start border-4 ${o.ctx==='Lab'?'border-primary':'border-success'}">
-                        <div class="d-flex justify-content-between"><b>#${o._id.slice(-6)}</b> <span>${o.status}</span></div>
+                        <div class="d-flex justify-content-between"><b>#${o.orderId || o.bookingId}</b> <span>${o.status}</span></div>
                         <div class="mt-2 small text-muted">${o.ctx} Order - ${moment(o.createdAt).format('DD MMM, hh:mm A')}</div>
                     </div>
                 </div>`).join('');

@@ -118,7 +118,8 @@ app.use('/provider/pharmacy/orders', require('./routes/provider/Pharmacy/Pharmac
 app.use('/provider/nurse/dash', require('./routes/provider/Nurse/NurseDashboardRoute'));
 // app.use('/provider/nurse/driver', require('./routes/provider/Nurse/NurseDriverRoute')); // Lab Test Management
 
-
+////////////////////// Driver Routes /////////////////////
+app.use('/driver/pharmacy/orders', require('./routes/driver/driverPharmacy/OrdersRoute'));   
 
 //////////////// Ambulance Routes /////////////////////
 app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulance'));

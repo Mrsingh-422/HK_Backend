@@ -142,7 +142,7 @@ const getMyCart = async (req, res) => {
         const cart = await Cart.findOne({ userId: req.user.id })
             .populate('labCart.labId', 'name city address profileImage')
             .populate('pharmacyCart.pharmacyId', 'name address rating city')
-            .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp');
+            .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp prescription_required')
 
         if (!cart) {
             return res.json({ 
@@ -338,68 +338,40 @@ const compareCartOnMap = async (req, res) => {
 // endpoint: /user/cart/pharmacy/add
 const addToPharmacyCart = async (req, res) => {
     try {
-        const { pharmacyId, medicineId, quantity = 1, forceReplace } = req.body;
+        const { pharmacyId, medicineId, quantity = 1, duration = "Full Course", forceReplace } = req.body;
         const userId = req.user.id;
 
-        console.log("Adding to cart:", { userId, pharmacyId, medicineId }); // Debug Log
-
-        // 1. Check if pharmacy has this medicine
         const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId, is_available: true });
-        if (!inventory) {
-            return res.status(404).json({ success: false, message: "Medicine not found in this pharmacy's stock" });
-        }
+        if (!inventory) return res.status(404).json({ success: false, message: "Out of stock in this pharmacy" });
 
-        // 2. Get or Create Cart
         let cart = await Cart.findOne({ userId });
-        if (!cart) {
-            cart = new Cart({ userId, pharmacyCart: { items: [] }, labCart: { items: [] } });
+        if (!cart) cart = new Cart({ userId, pharmacyCart: { items: [] } });
+
+        if (cart.pharmacyCart.items.length > 0 && cart.pharmacyCart.pharmacyId?.toString() !== pharmacyId && !forceReplace) {
+            return res.status(400).json({ success: false, canReplace: true, message: "Clear existing pharmacy items?" });
         }
 
-        // 3. Logic: Single Pharmacy Rule
-        const hasPharmacyItems = cart.pharmacyCart && cart.pharmacyCart.items.length > 0;
-        const isDifferentPharmacy = hasPharmacyItems && cart.pharmacyCart.pharmacyId?.toString() !== pharmacyId;
-
-        if (isDifferentPharmacy && !forceReplace) {
-            return res.status(400).json({ 
-                success: false, 
-                canReplace: true, 
-                message: "Cart contains items from another pharmacy. Replace with this one?" 
-            });
-        }
-
-        // 4. Reset if forceReplace is true
-        if (forceReplace) {
-            cart.pharmacyCart.items = [];
-        }
-
+        if (forceReplace) cart.pharmacyCart.items = [];
         cart.pharmacyCart.pharmacyId = pharmacyId;
 
-        // 5. Update or Add Item
         const itemIndex = cart.pharmacyCart.items.findIndex(i => i.medicineId.toString() === medicineId);
-        
         if (itemIndex > -1) {
             cart.pharmacyCart.items[itemIndex].quantity += Number(quantity);
+            cart.pharmacyCart.items[itemIndex].duration = duration;
         } else {
             const medData = await Medicine.findById(medicineId);
-            if(!medData) return res.status(404).json({ message: "Master Medicine not found" });
-
             cart.pharmacyCart.items.push({
                 medicineId,
                 name: medData.name,
                 price: inventory.vendor_price,
-                quantity: Number(quantity)
+                quantity: Number(quantity),
+                duration: duration // Figma: Full Course / Custom
             });
         }
-
         await cart.save();
-        res.json({ success: true, message: "Medicine added to cart!", data: cart });
-
-    } catch (error) {
-        console.error("Cart Error:", error); // Terminal check karein
-        res.status(500).json({ success: false, message: error.message });
-    }
+        res.json({ success: true, message: "Added to cart", data: cart });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
-
 // 2. UPDATE PHARMACY QUANTITY
 const updatePharmacyQuantity = async (req, res) => {
     try {
