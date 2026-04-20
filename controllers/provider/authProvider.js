@@ -63,6 +63,7 @@ const registerProvider = async (req, res) => {
             success: true, 
             message: 'Registered successfully. Please login to upload documents.', 
             token,
+category,
             profileStatus: 'Incomplete' 
         });
     } catch (error) {

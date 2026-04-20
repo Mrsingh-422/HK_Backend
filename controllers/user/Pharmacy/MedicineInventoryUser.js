@@ -96,10 +96,74 @@ const getSellersForMedicine = async (req, res) => {
         res.json({ success: true, data: sellers });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+const getPharmacySpecificMedicines = async (req, res) => {
+    try {
+        const { pharmacyId } = req.params;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20; // 20 ki pagination as requested
+        const skip = (page - 1) * limit;
+
+        // 1. Total count nikalna pagination ke liye
+        const total = await MedicineInventory.countDocuments({ 
+            pharmacyId, 
+            is_available: true 
+        });
+
+        // 2. Inventory fetch karna with Medicine details
+        const inventory = await MedicineInventory.find({ 
+            pharmacyId, 
+            is_available: true 
+        })
+        .populate({
+            path: 'medicineId',
+            select: 'name mrp packaging image_url prescription_required salt'
+        })
+        .sort({ createdAt: -1 }) // Newest medicines first
+        .skip(skip)
+        .limit(limit)
+        .lean();
+
+        // 3. Flutter ke liye data format karna
+        const formattedMedicines = inventory.map(item => {
+            const med = item.medicineId;
+            if (!med) return null; // Safety check agar medicine delete ho gayi ho
+
+            return {
+                inventoryId: item._id,
+                medicineId: med._id,
+                name: med.name,
+                salt: med.salt,
+                image: med.image_url && med.image_url.length > 0 ? med.image_url[0] : null,
+                mrp: med.mrp,
+                vendorPrice: item.vendor_price,
+                discountPercentage: med.mrp > item.vendor_price 
+                    ? Math.round(((med.mrp - item.vendor_price) / med.mrp) * 100) 
+                    : 0,
+                stock: item.stock_quantity,
+                packaging: med.packaging,
+                prescriptionRequired: med.prescription_required,
+                isAvailable: item.is_available
+            };
+        }).filter(m => m !== null); // Null items remove karna
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: formattedMedicines
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = {
     getMedicineInventory,
     searchMedicinesUser,
     getMedicineFullDetails,
-    getSellersForMedicine
+    getSellersForMedicine,
+    getPharmacySpecificMedicines
 };

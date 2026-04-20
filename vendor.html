@@ -419,21 +419,26 @@
         let pharmaSpeed = 'standard', labCollMode = 'Home Collection', detectedMeds = [];
 
         async function apiFetch(endpoint, method = 'GET', body = null, isFormData = false) {
-            const headers = { 'Authorization': `Bearer ${AUTH_TOKEN}` };
-            if(!isFormData) headers['Content-Type'] = 'application/json';
+    const headers = { 'Authorization': `Bearer ${AUTH_TOKEN}` };
+    if(!isFormData) headers['Content-Type'] = 'application/json';
 
-            const options = { 
-                method, 
-                headers, 
-                body: isFormData ? body : (body ? JSON.stringify(body) : null) 
-            };
-            
-            const res = await fetch(`${API_URL}${endpoint}`, options);
-            const r = await res.json();
-            if(!res.ok) throw new Error(r.message || "Error");
-            return r;
-        }
-
+    const options = { 
+        method, 
+        headers, 
+        body: isFormData ? body : (body ? JSON.stringify(body) : null) 
+    };
+    
+    const res = await fetch(`${API_URL}${endpoint}`, options);
+    const r = await res.json();
+    
+    if(!res.ok) {
+        // Create error object and attach the response data to it
+        const err = new Error(r.message || "Error");
+        err.data = r; 
+        throw err;
+    }
+    return r;
+}
         function switchView(id) {
             document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -518,15 +523,56 @@
             } catch(e) { Swal.fire('Error', 'Unable to fetch providers', 'error'); }
         }
 
-        async function addToCartEngine(vId, itemId, type) {
-            try {
-                const endpoint = type === 'Lab' ? '/user/cart/lab/add' : '/user/cart/pharmacy/add';
-                const body = type === 'Lab' ? { labId: vId, itemId, productType: (currentLabType==='test'?'LabTest':'LabPackage') } : { pharmacyId: vId, medicineId: itemId, quantity: 1 };
-                await apiFetch(endpoint, 'POST', body);
-                Swal.fire('Success!', 'Added to basket.', 'success'); refreshBadge();
-            } catch(e) { Swal.fire("Notice", e.message, "warning"); }
-        }
+        async function addToCartEngine(vId, itemId, type, forceReplace = false) {
+    try {
+        const endpoint = type === 'Lab' ? '/user/cart/lab/add' : '/user/cart/pharmacy/add';
+        
+        const body = type === 'Lab' 
+            ? { labId: vId, itemId, productType: (currentLabType === 'test' ? 'LabTest' : 'LabPackage'), forceReplace } 
+            : { pharmacyId: vId, medicineId: itemId, quantity: 1, forceReplace };
 
+        await apiFetch(endpoint, 'POST', body);
+        
+        Swal.fire({
+            icon: 'success',
+            title: 'Added to Basket',
+            text: 'Your selection has been updated successfully.',
+            timer: 1500,
+            showConfirmButton: false
+        });
+        
+        refreshBadge();
+    } catch(e) {
+        // Agar backend kehta hai ki cart replace karni padegi (Category ya Lab mismatch)
+        if(e.data && e.data.canReplace) {
+            Swal.fire({
+                title: 'Replace Basket Items?',
+                text: e.message, // Backend se aane wala specific message (e.g. Pathology vs Radiology)
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#00b894',
+                cancelButtonColor: '#d33',
+                confirmButtonText: 'Yes, Clear & Replace',
+                cancelButtonText: 'Keep Existing'
+            }).then(async (result) => {
+                if (result.isConfirmed) {
+                    try {
+                        // Pehle Clear Cart API hit hogi jaisa aapne pucha
+                        const clearEndpoint = type === 'Lab' ? '/user/cart/lab/clear' : '/user/cart/pharmacy/clear';
+                        await apiFetch(clearEndpoint, 'POST');
+                        
+                        // Phir dubara Add to Cart hit hogi
+                        await addToCartEngine(vId, itemId, type, true);
+                    } catch(clearErr) {
+                        Swal.fire('Error', 'Failed to clear cart', 'error');
+                    }
+                }
+            });
+        } else {
+            Swal.fire("Notice", e.message, "warning");
+        }
+    }
+}
         async function launchCheckoutFlow(type) {
             currentChkCtx = type;
             document.getElementById('checkoutContextTitle').innerText = type;
@@ -583,16 +629,97 @@
             updateLiveBill();
         }
 
-        async function fetchCheckoutSlots() {
-            const date = document.getElementById('chkDateInp').value;
-            if(!date) return;
-            try {
-                const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
-                const r = await apiFetch(currentChkCtx === 'Lab' ? `/user/labs/slots?labId=${vId}&date=${date}` : `/user/pharmacy/slots?pharmacyId=${vId}&date=${date}`);
-                document.getElementById('chkSlotGridUI').innerHTML = (r.slots || []).map(s => `<div class="slot-box ${s.isFull ? 'full' : ''}" onclick="${s.isFull ? '' : `setSlotSelection('${s.time}', ${s.extraFee || 0}, this)`}"><span>${s.time}</span>${s.extraFee > 0 ? `<span class="fee-tag">+₹${s.extraFee}</span>` : ''}</div>`).join('') || '<small class="text-muted">No slots available.</small>';
-            } catch(e) { console.error("Slot Error:", e); }
+        // 1. Fetch and Display Slots according to your JSON structure
+async function fetchCheckoutSlots() {
+    const date = document.getElementById('chkDateInp').value;
+    const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
+    
+    if(!date) return;
+
+    try {
+        const endpoint = currentChkCtx === 'Lab' 
+            ? `/user/labs/slots?labId=${vId}&date=${date}` 
+            : `/user/pharmacy/slots?pharmacyId=${vId}&date=${date}`;
+            
+        const r = await apiFetch(endpoint);
+        
+        const gridUI = document.getElementById('chkSlotGridUI');
+        
+        if (r.isClosed) {
+            gridUI.innerHTML = '<div class="alert alert-warning w-100">Pharmacy is closed on this date.</div>';
+            return;
         }
 
+        gridUI.innerHTML = (r.slots || []).map(s => {
+            // "Book Once" Logic: Agar ek booking ho chuki hai, toh full dikhao
+            const isFull = s.isFull || s.currentBookings >= 1;
+            
+            return `
+                <div class="slot-box ${isFull ? 'full' : ''}" 
+                     onclick="${isFull ? '' : `setSlotSelection('${s.time}', ${s.extraFee}, this)`}">
+                    <div class="small fw-bold">${s.time}</div>
+                    <div style="font-size: 0.6rem; opacity: 0.7;">${s.category}</div>
+                    ${s.extraFee > 0 ? `<div class="text-danger" style="font-size: 0.7rem;">+₹${s.extraFee}</div>` : ''}
+                    ${isFull ? '<div class="badge bg-secondary" style="font-size:0.5rem">Booked</div>' : ''}
+                </div>
+            `;
+        }).join('');
+
+    } catch(e) { 
+        console.error("Slot Error:", e);
+        document.getElementById('chkSlotGridUI').innerHTML = '<small class="text-danger">Error loading slots</small>';
+    }
+}
+
+// 2. Select Slot and Update Fee
+function setSlotSelection(time, fee, el) {
+    // Remove selection from others
+    document.querySelectorAll('.slot-box').forEach(x => x.classList.remove('selected'));
+    
+    // Add to current
+    el.classList.add('selected');
+    
+    // Global state update
+    chkSlot = { time: time, fee: fee };
+    
+    // Bill update
+    updateLiveBill();
+}
+
+// 3. Update Bill to include Slot Extra Fee
+function updateLiveBill() {
+    if(!userCartState || !ctxCharges) return;
+    
+    const items = currentChkCtx === 'Lab' ? (userCartState.labCart?.items || []) : (userCartState.pharmacyCart?.items || []);
+    let billTotal = items.reduce((acc, i) => acc + (i.price * (currentChkCtx==='Lab' ? chkPatients.length : i.quantity)), 0);
+
+    let delFee = 0;
+    let rapFee = 0;
+    let slotExtraFee = chkSlot ? chkSlot.fee : 0; // JSON se aayi extraFee
+
+    if(currentChkCtx === 'Pharmacy') {
+        if(pharmaSpeed === 'rapid') rapFee = ctxCharges.fastDeliveryExtra || 29;
+        if(pharmaSpeed !== 'standard' || billTotal < 500) delFee = ctxCharges.fixedPrice || 40;
+    } else {
+        if(labCollMode === 'Home Collection') delFee = ctxCharges.fixedPrice || 40;
+        if(document.getElementById('labRapidCheck')?.checked) rapFee = ctxCharges.fastDeliveryExtra || 100;
+    }
+
+    // Total Calculation
+    const finalAmount = billTotal + delFee + rapFee + slotExtraFee;
+
+    // Update UI
+    document.getElementById('billMRPVal').innerText = `₹${billTotal}`;
+    document.getElementById('billDelFeeVal').innerText = `₹${delFee}`;
+    
+    // Rapid aur Slot Charges ka combo display
+    let extraHTML = '';
+    if(rapFee > 0) extraHTML += `<div class="bill-row text-danger"><span>Express Delivery</span><span>+₹${rapFee}</span></div>`;
+    if(slotExtraFee > 0) extraHTML += `<div class="bill-row text-warning"><span>Premium Slot Fee</span><span>+₹${slotExtraFee}</span></div>`;
+    
+    document.getElementById('billExtraChargesArea').innerHTML = extraHTML;
+    document.getElementById('billFinalValueFinal').innerText = `₹${finalAmount}`;
+}
         function setSlotSelection(t, f, el) {
             document.querySelectorAll('.slot-box').forEach(x => x.classList.remove('selected'));
             el.classList.add('selected'); chkSlot = { time: t, fee: f }; updateLiveBill();

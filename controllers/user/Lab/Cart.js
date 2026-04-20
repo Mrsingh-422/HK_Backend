@@ -59,45 +59,76 @@ const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid
 // endpoint: /user/cart/lab/add
 const addToLabCart = async (req, res) => {
     try {
-        const { labId, itemId, productType, forceReplace } = req.body; 
+        const { labId, itemId, productType, forceReplace } = req.body; // productType: 'LabTest' or 'LabPackage'
         const userId = req.user.id;
 
+        // 1. Fetch Item Data and Determine Category
         let itemData, newItemCategory;
         if (productType === 'LabTest') {
             itemData = await LabTest.findById(itemId);
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Test not found" });
-            newItemCategory = itemData.mainCategory || 'Pathology';
+            newItemCategory = itemData.mainCategory; // Pathology or Radiology
         } else {
             itemData = await LabPackage.findById(itemId);
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Package not found" });
-            newItemCategory = 'Package';
+            newItemCategory = itemData.mainCategory || 'Pathology';
         }
 
         let cart = await Cart.findOne({ userId });
         if (!cart) cart = new Cart({ userId, labCart: { items: [] } });
 
         const hasItems = cart.labCart.items.length > 0;
-        const isDifferentLab = hasItems && cart.labCart.labId && cart.labCart.labId.toString() !== labId;
+        const existingCategory = cart.labCart.categoryType;
+        const existingLabId = cart.labCart.labId;
 
-        if (isDifferentLab && !forceReplace) {
+        // --- NEW LOGIC: TYPE CHECK (Test vs Package) ---
+        // Cart mein pehle se jo items hain unka type kya hai?
+        const existingProductType = hasItems ? cart.labCart.items[0].productType : null;
+
+        // 2. VALIDATIONS
+        const isDifferentLab = hasItems && existingLabId && existingLabId.toString() !== labId;
+        const isDifferentCategory = hasItems && existingCategory && existingCategory !== newItemCategory;
+        
+        // Agar pehle se Test hai aur ab Package add kar rahe hain, ya vice-versa
+        const isDifferentType = hasItems && existingProductType && existingProductType !== productType;
+
+        if ((isDifferentLab || isDifferentCategory || isDifferentType) && !forceReplace) {
+            let message = "";
+            if (isDifferentLab) {
+                message = "Your cart has items from another lab. Replace them?";
+            } else if (isDifferentCategory) {
+                message = `Your cart already contains ${existingCategory} items. You cannot add ${newItemCategory} items in the same order. Replace cart?`;
+            } else if (isDifferentType) {
+                // Specific message for Test vs Package
+                const existingLabel = existingProductType === 'LabTest' ? 'Tests' : 'Packages';
+                const incomingLabel = productType === 'LabTest' ? 'Test' : 'Package';
+                message = `Your cart already contains Lab ${existingLabel}. You cannot add a ${incomingLabel} to this order. Replace cart?`;
+            }
+
             return res.status(400).json({ 
                 success: false, 
                 canReplace: true, 
-                message: "Cart already has items from another lab. Replace them?"
+                message: message
             });
         }
 
-        if (forceReplace) { cart.labCart.items = []; }
+        // 3. FORCE REPLACE: Agar user ne popup mein "Yes" kiya
+        if (forceReplace) { 
+            cart.labCart.items = []; 
+        }
 
+        // 4. Update Meta Data
         cart.labCart.labId = labId;
         cart.labCart.categoryType = newItemCategory;
 
+        // 5. Add or Update Item
         const itemIndex = cart.labCart.items.findIndex(i => i.itemId.toString() === itemId);
         if (itemIndex > -1) {
             cart.labCart.items[itemIndex].quantity += 1;
         } else {
             cart.labCart.items.push({
-                productType, itemId,
+                productType, 
+                itemId,
                 name: productType === 'LabTest' ? itemData.testName : itemData.packageName,
                 price: productType === 'LabTest' ? itemData.discountPrice : itemData.offerPrice,
                 quantity: 1
@@ -106,7 +137,10 @@ const addToLabCart = async (req, res) => {
 
         await cart.save();
         res.json({ success: true, message: "Cart Updated", data: cart });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 2. UPDATE QUANTITY (Inc/Dec)
@@ -347,11 +381,19 @@ const addToPharmacyCart = async (req, res) => {
         let cart = await Cart.findOne({ userId });
         if (!cart) cart = new Cart({ userId, pharmacyCart: { items: [] } });
 
+        // IMPORTANT: "Replace Cart" logic for Pharmacy mismatch
         if (cart.pharmacyCart.items.length > 0 && cart.pharmacyCart.pharmacyId?.toString() !== pharmacyId && !forceReplace) {
-            return res.status(400).json({ success: false, canReplace: true, message: "Clear existing pharmacy items?" });
+            return res.status(400).json({ 
+                success: false, 
+                canReplace: true, 
+                message: "Your cart has medicines from another pharmacy. Clear and add this instead?" 
+            });
         }
 
-        if (forceReplace) cart.pharmacyCart.items = [];
+        if (forceReplace) {
+            cart.pharmacyCart.items = [];
+        }
+        
         cart.pharmacyCart.pharmacyId = pharmacyId;
 
         const itemIndex = cart.pharmacyCart.items.findIndex(i => i.medicineId.toString() === medicineId);
@@ -365,11 +407,11 @@ const addToPharmacyCart = async (req, res) => {
                 name: medData.name,
                 price: inventory.vendor_price,
                 quantity: Number(quantity),
-                duration: duration // Figma: Full Course / Custom
+                duration: duration
             });
         }
         await cart.save();
-        res.json({ success: true, message: "Added to cart", data: cart });
+        res.json({ success: true, message: "Added to pharmacy cart", data: cart });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 // 2. UPDATE PHARMACY QUANTITY
@@ -395,6 +437,47 @@ const updatePharmacyQuantity = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// 1. CLEAR FULL PHARMACY CART
+// endpoint: POST /user/cart/pharmacy/clear
+const clearPharmacyCart = async (req, res) => {
+    try {
+        await Cart.findOneAndUpdate(
+            { userId: req.user.id },
+            { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } }
+        );
+        res.json({ success: true, message: "Pharmacy cart cleared successfully" });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// 2. REMOVE SPECIFIC MEDICINE FROM CART
+// endpoint: DELETE /user/cart/pharmacy/item/:itemId
+const removePharmacyItem = async (req, res) => {
+    try {
+        const { medicineId } = req.params;
+        const cart = await Cart.findOne({ userId: req.user.id });
+        
+        if (!cart || !cart.pharmacyCart) {
+            return res.status(404).json({ message: "Cart not found" });
+        }
+
+        // Filter out the medicine
+        cart.pharmacyCart.items = cart.pharmacyCart.items.filter(
+            item => item.medicineId.toString() !== medicineId
+        );
+
+        // Agar cart khali ho gayi hai toh pharmacyId null kar dein
+        if (cart.pharmacyCart.items.length === 0) {
+            cart.pharmacyCart.pharmacyId = null;
+        }
+
+        await cart.save();
+        res.json({ success: true, message: "Medicine removed", data: cart });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
 
 
 const checkBetterOptions = async (req, res) => {
@@ -467,5 +550,8 @@ const getAvailableCoupons = async (req, res) => {
 module.exports = { addToLabCart,updateCartQuantity, getMyCart, clearLabCart, removeItem,
     compareCartOnMap,
     addToPharmacyCart, updatePharmacyQuantity , checkBetterOptions,
+    clearPharmacyCart, removePharmacyItem,
+
+
     getAvailableSlots, getAvailableCoupons
  };

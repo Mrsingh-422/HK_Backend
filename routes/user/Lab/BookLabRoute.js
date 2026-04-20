@@ -70,8 +70,8 @@ router.post('/upload-prescription', protect('user'), prescriptionUploads.array('
 // Discovery & Logistics
 router.get('/slots', protect('user'), getLabSlots); // User selects slot
 router.get('/coupons', protect('user'), getAvailableCoupons); // User views applicable coupons
-router.post('/validate-coupon', protect('user'), validateLabCoupon);
-
+router.post('/validate-coupon', protect('user'), validateLabCoupon); 
+  
 
 router.post('/book', protect('user'), bookLabTest);
 

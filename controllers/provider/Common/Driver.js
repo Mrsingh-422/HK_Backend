@@ -14,25 +14,24 @@ const generateToken = (id, role) => {
 const registerDriver = async (req, res) => {
     try {
         const vendorId = req.user.id; 
-        const vendorType = req.user.role; // Lab, Pharmacy, ya Nurse
-
+        const vendorType = req.user.role; 
         const { name, phone, password, username, ...details } = req.body;
         const files = req.files;
 
-        // Duplicate Check
-        const exists = await Driver.findOne({ username });
-        if (exists) return res.status(400).json({ message: "Username already taken" });
+        // Phone aur Username dono ka duplicate check
+        const exists = await Driver.findOne({ $or: [{ username }, { phone }] });
+        if (exists) {
+            if (exists.username === username) return res.status(400).json({ message: "Username already taken" });
+            if (exists.phone === phone) return res.status(400).json({ message: "Phone number already registered" });
+        }
 
         const hashedPassword = await bcrypt.hash(String(password), 10);
 
         const driver = await Driver.create({
-            vendorId,
-            vendorType,
-            name, phone,
+            vendorId, vendorType, name, phone,
             password: hashedPassword,
             username,
             ...details,
-            // Multer files mapping
             profilePic: files?.profilePic ? files.profilePic[0].path : null,
             documents: {
                 certificate: files?.certificate ? files.certificate[0].path : null,
@@ -45,18 +44,29 @@ const registerDriver = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. LOGIN DRIVER
+// // LOGIN DRIVER (Username ya Phone dono se login possible hai)
 // endpoint: POST /api/provider/driver/login
 const loginDriver = async (req, res) => {
     try {
-        const { username, password } = req.body;
-        if (!username || !password) return res.status(400).json({ message: "Username and Password required" });
+        const { identifier, password } = req.body; // 'identifier' mein username ya phone aayega
 
-        const driver = await Driver.findOne({ username }).select('+password');
+        if (!identifier || !password) {
+            return res.status(400).json({ message: "Username/Phone and Password are required" });
+        }
+
+        // Username OR Phone dono mein se kisi ek ko match karo
+        const driver = await Driver.findOne({
+            $or: [
+                { username: identifier },
+                { phone: identifier }
+            ]
+        }).select('+password');
+
         if (!driver || !(await bcrypt.compare(String(password), driver.password))) {
             return res.status(400).json({ message: "Invalid credentials" });
         }
 
+        // Token logic
         let token = null;
         if (process.env.NODE_ENV === 'development' && driver.token) {
             try {
@@ -72,8 +82,17 @@ const loginDriver = async (req, res) => {
         }
 
         driver.password = undefined;
-        res.json({ success: true, token, data: driver });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        // Response with vendorType key
+        res.json({ 
+            success: true, 
+            token, 
+            vendorType: driver.vendorType, // Flutter ke liye specific key
+            data: driver 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 1. GET ALL DRIVERS (Vendor Specific + Pagination)

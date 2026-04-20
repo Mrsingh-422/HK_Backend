@@ -5,6 +5,9 @@ const { addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity,
     compareCartOnMap,
     addToPharmacyCart,
     updatePharmacyQuantity,checkBetterOptions,
+    clearPharmacyCart, removePharmacyItem,
+
+
     getAvailableSlots,
     getAvailableCoupons
 
@@ -25,6 +28,10 @@ router.post('/compare', protect('user'), compareCartOnMap);
 // Pharmacy Cart Endpoints
 router.post('/pharmacy/add', protect('user'), addToPharmacyCart);
 router.put('/pharmacy/quantity', protect('user'), updatePharmacyQuantity);
+router.post('/pharmacy/clear', protect('user'), clearPharmacyCart);
+router.delete('/pharmacy/item/:itemId', protect('user'), removePharmacyItem);
+
+
 router.post('/check-better-options', protect('user'), checkBetterOptions);
 
 

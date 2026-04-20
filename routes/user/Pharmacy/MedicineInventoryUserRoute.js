@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { getMedicineInventory,  searchMedicinesUser,
     getMedicineFullDetails,
-    getSellersForMedicine } = require('../../../controllers/user/Pharmacy/MedicineInventoryUser');
+    getSellersForMedicine, getPharmacySpecificMedicines } = require('../../../controllers/user/Pharmacy/MedicineInventoryUser');
 
 // Base URL: /user/medicine
 
@@ -16,6 +16,10 @@ router.get('/details/:medicineId', getMedicineFullDetails);
 
 // Compare Prices (List of all pharmacies selling this)
 router.get('/sellers/:medicineId', getSellersForMedicine);
+
+// List of pharmacies selling this medicine
+router.get('/pharmacies/:pharmacyId', getPharmacySpecificMedicines);
+
 
 
 module.exports = router;

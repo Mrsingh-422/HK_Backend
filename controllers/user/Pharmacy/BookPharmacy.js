@@ -649,6 +649,7 @@ const validateCoupon = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 // BookPharmacy.js mein checkoutMedicineOrder update karein
+// BookPharmacy.js mein checkoutMedicineOrder update karein
 const checkoutMedicineOrder = async (req, res) => {
     try {
         const { 
@@ -658,13 +659,16 @@ const checkoutMedicineOrder = async (req, res) => {
 
         const userId = req.user.id;
         
+        // 1. Cart fetch karo aur Medicine details populate karo
         const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
 
         if (!cart || !cart.pharmacyCart || cart.pharmacyCart.items.length === 0) {
             return res.status(400).json({ success: false, message: "Cart is empty" });
         }
 
-        // FIXED: Added toUpperCase() to match your Database Reference "YES"
+        const pharmacyId = cart.pharmacyCart.pharmacyId;
+
+        // 2. CHECK: Prescription Required logic (Same as before)
         const rxMandatory = cart.pharmacyCart.items.some(item => 
             item.medicineId && 
             item.medicineId.prescription_required && 
@@ -672,9 +676,7 @@ const checkoutMedicineOrder = async (req, res) => {
         );
 
         let rxImages = [];
-        
         if (rxMandatory) {
-            // Check if files exist in req.files
             if (!req.files || !req.files['prescriptionImages'] || req.files['prescriptionImages'].length === 0) {
                 return res.status(400).json({ 
                     success: false, 
@@ -684,16 +686,44 @@ const checkoutMedicineOrder = async (req, res) => {
             rxImages = req.files['prescriptionImages'].map(f => f.path);
         }
 
+        // 3. STOCK MANAGEMENT LOGIC (Naya Logic)
+        // Har item ke liye loop chalakar inventory se stock minus karna
+        for (const item of cart.pharmacyCart.items) {
+            const inventory = await MedicineInventory.findOne({ 
+                pharmacyId: pharmacyId, 
+                medicineId: item.medicineId._id 
+            });
+
+            if (!inventory || inventory.stock_quantity < item.quantity) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Medicine ${item.name} is out of stock or insufficient quantity.` 
+                });
+            }
+
+            // Stock minus karein
+            inventory.stock_quantity -= item.quantity;
+            
+            // Agar stock 0 ho jaye toh is_available false kar dein
+            if (inventory.stock_quantity <= 0) {
+                inventory.is_available = false;
+            }
+            
+            await inventory.save();
+        }
+
+        // 4. Calculate Bill
         const bill = await calculatePharmacyBillHelper(
-            cart.pharmacyCart.pharmacyId, 
+            pharmacyId, 
             cart.pharmacyCart.items, 
             1, collectionType, couponCode, isRapid, appointmentTime
         );
 
+        // 5. Create Booking
         const order = await PharmacyBooking.create({
             orderId: `MED-${require('crypto').randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
-            pharmacyId: cart.pharmacyCart.pharmacyId,
+            pharmacyId: pharmacyId,
             items: cart.pharmacyCart.items,
             collectionType, 
             address: typeof address === 'string' ? JSON.parse(address) : address, 
@@ -708,15 +738,17 @@ const checkoutMedicineOrder = async (req, res) => {
             deliveryStatus: 'PendingAssignment'
         });
 
+        // 6. Clear Cart
         await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
         res.status(201).json({ 
             success: true, 
-            message: rxMandatory ? "Order placed! Pharmacist will verify your prescription." : "Order placed successfully!", 
+            message: rxMandatory ? "Order placed! Stock updated and pending verification." : "Order placed and stock updated successfully!", 
             data: order 
         });
 
     } catch (error) {
+        console.error("PHARMA CHECKOUT ERROR:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
