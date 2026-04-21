@@ -340,6 +340,104 @@ const pharmacyPrescriptionUploads = multer({
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
 
+// ==========================================
+// 19. FIRE HQ CONFIGURATION
+// ==========================================
+const fireHQDir = 'public/uploads/fire_hq';
+ensureDir(fireHQDir);
+const fireHQUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, fireHQDir),
+        filename: (req, file, cb) => cb(null, `hq-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).fields([
+    { name: 'profileImage', maxCount: 1 },
+    { name: 'hqDocuments', maxCount: 5 }
+]);
+
+// ==========================================
+// 20. FIRE STATION CONFIGURATION
+// ==========================================
+const fireStationDir = 'public/uploads/fire_stations';
+ensureDir(fireStationDir);
+const fireStationUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, fireStationDir),
+        filename: (req, file, cb) => cb(null, `stn-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).fields([
+    { name: 'profileImage', maxCount: 1 },
+    { name: 'stationImages', maxCount: 5 },
+    { name: 'certificates', maxCount: 5 }
+]);
+
+// ==========================================
+// 21. FIRE STAFF CONFIGURATION
+// ==========================================
+const fireStaffDir = 'public/uploads/fire_staff';
+ensureDir(fireStaffDir);
+const fireStaffUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, fireStaffDir),
+        filename: (req, file, cb) => cb(null, `staff-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 2 * 1024 * 1024 } // 2MB for profile pics
+}).single('profileImage'); // Figma Screen 1: Staff profile photo upload
+
+// ==========================================
+// 22. POLICE HQ CONFIGURATION
+// ==========================================
+const policeHQDir = 'public/uploads/police_hq';
+ensureDir(policeHQDir);
+const policeHQUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, policeHQDir),
+        filename: (req, file, cb) => cb(null, `phq-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).fields([
+    { name: 'profileImage', maxCount: 1 },
+    { name: 'hqDocuments', maxCount: 5 }
+]);
+
+// ==========================================
+// 23. POLICE STATION CONFIGURATION
+// ==========================================
+const policeStationDir = 'public/uploads/police_stations';
+ensureDir(policeStationDir);
+const policeStationUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, policeStationDir),
+        filename: (req, file, cb) => cb(null, `ps-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).fields([
+    { name: 'profileImage', maxCount: 1 },
+    { name: 'stationImages', maxCount: 5 }
+]);
+
+// ==========================================
+// 24. POLICE STAFF CONFIGURATION
+// ==========================================
+const policeStaffDir = 'public/uploads/police_staff';
+ensureDir(policeStaffDir);
+const policeStaffUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, policeStaffDir),
+        filename: (req, file, cb) => cb(null, `pstaff-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 2 * 1024 * 1024 }
+}).single('profileImage');
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -359,5 +457,12 @@ module.exports = {
     insuranceUpload,
     lockerUpload,
     pharmacyPrescriptionUploads,
-    uploadExcel
+    uploadExcel,
+
+    fireHQUploads,
+    fireStationUploads,
+    fireStaffUploads,
+     policeHQUploads,
+    policeStationUploads,
+    policeStaffUploads
 };  

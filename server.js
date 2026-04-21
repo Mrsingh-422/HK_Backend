@@ -128,6 +128,9 @@ app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulance'));
 app.use('/api/public', require('./routes/others/locationRoutes'));
 app.use('/api/password', require('./routes/others/forgotPassword'));
 
+///////////////////////// fireHQ Routes /////////////////////////
+app.use('/fireHQ/auth', require('./routes/fireHQ/authFireHQRoute')); // FireHQ Authentication Route
+
 app.get('/', (req, res) => {
     res.send('HK Backend is running...');
 }); 

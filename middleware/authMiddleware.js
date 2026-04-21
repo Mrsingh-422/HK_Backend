@@ -9,6 +9,9 @@ const Nurse = require('../models/Nurse');
 const Ambulance = require('../models/Ambulance');
 const Driver = require('../models/Driver');
 const Tab = require('../models/Tab'); // Tab model for global tab status check
+const FireHQ = require('../models/FireHQ');
+const FireStation = require('../models/FireStation');
+const FireStaff = require('../models/FireStaff');
 
 
 // 1. Verify Token & Identify User Type
@@ -61,6 +64,27 @@ const protect = (modelType) => async (req, res, next) => {
                 case 'hospital-ambulance':
                     user = await Ambulance.findById(decoded.id);
                     break;
+                // fire models
+                    case 'fire-hq':
+                    user = await FireHQ.findById(decoded.id);
+                    break;
+                case 'fire-station':
+                    user = await FireStation.findById(decoded.id);
+                    break;
+                case 'fire-staff':
+                    user = await FireStaff.findById(decoded.id);
+                    break;
+                // police models
+                case 'police-hq':
+                    user = await PoliceHQ.findById(decoded.id);
+                    break;
+                case 'police-station':
+                    user = await PoliceStation.findById(decoded.id);
+                    break;
+                case 'police-staff':
+                    user = await PoliceStaff.findById(decoded.id);
+                    break;
+
                 default:
                     return res.status(400).json({ message: 'Invalid Model Type in Middleware' });
             }
