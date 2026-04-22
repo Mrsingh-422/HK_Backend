@@ -22,6 +22,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { HarmCategory, HarmBlockThreshold } = require("@google/generative-ai");
 const fs = require('fs');
 const path = require('path');
+const LabCategory = require('../../../models/LabCategory');
 
 
 
@@ -181,6 +182,71 @@ const scanPrescription = async (req, res) => {
     }
 };
 
+const getMedicineCategories = async (req, res) => {
+    try {
+        // 1. Aggregation: Breadcrumb se Main Category nikalna aur Stock (Product Count) ginna
+        const categoryStats = await Medicine.aggregate([
+            {
+                $project: {
+                    // "Medicines > Fever" -> ["Medicines", "Fever"] -> lelo "Medicines"
+                    mainCat: { $trim: { input: { $arrayElemAt: [{ $split: ["$bread_crumb", ">"] }, 0] } } }
+                }
+            },
+            { $match: { mainCat: { $ne: null, $ne: "" } } },
+            { $group: { _id: "$mainCat", productCount: { $sum: 1 } } },
+            { $sort: { productCount: -1 } } // Sabse zyada products wali upar
+        ]);
+
+        // 2. Database se images fetch karein
+        const dbImages = await LabCategory.find({ vendorType: 'Pharmacy' });
+
+        // 3. Data Merge Karein
+        const finalData = categoryStats.map(stat => {
+            const dbMatch = dbImages.find(img => img.name === stat._id);
+            return {
+                name: stat._id,
+                productCount: stat.productCount,
+                // 'public/' hata kar bhej rahe hain
+                image: dbMatch?.image ? dbMatch.image.replace(/^public[\\/]/, '') : `assets/images/med_${stat._id.toLowerCase().replace(/\s+/g, '_')}.png`
+            };
+        });
+
+        res.json({ success: true, data: finalData });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+const getMedicineCategoryDetails = async (req, res) => {
+    try {
+        const { category } = req.query;
+
+        // 1. Is Category ke under aane wali unique Subcategories nikalna
+        const medicines = await Medicine.find({ 
+            bread_crumb: new RegExp(`^${category}\\s*>`, 'i') 
+        }).lean();
+
+        const subCategories = new Set();
+        medicines.forEach(m => {
+            const parts = m.bread_crumb.split('>');
+            if (parts[1]) subCategories.add(parts[1].trim());
+        });
+
+        // 2. (Optional) In medicines ka lowest price nikalna inventory se
+        const formattedMeds = await Promise.all(medicines.slice(0, 20).map(async (med) => {
+            const inventory = await MedicineInventory.findOne({ medicineId: med._id, is_available: true }).sort({ vendor_price: 1 });
+            return {
+                ...med,
+                price: inventory ? inventory.vendor_price : med.mrp,
+                isAvailable: !!inventory
+            };
+        }));
+
+        res.json({
+            success: true,
+            mainCategory: category,
+            subCategories: Array.from(subCategories),
+            medicines: formattedMeds
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 
 // Default Location: Delhi (Coordinates)
@@ -415,91 +481,122 @@ const getStandardMedicineCatalog = async (req, res) => {
 const getMedicineVendors = async (req, res) => {
     try {
         const { medicineId } = req.params;
-        const { lat, lng } = req.query;
+        const { lat, lng } = req.body; // Flutter se aane wala location
 
-        // 1. Medicine ki basic details find karein
-        const medicine = await Medicine.findById(medicineId).lean();
-        if (!medicine) {
-            return res.status(404).json({ success: false, message: "Medicine not found" });
-        }
+        // 1. Convert String ID to MongoDB ObjectId (Casting fix)
+        const medObjectId = new mongoose.Types.ObjectId(medicineId);
 
-        // 2. Inventory se data nikalna (For Vendor List and Summary)
+        // 2. Master Medicine Info lein (Fallback logic ke liye)
+        const masterMedicine = await Medicine.findById(medObjectId).lean();
+        if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
+
+        // 3. KM Limit fetch karein (Pharmacy ke liye)
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
+        const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
+
+        // 4. Inventory fetch karein (ID match YA Name match)
+        // Bilkul Lab Package ki tarah fallback search
         const inventoryRecords = await MedicineInventory.find({
-            medicineId: medicineId,
+            $or: [
+                { medicineId: medObjectId },
+                { name: masterMedicine.name } // Agar ID link miss ho par Name same ho
+            ],
             stock_quantity: { $gt: 0 },
             is_available: true
         })
         .populate({
-            path: 'pharmacyId', 
-            select: 'name profileImage rating totalReviews address location city isHomeDeliveryAvailable is24x7 profileStatus isActive'
+            path: 'pharmacyId',
+            match: { profileStatus: 'Approved', isActive: true }, // Sirf Approved Pharmacies
+            select: 'name profileImage rating totalReviews location city state address isHomeDeliveryAvailable is24x7 profileStatus isActive'
         })
         .lean();
 
-        // 3. Distance & Radius Logic
-        const userLat = parseFloat(lat) || DEFAULT_LAT;
-        const userLng = parseFloat(lng) || DEFAULT_LNG;
-        
-        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
-        const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
+        const availableInPharmacies = [];
+        let minPriceFound = null;
 
-        let formattedVendors = [];
-        let minPrice = null;
-
-        for (let record of inventoryRecords) {
-            const pharmacy = record.pharmacyId;
+        // 5. Loop through all found inventory records
+        for (let item of inventoryRecords) {
             
-            // Pharmacy validation
-            if (!pharmacy || pharmacy.profileStatus !== 'Approved' || pharmacy.isActive === false) continue;
+            // Validation: Agar pharmacyId null hai (Approved nahi hai), toh skip karein
+            if (!item.pharmacyId) continue;
 
-            // Track Min Price (Standard list logic ki tarah)
-            if (minPrice === null || record.vendor_price < minPrice) {
-                minPrice = record.vendor_price;
-            }
-
+            const pharmacy = item.pharmacyId;
             let distance = null;
-            if (pharmacy.location?.lat && pharmacy.location?.lng) {
-                distance = await getDistance(userLat, userLng, pharmacy.location.lat, pharmacy.location.lng);
+
+            // Validation: Distance Calculation (Using provided Lat/Lng)
+            if (lat && lng && pharmacy.location && pharmacy.location.lat) {
+                distance = await getDistance(
+                    parseFloat(lat), 
+                    parseFloat(lng), 
+                    parseFloat(pharmacy.location.lat), 
+                    parseFloat(pharmacy.location.lng)
+                );
             }
 
-            // Radius filter
-            if (distance === null || distance <= maxRadius) {
-                formattedVendors.push({
+            // Validation: Radius Limit Check (getLabs logic mirror)
+            const isBroadSearch = !lat || !lng;
+            
+            if (isBroadSearch || (distance !== null && distance <= maxRadius)) {
+                
+                // Track Min Price
+                if (minPriceFound === null || item.vendor_price < minPriceFound) {
+                    minPriceFound = item.vendor_price;
+                }
+
+                availableInPharmacies.push({
                     pharmacyId: pharmacy._id,
-                    pharmacyName: pharmacy.name,
-                    profileImage: pharmacy.profileImage,
+                    name: pharmacy.name,
+                    image: pharmacy.profileImage,
                     rating: pharmacy.rating,
                     totalReviews: pharmacy.totalReviews,
-                    address: pharmacy.address,
-                    city: pharmacy.city,
-                    distance: distance ? distance.toFixed(1) : "N/A",
-                    price: record.vendor_price,
-                    mrp: medicine.mrp,
-                    discount: medicine.mrp > record.vendor_price ? 
-                        Math.round(((medicine.mrp - record.vendor_price) / medicine.mrp) * 100) : 0,
-                    stock: record.stock_quantity,
+                    address: `${pharmacy.city}, ${pharmacy.state}`,
+                    distance: distance !== null ? distance.toFixed(1) : "N/A", // Figma style distance
+                    price: item.vendor_price, // Pharmacy ka apna rate
+                    mrp: masterMedicine.mrp,
+                    discount: masterMedicine.mrp > item.vendor_price ? 
+                        Math.round(((masterMedicine.mrp - item.vendor_price) / masterMedicine.mrp) * 100) : 0,
+                    stock: item.stock_quantity,
                     isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
-                    isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now"
+                    isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
+                    inventoryId: item._id
                 });
             }
         }
 
-        // Sorting: Cheapest vendor first
-        formattedVendors.sort((a, b) => a.price - b.price);
+        // 6. Remove Duplicates (Agar ek hi pharmacy ID aur Name dono se match ho jaye)
+        const uniquePharmacies = [];
+        const seenPharmaIds = new Set();
+        for (let p of availableInPharmacies) {
+            if (!seenPharmaIds.has(p.pharmacyId.toString())) {
+                seenPharmaIds.add(p.pharmacyId.toString());
+                uniquePharmacies.push(p);
+            }
+        }
 
-        // 4. Combine Response: Exact same as Standard List structure
-        res.json({
-            success: true,
-            medicineData: {
-                ...medicine,           // Saare purane fields (bread_crumb, salt, etc.)
-                vendorCount: inventoryRecords.length,
-                minPrice: minPrice     // Lowest price among sellers
-            },
-            totalVendors: formattedVendors.length,
-            vendors: formattedVendors
+        // 7. Sorting: Nearest First (Sabse paas wali upar)
+        uniquePharmacies.sort((a, b) => {
+            if (a.distance === "N/A") return 1;
+            if (b.distance === "N/A") return -1;
+            return parseFloat(a.distance) - parseFloat(b.distance);
         });
 
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        res.json({
+            success: true,
+            count: uniquePharmacies.length,
+            radiusApplied: lat ? `${maxRadius} km` : "No GPS (Broad Search)",
+            data: { 
+                medicineDetails: {
+                    ...masterMedicine,
+                    minPrice: minPriceFound,
+                    totalSellers: uniquePharmacies.length
+                }, 
+                availableInPharmacies: uniquePharmacies 
+            }
+        });
+
+    } catch (error) { 
+        console.error("Medicine Vendors Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -847,5 +944,5 @@ const trackOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = {scanPrescription,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
+module.exports = {scanPrescription,getMedicineCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder };

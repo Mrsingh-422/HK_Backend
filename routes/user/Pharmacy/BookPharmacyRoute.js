@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { pharmacyPrescriptionUploads } = require('../../../middleware/multer');
-const { scanPrescription,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getStandardMedicineCatalog,getMedicineVendors,
+const { scanPrescription,getMedicineCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getStandardMedicineCatalog,getMedicineVendors,
     getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
@@ -12,8 +12,11 @@ router.post('/scan-rx',
     pharmacyPrescriptionUploads.single('prescriptionFile'), 
     scanPrescription
 );
-router.get('/standard-list', getStandardMedicineCatalog);
-router.get('/medicine-details/:medicineId', getMedicineVendors);
+router.get('/categories', getMedicineCategories);
+router.get('/category-details', getMedicineCategoryDetails);
+
+router.get('/standard-list', getStandardMedicineCatalog); // get all list medicine
+router.get('/medicine-details/:medicineId', getMedicineVendors); // Get medcine by id
 
 router.get('/search-suggestions', getPharmacySearchSuggestions);
 router.get('/pharmacy-suggestions', getPharmacyNameSuggestions);

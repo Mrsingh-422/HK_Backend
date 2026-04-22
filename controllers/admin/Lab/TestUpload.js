@@ -2,6 +2,8 @@ const MasterLabTest = require('../../../models/MasterLabTest');
 const MasterLabPackage = require('../../../models/MasterLabPackage');
 const MasterRequest = require('../../../models/MasterRequest');
 const xlsx = require('xlsx');
+const LabCategory = require('../../../models/LabCategory');
+const { deleteFile } = require('../../../utils/fileHandler');
 
 // upload master tests // Example CSV Format: 
 // endpoint: POST /admin/lab/tests/upload
@@ -247,7 +249,61 @@ const getMasterPackages = async (req, res) => {
     }
 };
 
+
+// UPDATE CATEGORY IMAGE (Admin)
+// endpoint: POST /admin/lab/tests/update-test-category-image
+const updateCategoryImage = async (req, res) => {
+    try {
+        const { categoryName } = req.body;
+        if (!req.file) return res.status(400).json({ message: "Please upload an image" });
+
+        // 1. Check karein kya category pehle se exist karti hai
+        let category = await LabCategory.findOne({ name: categoryName });
+
+        if (category) {
+            // Agar exist karti hai toh purani file delete karein
+            if (category.image) deleteFile(category.image);
+            
+            category.image = req.file.path;
+            await category.save();
+        } else {
+            // Agar nayi category hai toh create karein
+            category = await LabCategory.create({
+                name: categoryName,
+                image: req.file.path
+            });
+        }
+
+        res.json({ success: true, message: "Category image updated", data: category });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+const updatePharmacyCategoryImage = async (req, res) => {
+    try {
+        const { categoryName } = req.body;
+        if (!req.file) return res.status(400).json({ message: "Upload an image" });
+
+        let category = await LabCategory.findOne({ name: categoryName, vendorType: 'Pharmacy' });
+
+        if (category) {
+            if (category.image) deleteFile(category.image);
+            category.image = req.file.path;
+            await category.save();
+        } else {
+            category = await LabCategory.create({
+                name: categoryName,
+                image: req.file.path,
+                vendorType: 'Pharmacy'
+            });
+        }
+
+        res.json({ success: true, data: category });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
                     listMasterData, searchMasterData, createMasterData, editMasterData,
-                    getPendingRequests, approveRequest
+                    getPendingRequests, approveRequest, updateCategoryImage, updatePharmacyCategoryImage
  }; 

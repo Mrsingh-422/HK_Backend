@@ -437,6 +437,20 @@ const policeStaffUploads = multer({
     limits: { fileSize: 2 * 1024 * 1024 }
 }).single('profileImage');
 
+// ==========================================
+// 25. CATEGORY CONFIGURATION
+// ==========================================
+const categoryDir = 'public/uploads/categories';
+ensureDir(categoryDir);
+const categoryTestUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, categoryDir),
+        filename: (req, file, cb) => cb(null, `cat-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 2 * 1024 * 1024 }
+}).single('categoryImage'); // Key for Postman: categoryImage
+
 
 module.exports = { 
     hospitalUploads,
@@ -464,5 +478,6 @@ module.exports = {
     fireStaffUploads,
      policeHQUploads,
     policeStationUploads,
-    policeStaffUploads
+    policeStaffUploads,
+    categoryTestUploads
 };  

@@ -15,7 +15,8 @@ const {
     confirmPrescriptionBooking,
     rateLabOrder,cancelBooking,
     getAvailableCoupons ,validateLabCoupon,
-    getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions
+    getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,
+    getWomenCategories,getWomenTestsByCategory
     
 } = require('../../../controllers/user/Lab/BookLab');
 
@@ -35,21 +36,20 @@ router.get('/standard-packages/female', getFemaleStandardPackages);
 router.get('/standard-tests/female', getFemaleStandardTests);
 
 
-
-router.get('/suggestions', getSearchSuggestions);
-router.get('/lab-suggestions', getLabSuggestions);
+router.get('/suggestions', getSearchSuggestions); //user/labs/suggestions?query=Labname
+router.get('/lab-suggestions', getLabSuggestions); //user/labs/lab-suggestions?query=Labname
 // Discovery
 router.post('/list', getLabs);
 router.get('/details/:id', getLabDetails);
-// 2. Inventory - Tests
+// 2. Inventory - Tests for specific lab
 router.get('/:labId/inventory-tests', getLabInventoryTests); // GET with ?page=1
 router.post('/:labId/inventory-tests/search', searchLabInventoryTests); // POST with body {query: ""}
-// 3. Inventory - Packages
+// 3. Inventory - Packages for specific lab
 router.get('/:labId/inventory-packages', getLabInventoryPackages);
 router.post('/:labId/inventory-packages/search', searchLabInventoryPackages);
 
 
-router.get('/slots', getLabSlots);
+router.get('/slots', getLabSlots); // user/labs/slots?labId=xxx&date=2024-08-20
 
 // --- Guidance & Suggestion ---
 router.get('/prep-guide', protect('user'), getPreparationGuide); // For Fasting/Instructions modal
@@ -84,6 +84,10 @@ router.get('/my-bookings', protect('user'), getMyBookings);
 router.get('/details/:id/track', protect('user'), getBookingDetails);
 router.put('/cancel/:id', protect('user'), cancelBooking);
 router.post('/rate', protect('user'), rateLabOrder);
+
+router.get('/women-special-tests', protect('user'), getWomenSpecialTests); //
+router.get('/test/women/categories', protect('user'), getWomenCategories); //
+router.get('/test/women/tests-by-category', protect('user'), getWomenTestsByCategory); //
 
 
 module.exports = router;

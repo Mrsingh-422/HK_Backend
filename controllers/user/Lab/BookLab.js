@@ -22,6 +22,7 @@ const countries = require('../../../data/countries.json');
 const states = require('../../../data/states.json');
 const cities = require('../../../data/cities.json');
 const Fuse = require('fuse.js');
+const LabCategory = require('../../../models/LabCategory');
 
 
 
@@ -676,8 +677,6 @@ const getLabs = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
-
-
 // 1. GET LAB PROFILE (Sirf Lab ki basic info)
 const getLabDetails = async (req, res) => {
     try {
@@ -1387,57 +1386,92 @@ const getMasterPackageDetails = async (req, res) => {
         const { id } = req.params;
         const { lat, lng } = req.body;
 
-        const masterData = await MasterLabPackage.findById(id).populate('tests', 'testName parameters').lean();
-        if (!masterData) return res.status(404).json({ success: false, message: "Package not found" });
+        const masterPkgId = new mongoose.Types.ObjectId(id);
 
+        // 1. Master Package ki info lein
+        const masterData = await MasterLabPackage.findById(masterPkgId).populate('tests', 'testName parameters').lean();
+        if (!masterData) return res.status(404).json({ success: false, message: "Master Package not found" });
+
+        // 2. KM Limit
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Lab', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
-        const vendorsOffering = await LabPackage.find({ masterPackageId: id, isActive: true })
-            .populate('labId', 'name profileImage rating totalReviews location city state address isHomeCollectionAvailable isRapidServiceAvailable isActive profileStatus')
-            .lean();
+        // 3. UPDATED QUERY: ID se dhoondo YA Name se (Fallback logic)
+        // Isse agar ID miss bhi ho gayi ho par Name same hai, toh wo vendor dikhega
+        const labsPackages = await LabPackage.find({
+            $or: [
+                { masterPackageId: masterPkgId },
+                { packageName: masterData.packageName } // Agar ID link nahi hai par Name wahi hai
+            ],
+            isActive: true 
+        })
+        .populate({
+            path: 'labId',
+            match: { profileStatus: 'Approved', isActive: true }
+        })
+        .lean();
+
+        console.log(`DEBUG: Found ${labsPackages.length} packages by ID or Name`);
 
         const availableInLabs = [];
 
-        for (let item of vendorsOffering) {
-            if (item.labId?.profileStatus !== 'Approved' || !item.labId?.isActive) continue;
+        for (let item of labsPackages) {
+            if (!item.labId) continue;
 
             let distance = null;
-            if (lat && lng && item.labId?.location?.lat) {
-                distance = await getDistance(lat, lng, item.labId.location.lat, item.labId.location.lng);
+            if (lat && lng && item.labId.location?.lat) {
+                distance = await getDistance(
+                    parseFloat(lat), 
+                    parseFloat(lng), 
+                    parseFloat(item.labId.location.lat), 
+                    parseFloat(item.labId.location.lng)
+                );
             }
 
-            // --- RADIUS LOGIC (Matches getLabs) ---
             const isBroadSearch = !lat || !lng;
-
-            if (isBroadSearch || distance <= maxRadius) {
+            if (isBroadSearch || (distance !== null && distance <= maxRadius)) {
                 availableInLabs.push({
-                    labId: item.labId?._id,
-                    name: item.labId?.name,
-                    image: item.labId?.profileImage,
-                    rating: item.labId?.rating,
-                    distance: distance ? distance.toFixed(1) : "N/A",
+                    labId: item.labId._id,
+                    name: item.labId.name,
+                    image: item.labId.profileImage,
+                    rating: item.labId.rating,
+                    totalReviews: item.labId.totalReviews,
+                    address: `${item.labId.city}, ${item.labId.state}`,
+                    distance: distance !== null ? distance.toFixed(1) : "N/A",
                     offerPrice: item.offerPrice,
                     mrp: item.mrp,
                     discount: item.mrp > 0 ? Math.round(((item.mrp - item.offerPrice) / item.mrp) * 100) : 0,
-                    isHomeCollection: item.labId?.isHomeCollectionAvailable,
+                    isHomeCollection: item.labId.isHomeCollectionAvailable,
+                    isRapid: item.labId.isRapidServiceAvailable,
                     labPackageId: item._id
                 });
             }
         }
 
-        availableInLabs.sort((a, b) => {
-            if (a.distance === "N/A") return 1;
-            return parseFloat(a.distance) - parseFloat(b.distance);
-        });
+        // Duplicates remove karein (In case ek hi vendor ID aur Name dono se match ho jaye)
+        const uniqueLabs = [];
+        const seenLabIds = new Set();
+        for (let lab of availableInLabs) {
+            if (!seenLabIds.has(lab.labId.toString())) {
+                seenLabIds.add(lab.labId.toString());
+                uniqueLabs.push(lab);
+            }
+        }
+
+        uniqueLabs.sort((a, b) => (a.distance === "N/A" ? 1 : parseFloat(a.distance) - parseFloat(b.distance)));
 
         res.json({
             success: true,
-            radiusApplied: lat ? `${maxRadius} km` : "No GPS (Broad Search)",
-            data: { packageDetails: masterData, availableInLabs: availableInLabs }
+            count: uniqueLabs.length,
+            data: { 
+                packageDetails: masterData, 
+                availableInLabs: uniqueLabs 
+            }
         });
 
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- NEW: GET PREPARATION GUIDE (Figma: Okay, I understand modal) ---
@@ -1479,6 +1513,7 @@ const suggestPersonalizedPackage = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// not in use yet
 const getTestSuggestions = async (req, res) => {
     try {
         const { query } = req.body;
@@ -1533,7 +1568,130 @@ const getTestSuggestions = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// not in use yet
+const getWomenSpecialTests = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
 
+        // --- Strictly Women-Specific Filter ---
+        const womenOnlyFilter = {
+            isActive: true,
+            $or: [
+                // 1. Specific Female Health Tests
+                { testName: { $regex: /Pap Smear|Mammography|FSH Test|LH Test|Prolactin/i } },
+                
+                // 2. Female Organ Imaging
+                { 
+                    $and: [
+                        { testName: { $regex: /Ultrasound Pelvis/i } },
+                        { category: "Reproductive" } 
+                    ]
+                }
+            ]
+        };
+
+        const aggregate = MasterLabTest.aggregate([
+            { $match: womenOnlyFilter },
+            {
+                $lookup: {
+                    from: "labtests",
+                    localField: "_id",
+                    foreignField: "masterTestId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: { $min: "$vendorList.discountPrice" }
+                }
+            },
+            { $sort: { testName: 1 } },
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            data: result[0].data
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// GET /user/labs/women/categories
+const getWomenCategories = async (req, res) => {
+    try {
+        // 1. Master tests se unique category names nikalen
+        const womenCats = await MasterLabTest.distinct("category", {
+            testName: { $regex: /Pap Smear|Mammography|FSH Test|LH Test|Prolactin|Ultrasound Pelvis/i },
+            isActive: true
+        });
+
+        // 2. Database se images uthayen
+        const dbCategories = await LabCategory.find({ name: { $in: womenCats } });
+
+        // 3. Logic: Agar DB mein image hai toh 'public/' hatao, nahi toh fallback asset dikhao
+        const finalData = womenCats.map(catName => {
+            const dbMatch = dbCategories.find(dbCat => dbCat.name === catName);
+            
+            let imagePath;
+            if (dbMatch && dbMatch.image) {
+                // 'public/' ko string se remove karein
+                imagePath = dbMatch.image.replace(/^public[\\/]/, ''); 
+            } else {
+                // Fallback asset path
+                imagePath = `assets/images/women_${catName.toLowerCase().replace(" ", "_")}.png`;
+            }
+
+            return {
+                name: catName,
+                image: imagePath
+            };
+        });
+
+        res.json({ success: true, data: finalData });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// GET /user/labs/women/tests-by-category?category=Hormonal
+const getWomenTestsByCategory = async (req, res) => {
+    try {
+        const { category } = req.query; 
+        
+        const filter = {
+            category: category,
+            isActive: true,
+            // Strictly Women-Only tests filter
+            testName: { $regex: /Pap Smear|Mammography|FSH Test|LH Test|Prolactin|Ultrasound Pelvis/i }
+        };
+
+        // Simple find ya aggregate use kar sakte hain kyunki lookup nahi chahiye
+        const result = await MasterLabTest.find(filter).sort({ testName: 1 });
+
+        res.json({ 
+            success: true, 
+            count: result.length, 
+            data: result 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = { 
         getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
@@ -1545,5 +1703,5 @@ module.exports = {
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
     cancelBooking, confirmPrescriptionBooking, rateLabOrder ,
-    getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions
+    getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,getWomenCategories,getWomenTestsByCategory
 };

@@ -40,7 +40,7 @@ const acceptCase = async (req, res) => {
 };
 
 // 3. STAFF MANAGEMENT (Screen 8 & 11)
-constaddStaff = async (req, res) => {
+const addStaff = async (req, res) => {
     try {
         const { fullName, badgeId, rank, mobileNumber, officialEmail, password, address } = req.body;
         

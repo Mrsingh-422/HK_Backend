@@ -1,13 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { loginStation, updateStationProfile } = require('../../controllers/fire/StationAuthController');
-const { protect } = require('../../middleware/authMiddleware'); // Role check 'Fire-Station'
-const { upload } = require('../../middleware/multer'); 
+const { loginStation, updateStationProfile } = require('../../../controllers/fireHQ/fireStation/authfireStation');
+const { protect } = require('../../../middleware/authMiddleware'); 
+
+// Base URL: /fireStation/auth
 
 // Public Routes
 router.post('/login', loginStation);
 
 // Protected Routes
-router.put('/profile/update', protect('Fire-Station'), upload.single('profileImage'), updateStationProfile);
+router.put('/profile/update', protect('fire-station'), updateStationProfile);
 
 module.exports = router;
