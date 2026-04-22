@@ -21,12 +21,15 @@ const mongoose = require('mongoose');
 const countries = require('../../../data/countries.json');
 const states = require('../../../data/states.json');
 const cities = require('../../../data/cities.json');
+const Fuse = require('fuse.js');
 
 
 
 // --- UPDATED: CALCULATE BILL (Per Patient Rapid Charge Logic) ---
 const calculateBillHelper = async (labId, items, patientsCount, collectionType, couponCode, isRapid, userId, appointmentTime) => {
     let itemTotal = 0;
+    
+    // Items total calculation
     const tests = items.items ? items.items.filter(i => i.productType === 'LabTest') : (items.tests || []);
     const packages = items.items ? items.items.filter(i => i.productType === 'LabPackage') : (items.packages || []);
 
@@ -41,36 +44,40 @@ const calculateBillHelper = async (labId, items, patientsCount, collectionType, 
         if (pkg) itemTotal += (pkg.offerPrice || pkg.mrp);
     }
 
-    itemTotal = itemTotal * patientsCount;
+    itemTotal = itemTotal * patientsCount; // Subtotal
 
     let homeVisitCharge = 0;
-    let rapidCharge = 0;
-    let slotCharge = 0; // Initialize always
-
-    const cleanLabId = labId.toString();
-    const charges = await DeliveryCharge.findOne({ vendorId: cleanLabId });
+    const charges = await DeliveryCharge.findOne({ vendorId: labId });
 
     if (collectionType === 'Home Collection') {
-        homeVisitCharge = charges ? Number(charges.fixedPrice) : 40;
+        // --- FIXED LOGIC ---
+        let standardFee = charges ? Number(charges.fixedPrice) : 40;
+        
+        // Agar total amount threshold se zyada hai toh zero
+        if (charges && charges.freeDeliveryThreshold && itemTotal >= charges.freeDeliveryThreshold) {
+            homeVisitCharge = 0;
+        } else {
+            homeVisitCharge = standardFee;
+        }
     }
     
+    // Rapid charge logic
+    let rapidCharge = 0;
     if (isRapid) {
         rapidCharge = charges ? Number(charges.fastDeliveryExtra) : 100;
     }
 
-    // PREMIUM SLOT LOGIC
-    // Agar time "Immediate" nahi hai, tabhi Availability check karo
+    // Slot charge logic
+    let slotCharge = 0;
     if (appointmentTime && appointmentTime !== 'Immediate') {
-        const availConfig = await Availability.findOne({ vendorId: cleanLabId });
+        const availConfig = await Availability.findOne({ vendorId: labId });
         if (availConfig && availConfig.premiumSlots) {
-            const selectedTimeClean = appointmentTime.trim();
-            const premiumSlotMatch = availConfig.premiumSlots.find(ps => ps.time.trim() === selectedTimeClean);
-            if (premiumSlotMatch) {
-                slotCharge = Number(premiumSlotMatch.extraFee) || 0;
-            }
+            const premiumSlotMatch = availConfig.premiumSlots.find(ps => ps.time.trim() === appointmentTime.trim());
+            if (premiumSlotMatch) slotCharge = Number(premiumSlotMatch.extraFee) || 0;
         }
     }
 
+    // Coupon logic
     let couponDiscount = 0;
     let couponId = null;
     if (couponCode) {
@@ -89,7 +96,7 @@ const calculateBillHelper = async (labId, items, patientsCount, collectionType, 
         couponId,
         homeVisitCharge, 
         rapidDeliveryCharge: rapidCharge, 
-        slotCharge, // Yeh field ab hamesha return hogi
+        slotCharge, 
         totalAmount: Math.round(totalAmount)
     };
 };
@@ -288,7 +295,7 @@ const searchStandardTests = async (req, res) => {
 const getStandardPackages = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
+        const limit = 20;
         const skip = (page - 1) * limit;
         const { search, category } = req.query;
 
@@ -299,17 +306,7 @@ const getStandardPackages = async (req, res) => {
         const aggregate = MasterLabPackage.aggregate([
             { $match: matchQuery },
             
-            // 1. POPULATE TESTS (MasterLabTest collection se data laane ke liye)
-            {
-                $lookup: {
-                    from: "masterlabtests", // Aapki MasterLabTest collection ka asli naam (usually plural/lowercase)
-                    localField: "tests",
-                    foreignField: "_id",
-                    as: "tests"
-                }
-            },
-
-            // 2. LOOKUP VENDORS (LabPackage details)
+            // 1. LOOKUP VENDORS (Sirf Price aur Count nikalne ke liye)
             {
                 $lookup: {
                     from: "labpackages",
@@ -320,17 +317,27 @@ const getStandardPackages = async (req, res) => {
                 }
             },
             
-            // 3. FIELDS CALCULATE KAREIN
+            // 2. LIGHTWEIGHT FIELDS (Sirf zaroori data)
             {
                 $addFields: {
                     vendorCount: { $size: "$vendorList" },
-                    minPrice: { $min: "$vendorList.offerPrice" }
+                    minPrice: { $min: "$vendorList.offerPrice" },
+                    testCount: { $size: "$tests" } // Sirf ginti bhejein, pura data nahi
                 }
+            },
+            
+            // 3. PROJECT: Heavy fields ko hata dein
+            { 
+                $project: { 
+                    vendorList: 0, 
+                    tests: 0,        // <--- Tests array hata diya (Heavy field)
+                    description: 0,  // <--- Description bhi details mein dikhayenge
+                    precaution: 0    // <--- Precaution details mein
+                } 
             },
             
             { $sort: { vendorCount: -1, packageName: 1 } },
             
-            // 4. PAGINATION
             {
                 $facet: {
                     metadata: [{ $count: "total" }],
@@ -340,19 +347,15 @@ const getStandardPackages = async (req, res) => {
         ]);
 
         const result = await aggregate;
-        const total = result[0].metadata[0]?.total || 0;
-
         res.json({
             success: true,
-            total,
+            total: result[0].metadata[0]?.total || 0,
             currentPage: page,
-            totalPages: Math.ceil(total / limit),
             data: result[0].data
         });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
-    }
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 // 2. SEARCH STANDARD PACKAGES (POST - Master Catalog)
 const searchStandardPackages = async (req, res) => {
     try {
@@ -515,7 +518,7 @@ const getFemaleStandardTests = async (req, res) => {
 const DEFAULT_LAT = 28.6139;
 const DEFAULT_LNG = 77.2090;
 
-// endpoint: GET /api/user/labs/suggestions?query=Del
+// endpoint: GET /user/labs/suggestions?query=Del
 const getSearchSuggestions = (req, res) => {
     try {
         const { query } = req.query;
@@ -545,7 +548,7 @@ const getSearchSuggestions = (req, res) => {
         res.status(500).json({ message: "Error fetching suggestions" });
     }
 };
-// endpoint: GET /api/user/labs/lab-suggestions?query=Mud
+// endpoint: GET /user/labs/lab-suggestions?query=Mud
 // searchbar ke liye in Labs
 const getLabSuggestions = async (req, res) => {
     try {
@@ -1312,50 +1315,129 @@ const getLabsByMasterPackage = async (req, res) => {
 // NEW: Get Master Test Details for User
 const getMasterTestDetails = async (req, res) => {
     try {
-        const data = await MasterLabTest.findById(req.params.id); // params.id match route
-        if (!data) return res.status(404).json({ success: false, message: "Test not found" });
-        res.json({ success: true, data });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
-};
+        const { id } = req.params;
+        const { lat, lng } = req.body; // Location from Flutter
 
-// NEW: Get Master Package Details for User
-const getMasterPackageDetails = async (req, res) => {
-    try {
-        const { id } = req.params; // Yeh ID bhi ho sakti hai ya Name bhi
-        let data;
+        // 1. Fetch Master Test Info
+        const masterData = await MasterLabTest.findById(id).lean();
+        if (!masterData) return res.status(404).json({ success: false, message: "Test not found" });
 
-        // 1. Check karein ki kya 'id' ek valid MongoDB ObjectId hai?
-        const isValidId = mongoose.Types.ObjectId.isValid(id);
+        // 2. KM Limit Config (Matches getLabs)
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Lab', isActive: true });
+        const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
-        if (isValidId) {
-            // A. Agar ID hai, toh pehle Master Templates mein dhundo
-            data = await MasterLabPackage.findById(id).populate('tests');
+        // 3. Fetch Labs offering this test
+        const labsOffering = await LabTest.find({ masterTestId: id, isActive: true })
+            .populate('labId', 'name profileImage rating totalReviews location city state address isHomeCollectionAvailable isRapidServiceAvailable isActive profileStatus')
+            .lean();
 
-            // B. Agar master mein nahi mila, toh LabPackage (Vendor listing) mein dhundo
-            if (!data) {
-                data = await LabPackage.findById(id).populate({
-                    path: 'tests',
-                    model: 'MasterLabTest'
+        const availableInLabs = [];
+
+        for (let item of labsOffering) {
+            // Sirf Approved aur Active Labs dikhayein
+            if (item.labId?.profileStatus !== 'Approved' || !item.labId?.isActive) continue;
+
+            let distance = null;
+            if (lat && lng && item.labId?.location?.lat) {
+                distance = await getDistance(lat, lng, item.labId.location.lat, item.labId.location.lng);
+            }
+
+            // --- RADIUS LOGIC (Matches getLabs) ---
+            // Agar Lat/Lng diya hai toh Radius check hoga, warna Broad Search (All Labs)
+            const isBroadSearch = !lat || !lng;
+
+            if (isBroadSearch || distance <= maxRadius) {
+                availableInLabs.push({
+                    labId: item.labId?._id,
+                    name: item.labId?.name,
+                    image: item.labId?.profileImage,
+                    rating: item.labId?.rating,
+                    totalReviews: item.labId?.totalReviews,
+                    address: `${item.labId?.city}, ${item.labId?.state}`,
+                    distance: distance ? distance.toFixed(1) : "N/A",
+                    discountPrice: item.discountPrice,
+                    amount: item.amount,
+                    discount: item.amount > 0 ? Math.round(((item.amount - item.discountPrice) / item.amount) * 100) : 0,
+                    isHomeCollection: item.labId?.isHomeCollectionAvailable,
+                    isRapid: item.labId?.isRapidServiceAvailable,
+                    labTestId: item._id 
                 });
             }
-        } else {
-            // 2. Agar ID nahi hai (Matlab yeh Name string hai), toh LabPackage mein Name se dhundo
-            // Hum .findOne use karenge kyunki humein sirf package ka structure (tests/description) chahiye
-            data = await LabPackage.findOne({ packageName: id }).populate({
-                path: 'tests',
-                model: 'MasterLabTest'
-            });
         }
 
-        if (!data) {
-            return res.status(404).json({ success: false, message: "Package information not found" });
+        // Sorting: Nearest First
+        availableInLabs.sort((a, b) => {
+            if (a.distance === "N/A") return 1;
+            if (b.distance === "N/A") return -1;
+            return parseFloat(a.distance) - parseFloat(b.distance);
+        });
+
+        res.json({
+            success: true,
+            radiusApplied: lat ? `${maxRadius} km` : "No GPS (Broad Search)",
+            data: { testDetails: masterData, availableInLabs: availableInLabs }
+        });
+
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 2. POST /user/labs/master-package/:id
+const getMasterPackageDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { lat, lng } = req.body;
+
+        const masterData = await MasterLabPackage.findById(id).populate('tests', 'testName parameters').lean();
+        if (!masterData) return res.status(404).json({ success: false, message: "Package not found" });
+
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Lab', isActive: true });
+        const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
+
+        const vendorsOffering = await LabPackage.find({ masterPackageId: id, isActive: true })
+            .populate('labId', 'name profileImage rating totalReviews location city state address isHomeCollectionAvailable isRapidServiceAvailable isActive profileStatus')
+            .lean();
+
+        const availableInLabs = [];
+
+        for (let item of vendorsOffering) {
+            if (item.labId?.profileStatus !== 'Approved' || !item.labId?.isActive) continue;
+
+            let distance = null;
+            if (lat && lng && item.labId?.location?.lat) {
+                distance = await getDistance(lat, lng, item.labId.location.lat, item.labId.location.lng);
+            }
+
+            // --- RADIUS LOGIC (Matches getLabs) ---
+            const isBroadSearch = !lat || !lng;
+
+            if (isBroadSearch || distance <= maxRadius) {
+                availableInLabs.push({
+                    labId: item.labId?._id,
+                    name: item.labId?.name,
+                    image: item.labId?.profileImage,
+                    rating: item.labId?.rating,
+                    distance: distance ? distance.toFixed(1) : "N/A",
+                    offerPrice: item.offerPrice,
+                    mrp: item.mrp,
+                    discount: item.mrp > 0 ? Math.round(((item.mrp - item.offerPrice) / item.mrp) * 100) : 0,
+                    isHomeCollection: item.labId?.isHomeCollectionAvailable,
+                    labPackageId: item._id
+                });
+            }
         }
 
-        res.json({ success: true, data });
-    } catch (error) {
-        // CastError ya koi aur error handle karne ke liye
-        res.status(500).json({ success: false, message: error.message });
-    }
+        availableInLabs.sort((a, b) => {
+            if (a.distance === "N/A") return 1;
+            return parseFloat(a.distance) - parseFloat(b.distance);
+        });
+
+        res.json({
+            success: true,
+            radiusApplied: lat ? `${maxRadius} km` : "No GPS (Broad Search)",
+            data: { packageDetails: masterData, availableInLabs: availableInLabs }
+        });
+
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // --- NEW: GET PREPARATION GUIDE (Figma: Okay, I understand modal) ---
@@ -1397,6 +1479,61 @@ const suggestPersonalizedPackage = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const getTestSuggestions = async (req, res) => {
+    try {
+        const { query } = req.body;
+        if (!query || query.length < 2) return res.json({ success: true, data: [] });
+
+        // 1. Saare active tests fetch karein
+        const allTests = await MasterLabTest.find({ isActive: true }).select('testName').lean();
+
+        // 2. Fuse configuration
+        const fuse = new Fuse(allTests, {
+            keys: ['testName'],
+            threshold: 0.4, 
+            includeScore: true
+        });
+
+        // 3. Logic: Query ko comma (,) ya space ( ) se split karein
+        // e.g. "Sugar, Thyroid" -> ["Sugar", "Thyroid"]
+        const keywords = query.split(/[, ]+/).filter(k => k.trim().length > 2);
+
+        let finalResults = [];
+
+        if (keywords.length > 1) {
+            // Har keyword ke liye alag se dhoondein
+            keywords.forEach(word => {
+                const matches = fuse.search(word).map(r => r.item);
+                finalResults.push(...matches);
+            });
+
+            // 4. Duplicate Results Hatayein (Unique IDs only)
+            const uniqueIds = new Set();
+            finalResults = finalResults.filter(item => {
+                const idStr = item._id.toString();
+                if (!uniqueIds.has(idStr)) {
+                    uniqueIds.add(idStr);
+                    return true;
+                }
+                return false;
+            });
+        } else {
+            // Agar single word hai toh normal search
+            finalResults = fuse.search(query).map(r => r.item);
+        }
+
+        // Top 15 suggestions bhejein
+        res.json({ 
+            success: true, 
+            count: finalResults.length, 
+            data: finalResults.slice(0, 15) 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
         getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
@@ -1408,5 +1545,5 @@ module.exports = {
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
     cancelBooking, confirmPrescriptionBooking, rateLabOrder ,
-    getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage
+    getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions
 };

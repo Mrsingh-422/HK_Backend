@@ -18,7 +18,7 @@ const { addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity,
 router.get('/', protect('user'), getMyCart);
 router.post('/lab/add', protect('user'), addToLabCart);
 router.post('/lab/clear', protect('user'), clearLabCart);
-router.delete('/item/:itemId', protect('user'), removeItem);
+router.delete('/item/:itemId', protect('user'), removeItem);// lab cart item removal by itemId (could be test or package)
 router.put('/quantity', protect('user'), updateCartQuantity);
 
 router.post('/compare', protect('user'), compareCartOnMap);
@@ -29,7 +29,7 @@ router.post('/compare', protect('user'), compareCartOnMap);
 router.post('/pharmacy/add', protect('user'), addToPharmacyCart);
 router.put('/pharmacy/quantity', protect('user'), updatePharmacyQuantity);
 router.post('/pharmacy/clear', protect('user'), clearPharmacyCart);
-router.delete('/pharmacy/item/:itemId', protect('user'), removePharmacyItem);
+router.delete('/pharmacy/item/:medicineId', protect('user'), removePharmacyItem);
 
 
 router.post('/check-better-options', protect('user'), checkBetterOptions);

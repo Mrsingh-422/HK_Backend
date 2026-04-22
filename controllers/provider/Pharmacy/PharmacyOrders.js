@@ -95,4 +95,59 @@ const triggerAutoAssignment = async (orderId) => {
     }
 };
 
-module.exports = { getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment };
+// 5. REASSIGN DRIVER (Jab tak driver accept na kare)
+// Endpoint: POST /provider/pharmacy/orders/reassign
+const reassignDriverManual = async (req, res) => {
+    try {
+        const { orderId, newDriverId } = req.body;
+        const pharmacyId = req.user.id;
+
+        // 1. Order find karein
+        const order = await PharmacyBooking.findById(orderId);
+        if (!order) return res.status(404).json({ message: "Order not found" });
+
+        // 2. Logic: Sirf tabhi reassign hoga jab tak driver ne Accept na kiya ho
+        const restrictedStatuses = ['Accepted', 'PickedUp', 'OutForDelivery', 'Delivered'];
+        if (restrictedStatuses.includes(order.deliveryStatus)) {
+            return res.status(400).json({ 
+                message: `Cannot reassign. Order is already ${order.deliveryStatus} by the current driver.` 
+            });
+        }
+
+        // 3. Purane driver ko wapas free karein (Available)
+        if (order.driverId) {
+            await Driver.findByIdAndUpdate(order.driverId, { status: 'Available' });
+            // Purane driver ko rejectedBy mein daal dein taaki auto-assign wapas uske paas na jaye
+            if (!order.rejectedBy.includes(order.driverId)) {
+                order.rejectedBy.push(order.driverId);
+            }
+        }
+
+        // 4. Naya driver check karein
+        const newDriver = await Driver.findById(newDriverId);
+        if (!newDriver || newDriver.status !== 'Available') {
+            return res.status(400).json({ message: "New driver is not available" });
+        }
+
+        // 5. Order update karein
+        order.driverId = newDriverId;
+        order.deliveryStatus = 'Assigned';
+        order.assignedAt = new Date();
+        await order.save();
+
+        // 6. Naye driver ko Busy mark karein
+        await Driver.findByIdAndUpdate(newDriverId, { status: 'Busy' });
+
+        res.json({ 
+            success: true, 
+            message: "Order reassigned to new driver successfully", 
+            data: order 
+        });
+
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+
+module.exports = { getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual };

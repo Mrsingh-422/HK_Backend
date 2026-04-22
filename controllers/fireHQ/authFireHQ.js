@@ -58,5 +58,20 @@ const updateHQProfile = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const changePassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        const hq = await FireHQ.findById(req.user.id).select('+password');
+
+        const isMatch = await bcrypt.compare(oldPassword, hq.password);
+        if (!isMatch) return res.status(400).json({ message: "Old password does not match" });
+
+        hq.password = await bcrypt.hash(newPassword, 10);
+        await hq.save();
+
+        res.json({ success: true, message: "Password updated successfully" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 // Forgot & Reset same rahenge (Bas token gen update ho gaya hai)
-module.exports = { registerHQ, loginHQ, updateHQProfile };
+module.exports = { registerHQ, loginHQ, updateHQProfile, changePassword };

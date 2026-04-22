@@ -51,14 +51,15 @@ const labBookingSchema = new mongoose.Schema({
     // ==========================================
     collectionType: { type: String, enum: ['Home Collection', 'Visit Lab'], required: true },
     address: {
-        addressType: String, // Home, Office, Other
-        pincode: String,
+        name: String,
+        phone: String,
         houseNo: String,
         sector: String,
+        landmark: String,
         city: String,
         state: String,
-        lat: Number,
-        lng: Number
+        pincode: String,
+        addressType: String
     },
 
     // FLOW: Slot selected using 'Availability' model intervals.

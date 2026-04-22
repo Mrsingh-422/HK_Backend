@@ -9,6 +9,8 @@ const {
     loginDoctor 
 } = require('../../controllers/doctor/authDoctor');
 
+// Base route: /api/auth/doctor
+
 // 1. Register (Step 1)
 router.post('/register', registerDoctor);
 

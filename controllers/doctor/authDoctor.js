@@ -96,15 +96,61 @@ const uploadDocuments = async (req, res) => {
 const loginDoctor = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
+        
+        // 1. Find Doctor by Email or Phone
         let query = email ? { email: email.toLowerCase() } : { phone };
-
         const doctor = await Doctor.findOne(query).select('+password');
+
         if (!doctor || !(await bcrypt.compare(String(password), doctor.password))) {
             return res.status(400).json({ message: 'Invalid Credentials' });
         }
 
+        // ------------------------------------------------------------
+        // 🚀 STATUS & ROLE BASED FLOW
+        // ------------------------------------------------------------
+        
+        // A. PENDING: Review ke liye wait kar raha hai
+        if (doctor.profileStatus === 'Pending') {
+            return res.status(200).json({ 
+                success: true, 
+                fullAccess: false,
+                role: doctor.role, // 'doctor' ya 'hospital-doctor'
+                profileStatus: 'Pending',
+                message: 'Profile under review. No dashboard access yet.' 
+            });
+        }
+
+        // B. INCOMPLETE: Docs upload karne baaki hain
+        if (doctor.profileStatus === 'Incomplete') {
+            const token = doctor.token || generateToken(doctor._id, doctor.role);
+            if (!doctor.token) { doctor.token = token; await doctor.save(); }
+            
+            return res.status(200).json({ 
+                success: true, 
+                fullAccess: false, 
+                token, 
+                role: doctor.role,
+                profileStatus: 'Incomplete',
+                message: 'Please complete your profile by uploading documents.' 
+            });
+        }
+
+        // C. REJECTED: Admin ne docs reject kar diye
+        if (doctor.profileStatus === 'Rejected') {
+            const token = doctor.token || generateToken(doctor._id, doctor.role);
+            return res.status(200).json({ 
+                success: true, 
+                fullAccess: false, 
+                token, 
+                role: doctor.role,
+                profileStatus: 'Rejected',
+                rejectionReason: doctor.rejectionReason,
+                message: `Rejected: ${doctor.rejectionReason}. Re-upload required.` 
+            });
+        }
+
+        // D. APPROVED: Full Access (Dashboard)
         let token = null;
-        // DEVELOPMENT MODE: Reuse Token
         if (process.env.NODE_ENV === 'development' && doctor.token) {
             try {
                 jwt.verify(doctor.token, process.env.JWT_SECRET);
@@ -121,11 +167,13 @@ const loginDoctor = async (req, res) => {
         doctor.password = undefined;
         res.json({ 
             success: true, 
+            fullAccess: true, 
             token, 
-            role: doctor.role, 
-            profileStatus: doctor.profileStatus, 
+            role: doctor.role, // Figma navigation ke liye zaroori
+            profileStatus: 'Approved', 
             data: doctor 
         });
+
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

@@ -15,17 +15,21 @@ const {
     confirmPrescriptionBooking,
     rateLabOrder,cancelBooking,
     getAvailableCoupons ,validateLabCoupon,
-    getPreparationGuide, suggestPersonalizedPackage
+    getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions
     
 } = require('../../../controllers/user/Lab/BookLab');
 
 // Base URL: /user/labs
 
+router.post('/test-suggestions', getTestSuggestions);
+
 
 router.get('/standard-tests', getStandardCatalogTests);
+router.post('/standard-tests/details/:id', getMasterTestDetails);
 router.post('/standard-tests/search', searchStandardTests); ///user/labs/standard-tests/search?page=1
 
 router.get('/standard-packages', getStandardPackages); 
+router.post('/standard-packages/details/:id', getMasterPackageDetails); ///user/labs/standard-packages/details/:id
 router.post('/standard-packages/search', searchStandardPackages); ///user/labs/standard-packages/search?page=1
 router.get('/standard-packages/female', getFemaleStandardPackages);
 router.get('/standard-tests/female', getFemaleStandardTests);
