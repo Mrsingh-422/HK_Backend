@@ -182,6 +182,7 @@ const scanPrescription = async (req, res) => {
     }
 };
 
+
 const getMedicineCategories = async (req, res) => {
     try {
         // 1. Aggregation: Breadcrumb se Main Category nikalna aur Stock (Product Count) ginna
@@ -214,38 +215,128 @@ const getMedicineCategories = async (req, res) => {
         res.json({ success: true, data: finalData });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-const getMedicineCategoryDetails = async (req, res) => {
+const getPharmacySubCategories = async (req, res) => {
     try {
         const { category } = req.query;
 
-        // 1. Is Category ke under aane wali unique Subcategories nikalna
-        const medicines = await Medicine.find({ 
-            bread_crumb: new RegExp(`^${category}\\s*>`, 'i') 
-        }).lean();
-
-        const subCategories = new Set();
-        medicines.forEach(m => {
-            const parts = m.bread_crumb.split('>');
-            if (parts[1]) subCategories.add(parts[1].trim());
-        });
-
-        // 2. (Optional) In medicines ka lowest price nikalna inventory se
-        const formattedMeds = await Promise.all(medicines.slice(0, 20).map(async (med) => {
-            const inventory = await MedicineInventory.findOne({ medicineId: med._id, is_available: true }).sort({ vendor_price: 1 });
-            return {
-                ...med,
-                price: inventory ? inventory.vendor_price : med.mrp,
-                isAvailable: !!inventory
-            };
-        }));
+        // Aggregation logic taaki laakho records mein se unique sub-cats jaldi nikle
+        const subCats = await Medicine.aggregate([
+            { $match: { bread_crumb: new RegExp(`^${category}\\s*>`, 'i') } },
+            {
+                $project: {
+                    // Split "Cardiac Care > Blood Pressure" and take index 1
+                    sub: { $trim: { input: { $arrayElemAt: [{ $split: ["$bread_crumb", ">"] }, 1] } } }
+                }
+            },
+            { $group: { _id: "$sub" } },
+            { $match: { _id: { $ne: null } } },
+            { $sort: { _id: 1 } }
+        ]);
 
         res.json({
             success: true,
-            mainCategory: category,
-            subCategories: Array.from(subCategories),
-            medicines: formattedMeds
+            data: subCats.map(s => s._id)
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
+};
+const getMedicineCategoryDetails = async (req, res) => {
+    try {
+        const { category, subCategory, page = 1 } = req.query;
+        const limit = 20;
+        const skip = (parseInt(page) - 1) * limit;
+
+        let breadcrumbRegex = subCategory 
+            ? new RegExp(`^${category}\\s*>\\s*${subCategory}`, 'i')
+            : new RegExp(`^${category}\\s*>`, 'i');
+
+        const pipeline = [
+            { $match: { bread_crumb: breadcrumbRegex } },
+            {
+                // 1. Inventory check (Lowest Vendor Price)
+                $lookup: {
+                    from: "medicineinventories",
+                    localField: "_id",
+                    foreignField: "medicineId",
+                    as: "inventory",
+                    pipeline: [
+                        { $match: { is_available: true, stock_quantity: { $gt: 0 } } },
+                        { $sort: { vendor_price: 1 } },
+                        { $limit: 1 }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    // Pre-calculate numeric values for fallback and calculation
+                    numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
+                    numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
+                    numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
+                    isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
+                }
+            },
+            {
+                $addFields: {
+                    // --- MINIMUM PRICE FALLBACK ---
+                    // Agar inventory mein sasta vendor hai toh wo, warna medicine ka 'best_price'
+                    minimumPrice: {
+                        $cond: [
+                            "$isInventoryAvailable",
+                            "$numInventoryPrice",
+                            "$numDocBestPrice"
+                        ]
+                    },
+                    isAvailable: "$isInventoryAvailable"
+                }
+            },
+            {
+                $addFields: {
+                    // --- DISCOUNT PERCENTAGE FALLBACK ---
+                    // Logic: ((MRP - SelectedPrice) / MRP) * 100
+                    discountPercentage: {
+                        $cond: {
+                            if: { $gt: ["$numMRP", 0] },
+                            then: {
+                                $round: [
+                                    {
+                                        $multiply: [
+                                            { $divide: [{ $subtract: ["$numMRP", "$minimumPrice"] }, "$numMRP"] },
+                                            100
+                                        ]
+                                    },
+                                    0
+                                ]
+                            },
+                            else: 0
+                        }
+                    }
+                }
+            },
+            { 
+                $project: { 
+                    inventory: 0, numMRP: 0, numDocBestPrice: 0, numInventoryPrice: 0, isInventoryAvailable: 0 
+                } 
+            },
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ];
+
+        const result = await Medicine.aggregate(pipeline);
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.json({
+            success: true,
+            total,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 
@@ -476,37 +567,34 @@ const getStandardMedicineCatalog = async (req, res) => {
     }
 };
 
-// 2. GET VENDORS FOR A SPECIFIC MEDICINE
+// 2. GET medicine with all VENDORS FOR A SPECIFIC MEDICINE
 // endpoint: GET /user/medicine/vendors/:medicineId?lat=28.6&lng=77.2
 const getMedicineVendors = async (req, res) => {
     try {
         const { medicineId } = req.params;
-        const { lat, lng } = req.body; // Flutter se aane wala location
+        
+        // 1. Fallback Logic: Agar user lat/lng nahi bhejta toh Delhi ke coordinates use honge
+        const filterLat = req.body.lat || req.query.lat || DEFAULT_LAT;
+        const filterLng = req.body.lng || req.query.lng || DEFAULT_LNG;
 
-        // 1. Convert String ID to MongoDB ObjectId (Casting fix)
+        // 2. Casting & Master Info
         const medObjectId = new mongoose.Types.ObjectId(medicineId);
-
-        // 2. Master Medicine Info lein (Fallback logic ke liye)
         const masterMedicine = await Medicine.findById(medObjectId).lean();
         if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // 3. KM Limit fetch karein (Pharmacy ke liye)
+        // 3. KM Limit fetch karein
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
-        // 4. Inventory fetch karein (ID match YA Name match)
-        // Bilkul Lab Package ki tarah fallback search
+        // 4. Fetch Inventory Records
         const inventoryRecords = await MedicineInventory.find({
-            $or: [
-                { medicineId: medObjectId },
-                { name: masterMedicine.name } // Agar ID link miss ho par Name same ho
-            ],
+            $or: [{ medicineId: medObjectId }, { name: masterMedicine.name }],
             stock_quantity: { $gt: 0 },
             is_available: true
         })
         .populate({
             path: 'pharmacyId',
-            match: { profileStatus: 'Approved', isActive: true }, // Sirf Approved Pharmacies
+            match: { profileStatus: 'Approved', isActive: true },
             select: 'name profileImage rating totalReviews location city state address isHomeDeliveryAvailable is24x7 profileStatus isActive'
         })
         .lean();
@@ -514,31 +602,27 @@ const getMedicineVendors = async (req, res) => {
         const availableInPharmacies = [];
         let minPriceFound = null;
 
-        // 5. Loop through all found inventory records
+        // 5. Processing Vendors
         for (let item of inventoryRecords) {
-            
-            // Validation: Agar pharmacyId null hai (Approved nahi hai), toh skip karein
             if (!item.pharmacyId) continue;
 
             const pharmacy = item.pharmacyId;
             let distance = null;
 
-            // Validation: Distance Calculation (Using provided Lat/Lng)
-            if (lat && lng && pharmacy.location && pharmacy.location.lat) {
+            // Distance calculation (Hamesha calculate hoga, chahe user ho ya Delhi fallback)
+            if (pharmacy.location && pharmacy.location.lat) {
                 distance = await getDistance(
-                    parseFloat(lat), 
-                    parseFloat(lng), 
+                    parseFloat(filterLat), 
+                    parseFloat(filterLng), 
                     parseFloat(pharmacy.location.lat), 
                     parseFloat(pharmacy.location.lng)
                 );
             }
 
-            // Validation: Radius Limit Check (getLabs logic mirror)
-            const isBroadSearch = !lat || !lng;
-            
-            if (isBroadSearch || (distance !== null && distance <= maxRadius)) {
+            // Radius Filter: Sirf radius ke andar wale ya phir agar coordinates bilkul missing hain toh logic adjust karein
+            // Note: Agar user ki location Mohali hai aur base Delhi hai, toh wo filter ho jayega agar radius kam hua.
+            if (distance !== null && distance <= maxRadius) {
                 
-                // Track Min Price
                 if (minPriceFound === null || item.vendor_price < minPriceFound) {
                     minPriceFound = item.vendor_price;
                 }
@@ -550,8 +634,8 @@ const getMedicineVendors = async (req, res) => {
                     rating: pharmacy.rating,
                     totalReviews: pharmacy.totalReviews,
                     address: `${pharmacy.city}, ${pharmacy.state}`,
-                    distance: distance !== null ? distance.toFixed(1) : "N/A", // Figma style distance
-                    price: item.vendor_price, // Pharmacy ka apna rate
+                    distance: distance.toFixed(1), // Hamesha string value with 1 decimal
+                    price: item.vendor_price,
                     mrp: masterMedicine.mrp,
                     discount: masterMedicine.mrp > item.vendor_price ? 
                         Math.round(((masterMedicine.mrp - item.vendor_price) / masterMedicine.mrp) * 100) : 0,
@@ -563,39 +647,26 @@ const getMedicineVendors = async (req, res) => {
             }
         }
 
-        // 6. Remove Duplicates (Agar ek hi pharmacy ID aur Name dono se match ho jaye)
-        const uniquePharmacies = [];
-        const seenPharmaIds = new Set();
-        for (let p of availableInPharmacies) {
-            if (!seenPharmaIds.has(p.pharmacyId.toString())) {
-                seenPharmaIds.add(p.pharmacyId.toString());
-                uniquePharmacies.push(p);
-            }
-        }
+        // 6. Sorting: Nearest First
+        availableInPharmacies.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
 
-        // 7. Sorting: Nearest First (Sabse paas wali upar)
-        uniquePharmacies.sort((a, b) => {
-            if (a.distance === "N/A") return 1;
-            if (b.distance === "N/A") return -1;
-            return parseFloat(a.distance) - parseFloat(b.distance);
-        });
-
+        // 7. Final Clean Response
         res.json({
             success: true,
-            count: uniquePharmacies.length,
-            radiusApplied: lat ? `${maxRadius} km` : "No GPS (Broad Search)",
+            maxRadius: `${maxRadius} km`, // Requirement: Top level key
+            locationApplied: (req.body.lat || req.query.lat) ? "User GPS" : "Delhi (Default)",
+            count: availableInPharmacies.length,
             data: { 
-                medicineDetails: {
-                    ...masterMedicine,
+                medicineDetails: { 
+                    ...masterMedicine, 
                     minPrice: minPriceFound,
-                    totalSellers: uniquePharmacies.length
+                    totalSellers: availableInPharmacies.length 
                 }, 
-                availableInPharmacies: uniquePharmacies 
+                availableInPharmacies: availableInPharmacies 
             }
         });
 
     } catch (error) { 
-        console.error("Medicine Vendors Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -944,5 +1015,5 @@ const trackOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = {scanPrescription,getMedicineCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
+module.exports = {scanPrescription,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder };
