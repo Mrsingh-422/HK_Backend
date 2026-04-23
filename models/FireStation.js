@@ -23,6 +23,13 @@ const fireStationSchema = new mongoose.Schema({
     
     role: { type: String, default: 'Fire-Station', immutable: true },
     isActive: { type: Boolean, default: true },
+
+    jurisdiction: {
+        totalArea: { type: String, default: "42.5 km²" },
+        population: { type: String, default: "~850,000" },
+        activeZones: { type: Number, default: 4 },
+        riskLevel: { type: String, default: "Moderate-High" }
+    },
     
     // Auth
     otp: { type: String, select: false },

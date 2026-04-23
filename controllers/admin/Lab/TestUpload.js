@@ -4,6 +4,7 @@ const MasterRequest = require('../../../models/MasterRequest');
 const xlsx = require('xlsx');
 const LabCategory = require('../../../models/LabCategory');
 const { deleteFile } = require('../../../utils/fileHandler');
+const Medicine = require('../../../models/Medicine');
 
 // upload master tests // Example CSV Format: 
 // endpoint: POST /admin/lab/tests/upload
@@ -303,7 +304,76 @@ const updatePharmacyCategoryImage = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const getLabCategories = async (req, res) => {
+    try {
+        // 1. Master tests se unique category names nikalen
+        const womenCats = await MasterLabTest.distinct("category", {
+            testName: { $regex: /Pap Smear|Mammography|FSH Test|LH Test|Prolactin|Ultrasound Pelvis/i },
+            isActive: true
+        });
+
+        // 2. Database se images uthayen
+        const dbCategories = await LabCategory.find({ name: { $in: womenCats } });
+
+        // 3. Logic: Agar DB mein image hai toh 'public/' hatao, nahi toh fallback asset dikhao
+        const finalData = womenCats.map(catName => {
+            const dbMatch = dbCategories.find(dbCat => dbCat.name === catName);
+            
+            let imagePath;
+            if (dbMatch && dbMatch.image) {
+                // 'public/' ko string se remove karein
+                imagePath = dbMatch.image.replace(/^public[\\/]/, ''); 
+            } else {
+                // Fallback asset path
+                imagePath = `assets/images/women_${catName.toLowerCase().replace(" ", "_")}.png`;
+            }
+
+            return {
+                name: catName,
+                image: imagePath
+            };
+        });
+
+        res.json({ success: true, data: finalData });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// 2. Get All Pharmacy Categories (Including those without images)
+const getPharmacyCategories = async (req, res) => {
+    try {
+        // Step 1: Medicine bread_crumb se Category nikalna
+        const stats = await Medicine.aggregate([
+            {
+                $project: {
+                    mainCat: { $trim: { input: { $arrayElemAt: [{ $split: ["$bread_crumb", ">"] }, 0] } } }
+                }
+            },
+            { $match: { mainCat: { $ne: null, $ne: "" } } },
+            { $group: { _id: "$mainCat", productCount: { $sum: 1 } } },
+            { $sort: { productCount: -1 } }
+        ]);
+
+        const dbImages = await LabCategory.find({ vendorType: 'Pharmacy' });
+
+        const finalData = stats.map(stat => {
+            const dbMatch = dbImages.find(img => img.name === stat._id);
+            return {
+                name: stat._id,
+                productCount: stat.productCount,
+                image: dbMatch?.image ? dbMatch.image.replace(/^public[\\/]/, '') : null
+            };
+        });
+
+        res.json({ success: true, data: finalData });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+    
 module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
                     listMasterData, searchMasterData, createMasterData, editMasterData,
-                    getPendingRequests, approveRequest, updateCategoryImage, updatePharmacyCategoryImage
+                    getPendingRequests, approveRequest, updateCategoryImage, updatePharmacyCategoryImage,
+                    getLabCategories, getPharmacyCategories
  }; 

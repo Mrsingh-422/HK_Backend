@@ -451,6 +451,24 @@ const categoryTestUploads = multer({
     limits: { fileSize: 2 * 1024 * 1024 }
 }).single('categoryImage'); // Key for Postman: categoryImage
 
+// ==========================================
+// 26. FIRE CASE/INCIDENT REPORT CONFIGURATION
+// ==========================================
+// ADDON: Screen 66 Scene Photos ke liye
+const fireCaseDir = 'public/uploads/fire_cases';
+ensureDir(fireCaseDir);
+
+const fireCaseUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, fireCaseDir),
+        filename: (req, file, cb) => cb(null, `case-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+}).fields([
+    { name: 'incidentImages', maxCount: 10 }, // Figma Screen 66: Scene Photos
+    { name: 'medicalCertificate', maxCount: 1 } // Support for medical files if needed
+]);
 
 module.exports = { 
     hospitalUploads,
@@ -479,5 +497,6 @@ module.exports = {
      policeHQUploads,
     policeStationUploads,
     policeStaffUploads,
+    fireCaseUploads,
     categoryTestUploads
 };  

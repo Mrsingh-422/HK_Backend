@@ -4,7 +4,9 @@ const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware
 const { uploadExcel, categoryTestUploads } = require('../../../middleware/multer'); 
 const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
     listMasterData, searchMasterData, createMasterData, editMasterData,
-                    getPendingRequests, approveRequest, updateCategoryImage,updatePharmacyCategoryImage
+                    getPendingRequests, approveRequest, updateCategoryImage,updatePharmacyCategoryImage,
+                    getLabCategories, getPharmacyCategories
+
  } = require('../../../controllers/admin/Lab/TestUpload');
 
 // Base URL: /admin/lab/tests
@@ -30,5 +32,7 @@ router.get('/master-packages', protect('admin'),checkRoleAccess(29), getMasterPa
 router.post('/update-test-category-image', categoryTestUploads, protect('admin'), checkRoleAccess(29), updateCategoryImage);
 router.post('/update-pharmacy-category-image', categoryTestUploads, protect('admin'), checkRoleAccess(29), updatePharmacyCategoryImage);
 
+router.get('/lab-categories', protect('admin'), checkRoleAccess(29), getLabCategories);
+router.get('/pharmacy-categories', protect('admin'), checkRoleAccess(29), getPharmacyCategories);
 
 module.exports = router;

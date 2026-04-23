@@ -6,7 +6,7 @@ const { addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity,
     addToPharmacyCart,
     updatePharmacyQuantity,checkBetterOptions,
     clearPharmacyCart, removePharmacyItem,
-
+updateMedicineDuration,
 
     getAvailableSlots,
     getAvailableCoupons
@@ -33,6 +33,7 @@ router.delete('/pharmacy/item/:medicineId', protect('user'), removePharmacyItem)
 
 
 router.post('/check-better-options', protect('user'), checkBetterOptions);
+router.put('/update-duration', protect('user'), updateMedicineDuration);
 
 
 

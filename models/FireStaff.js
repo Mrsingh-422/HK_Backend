@@ -14,7 +14,10 @@ const fireStaffSchema = new mongoose.Schema({
     profileImage: { type: String, default: null },
 
     // Operational Stats (Screen 13)
+     currentShift: { type: String, enum: ['Shift A', 'Shift B'], default: 'Shift A' }, // Figma: Shift A
     joiningDate: { type: Date },
+    attendancePercentage: { type: Number, default: 0 }, // Figma: 96%
+    activeCasesCount: { type: Number, default: 0 },
     attendance: { type: Number, default: 0 }, // 96% in figma
     activeCases: { type: Number, default: 0 },
     

@@ -135,6 +135,9 @@ app.use('/fireHQ/management', require('./routes/fireHQ/fireHqManageRoute'));
 app.use('/fireStation/auth', require('./routes/fireHQ/fireStation/authFireStationRoute')); // Fire Station Management Route
 app.use('/fireStation/ops', require('./routes/fireHQ/fireStation/opsRoute')); // Fire Station Operations Route (Roster, Leaves, Case Updates)
 app.use('/fireStation/management', require('./routes/fireHQ/fireStation/stationManageRoute')); // Fire Station Management Route
+// --- Fire Station Staff ---
+app.use('/fireStaff/auth', require('./routes/fireHQ/fireStationStaff/authStaff')); // Fire Station Staff Authentication Route
+app.use('/fireStaff/ops', require('./routes/fireHQ/fireStationStaff/staffOpsRoutes')); // Fire Station Staff Operations Route (Check-in, Leaves, Assigned Cases)
 
 app.get('/', (req, res) => {
     res.send('HK Backend is running...');

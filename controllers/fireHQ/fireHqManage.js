@@ -3,29 +3,112 @@ const FireCase = require('../../models/FireCase'); // Assuming this model exists
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
+const mongoose = require('mongoose');
 
 // 1. GET DASHBOARD STATS (Screen 9)
 const getDashboardStats = async (req, res) => {
     try {
-        // HQ sirf apne under aane wale stations ke cases dikhayega
-        const stations = await FireStation.find({ hqId: req.user.id }).select('_id');
-        const stationIds = stations.map(s => s._id);
-
-        const freshCases = await FireCase.countDocuments({ stationId: { $in: stationIds }, status: 'Fresh' });
-        const pendingCases = await FireCase.countDocuments({ stationId: { $in: stationIds }, status: 'Pending' });
-        const historyCases = await FireCase.countDocuments({ stationId: { $in: stationIds }, status: { $in: ['Closed', 'Archived'] } });
+        const hqId = req.user.id;
+        // Figma Names: New Fire Alerts, Ongoing Operations, Resolved Incidents
+        const newFireAlerts = await FireCase.countDocuments({ hqId, status: 'Fresh' });
+        const ongoingOps = await FireCase.countDocuments({ hqId, status: { $in: ['Pending', 'Under Control', 'Critical'] } });
+        const resolvedIncidents = await FireCase.countDocuments({ hqId, status: 'Closed' });
 
         res.json({
             success: true,
             data: {
-                freshCases,
-                pendingCases,
-                historyCases,
-                totalEarnings: "42,000" // Figma example value
+                newFireAlerts,     // Screen 33 label
+                ongoingOps,        // Screen 33 label
+                resolvedIncidents, // Screen 33 label
+                totalEarnings: "42,000" 
             }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+const createFireCase = async (req, res) => {
+    try {
+        const { 
+            callerName, callerPhone, fireType, severity, 
+            description, address, lat, lng, stationId 
+        } = req.body;
+
+        // 1. Check karein ki bheja gaya stationId format sahi hai ya nahi
+        if (!mongoose.Types.ObjectId.isValid(stationId)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid Station ID format provided" 
+            });
+        }
+
+        // 2. Check karein ki Station exist karta hai aur isi HQ ka hai
+        const station = await FireStation.findOne({ _id: stationId, hqId: req.user.id });
+        if (!station) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Station not found or not authorized under this HQ" 
+            });
+        }
+
+        // 3. Case Create karein
+        const newCase = await FireCase.create({
+            hqId: req.user.id,
+            stationId: stationId,
+            callerName,
+            callerPhone,
+            fireType,
+            severity,
+            description,
+            address,
+            location: {
+                lat: parseFloat(lat),
+                lng: parseFloat(lng)
+            },
+            status: 'Fresh',
+            reportedAt: Date.now()
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Fire Case created successfully",
+            data: newCase
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const getIncidentDetails = async (req, res) => {
+    try {
+        const incident = await FireCase.findById(req.params.id)
+            .populate('stationId', 'stationName captainName')
+            .populate('hqId', 'stationName');
+
+        if (!incident) return res.status(404).json({ message: "Incident not found" });
+
+        res.json({
+            success: true,
+            data: {
+                generalDetails: {
+                    incidentId: incident.caseNo,
+                    type: incident.fireType,
+                    location: incident.address,
+                    reportedTime: incident.reportedAt,
+                    severity: incident.severity
+                },
+                callerDetails: {
+                    name: incident.callerName,
+                    phone: incident.callerPhone
+                },
+                location: incident.location, // For Map (Screen 12)
+                description: incident.description
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+ 
+
 
 // 2. CREATE NEW FIRE STATION (By Fire-HQ)
 // endpoint: POST /fireHQ/management/create-station
@@ -190,4 +273,53 @@ const deleteFireStation = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-module.exports = { getDashboardStats,createFireStation, getMyStations, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation };
+
+// ADDED: Jurisdiction Details (Screen 41)
+const getJurisdictionData = async (req, res) => {
+    try {
+        const hq = await FireHQ.findById(req.user.id);
+        res.json({
+            success: true,
+            data: {
+                coverage: {
+                    totalArea: "42.5 km²",
+                    population: "~850,000",
+                    activeZone: "4 Main Zones",
+                    riskLevel: "Moderate- High"
+                },
+                sectors: [
+                    { id: 'A', name: 'Central Commercial', desc: 'MI Road, Sindhi Camp...' },
+                    { id: 'B', name: 'Residential', desc: 'Malviya Nagar, Raja Park...' }
+                ]
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// ADDED: Detailed Incident Report (Screen 66)
+const getFullIncidentReport = async (req, res) => {
+    try {
+        const incident = await FireCase.findById(req.params.id).populate('stationId');
+        if (!incident) return res.status(404).json({ message: "Report not found" });
+
+        res.json({
+            success: true,
+            data: {
+                general: {
+                    incidentId: incident.caseNo,
+                    type: incident.fireType,
+                    location: incident.address,
+                    reportedTime: incident.reportedAt,
+                    responseTime: incident.responseTime || "38 Minutes"
+                },
+                resources: incident.resourcesUsed,
+                impact: incident.damageImpact,
+                photos: incident.incidentImages
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+module.exports = { getDashboardStats,createFireCase,getIncidentDetails,createFireStation,
+     getMyStations, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation, getJurisdictionData, getFullIncidentReport };

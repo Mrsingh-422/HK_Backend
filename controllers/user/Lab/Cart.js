@@ -505,7 +505,53 @@ const checkBetterOptions = async (req, res) => {
     }
 };
 
+// PUT /user/cart/pharmacy/update-duration
+const updateMedicineDuration = async (req, res) => {
+    try {
+        const { type, customData } = req.body; 
+        // type: 'Full Course' or 'Custom'
+        // customData: [{ medicineId: "...", days: 5 }] (Sirf Custom ke liye)
 
+        const userId = req.user.id;
+        let cart = await Cart.findOne({ userId });
+
+        if (!cart || cart.pharmacyCart.items.length === 0) {
+            return res.status(400).json({ success: false, message: "Cart is empty" });
+        }
+
+        if (type === 'Full Course') {
+            // Case 1: Sabhi items ko Full Course mark kar do
+            cart.pharmacyCart.items.forEach(item => {
+                item.duration = "Full Course";
+                // Quantity unchanged rakhein ya default strip quantity set karein
+            });
+        } else if (type === 'Custom' && customData) {
+            // Case 2: Har medicine ke liye alag-alag days set karein
+            customData.forEach(data => {
+                const itemIndex = cart.pharmacyCart.items.findIndex(
+                    i => i.medicineId.toString() === data.medicineId
+                );
+                
+                if (itemIndex > -1) {
+                    cart.pharmacyCart.items[itemIndex].duration = `${data.days} Days`;
+                    // Business Logic: Jitne din, utni quantity (assuming 1 tab/day)
+                    // Flutter se user quantity alag se bhi update kar sakta hai
+                    cart.pharmacyCart.items[itemIndex].quantity = data.days;
+                }
+            });
+        }
+
+        await cart.save();
+        res.json({ 
+            success: true, 
+            message: `Duration updated to ${type}`, 
+            data: cart.pharmacyCart 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 
@@ -551,6 +597,7 @@ module.exports = { addToLabCart,updateCartQuantity, getMyCart, clearLabCart, rem
     compareCartOnMap,
     addToPharmacyCart, updatePharmacyQuantity , checkBetterOptions,
     clearPharmacyCart, removePharmacyItem,
+    updateMedicineDuration,
 
 
     getAvailableSlots, getAvailableCoupons

@@ -412,83 +412,54 @@ const getPharmacies = async (req, res) => {
     try {
         let { lat, lng, search, city, state, country } = req.body;
 
-        // --- Fallback coordinates logic ---
         const filterLat = lat || DEFAULT_LAT;
         const filterLng = lng || DEFAULT_LNG;
 
-        // Base Query
-        let query = { profileStatus: 'Approved', isActive: true };
+        // --- STRICT FILTER: Only Approved and Active ---
+        let query = { 
+            profileStatus: 'Approved', 
+            isActive: true 
+        };
 
-        // --- Strict Location Matching (Dropdown selection) ---
         if (city) query.city = new RegExp(`^${city}$`, 'i');
         if (state) query.state = new RegExp(`^${state}$`, 'i');
-        if (country) query.country = new RegExp(`^${country}$`, 'i');
 
-        // --- Global Name Search Logic ---
         if (search) {
             const searchRegex = new RegExp(search, 'i');
-            if (city) {
-                // Specific city ke andar search
-                query.name = searchRegex;
-            } else {
-                // Poore database mein search
-                query.$or = [
-                    { name: searchRegex },
-                    { city: searchRegex },
-                    { state: searchRegex }
-                ];
-            }
+            query.$or = [{ name: searchRegex }, { city: searchRegex }];
         }
 
-        // Fetch Pharmacies
         const pharmacies = await Pharmacy.find(query)
             .select('name profileImage city state country address location rating totalReviews isHomeDeliveryAvailable is24x7 documents.pharmacyImages')
             .lean();
 
         let finalPharmacies = [];
-        
-        // KM Limit Configuration
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
         for (let pharma of pharmacies) {
             let distance = null;
-
             if (pharma.location?.lat) {
                 distance = await getDistance(filterLat, filterLng, pharma.location.lat, pharma.location.lng);
             }
 
-            // Logic: Agar user ne name search kiya hai ya city select ki hai (Broad Search), 
-            // toh radius ignore karein. Warna nearest dikhayein.
             const isBroadSearch = !!(city || search);
-
-            if (isBroadSearch || distance <= maxRadius) {
+            if (isBroadSearch || (distance !== null && distance <= maxRadius)) {
                 finalPharmacies.push({
                     ...pharma,
                     distance: distance ? distance.toFixed(1) : "N/A",
-                    openStatus: pharma.is24x7 ? "Open 24/7" : "Open Now" // Standard label
+                    openStatus: pharma.is24x7 ? "Open 24/7" : "Open Now"
                 });
             }
         }
 
-        // Sorting: Nearest First
         finalPharmacies.sort((a, b) => {
             if (a.distance === "N/A") return 1;
-            if (b.distance === "N/A") return -1;
             return parseFloat(a.distance) - parseFloat(b.distance);
         });
 
-        res.json({ 
-            success: true, 
-            count: finalPharmacies.length, 
-            locationApplied: (!lat || !lng) ? "Delhi (Default Base)" : "User GPS Base",
-            isGlobalSearch: !!(city || search),
-            data: finalPharmacies 
-        });
-
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
-    }
+        res.json({ success: true, count: finalPharmacies.length, data: finalPharmacies });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // 4. GET PHARMACY DETAILS
@@ -573,20 +544,18 @@ const getMedicineVendors = async (req, res) => {
     try {
         const { medicineId } = req.params;
         
-        // 1. Fallback Logic: Agar user lat/lng nahi bhejta toh Delhi ke coordinates use honge
-        const filterLat = req.body.lat || req.query.lat || DEFAULT_LAT;
-        const filterLng = req.body.lng || req.query.lng || DEFAULT_LNG;
+        // --- SAFE COORDINATE EXTRACTION ---
+        // Optional chaining (?.) use kiya hai taaki agar body missing ho toh crash na ho
+        const filterLat = req?.body?.lat || req?.query?.lat || DEFAULT_LAT;
+        const filterLng = req?.body?.lng || req?.query?.lng || DEFAULT_LNG;
 
-        // 2. Casting & Master Info
         const medObjectId = new mongoose.Types.ObjectId(medicineId);
         const masterMedicine = await Medicine.findById(medObjectId).lean();
         if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // 3. KM Limit fetch karein
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
-        // 4. Fetch Inventory Records
         const inventoryRecords = await MedicineInventory.find({
             $or: [{ medicineId: medObjectId }, { name: masterMedicine.name }],
             stock_quantity: { $gt: 0 },
@@ -602,15 +571,14 @@ const getMedicineVendors = async (req, res) => {
         const availableInPharmacies = [];
         let minPriceFound = null;
 
-        // 5. Processing Vendors
         for (let item of inventoryRecords) {
             if (!item.pharmacyId) continue;
 
             const pharmacy = item.pharmacyId;
             let distance = null;
 
-            // Distance calculation (Hamesha calculate hoga, chahe user ho ya Delhi fallback)
-            if (pharmacy.location && pharmacy.location.lat) {
+            // --- SAFE LOCATION CHECK ---
+            if (pharmacy.location && typeof pharmacy.location.lat !== 'undefined') {
                 distance = await getDistance(
                     parseFloat(filterLat), 
                     parseFloat(filterLng), 
@@ -619,10 +587,7 @@ const getMedicineVendors = async (req, res) => {
                 );
             }
 
-            // Radius Filter: Sirf radius ke andar wale ya phir agar coordinates bilkul missing hain toh logic adjust karein
-            // Note: Agar user ki location Mohali hai aur base Delhi hai, toh wo filter ho jayega agar radius kam hua.
             if (distance !== null && distance <= maxRadius) {
-                
                 if (minPriceFound === null || item.vendor_price < minPriceFound) {
                     minPriceFound = item.vendor_price;
                 }
@@ -634,7 +599,7 @@ const getMedicineVendors = async (req, res) => {
                     rating: pharmacy.rating,
                     totalReviews: pharmacy.totalReviews,
                     address: `${pharmacy.city}, ${pharmacy.state}`,
-                    distance: distance.toFixed(1), // Hamesha string value with 1 decimal
+                    distance: distance.toFixed(1),
                     price: item.vendor_price,
                     mrp: masterMedicine.mrp,
                     discount: masterMedicine.mrp > item.vendor_price ? 
@@ -647,14 +612,12 @@ const getMedicineVendors = async (req, res) => {
             }
         }
 
-        // 6. Sorting: Nearest First
         availableInPharmacies.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
 
-        // 7. Final Clean Response
         res.json({
             success: true,
-            maxRadius: `${maxRadius} km`, // Requirement: Top level key
-            locationApplied: (req.body.lat || req.query.lat) ? "User GPS" : "Delhi (Default)",
+            maxRadius: `${maxRadius} km`,
+            locationApplied: (req?.body?.lat || req?.query?.lat) ? "User GPS" : "Delhi (Default)",
             count: availableInPharmacies.length,
             data: { 
                 medicineDetails: { 
@@ -667,10 +630,12 @@ const getMedicineVendors = async (req, res) => {
         });
 
     } catch (error) { 
+        console.error("Crash Error:", error.message);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
+   
 
 
 
@@ -791,12 +756,76 @@ const getPharmacyDeliveryCharges = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+const getPharmacyAvailableCoupons = async (req, res) => {
+    try {
+        const userId = req.user.id;
 
+        // 1. User ki cart se Pharmacy ID aur Total Amount nikalein
+        const cart = await Cart.findOne({ userId });
+        
+        if (!cart || !cart.pharmacyCart || !cart.pharmacyCart.pharmacyId || cart.pharmacyCart.items.length === 0) {
+            return res.status(400).json({ success: false, message: "Cart is empty or no pharmacy selected" });
+        }
 
+        const pharmacyId = cart.pharmacyCart.pharmacyId;
+        // Total calculate karein (Price * Quantity)
+        const itemTotal = cart.pharmacyCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+        const today = new Date();
 
+        // 2. Coupons Fetch Karein: 
+        // A. Jo is specific Pharmacy ke hon.
+        // B. Jo Admin ne banaye hon specifically 'Pharmacy' ya 'All' category ke liye.
+        const coupons = await Coupon.find({ 
+            isActive: true,
+            expiryDate: { $gte: today }, 
+            $or: [
+                { vendorId: pharmacyId }, // Specific Pharmacy coupons
+                { 
+                    isAdminCreated: true, 
+                    vendorType: { $in: ['Pharmacy', 'All'] } // Global Pharmacy coupons
+                }
+            ]
+        }).sort({ createdAt: -1 });
 
+        // 3. Validation Logic: Check karein kaunsa apply ho sakta hai
+        const validatedCoupons = coupons.map(coupon => {
+            let isApplicable = true;
+            let reason = "Coupon is available";
+            let amountShort = 0;
 
+            // A. Check Min Order Amount
+            if (itemTotal < coupon.minOrderAmount) {
+                isApplicable = false;
+                amountShort = coupon.minOrderAmount - itemTotal;
+                reason = `Add ₹${amountShort} more to apply this coupon.`;
+            }
 
+            // B. Check User Usage Limit
+            const userUsage = coupon.usedBy.find(u => u.userId.toString() === userId.toString());
+            if (userUsage && userUsage.usageCount >= coupon.maxUsagePerUser) {
+                isApplicable = false;
+                reason = "Limit reached for this coupon.";
+            }
+
+            return {
+                ...coupon._doc,
+                isApplicable,
+                validationMessage: reason,
+                amountShort,
+                potentialDiscount: Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount)
+            };
+        });
+
+        res.json({ 
+            success: true, 
+            cartTotal: itemTotal,
+            data: validatedCoupons 
+        });
+
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
 const validateCoupon = async (req, res) => {
     try {
         const { couponName, pharmacyId, totalAmount } = req.body;
@@ -816,7 +845,6 @@ const validateCoupon = async (req, res) => {
         res.json({ success: true, discount: finalDiscount });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-// BookPharmacy.js mein checkoutMedicineOrder update karein
 // BookPharmacy.js mein checkoutMedicineOrder update karein
 const checkoutMedicineOrder = async (req, res) => {
     try {
@@ -945,9 +973,6 @@ const placeOrder = async (req, res) => {
 };
 
 
-
-
-
 const uploadPrescription = async (req, res) => {
     try {
         const { address, pharmacyId } = req.body;
@@ -1016,4 +1041,4 @@ const trackOrder = async (req, res) => {
 };
 
 module.exports = {scanPrescription,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
-   getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder };
+   getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder };

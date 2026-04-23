@@ -21,6 +21,8 @@ const fireCaseSchema = new mongoose.Schema({
         ref: 'FireStation', 
         required: true 
     },
+    assignedStaff: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FireStaff' }],
+    assignedVehicles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FireVehicle' }],
 
     // 3. Caller / Victim Details
     callerName: { type: String, required: true },
@@ -37,6 +39,7 @@ const fireCaseSchema = new mongoose.Schema({
         enum: ['Low', 'Medium', 'High', 'Critical'], 
         default: 'Medium' 
     },
+    severityLevel: { type: String, default: 'Level 1' }, 
     description: { type: String },
 
     // 5. Location Details (Maps Support)
@@ -45,11 +48,12 @@ const fireCaseSchema = new mongoose.Schema({
         lat: { type: Number, required: true },
         lng: { type: Number, required: true }
     },
+    responseTime: { type: String },
 
     // 6. Status Tracking (Matches your Controller Logic)
     status: { 
         type: String, 
-        enum: ['Fresh', 'Pending', 'Closed', 'Archived'], 
+        enum: ['Fresh', 'Pending', 'Under Control', 'Critical', 'Closed', 'Archived'], // Added Under Control & Critical
         default: 'Fresh' 
     },
 
@@ -66,7 +70,18 @@ const fireCaseSchema = new mongoose.Schema({
     earnings: { type: Number, default: 0 },
     
     // Additional Info
-    remarks: { type: String } // Captain's final notes
+    remarks: { type: String }, // Captain's final notes
+    // Figma Screen 10 (Incident Report) ke additional fields
+    resourcesUsed: {
+        trucksAssigned: { type: Number, default: 0 },
+        personnelCount: { type: Number, default: 0 },
+        equipmentList: [String], // e.g., ["Hoses", "Ladders", "BA Sets"]
+    },
+    damageImpact: {
+        damageLevel: { type: String, enum: ['Minor', 'Major', 'Total', 'Minor Structural Damage'] },
+        injuries: { type: Number, default: 0 },
+        casualties: { type: Number, default: 0 }
+    },
 
 }, { timestamps: true });
 

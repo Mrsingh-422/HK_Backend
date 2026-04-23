@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { pharmacyPrescriptionUploads } = require('../../../middleware/multer');
 const { scanPrescription,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getStandardMedicineCatalog,getMedicineVendors,
-    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder } = require('../../../controllers/user/Pharmacy/BookPharmacy');
+    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
 
@@ -31,6 +31,7 @@ router.get('/slots', protect('user'), getPharmacySlots); // Naya Endpoint
 router.get('/delivery-charges', protect('user'), getPharmacyDeliveryCharges); // Re-use lab delivery logic if same
 
 router.post('/validate-coupon',protect('user'),validateCoupon);
+router.get('/available-coupons',protect('user'),getPharmacyAvailableCoupons);
 
 router.post('/checkout', 
     protect('user'), 

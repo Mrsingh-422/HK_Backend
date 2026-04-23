@@ -940,7 +940,7 @@ const getAvailableCoupons = async (req, res) => {
         const cart = await Cart.findOne({ userId });
         
         if (!cart || !cart.labCart || !cart.labCart.labId || cart.labCart.items.length === 0) {
-            return res.status(400).json({ success: false, message: "Cart empty or No lab selected" });
+            return res.status(200).json({ success: false, message: "Cart empty or No lab selected" });
         }
 
         const labId = cart.labCart.labId;
