@@ -419,26 +419,26 @@
         let pharmaSpeed = 'standard', labCollMode = 'Home Collection', detectedMeds = [];
 
         async function apiFetch(endpoint, method = 'GET', body = null, isFormData = false) {
-    const headers = { 'Authorization': `Bearer ${AUTH_TOKEN}` };
-    if(!isFormData) headers['Content-Type'] = 'application/json';
+            const headers = { 'Authorization': `Bearer ${AUTH_TOKEN}` };
+            if(!isFormData) headers['Content-Type'] = 'application/json';
 
-    const options = { 
-        method, 
-        headers, 
-        body: isFormData ? body : (body ? JSON.stringify(body) : null) 
-    };
-    
-    const res = await fetch(`${API_URL}${endpoint}`, options);
-    const r = await res.json();
-    
-    if(!res.ok) {
-        // Create error object and attach the response data to it
-        const err = new Error(r.message || "Error");
-        err.data = r; 
-        throw err;
-    }
-    return r;
-}
+            const options = { 
+                method, 
+                headers, 
+                body: isFormData ? body : (body ? JSON.stringify(body) : null) 
+            };
+            
+            const res = await fetch(`${API_URL}${endpoint}`, options);
+            const r = await res.json();
+            
+            if(!res.ok) {
+                const err = new Error(r.message || "Error");
+                err.data = r; 
+                throw err;
+            }
+            return r;
+        }
+
         function switchView(id) {
             document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -460,6 +460,7 @@
                 document.getElementById('catalogGrid').innerHTML = (r.data || []).map(i => `<div class="col-md-3"><div class="hk-card p-4" onclick="initComparison('${i._id}', 'Lab')" style="cursor:pointer"><h6 class="fw-800">${i.testName || i.packageName}</h6><small>Verified Price</small><b class="text-success d-block">₹${i.minPrice}</b></div></div>`).join('');
             } catch(e) {}
         }
+
         async function loadMedicineMarket() {
             try {
                 const r = await apiFetch('/user/pharmacy/standard-list');
@@ -475,25 +476,17 @@
             } catch(e) {}
         }
 
-        // --- FLOW 1: AI SCAN (FIGMA 23/24) ---
         function triggerAIScan() { document.getElementById('aiRxInput').click(); }
         async function handleAIScan(event) {
             const file = event.target.files[0];
             if(!file) return;
-
             Swal.fire({ title: 'AI Scanning Prescription...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
             const formData = new FormData();
             formData.append('prescriptionFile', file);
-
             try {
                 const res = await apiFetch('/user/pharmacy/scan-rx', 'POST', formData, true);
                 Swal.close();
-                
-                detectedMeds = res.data.detectedMedicines.length > 0 ? res.data.detectedMedicines : [
-                    { medicineId: 'mock-dolo', name: 'Dolo 650mg Tablet', mrp: '30' },
-                    { medicineId: 'mock-abc', name: 'Vitamin C 500mg', mrp: '150' }
-                ];
-
+                detectedMeds = res.data.detectedMedicines;
                 document.getElementById('aiDetectionArea').classList.remove('d-none');
                 document.getElementById('detectedMedsList').innerHTML = detectedMeds.map(m => `
                     <div class="col-md-4 mb-3">
@@ -511,7 +504,7 @@
         async function initComparison(id, type) {
             currentCompCtx = type;
             try {
-                const endpoint = type === 'Lab' ? `/user/labs/comparison/test/${id}` : `/user/medicine/sellers/${id}`;
+                const endpoint = type === 'Lab' ? `/user/labs/comparison/test/${id}` : `/user/medicine/vendors/${id}`;
                 const res = await apiFetch(endpoint);
                 document.getElementById('masterInfoPanel').innerHTML = `<h5 class="fw-800 text-center text-success">${type} Selection</h5><p class="text-muted small text-center">Available providers near you.</p>`;
                 document.getElementById('comparisonList').innerHTML = res.data.map(s => `
@@ -524,212 +517,138 @@
         }
 
         async function addToCartEngine(vId, itemId, type, forceReplace = false) {
-    try {
-        const endpoint = type === 'Lab' ? '/user/cart/lab/add' : '/user/cart/pharmacy/add';
-        
-        const body = type === 'Lab' 
-            ? { labId: vId, itemId, productType: (currentLabType === 'test' ? 'LabTest' : 'LabPackage'), forceReplace } 
-            : { pharmacyId: vId, medicineId: itemId, quantity: 1, forceReplace };
-
-        await apiFetch(endpoint, 'POST', body);
-        
-        Swal.fire({
-            icon: 'success',
-            title: 'Added to Basket',
-            text: 'Your selection has been updated successfully.',
-            timer: 1500,
-            showConfirmButton: false
-        });
-        
-        refreshBadge();
-    } catch(e) {
-        // Agar backend kehta hai ki cart replace karni padegi (Category ya Lab mismatch)
-        if(e.data && e.data.canReplace) {
-            Swal.fire({
-                title: 'Replace Basket Items?',
-                text: e.message, // Backend se aane wala specific message (e.g. Pathology vs Radiology)
-                icon: 'warning',
-                showCancelButton: true,
-                confirmButtonColor: '#00b894',
-                cancelButtonColor: '#d33',
-                confirmButtonText: 'Yes, Clear & Replace',
-                cancelButtonText: 'Keep Existing'
-            }).then(async (result) => {
-                if (result.isConfirmed) {
-                    try {
-                        // Pehle Clear Cart API hit hogi jaisa aapne pucha
-                        const clearEndpoint = type === 'Lab' ? '/user/cart/lab/clear' : '/user/cart/pharmacy/clear';
-                        await apiFetch(clearEndpoint, 'POST');
-                        
-                        // Phir dubara Add to Cart hit hogi
-                        await addToCartEngine(vId, itemId, type, true);
-                    } catch(clearErr) {
-                        Swal.fire('Error', 'Failed to clear cart', 'error');
-                    }
+            try {
+                const endpoint = type === 'Lab' ? '/user/cart/lab/add' : '/user/cart/pharmacy/add';
+                const body = type === 'Lab' 
+                    ? { labId: vId, itemId, productType: (currentLabType === 'test' ? 'LabTest' : 'LabPackage'), forceReplace } 
+                    : { pharmacyId: vId, medicineId: itemId, quantity: 1, forceReplace };
+                await apiFetch(endpoint, 'POST', body);
+                Swal.fire({ icon: 'success', title: 'Added to Basket', timer: 1500, showConfirmButton: false });
+                refreshBadge();
+            } catch(e) {
+                if(e.data && e.data.canReplace) {
+                    Swal.fire({
+                        title: 'Replace Basket Items?', text: e.message, icon: 'warning', showCancelButton: true,
+                        confirmButtonText: 'Yes, Clear & Replace'
+                    }).then(async (result) => {
+                        if (result.isConfirmed) {
+                            const clearEndpoint = type === 'Lab' ? '/user/cart/lab/clear' : '/user/cart/pharmacy/clear';
+                            await apiFetch(clearEndpoint, 'POST');
+                            await addToCartEngine(vId, itemId, type, true);
+                        }
+                    });
                 }
-            });
-        } else {
-            Swal.fire("Notice", e.message, "warning");
+            }
         }
-    }
-}
+
+        // --- NEW LOGIC: CHECKOUT SUMMARY & BOOK ORDER ---
         async function launchCheckoutFlow(type) {
             currentChkCtx = type;
             document.getElementById('checkoutContextTitle').innerText = type;
-            const [cartR, profR, addrR] = await Promise.all([apiFetch('/user/cart'), apiFetch('/api/auth/user/profile'), apiFetch('/api/auth/user/addresses')]);
-            userCartState = cartR.data; couponApplied = null;
             
-            if(type === 'Pharmacy') {
-                // REQUIRED PRESCRIPTION LOGIC: Check items in cart
-                const needsRx = userCartState.pharmacyCart.items.some(i => 
-                    i.medicineId && i.medicineId.prescription_required && i.medicineId.prescription_required.toUpperCase() === 'YES'
-                );
-                document.getElementById('rxMandatorySection').classList.toggle('d-none', !needsRx);
-            } else {
-                document.getElementById('rxMandatorySection').classList.add('d-none');
-            }
+            Swal.fire({ title: 'Preparing Checkout...', didOpen: () => Swal.showLoading() });
 
-            const grid = document.getElementById('chkRecipientGridArea');
-            if(type === 'Lab') {
-                document.getElementById('labRapidFlowUI').classList.remove('d-none'); document.getElementById('pharmaSpeedFlowUI').classList.add('d-none');
-                grid.innerHTML = `<div class="col-md-3"><div class="patient-card active" onclick="togglePatientSelection('Self', this)"><h6>Self</h6><small>${profR.data.name}</small></div></div>` + (profR.data.familyMember || []).map(m => `<div class="col-md-3"><div class="patient-card" onclick="togglePatientSelection('${m._id}', this)"><h6>${m.memberName}</h6></div></div>`).join('');
-            } else {
-                document.getElementById('labRapidFlowUI').classList.add('d-none'); document.getElementById('pharmaSpeedFlowUI').classList.remove('d-none');
-                grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4">
-                    <div class="address-card ${a.isDefault?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)">
-                        <h6>${a.name || 'Recipient'}</h6><span class="badge bg-light text-dark mb-2" style="font-size:0.65rem;">${a.addressType}</span>
-                        <small class="d-block text-muted">${a.houseNo}, ${a.city}</small><small class="d-block fw-bold">${a.phone || ''}</small>
-                    </div>
-                </div>`).join('') || '<div class="col-12 text-center text-muted"><p>No addresses found. Add one in profile.</p></div>';
-                if(addrR.data?.find(x => x.isDefault)) selectedAddr = addrR.data.find(x => x.isDefault);
-                updatePharmaSpeed('standard');
-            }
-            const charges = await apiFetch(type === 'Lab' ? '/user/labs/delivery-charges' : '/user/pharmacy/delivery-charges');
-            ctxCharges = charges.data || { fixedPrice: 40, fastDeliveryExtra: 100 };
-            updateLiveBill(); switchView('checkoutView');
+            try {
+                const [cartR, profR, addrR] = await Promise.all([
+                    apiFetch('/user/cart'), 
+                    apiFetch('/api/auth/user/profile'), 
+                    apiFetch('/api/auth/user/addresses')
+                ]);
+                
+                userCartState = cartR.data;
+                couponApplied = null;
+
+                // 1. CALL SUMMARY API (Backend logic verification)
+                if(type === 'Pharmacy') {
+                    const summaryRes = await apiFetch('/user/pharmacy/checkout', 'POST', {
+                        collectionType: pharmaSpeed === 'pickup' ? 'Self Pickup' : 'Home Delivery',
+                        isRapid: pharmaSpeed === 'rapid'
+                    });
+                    // RX Mandatory flag backend se aayega
+                    document.getElementById('rxMandatorySection').classList.toggle('d-none', !summaryRes.data.rxMandatory);
+                }
+
+                // UI Loading logic
+                const grid = document.getElementById('chkRecipientGridArea');
+                if(type === 'Lab') {
+                    document.getElementById('labRapidFlowUI').classList.remove('d-none'); 
+                    document.getElementById('pharmaSpeedFlowUI').classList.add('d-none');
+                    grid.innerHTML = `<div class="col-md-3"><div class="patient-card active" onclick="togglePatientSelection('Self', this)"><h6>Self</h6><small>${profR.data.name}</small></div></div>` + (profR.data.familyMember || []).map(m => `<div class="col-md-3"><div class="patient-card" onclick="togglePatientSelection('${m._id}', this)"><h6>${m.memberName}</h6></div></div>`).join('');
+                } else {
+                    document.getElementById('labRapidFlowUI').classList.add('d-none'); 
+                    document.getElementById('pharmaSpeedFlowUI').classList.remove('d-none');
+                    grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4"><div class="address-card ${a.isDefault?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)"><h6>${a.name || 'Recipient'}</h6><small class="d-block text-muted">${a.houseNo}, ${a.city}</small></div></div>`).join('');
+                    if(addrR.data?.find(x => x.isDefault)) selectedAddr = addrR.data.find(x => x.isDefault);
+                }
+
+                const charges = await apiFetch(type === 'Lab' ? '/user/labs/delivery-charges' : '/user/pharmacy/delivery-charges');
+                ctxCharges = charges.data;
+                updateLiveBill();
+                Swal.close();
+                switchView('checkoutView');
+            } catch(e) { Swal.fire('Error', e.message, 'error'); }
         }
 
+        async function processFinalBooking() {
+            const isRapidCheck = currentChkCtx === 'Lab' ? document.getElementById('labRapidCheck').checked : pharmaSpeed === 'rapid';
+            
+            // Prescription validation
+            if(currentChkCtx === 'Pharmacy') {
+                const rxFiles = document.getElementById('rxCheckoutFiles').files;
+                const rxVisible = !document.getElementById('rxMandatorySection').classList.contains('d-none');
+                if (rxVisible && rxFiles.length === 0) return Swal.fire('Action Required', 'Please upload Prescription images.', 'warning');
+            }
+
+            if(!chkSlot && !isRapidCheck) return Swal.fire('Error', 'Select slot or choose Express Collection', 'error');
+
+            const body = new FormData();
+            body.append('appointmentDate', document.getElementById('chkDateInp').value || new Date().toISOString().split('T')[0]);
+            body.append('appointmentTime', chkSlot ? chkSlot.time : 'Immediate');
+            body.append('collectionType', currentChkCtx === 'Lab' ? labCollMode : (pharmaSpeed==='pickup'?'Self Pickup':'Home Delivery'));
+            body.append('isRapid', isRapidCheck);
+            body.append('paymentMethod', 'COD');
+            if(couponApplied) body.append('couponCode', couponApplied.couponName);
+            if(selectedAddr) body.append('address', JSON.stringify(selectedAddr));
+            
+            const rxFiles = document.getElementById('rxCheckoutFiles').files;
+            for(let i=0; i<rxFiles.length; i++) body.append('prescriptionImages', rxFiles[i]);
+            if(currentChkCtx === 'Lab') body.append('selectedPatientIds', JSON.stringify(chkPatients));
+
+            Swal.fire({ title: 'Booking your order...', didOpen: () => Swal.showLoading() });
+            try {
+                // Endpoint updated to /place-order as per backend split
+                const endpoint = currentChkCtx === 'Lab' ? '/user/labs/checkout' : '/user/pharmacy/place-order';
+                const res = await apiFetch(endpoint, 'POST', body, true);
+                Swal.fire('Success!', 'Order placed successfully.', 'success');
+                switchView('historyView');
+                refreshBadge();
+            } catch(e) { Swal.fire('Error', e.message, 'error'); }
+        }
+
+        // --- BAaki functions same rahenge (Billing, Slots, UI) ---
         function previewRxFiles() {
             const files = document.getElementById('rxCheckoutFiles').files;
-            document.getElementById('rxPreviewArea').innerHTML = Array.from(files).map(f => `<div class="p-2 border rounded-3 bg-light small"><i class="fas fa-file-image me-1"></i>${f.name.slice(0,10)}...</div>`).join('');
+            document.getElementById('rxPreviewArea').innerHTML = Array.from(files).map(f => `<div class="p-2 border rounded-3 bg-light small"><i class="fas fa-file-image me-1"></i>${f.name.slice(0,10)}</div>`).join('');
         }
 
-        function setLabCollectionMode(mode) {
-            labCollMode = mode;
-            document.getElementById('labModeHome').classList.toggle('active', mode === 'Home Collection');
-            document.getElementById('labModeVisit').classList.toggle('active', mode === 'Visit Lab');
-            updateLiveBill();
+        function setLabCollectionMode(mode) { labCollMode = mode; document.getElementById('labModeHome').classList.toggle('active', mode === 'Home Collection'); document.getElementById('labModeVisit').classList.toggle('active', mode === 'Visit Lab'); updateLiveBill(); }
+
+        function updatePharmaSpeed(mode) { pharmaSpeed = mode; document.querySelectorAll('.delivery-mode-card').forEach(c => c.classList.remove('active')); const el = document.getElementById(`speed-${mode}`); if(el) el.classList.add('active'); if(mode === 'custom') document.getElementById('slotSelectionSection').classList.remove('d-none'); else { document.getElementById('slotSelectionSection').classList.add('d-none'); chkSlot = { time: 'Immediate', fee: 0 }; } updateLiveBill(); }
+
+        async function fetchCheckoutSlots() {
+            const date = document.getElementById('chkDateInp').value;
+            const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
+            if(!date) return;
+            try {
+                const endpoint = currentChkCtx === 'Lab' ? `/user/labs/slots?labId=${vId}&date=${date}` : `/user/pharmacy/slots?pharmacyId=${vId}&date=${date}`;
+                const r = await apiFetch(endpoint);
+                document.getElementById('chkSlotGridUI').innerHTML = (r.slots || []).map(s => `<div class="slot-box ${s.isFull?'full':''}" onclick="${s.isFull?'':'setSlotSelection(\''+s.time+'\','+s.extraFee+',this)'}"><b>${s.time}</b>${s.extraFee>0?'<small>+₹'+s.extraFee+'</small>':''}</div>`).join('');
+            } catch(e) {}
         }
 
-        function updatePharmaSpeed(mode) {
-            pharmaSpeed = mode; document.querySelectorAll('.delivery-mode-card').forEach(c => c.classList.remove('active'));
-            const el = document.getElementById(`speed-${mode}`); if(el) el.classList.add('active');
-            const slotP = document.getElementById('slotSelectionSection');
-            if(mode === 'custom') slotP.classList.remove('d-none'); else { slotP.classList.add('d-none'); chkSlot = { time: 'Immediate', fee: 0 }; }
-            updateLiveBill();
-        }
+        function setSlotSelection(t, f, el) { document.querySelectorAll('.slot-box').forEach(x => x.classList.remove('selected')); el.classList.add('selected'); chkSlot = { time: t, fee: f }; updateLiveBill(); }
 
-        // 1. Fetch and Display Slots according to your JSON structure
-async function fetchCheckoutSlots() {
-    const date = document.getElementById('chkDateInp').value;
-    const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
-    
-    if(!date) return;
-
-    try {
-        const endpoint = currentChkCtx === 'Lab' 
-            ? `/user/labs/slots?labId=${vId}&date=${date}` 
-            : `/user/pharmacy/slots?pharmacyId=${vId}&date=${date}`;
-            
-        const r = await apiFetch(endpoint);
-        
-        const gridUI = document.getElementById('chkSlotGridUI');
-        
-        if (r.isClosed) {
-            gridUI.innerHTML = '<div class="alert alert-warning w-100">Pharmacy is closed on this date.</div>';
-            return;
-        }
-
-        gridUI.innerHTML = (r.slots || []).map(s => {
-            // "Book Once" Logic: Agar ek booking ho chuki hai, toh full dikhao
-            const isFull = s.isFull || s.currentBookings >= 1;
-            
-            return `
-                <div class="slot-box ${isFull ? 'full' : ''}" 
-                     onclick="${isFull ? '' : `setSlotSelection('${s.time}', ${s.extraFee}, this)`}">
-                    <div class="small fw-bold">${s.time}</div>
-                    <div style="font-size: 0.6rem; opacity: 0.7;">${s.category}</div>
-                    ${s.extraFee > 0 ? `<div class="text-danger" style="font-size: 0.7rem;">+₹${s.extraFee}</div>` : ''}
-                    ${isFull ? '<div class="badge bg-secondary" style="font-size:0.5rem">Booked</div>' : ''}
-                </div>
-            `;
-        }).join('');
-
-    } catch(e) { 
-        console.error("Slot Error:", e);
-        document.getElementById('chkSlotGridUI').innerHTML = '<small class="text-danger">Error loading slots</small>';
-    }
-}
-
-// 2. Select Slot and Update Fee
-function setSlotSelection(time, fee, el) {
-    // Remove selection from others
-    document.querySelectorAll('.slot-box').forEach(x => x.classList.remove('selected'));
-    
-    // Add to current
-    el.classList.add('selected');
-    
-    // Global state update
-    chkSlot = { time: time, fee: fee };
-    
-    // Bill update
-    updateLiveBill();
-}
-
-// 3. Update Bill to include Slot Extra Fee
-function updateLiveBill() {
-    if(!userCartState || !ctxCharges) return;
-    
-    const items = currentChkCtx === 'Lab' ? (userCartState.labCart?.items || []) : (userCartState.pharmacyCart?.items || []);
-    let billTotal = items.reduce((acc, i) => acc + (i.price * (currentChkCtx==='Lab' ? chkPatients.length : i.quantity)), 0);
-
-    let delFee = 0;
-    let rapFee = 0;
-    let slotExtraFee = chkSlot ? chkSlot.fee : 0; // JSON se aayi extraFee
-
-    if(currentChkCtx === 'Pharmacy') {
-        if(pharmaSpeed === 'rapid') rapFee = ctxCharges.fastDeliveryExtra || 29;
-        if(pharmaSpeed !== 'standard' || billTotal < 500) delFee = ctxCharges.fixedPrice || 40;
-    } else {
-        if(labCollMode === 'Home Collection') delFee = ctxCharges.fixedPrice || 40;
-        if(document.getElementById('labRapidCheck')?.checked) rapFee = ctxCharges.fastDeliveryExtra || 100;
-    }
-
-    // Total Calculation
-    const finalAmount = billTotal + delFee + rapFee + slotExtraFee;
-
-    // Update UI
-    document.getElementById('billMRPVal').innerText = `₹${billTotal}`;
-    document.getElementById('billDelFeeVal').innerText = `₹${delFee}`;
-    
-    // Rapid aur Slot Charges ka combo display
-    let extraHTML = '';
-    if(rapFee > 0) extraHTML += `<div class="bill-row text-danger"><span>Express Delivery</span><span>+₹${rapFee}</span></div>`;
-    if(slotExtraFee > 0) extraHTML += `<div class="bill-row text-warning"><span>Premium Slot Fee</span><span>+₹${slotExtraFee}</span></div>`;
-    
-    document.getElementById('billExtraChargesArea').innerHTML = extraHTML;
-    document.getElementById('billFinalValueFinal').innerText = `₹${finalAmount}`;
-}
-        function setSlotSelection(t, f, el) {
-            document.querySelectorAll('.slot-box').forEach(x => x.classList.remove('selected'));
-            el.classList.add('selected'); chkSlot = { time: t, fee: f }; updateLiveBill();
-        }
-
-        function togglePatientSelection(id, el) {
-            el.classList.toggle('active');
-            if(chkPatients.includes(id)) chkPatients = chkPatients.filter(p => p !== id);
-            else chkPatients.push(id); updateLiveBill();
-        }
+        function togglePatientSelection(id, el) { el.classList.toggle('active'); if(chkPatients.includes(id)) chkPatients = chkPatients.filter(p => p !== id); else chkPatients.push(id); updateLiveBill(); }
 
         function setOrderAddress(a, el) { document.querySelectorAll('.address-card').forEach(x => x.classList.remove('active')); el.classList.add('active'); selectedAddr = a; }
 
@@ -738,40 +657,34 @@ function updateLiveBill() {
             const items = currentChkCtx === 'Lab' ? (userCartState.labCart?.items || []) : (userCartState.pharmacyCart?.items || []);
             const pCount = chkPatients.length;
             let mrpTotal = 0, billTotal = 0;
-
             document.getElementById('chkItemsListUI').innerHTML = items.map(i => {
-                const mrp = i.price * 1.5; const qty = currentChkCtx === 'Lab' ? pCount : i.quantity;
-                mrpTotal += mrp * qty; billTotal += i.price * qty;
+                const qty = currentChkCtx === 'Lab' ? pCount : i.quantity;
+                mrpTotal += (i.price * 1.5) * qty; billTotal += i.price * qty;
                 return `<div class="bill-row"><span>${i.name}</span><b>₹${i.price * qty}</b></div>`;
             }).join('');
-
             let delFee = 0, rapFee = 0;
             if(currentChkCtx === 'Pharmacy') {
-                if(pharmaSpeed === 'rapid') rapFee = ctxCharges.fastDeliveryExtra;
-                if(pharmaSpeed !== 'standard' || billTotal < 500) delFee = ctxCharges.fixedPrice;
+                if(pharmaSpeed === 'rapid') rapFee = ctxCharges.fastDeliveryExtra || 29;
+                if(pharmaSpeed !== 'standard' || billTotal < 500) delFee = ctxCharges.fixedPrice || 40;
             } else {
-                if(labCollMode === 'Home Collection') delFee = ctxCharges.fixedPrice;
-                if(document.getElementById('labRapidCheck')?.checked) rapFee = ctxCharges.fastDeliveryExtra;
+                if(labCollMode === 'Home Collection') delFee = ctxCharges.fixedPrice || 40;
+                if(document.getElementById('labRapidCheck')?.checked) rapFee = ctxCharges.fastDeliveryExtra || 100;
             }
             if(chkSlot?.fee) rapFee += chkSlot.fee;
-
             const final = (billTotal - (couponApplied?.amount || 0)) + delFee + rapFee;
-            const set = (id, val) => { const x = document.getElementById(id); if(x) x.innerText = val; };
-            set('billMRPVal', `₹${mrpTotal.toFixed(0)}`);
-            set('billDiscVal', `-₹${(mrpTotal - billTotal).toFixed(0)}`);
-            set('billDelFeeVal', `₹${delFee}`);
-            set('savingsValueVal', `₹${(mrpTotal - billTotal + (couponApplied?.amount || 0)).toFixed(0)}`);
-            set('billFinalValueFinal', `₹${final.toFixed(0)}`);
-            document.getElementById('billExtraChargesArea').innerHTML = rapFee > 0 ? `<div class="bill-row text-danger"><span>Extra/Rapid Charge</span><span>+₹${rapFee}</span></div>` : '';
-            const coupRow = document.getElementById('couponRowUI'); if(coupRow) coupRow.style.display = couponApplied ? 'flex' : 'none';
-            set('billCouponVal', `-₹${couponApplied?.amount || 0}`);
+            document.getElementById('billMRPVal').innerText = `₹${mrpTotal.toFixed(0)}`;
+            document.getElementById('billDiscVal').innerText = `-₹${(mrpTotal - billTotal).toFixed(0)}`;
+            document.getElementById('billDelFeeVal').innerText = `₹${delFee}`;
+            document.getElementById('billFinalValueFinal').innerText = `₹${final.toFixed(0)}`;
+            document.getElementById('savingsValueVal').innerText = `₹${(mrpTotal - billTotal + (couponApplied?.amount || 0)).toFixed(0)}`;
+            document.getElementById('billExtraChargesArea').innerHTML = rapFee > 0 ? `<div class="bill-row text-danger"><span>Rapid/Slot Charges</span><span>+₹${rapFee}</span></div>` : '';
         }
 
         async function fetchCouponsForCheckout() {
             try {
                 const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
                 const res = await apiFetch(`/user/cart/available-coupons?vendorId=${vId}&vendorType=${currentChkCtx}`);
-                document.getElementById('modalCouponListArea').innerHTML = res.data.map(c => `<div class="coupon-card shadow-sm" onclick="applyCouponPostAPI('${c.couponName}')"><div class="d-flex justify-content-between"><b>${c.couponName}</b><span class="badge bg-success">${c.discountPercentage}% OFF</span></div><small>Min order ₹${c.minOrderAmount}</small></div>`).join('');
+                document.getElementById('modalCouponListArea').innerHTML = res.data.map(c => `<div class="coupon-card shadow-sm" onclick="applyCouponPostAPI('${c.couponName}')"><b>${c.couponName}</b><br><small>Min order ₹${c.minOrderAmount}</small></div>`).join('');
             } catch(e) {}
         }
 
@@ -782,58 +695,7 @@ function updateLiveBill() {
                 const res = await apiFetch(currentChkCtx === 'Lab' ? '/user/labs/validate-coupon' : '/user/pharmacy/validate-coupon', 'POST', { couponName: code, pharmacyId: vId, labId: vId, totalAmount: total });
                 couponApplied = { couponName: code, amount: res.discount };
                 bootstrap.Modal.getInstance(document.getElementById('couponModal')).hide();
-                Swal.fire('Success!', `Applied: ₹${res.discount}`, 'success'); updateLiveBill();
-            } catch(e) { Swal.fire('Error', e.message, 'error'); }
-        }
-
-        function applyManualCouponAPI() {
-            const code = document.getElementById('manualCouponInput').value;
-            if(code) applyCouponPostAPI(code.toUpperCase());
-        }
-
-        async function processFinalBooking() {
-            const isRapidCheck = currentChkCtx === 'Lab' ? document.getElementById('labRapidCheck').checked : pharmaSpeed === 'rapid';
-            
-            // PRESCRIPTION VALIDATION LOGIC
-            if(currentChkCtx === 'Pharmacy') {
-                const needsRx = userCartState.pharmacyCart.items.some(i => 
-                    i.medicineId && i.medicineId.prescription_required && i.medicineId.prescription_required.toUpperCase() === 'YES'
-                );
-                const rxFiles = document.getElementById('rxCheckoutFiles').files;
-                
-                if (needsRx && rxFiles.length === 0) {
-                    return Swal.fire('Action Required', 'One or more items in your cart require a valid prescription. Please upload the image to proceed.', 'warning');
-                }
-            }
-
-            if(!chkSlot && !isRapidCheck) return Swal.fire('Error', 'Select slot or choose Express Collection', 'error');
-
-            const body = new FormData();
-            body.append('appointmentDate', document.getElementById('chkDateInp').value || new Date().toISOString().split('T')[0]);
-            
-            let finalTime = 'Immediate';
-            if (chkSlot && chkSlot.time) {
-                finalTime = chkSlot.time;
-            } else if (isRapidCheck) {
-                finalTime = 'Immediate';
-            }
-            body.append('appointmentTime', finalTime);
-
-            body.append('collectionType', currentChkCtx === 'Lab' ? labCollMode : (pharmaSpeed==='pickup'?'Self Pickup':'Home Delivery'));
-            body.append('isRapid', isRapidCheck);
-            body.append('paymentMethod', 'COD');
-            if(couponApplied) body.append('couponCode', couponApplied.couponName);
-            if(selectedAddr) body.append('address', JSON.stringify(selectedAddr));
-            
-            const rxFiles = document.getElementById('rxCheckoutFiles').files;
-            for(let i=0; i<rxFiles.length; i++) body.append('prescriptionImages', rxFiles[i]);
-
-            if(currentChkCtx === 'Lab') body.append('selectedPatientIds', JSON.stringify(chkPatients));
-
-            Swal.fire({ title: 'Processing Order...', didOpen: () => Swal.showLoading() });
-            try {
-                const res = await apiFetch(currentChkCtx === 'Lab' ? '/user/labs/checkout' : '/user/pharmacy/checkout', 'POST', body, true);
-                if(res.success) { Swal.fire('Ordered!', 'Order placed successfully.', 'success'); switchView('historyView'); refreshBadge(); }
+                updateLiveBill();
             } catch(e) { Swal.fire('Error', e.message, 'error'); }
         }
 

@@ -470,6 +470,25 @@ const fireCaseUploads = multer({
     { name: 'medicalCertificate', maxCount: 1 } // Support for medical files if needed
 ]);
 
+
+// ==========================================
+// 27. NURSE SERVICES (Daily Care & Packages)
+// ==========================================
+const nurseServiceDir = 'public/uploads/nurse_services';
+ensureDir(nurseServiceDir);
+
+const nurseServiceUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, nurseServiceDir),
+        filename: (req, file, cb) => cb(null, `nservice-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter, // Image and PDF filter
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+}).fields([
+    { name: 'photos', maxCount: 10 } // Figma Screen 42: "Add Service Photo"
+]);
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -498,5 +517,6 @@ module.exports = {
     policeStationUploads,
     policeStaffUploads,
     fireCaseUploads,
-    categoryTestUploads
+    categoryTestUploads,
+    nurseServiceUploads
 };  

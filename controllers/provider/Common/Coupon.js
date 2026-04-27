@@ -36,7 +36,7 @@ const getMyCoupons = async (req, res) => {
                     vendorId: null 
                 }
             ]
-        }).sort({ createdAt: -1 });
+        });
         res.json({ success: true, data: list });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };

@@ -183,6 +183,74 @@ const scanPrescription = async (req, res) => {
 };
 
 
+// --- API 1: GET MEDICINE SUGGESTIONS (Search Bar) ---
+const getMedicineSuggestions = async (req, res) => {
+    try {
+        const { query } = req.body;
+
+        if (!query || query.length < 2) {
+            return res.json({ success: true, data: [] });
+        }
+
+        // Search logic: Name ya Salt mein match dhoondega
+        const searchRegex = new RegExp(query, 'i');
+
+        const suggestions = await Medicine.find({
+            $or: [
+                { name: searchRegex },
+                { salt_composition: searchRegex }
+            ]
+        })
+        .select('name salt_composition mrp best_price image_url discont_percent') // Sirf zaroori fields
+        .limit(10) // Performance ke liye sirf 10 results
+        .lean();
+
+        // Response formatting for Flutter
+        const formattedData = suggestions.map(med => ({
+            id: med._id,
+            name: med.name,
+            salt: med.salt_composition,
+            price: med.best_price || med.mrp,
+            image: med.image_url && med.image_url.length > 0 ? med.image_url[0] : null,
+            discount: med.discont_percent,
+            displayType: med.name.toLowerCase().includes(query.toLowerCase()) ? "Name Match" : "Salt Match"
+        }));
+
+        res.json({
+            success: true,
+            count: formattedData.length,
+            data: formattedData
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API 2: GET FULL MEDICINE DETAILS (Click karne par) ---
+// GET /user/pharmacy/full-details/:id
+const getMedicineFullDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Saare fields fetch karein
+        const medicine = await Medicine.findById(id).lean();
+
+        if (!medicine) {
+            return res.status(404).json({ success: false, message: "Medicine details not found" });
+        }
+
+        res.json({
+            success: true,
+            data: medicine
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 const getMedicineCategories = async (req, res) => {
     try {
         // 1. Aggregation: Breadcrumb se Main Category nikalna aur Stock (Product Count) ginna
@@ -482,7 +550,99 @@ const getPharmacyDetails = async (req, res) => {
     }
 };
 
+const getTrendingMedicinesNearUser = async (req, res) => {
+    try {
+        // 1. Coordinates Logic (User GPS or Delhi Fallback)
+        const lat = req.body.lat || req.query.lat || DEFAULT_LAT;
+        const lng = req.body.lng || req.query.lng || DEFAULT_LNG;
 
+        // 2. Fetch Radius Limit for Pharmacies
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
+        const maxRadius = limitConfig ? limitConfig.kmLimit : 50;
+
+        // 3. Pehle Approved & Active Pharmacies dhoondo jo radius ke andar hain
+        const allPharmacies = await Pharmacy.find({ 
+            profileStatus: 'Approved', 
+            isActive: true 
+        }).select('location name').lean();
+
+        const nearbyPharmacyIds = [];
+        for (let p of allPharmacies) {
+            if (p.location?.lat) {
+                const dist = await getDistance(parseFloat(lat), parseFloat(lng), p.location.lat, p.location.lng);
+                if (dist <= maxRadius) {
+                    nearbyPharmacyIds.push(p._id);
+                }
+            }
+        }
+
+        if (nearbyPharmacyIds.length === 0) {
+            return res.json({ success: true, message: "No pharmacies found near you", data: [] });
+        }
+
+        // 4. In Pharmacies ke inventory se unique Medicines uthao
+        // Aggregation use kar rahe hain taaki duplicate medicines na aayein
+        const trendingMeds = await MedicineInventory.aggregate([
+            { 
+                $match: { 
+                    pharmacyId: { $in: nearbyPharmacyIds }, 
+                    is_available: true,
+                    stock_quantity: { $gt: 0 }
+                } 
+            },
+            {
+                $group: {
+                    _id: "$medicineId",
+                    bestPrice: { $min: "$vendor_price" }, // Paas ki shops mein sabse sasta rate
+                    availableAt: { $first: "$pharmacyId" } // Example shop
+                }
+            },
+            { $limit: 20 }, // Trending list ke liye top 20
+            {
+                $lookup: {
+                    from: "medicines", // Medicine collection name
+                    localField: "_id",
+                    foreignField: "_id",
+                    as: "details"
+                }
+            },
+            { $unwind: "$details" },
+            {
+                $project: {
+                    _id: 1,
+                    medicineId: "$_id",
+                    name: "$details.name",
+                    image: { $arrayElemAt: ["$details.image_url", 0] },
+                    mrp: "$details.mrp",
+                    bestPrice: 1,
+                    discount: {
+                        $round: [
+                            {
+                                $multiply: [
+                                    { $divide: [{ $subtract: [{ $toDouble: "$details.mrp" }, "$bestPrice"] }, { $toDouble: "$details.mrp" }] },
+                                    100
+                                ]
+                            },
+                            0
+                        ]
+                    },
+                    salt: "$details.salt_composition"
+                }
+            }
+        ]);
+
+        res.json({
+            success: true,
+            count: trendingMeds.length,
+            radius: `${maxRadius} km`,
+            locationApplied: (req.body.lat) ? "User GPS" : "Delhi (Default)",
+            data: trendingMeds
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 // 1. GET STANDARD LIST (Dawaiyan jinke sabse zyada vendors hain wo pehle)
 // endpoint: GET /user/medicine/standard-list
@@ -846,130 +1006,156 @@ const validateCoupon = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 // BookPharmacy.js mein checkoutMedicineOrder update karein
+// POST /user/pharmacy/checkout
 const checkoutMedicineOrder = async (req, res) => {
     try {
-        const { 
-            appointmentDate, appointmentTime, address, 
-            paymentMethod, couponCode, isRapid, collectionType 
-        } = req.body;
-
+        const { couponCode, isRapid, collectionType, appointmentTime, address } = req.body;
         const userId = req.user.id;
-        
-        // 1. Cart fetch karo aur Medicine details populate karo
-        const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
 
-        if (!cart || !cart.pharmacyCart || cart.pharmacyCart.items.length === 0) {
-            return res.status(400).json({ success: false, message: "Cart is empty" });
+        // A. Cart Fetch & Population
+        const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
+        if (!cart || !cart.pharmacyCart.items.length) {
+            return res.status(400).json({ success: false, message: "Basket is empty. Please add medicines." });
         }
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
 
-        // 2. CHECK: Prescription Required logic (Same as before)
-        const rxMandatory = cart.pharmacyCart.items.some(item => 
-            item.medicineId && 
-            item.medicineId.prescription_required && 
-            item.medicineId.prescription_required.toUpperCase() === "YES"
-        );
-
-        let rxImages = [];
-        if (rxMandatory) {
-            if (!req.files || !req.files['prescriptionImages'] || req.files['prescriptionImages'].length === 0) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: "One or more medicines in your cart require a valid prescription. Please upload it." 
-                });
-            }
-            rxImages = req.files['prescriptionImages'].map(f => f.path);
-        }
-
-        // 3. STOCK MANAGEMENT LOGIC (Naya Logic)
-        // Har item ke liye loop chalakar inventory se stock minus karna
+        // B. Real-time Stock Validation
+        const validatedItems = [];
         for (const item of cart.pharmacyCart.items) {
             const inventory = await MedicineInventory.findOne({ 
-                pharmacyId: pharmacyId, 
-                medicineId: item.medicineId._id 
+                pharmacyId, 
+                medicineId: item.medicineId._id,
+                is_available: true 
             });
 
             if (!inventory || inventory.stock_quantity < item.quantity) {
                 return res.status(400).json({ 
                     success: false, 
-                    message: `Medicine ${item.name} is out of stock or insufficient quantity.` 
+                    errorType: "OUT_OF_STOCK",
+                    message: `Item '${item.name}' is currently unavailable or out of stock.` 
                 });
             }
+            validatedItems.push(item);
+        }
 
-            // Stock minus karein
-            inventory.stock_quantity -= item.quantity;
-            
-            // Agar stock 0 ho jaye toh is_available false kar dein
-            if (inventory.stock_quantity <= 0) {
-                inventory.is_available = false;
+        // C. Prescription Mandatory Check
+        const rxMandatory = validatedItems.some(item => 
+            item.medicineId?.prescription_required?.toUpperCase() === "YES"
+        );
+
+        // D. Address Validation (If Home Delivery)
+        if (collectionType === 'Home Delivery' && (!address || !address.houseNo)) {
+            return res.status(400).json({ success: false, message: "Please provide a valid delivery address." });
+        }
+
+        // E. Billing Calculation
+        const bill = await calculatePharmacyBillHelper(
+            pharmacyId, validatedItems, 1, collectionType, couponCode, isRapid, appointmentTime
+        );
+
+        // F. Response with all metadata for payment screen
+        res.json({
+            success: true,
+            message: "Checkout validated successfully",
+            data: {
+                pharmacyId,
+                billSummary: bill,
+                rxMandatory,
+                items: validatedItems.map(i => ({
+                    id: i.medicineId._id,
+                    name: i.name,
+                    qty: i.quantity,
+                    price: i.price,
+                    total: i.price * i.quantity
+                })),
+                orderRestrictions: {
+                    canPlaceOrder: true,
+                    needsPrescription: rxMandatory
+                }
             }
-            
+        });
+
+    } catch (error) {
+        console.error("CHECKOUT_ERROR:", error);
+        res.status(500).json({ success: false, message: "Internal server error during checkout." });
+    }
+};
+
+// 2. PLACE ORDER (Final Step)
+// POST /user/pharmacy/place-order
+const placeOrder = async (req, res) => {
+    try {
+        const { 
+            appointmentDate, appointmentTime, address, 
+            paymentMethod, couponCode, isRapid, collectionType,
+            selectedPatientIds 
+        } = req.body;
+
+        const userId = req.user.id;
+        
+        // Final verification before locking the order
+        const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
+        if (!cart || !cart.pharmacyCart.items.length) {
+            return res.status(400).json({ message: "Transaction expired. Cart is empty." });
+        }
+
+        const pharmacyId = cart.pharmacyCart.pharmacyId;
+
+        // 1. Atomic Stock Deduction
+        for (const item of cart.pharmacyCart.items) {
+            const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId._id });
+            if (!inventory || inventory.stock_quantity < item.quantity) {
+                return res.status(400).json({ message: `Stock mismatch for ${item.name}. Please refresh cart.` });
+            }
+            inventory.stock_quantity -= item.quantity;
+            if (inventory.stock_quantity <= 0) inventory.is_available = false;
             await inventory.save();
         }
 
-        // 4. Calculate Bill
+        // 2. Handle Prescription
+        let rxImages = [];
+        if (req.files && req.files['prescriptionImages']) {
+            rxImages = req.files['prescriptionImages'].map(f => f.path);
+        }
+
+        // 3. Final Bill calculation
         const bill = await calculatePharmacyBillHelper(
-            pharmacyId, 
-            cart.pharmacyCart.items, 
-            1, collectionType, couponCode, isRapid, appointmentTime
+            pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime
         );
 
-        // 5. Create Booking
+        // 4. Create Order
         const order = await PharmacyBooking.create({
-            orderId: `MED-${require('crypto').randomBytes(3).toString('hex').toUpperCase()}`,
+            orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
-            pharmacyId: pharmacyId,
+            pharmacyId,
+            patients: await mapPatients(userId, selectedPatientIds || ['Self']),
             items: cart.pharmacyCart.items,
-            collectionType, 
-            address: typeof address === 'string' ? JSON.parse(address) : address, 
-            appointmentDate, 
+            collectionType,
+            address: typeof address === 'string' ? JSON.parse(address) : address,
+            appointmentDate,
             appointmentTime,
             billSummary: bill,
             paymentMethod: paymentMethod || 'COD',
-            isRapid: isRapid || false,
-            orderType: rxMandatory ? 'Prescription' : 'General',
+            orderType: rxImages.length > 0 ? 'Prescription' : 'General',
             prescriptionImages: rxImages,
-            status: rxMandatory ? 'Under Review' : 'Placed', 
-            deliveryStatus: 'PendingAssignment'
+            status: rxImages.length > 0 ? 'Under Review' : 'Placed',
+            paymentStatus: paymentMethod === 'COD' ? 'Pending' : 'Paid'
         });
 
-        // 6. Clear Cart
+        // 5. Clear User Cart
         await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
         res.status(201).json({ 
             success: true, 
-            message: rxMandatory ? "Order placed! Stock updated and pending verification." : "Order placed and stock updated successfully!", 
+            message: "Order has been placed successfully!", 
+            orderId: order.orderId,
             data: order 
         });
 
     } catch (error) {
-        console.error("PHARMA CHECKOUT ERROR:", error);
         res.status(500).json({ success: false, message: error.message });
     }
-};
-const placeOrder = async (req, res) => {
-    try {
-        const cart = await Cart.findOne({ userId: req.user.id });
-        if (!cart || cart.pharmacyCart.items.length === 0) return res.status(400).json({ message: "Cart is empty" });
-
-        const orderId = `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        
-        const order = await PharmacyBooking.create({
-            userId: req.user.id,
-            pharmacyId: cart.pharmacyCart.pharmacyId,
-            items: cart.pharmacyCart.items,
-            billSummary: req.body.billSummary,
-            deliveryAddress: req.body.deliveryAddress,
-            orderId
-        });
-
-        // Clear Cart
-        cart.pharmacyCart = { items: [], pharmacyId: null };
-        await cart.save();
-
-        res.status(201).json({ success: true, message: "Order Placed", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 
@@ -1040,5 +1226,5 @@ const trackOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = {scanPrescription,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, getStandardMedicineCatalog,getMedicineVendors,
+module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder };

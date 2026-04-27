@@ -1,30 +1,88 @@
+const Nurse = require('../../../models/Nurse');
 const NurseBooking = require('../../../models/NurseBooking');
 
-// 1. GET NURSE DASHBOARD STATS
-const getNurseStats = async (req, res) => {
+// 1. DASHBOARD STATS (Figma Screen 17)
+const getNurseDashboard = async (req, res) => {
     try {
         const nurseId = req.user.id;
-        const requests = await NurseBooking.countDocuments({ nurseId, status: 'Pending' });
-        const accepted = await NurseBooking.countDocuments({ nurseId, status: 'Confirmed' });
-        const completed = await NurseBooking.countDocuments({ nurseId, status: 'Completed' });
-        
-        res.json({ success: true, data: { todayRequests: requests, accepted, completed } });
+        const [stats, bookings] = await Promise.all([
+            NurseBooking.aggregate([
+                { $match: { nurseId: req.user.id } },
+                { $group: {
+                    _id: null,
+                    pending: { $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] } },
+                    accepted: { $sum: { $cond: [{ $eq: ["$status", "Assigned"] }, 1, 0] } },
+                    completed: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } }
+                }}
+            ]),
+            NurseBooking.find({ nurseId }).sort({ createdAt: -1 }).limit(10)
+        ]);
+
+        res.json({ 
+            success: true, 
+            stats: stats[0] || { pending: 0, accepted: 0, completed: 0 },
+            recentBookings: bookings 
+        });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. ACCEPT / REJECT NURSING REQUEST
-const handleNurseRequest = async (req, res) => {
+// 2. MANAGE SERVICES (Figma Screen 37, 42)
+// Add Service to Array
+const addService = async (req, res) => {
     try {
-        const { action, reason } = req.body; 
-        const status = action === 'Accept' ? 'Confirmed' : 'Cancelled';
+        const { type, title, price, description, prescriptionRequired } = req.body;
+
+        // Check karein ki 'photos' field mein files hain ya nahi
+        let photos = [];
+        if (req.files && req.files['photos']) {
+            photos = req.files['photos'].map(f => f.path);
+        }
+
+        const newService = { 
+            type, 
+            title, 
+            price, 
+            description, 
+            prescriptionRequired: prescriptionRequired === 'true', // String to Boolean fix
+            photos 
+        };
+
+        const nurse = await Nurse.findByIdAndUpdate(
+            req.user.id,
+            { $push: { offeredServices: newService } },
+            { new: true }
+        );
         
-        const booking = await NurseBooking.findByIdAndUpdate(req.params.id, { 
-            status, 
-            rejectionReason: reason 
-        }, { new: true });
+        res.json({ success: true, data: nurse.offeredServices });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+// Update Specific Service in Array
+const updateService = async (req, res) => {
+    try {
+        const { serviceId } = req.params;
+        const updates = req.body;
         
-        res.json({ success: true, message: `Request ${action}ed`, data: booking });
+        // Dynamic path for sub-document update
+        const nurse = await Nurse.findOneAndUpdate(
+            { _id: req.user.id, "offeredServices._id": serviceId },
+            { $set: { "offeredServices.$": { ...updates, _id: serviceId } } },
+            { new: true }
+        );
+        res.json({ success: true, data: nurse.offeredServices });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { getNurseStats, handleNurseRequest };
+// Delete Service from Array
+const deleteService = async (req, res) => {
+    try {
+        await Nurse.findByIdAndUpdate(req.user.id, {
+            $pull: { offeredServices: { _id: req.params.serviceId } }
+        });
+        res.json({ success: true, message: "Service Deleted" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+module.exports = { getNurseDashboard, addService, updateService, deleteService };

@@ -18,10 +18,7 @@ const nurseSchema = new mongoose.Schema({
     state: { type: String, default: null },
     city: { type: String, default: null },
     address: { type: String, default: null },
-    location: {
-        lat: Number,
-        lng: Number
-    },
+    
  documents: {
         nursingCertificates: [{ type: String }],    // Figma: Nursing Certificate
         licensePhotos: [{ type: String }],          // Figma: License Photo
@@ -42,10 +39,22 @@ const nurseSchema = new mongoose.Schema({
     speciality: { type: String, default: null }, // e.g., ICU, Pediatric
     gender: { type: String, enum: ['Male', 'Female', 'Other'] },
     about: { type: String, default: "" },
+     rating: { type: Number, default: 0 },
+    totalReviews: { type: Number, default: 0 },
     location: {
             lat: { type: Number, default: 0 },
             lng: { type: Number, default: 0 }
         },
+        offeredServices: [{
+        type: { type: String, enum: ['Daily Care', 'Package'] },
+        title: { type: String }, // e.g., "Cancer Care"
+        description: { type: String },
+        price: { type: Number },
+        prescriptionRequired: { type: Boolean, default: false },
+        photos: [{ type: String }],
+        isActive: { type: Boolean, default: true }
+    }],
+
 
 
 }, { timestamps: true });

@@ -10,7 +10,8 @@ const {
     getMyPackages, 
     deleteService ,
     getMasterList, getMasterTestDetails, getStandardCatalogTests, getStandardPackages,getMasterPackages,getMasterPackageDetails,
-    submitNewMasterRequest
+    submitNewMasterRequest,
+    updateLabTest, updateLabPackage
 
 } = require('../../../controllers/provider/Lab/LabsService');
 
@@ -42,5 +43,10 @@ router.get('/packages/my-packages', protect('lab'), getMyPackages);
 router.delete('/delete/:type/:id', protect('lab'), deleteService);
 
 router.post('/suggest-new', protect('lab'), submitNewMasterRequest);
+
+// --- UPDATE ---
+router.put('/update-package', protect('lab'), updateLabPackage);
+router.put('/update-test',protect('lab'),updateLabTest)
+ 
 
 module.exports = router;  

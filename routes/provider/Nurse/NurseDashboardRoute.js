@@ -2,11 +2,16 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { nurseDocUploads } = require('../../../middleware/multer');
-const { getNurseStats, handleNurseRequest } = require('../../../controllers/provider/Nurse/NurseDashboard');
+const { nurseServiceUploads } = require('../../../middleware/multer');
+const {getNurseDashboard,addService, updateService, deleteService  } = require('../../../controllers/provider/Nurse/NurseDashboard');
+
+// Base URL: /provider/nurse/dash
 
 // Nurse Dashboard
-router.get('/dashboard', protect('nurse'), getNurseStats);
-router.patch('/order-action/:id', protect('nurse'), handleNurseRequest);
+router.get('/dash', protect('nurse'), getNurseDashboard);
 
+// Nurse Services
+router.post('/services/add', protect('nurse'), nurseServiceUploads, addService);
+router.put('/services/update/:id', protect('nurse'), nurseServiceUploads, updateService);
+router.delete('/services/delete/:id', protect('nurse'), deleteService);
 module.exports = router;

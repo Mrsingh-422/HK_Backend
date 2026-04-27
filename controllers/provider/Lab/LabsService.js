@@ -325,6 +325,91 @@ const submitNewMasterRequest = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// endpoint: PUT /provider/labs/services/update-test
+const updateLabTest = async (req, res) => {
+    try {
+        const { id, amount, discountPercent, reportTime, precaution, testType, description } = req.body;
+ 
+        if (!id) return res.status(400).json({ message: "Test ID is required" });
+ 
+        // 1. Numeric Calculation
+        const mrp = parseFloat(amount);
+        const disc = parseFloat(discountPercent) || 0;
+        const calculatedDiscountPrice = mrp - (mrp * (disc / 100));
+ 
+        // 2. Prepare Payload
+        const payload = {
+            amount: mrp,
+            discountPercent: disc,
+            discountPrice: calculatedDiscountPrice,
+            reportTime,
+            precaution,
+            description,
+            testType
+        };
+ 
+        // 3. Simple Update
+        const updatedTest = await LabTest.findByIdAndUpdate(id, payload, { new: true });
+ 
+        if (!updatedTest) return res.status(404).json({ message: "Test not found" });
+ 
+        res.json({ success: true, message: "Test updated successfully", data: updatedTest });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+ 
+ 
+// endpoint: PUT /provider/labs/services/update-package
+const updateLabPackage = async (req, res) => {
+    try {
+        const {
+            id, packageName, tests, mrp, discountPercent,
+            reportTime, description, precaution, gender, ageGroup
+        } = req.body;
+ 
+        if (!id) return res.status(400).json({ message: "Package ID is required" });
+ 
+        let updateData = {
+            packageName, reportTime, description,
+            precaution, gender, ageGroup
+        };
+ 
+        // 1. Agar Tests update ho rahe hain toh Sample Types fetch karo
+        if (tests) {
+            const finalTests = typeof tests === 'string' ? JSON.parse(tests) : tests;
+            const testsData = await MasterLabTest.find({ _id: { $in: finalTests } });
+            
+            updateData.tests = finalTests;
+            updateData.totalTestsIncluded = finalTests.length;
+            updateData.sampleType = [...new Set(testsData.map(t => t.sampleType))].filter(Boolean);
+        }
+ 
+        // 2. Price Calculation
+        if (mrp) {
+            const packageMRP = parseFloat(mrp);
+            const disc = parseFloat(discountPercent) || 0;
+            updateData.mrp = packageMRP;
+            updateData.discountPercent = disc;
+            updateData.offerPrice = packageMRP - (packageMRP * (disc / 100));
+        }
+ 
+        // 3. Update execution
+        const updatedPackage = await LabPackage.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true }
+        ).populate('tests');
+ 
+        if (!updatedPackage) return res.status(404).json({ message: "Package not found" });
+ 
+        res.json({ success: true, message: "Package updated successfully", data: updatedPackage });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+ 
 
 
-module.exports = { getMasterList,getStandardCatalogTests, getStandardPackages, saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService,getMasterTestDetails,getMasterPackages, getMasterPackageDetails, submitNewMasterRequest };
+
+module.exports = { getMasterList,getStandardCatalogTests, getStandardPackages, saveLabTest, getMyTests, saveLabPackage, getMyPackages, deleteService,getMasterTestDetails,getMasterPackages, getMasterPackageDetails, submitNewMasterRequest,updateLabTest,updateLabPackage };
