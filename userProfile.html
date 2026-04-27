@@ -3,637 +3,410 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Nurse Booking</title>
+    <title>Health Kangaroo | Professional Nurse Booking</title>
     
-    <!-- CSS Dependencies -->
+    <!-- Dependencies -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+
     <style>
-        :root {
-            --hk-green: #00b894;
-            --hk-dark: #1e272e;
-            --hk-bg: #f7f9fb;
-            --hk-white: #ffffff;
-            --hk-gray: #808e9b;
-            --hk-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
-        }
+        :root { --hk-green: #00b894; --hk-bg: #f8fbf9; --hk-dark: #2d3436; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--hk-bg); color: var(--hk-dark); padding-bottom: 90px; }
+        
+        .hk-nav { background: white; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 1000; }
+        .hk-nav h4 { color: var(--hk-green); font-weight: 800; margin: 0; }
+        
+        .screen { display: none; animation: fadeIn 0.4s ease; padding: 15px; }
+        .active-screen { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
 
-        body {
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            background-color: var(--hk-bg);
-            color: var(--hk-dark);
-            margin: 0;
-            padding-bottom: 90px;
-        }
+        .card-hk { background: white; border-radius: 20px; border: none; box-shadow: 0 8px 24px rgba(0,0,0,0.06); margin-bottom: 15px; overflow: hidden; }
+        .btn-hk { background: var(--hk-green); color: white; border-radius: 12px; padding: 14px; font-weight: 700; width: 100%; border: none; transition: 0.3s; }
+        
+        .nurse-img { width: 75px; height: 75px; border-radius: 15px; object-fit: cover; border: 1px solid #eee; }
+        .slot-box { border: 1.5px solid #eee; border-radius: 12px; padding: 12px; text-align: center; cursor: pointer; position: relative; }
+        .slot-box.selected { border-color: var(--hk-green); background: rgba(0, 184, 148, 0.08); }
+        .slot-box.premium { border-color: #ffd700; background: #fffdf0; }
+        .slot-box.booked { background: #f8f9fa; color: #ced4da; cursor: not-allowed; border-style: dashed; }
 
-        /* Top Header */
-        .header {
-            background: var(--hk-white);
-            padding: 15px 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.03);
-            position: sticky;
-            top: 0;
-            z-index: 1000;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
+        .price-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.95rem; }
+        .total-row { border-top: 1px dashed #ddd; margin-top: 10px; padding-top: 10px; font-weight: 800; font-size: 1.2rem; color: var(--hk-green); }
 
-        .header h4 {
-            color: var(--hk-green);
-            font-weight: 800;
-            margin: 0;
-            font-size: 1.3rem;
-        }
+        .bottom-nav { position: fixed; bottom: 0; width: 100%; background: white; display: flex; justify-content: space-around; padding: 12px; border-top: 1px solid #eee; z-index: 1000; }
+        .nav-item { text-align: center; color: #b2bec3; text-decoration: none; font-size: 0.75rem; cursor: pointer; flex: 1; }
+        .nav-item.active { color: var(--hk-green); }
+        .nav-item i { font-size: 1.3rem; display: block; margin-bottom: 2px; }
 
-        /* Screen Transitions */
-        .screen { display: none; padding: 15px; animation: slideUp 0.4s ease; }
-        .screen.active { display: block; }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-
-        /* Nurse Card Style (Listing) */
-        .nurse-card {
-            background: var(--hk-white);
-            border-radius: 20px;
-            padding: 15px;
-            margin-bottom: 15px;
-            box-shadow: var(--hk-shadow);
-            border: 1px solid rgba(0,0,0,0.02);
-            transition: 0.3s;
-        }
-
-        .nurse-card:active { transform: scale(0.98); }
-
-        .img-wrapper {
-            width: 75px;
-            height: 75px;
-            border-radius: 15px;
-            overflow: hidden;
-            background: #eee;
-        }
-
-        .img-wrapper img { width: 100%; height: 100%; object-fit: cover; }
-
-        .badge-rating {
-            background: #fff9db;
-            color: #f1c40f;
-            padding: 4px 8px;
-            border-radius: 8px;
-            font-weight: 700;
-            font-size: 0.75rem;
-        }
-
-        .price-tag {
-            color: var(--hk-green);
-            font-weight: 700;
-            font-size: 1rem;
-        }
-
-        /* Detail Screen */
-        .detail-header {
-            background: linear-gradient(180deg, #00b894 0%, #009476 100%);
-            border-radius: 0 0 30px 30px;
-            padding: 40px 20px;
-            text-align: center;
-            color: white;
-            margin: -15px -15px 20px -15px;
-        }
-
-        .timing-box {
-            background: #f1f2f6;
-            border-radius: 12px;
-            padding: 10px;
-            font-size: 0.85rem;
-            color: var(--hk-dark);
-        }
-
-        /* Services List */
-        .service-select {
-            border: 2px solid #eee;
-            border-radius: 15px;
-            padding: 15px;
-            margin-bottom: 12px;
-            cursor: pointer;
-            transition: 0.3s;
-        }
-
-        .service-select.selected {
-            border-color: var(--hk-green);
-            background: rgba(0, 184, 148, 0.05);
-        }
-
-        /* Forms */
-        .form-group label {
-            font-weight: 600;
-            font-size: 0.85rem;
-            margin-bottom: 5px;
-            color: var(--hk-gray);
-        }
-
-        .form-control {
-            border-radius: 12px;
-            padding: 12px;
-            border: 1px solid #dfe6e9;
-            background: white;
-        }
-
-        .form-control:focus {
-            border-color: var(--hk-green);
-            box-shadow: none;
-        }
-
-        /* Buttons */
-        .btn-main {
-            background: var(--hk-green);
-            color: white;
-            border: none;
-            border-radius: 15px;
-            padding: 15px;
-            font-weight: 700;
-            width: 100%;
-            box-shadow: 0 5px 15px rgba(0, 184, 148, 0.3);
-        }
-
-        /* Bottom Nav */
-        .bottom-nav {
-            position: fixed;
-            bottom: 0;
-            width: 100%;
-            background: white;
-            display: flex;
-            justify-content: space-around;
-            padding: 15px;
-            box-shadow: 0 -5px 20px rgba(0,0,0,0.05);
-            z-index: 1001;
-        }
-
-        .nav-link {
-            text-align: center;
-            color: #b2bec3;
-            text-decoration: none;
-            font-size: 0.7rem;
-            font-weight: 600;
-        }
-
-        .nav-link.active { color: var(--hk-green); }
-        .nav-link i { font-size: 1.3rem; display: block; margin-bottom: 3px; }
-
-        /* Loader */
-        #loadingOverlay {
-            position: fixed; top:0; left:0; width:100%; height:100%;
-            background: rgba(255,255,255,0.8);
-            display:none; justify-content:center; align-items:center; z-index:2000;
-        }
+        .service-type-badge { position: absolute; top: 0; right: 0; background: #ffeaa7; font-size: 0.6rem; padding: 2px 6px; border-radius: 0 10px 0 10px; font-weight: bold; color: #d4a017; }
     </style>
 </head>
 <body>
 
-<div id="loadingOverlay"><div class="spinner-border text-success"></div></div>
-
-<!-- Top Navigation -->
-<div class="header">
-    <div id="backBtn" onclick="handleBack()" style="visibility: hidden; cursor:pointer">
-        <i class="fas fa-arrow-left fa-lg"></i>
-    </div>
+<nav class="hk-nav d-flex justify-content-between align-items-center">
+    <div id="backBtn" onclick="goBack()" style="visibility:hidden"><i class="fas fa-chevron-left"></i></div>
     <h4>Health Kangaroo</h4>
-    <div id="authStatus" onclick="toggleAuthModal()" style="cursor:pointer">
-        <i class="fas fa-user-circle fa-lg text-muted"></i>
-    </div>
-</div>
+    <div onclick="setAuthToken()" style="cursor:pointer"><i class="fas fa-user-circle fa-lg text-muted"></i></div>
+</nav>
 
-<div class="container">
+<div class="container mt-2">
 
-    <!-- 1. SEARCH/HOME SCREEN -->
-    <div id="screen-home" class="screen active">
-        <div class="mb-4">
-            <h3 class="fw-800">Nursing Care <br><span class="text-success">at Home</span></h3>
-            <p class="text-muted">Verified professional nurses near you.</p>
+    <!-- 1. NURSE LISTING -->
+    <div id="screen-list" class="screen active-screen">
+        <h5 class="fw-bold mb-3">Home Nursing Services</h5>
+        <div class="input-group mb-3">
+            <span class="input-group-text bg-white border-end-0"><i class="fas fa-search text-muted"></i></span>
+            <input type="text" id="searchQuery" class="form-control border-start-0" placeholder="Search speciality (ICU, Cancer...)" onkeyup="fetchNurses()">
         </div>
-
-        <div class="hk-card bg-white p-3 rounded-4 shadow-sm mb-4">
-            <div class="input-group mb-2">
-                <span class="input-group-text bg-transparent border-end-0"><i class="fas fa-search text-success"></i></span>
-                <input type="text" id="nurseSearch" class="form-control border-start-0" placeholder="Search by name or speciality...">
-            </div>
-            <div class="input-group">
-                <span class="input-group-text bg-transparent border-end-0"><i class="fas fa-map-marker-alt text-danger"></i></span>
-                <input type="text" id="citySearch" class="form-control border-start-0" placeholder="Enter City (e.g. Delhi)">
-            </div>
-            <button class="btn btn-main mt-3" onclick="fetchNurseList()">Search Available Nurses</button>
-        </div>
-
-        <h6 class="fw-bold mb-3">Popular Specialities</h6>
-        <div class="row g-2">
-            <div class="col-4" onclick="fetchNurseList('ICU Nurse')">
-                <div class="text-center p-2 bg-white rounded-3 shadow-sm">
-                    <i class="fas fa-heartbeat text-danger mb-1"></i><br><small>ICU</small>
-                </div>
-            </div>
-            <div class="col-4" onclick="fetchNurseList('General Nurse')">
-                <div class="text-center p-2 bg-white rounded-3 shadow-sm">
-                    <i class="fas fa-user-nurse text-primary mb-1"></i><br><small>General</small>
-                </div>
-            </div>
-            <div class="col-4" onclick="fetchNurseList('Critical Care')">
-                <div class="text-center p-2 bg-white rounded-3 shadow-sm">
-                    <i class="fas fa-medkit text-warning mb-1"></i><br><small>Critical</small>
-                </div>
-            </div>
-        </div>
+        <div id="nurseListArea"></div>
     </div>
 
-    <!-- 2. NURSE LISTING SCREEN -->
-    <div id="screen-list" class="screen">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="fw-bold mb-0">Recommended Nurses</h5>
-            <span id="resultCount" class="badge bg-light text-dark">0 found</span>
-        </div>
-        <div id="nurseListArea">
-            <!-- Dynamic Data from /api/user/nurse/list -->
-        </div>
-    </div>
-
-    <!-- 3. NURSE DETAILS SCREEN -->
+    <!-- 2. NURSE PROFILE / SERVICES -->
     <div id="screen-details" class="screen">
-        <div id="nurseDetailUI">
-            <!-- Dynamic Data from /api/user/nurse/details/:id -->
+        <div id="nurseProfileHeader"></div>
+        <div class="card-hk p-2 mt-3">
+            <ul class="nav nav-pills nav-justified" id="pills-tab">
+                <li class="nav-item"><button class="nav-link active" onclick="filterServices('Daily Care', this)">Daily Care</button></li>
+                <li class="nav-item"><button class="nav-link" onclick="filterServices('Package', this)">Packages</button></li>
+            </ul>
         </div>
-        
-        <h6 class="fw-bold mt-4 mb-3">Choose Nursing Package</h6>
-        <div id="nurseServicesUI">
-            <!-- Dynamic Data from /api/user/nurse/services/:id -->
-        </div>
-        
-        <button class="btn btn-main mt-3" onclick="goToBookingStep()">Book Appointment</button>
+        <div id="servicesArea"></div>
     </div>
 
-    <!-- 4. BOOKING FORM SCREEN -->
-    <div id="screen-booking" class="screen">
-        <h5 class="fw-bold mb-4">Patient & Schedule Details</h5>
+    <!-- 3. DATE & SLOTS (Figma Screen 7) -->
+    <div id="screen-slots" class="screen">
+        <h6 class="fw-bold mb-3">Select Schedule</h6>
+        <div class="card-hk p-3">
+            <input type="date" id="bookDate" class="form-control mb-3" onchange="fetchAvailability()">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <small class="text-muted">Available Slots</small>
+                <span class="badge bg-warning text-dark small">High Demand +₹79</span>
+            </div>
+            <div class="row g-2" id="slotsGrid"></div>
+        </div>
         
-        <div class="nurse-card">
-            <div class="form-group mb-3">
-                <label>Patient Full Name</label>
-                <input type="text" id="book_pname" class="form-control" placeholder="Full name of patient">
-            </div>
-
-            <div class="row">
-                <div class="col-6">
-                    <div class="form-group mb-3">
-                        <label>Patient Age</label>
-                        <input type="number" id="book_page" class="form-control" placeholder="Age">
-                    </div>
-                </div>
-                <div class="col-6">
-                    <div class="form-group mb-3">
-                        <label>Gender</label>
-                        <select id="book_pgender" class="form-control">
-                            <option>Male</option><option>Female</option><option>Other</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="form-group mb-3">
-                <label>Preferred Start Date</label>
-                <input type="date" id="book_date" class="form-control">
-            </div>
-
-            <div class="form-group mb-3">
-                <label>Health Condition / Medical History</label>
-                <textarea id="book_health" class="form-control" rows="3" placeholder="Brief about the patient's condition..."></textarea>
-            </div>
-
-            <div class="form-check form-switch mt-3">
-                <input class="form-check-input" type="checkbox" id="book_consumables">
-                <label class="form-check-label fw-bold">Need Consumables? (Gloves, Gauze, etc.)</label>
+        <!-- Faster Service Option -->
+        <div class="card-hk p-3 mt-3 border-success border">
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="fasterService" onchange="updateSummaryUI()">
+                <label class="form-check-label fw-bold">Emergency/Fast Service</label>
+                <p class="small text-muted mb-0">Priority nursing within 6 hrs (Rapid Charge)</p>
             </div>
         </div>
-
-        <div class="nurse-card bg-light mt-3">
-            <div class="d-flex justify-content-between mb-2">
-                <span>Service Charge:</span>
-                <span id="summary_price" class="fw-bold">₹0</span>
-            </div>
-            <div class="d-flex justify-content-between mb-2 text-success">
-                <span>Home Visit Fee:</span>
-                <span class="fw-bold">₹99</span>
-            </div>
-            <hr>
-            <div class="d-flex justify-content-between">
-                <h5 class="fw-bold">Total Amount:</h5>
-                <h5 id="summary_total" class="fw-bold text-success">₹0</h5>
-            </div>
-        </div>
-
-        <button class="btn btn-main mt-4" onclick="finalizeBooking()">Confirm & Pay</button>
+        <button class="btn-hk mt-3" onclick="showScreen('patient')">Next: Patient Details</button>
     </div>
 
-    <!-- 5. MY APPOINTMENTS SCREEN -->
-    <div id="screen-my-bookings" class="screen">
-        <h5 class="fw-bold mb-4">My Nurse Appointments</h5>
-        <div id="myBookingsArea">
-            <!-- Dynamic Data from /api/user/nurse/my-appointments -->
+    <!-- 4. PATIENT DETAILS (Figma Screen 3) -->
+    <div id="screen-patient" class="screen">
+        <h6 class="fw-bold mb-3">Appointment Info</h6>
+        <div class="card-hk p-3 mb-3">
+            <label class="small fw-bold mb-1">Assessment Location</label>
+            <select id="assessmentLoc" class="form-control mb-3">
+                <option value="At Home">At Home</option>
+                <option value="Clinic/Hospital">Clinic/Hospital</option>
+            </select>
+            <div class="row g-2">
+                <div class="col-8"><label class="small fw-bold mb-1">Patient Name</label><input type="text" id="pName" class="form-control mb-3" placeholder="Full Name"></div>
+                <div class="col-4"><label class="small fw-bold mb-1">Age</label><input type="number" id="pAge" class="form-control mb-3" value="30"></div>
+            </div>
+            <label class="small fw-bold mb-1">Health Notes</label>
+            <textarea id="hInstructions" class="form-control" rows="2" placeholder="Instructions for the nurse..."></textarea>
         </div>
+        <button class="btn-hk" onclick="callCheckout()">Verify & View Bill</button>
+    </div>
+
+    <!-- 5. CHECKOUT (Figma Screen 8) -->
+    <div id="screen-checkout" class="screen">
+        <h5 class="fw-bold mb-4">Order Summary</h5>
+        <div id="checkoutSummaryArea"></div>
+        <button class="btn-hk mt-4" onclick="placeFinalBooking()">Confirm & Book Now</button>
+    </div>
+
+    <!-- 6. TRACKING / HISTORY -->
+    <div id="screen-track" class="screen">
+        <div id="trackingInfo"></div>
+    </div>
+
+    <div id="screen-appointments" class="screen">
+        <h5 class="fw-bold mb-3">My Bookings</h5>
+        <div id="appointmentsList"></div>
     </div>
 
 </div>
 
-<!-- Bottom Navigation Bar -->
+<!-- Bottom Nav -->
 <div class="bottom-nav">
-    <a href="javascript:void(0)" class="nav-link active" onclick="navigate('home')">
-        <i class="fas fa-search"></i>Explore
-    </a>
-    <a href="javascript:void(0)" class="nav-link" onclick="navigate('my-bookings')">
-        <i class="fas fa-calendar-alt"></i>Bookings
-    </a>
-    <a href="javascript:void(0)" class="nav-link" onclick="promptNurseLogin()">
-        <i class="fas fa-user-nurse"></i>Provider
-    </a>
+    <div class="nav-item active" onclick="showScreen('list')"><i class="fas fa-search"></i>Explore</div>
+    <div class="nav-item" onclick="loadMyAppointments()"><i class="fas fa-calendar-check"></i>Orders</div>
+    <div class="nav-item"><i class="fas fa-user"></i>Account</div>
 </div>
-
-<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
 <script>
-    // Configuration - EXACT MATCH WITH YOUR ROUTES
-    const API_BASE = "http://localhost:5002"; // Replace with your IP
-    const USER_PATH = "/user/nurse";
-    const PROVIDER_PATH = "/provider/nurse";
+    const API_URL = "http://localhost:5002/user/nurse"; // Base path from your router
+    let USER_TOKEN = localStorage.getItem('u_token') || "";
+    let history = ['list'];
 
-    let state = {
-        userToken: localStorage.getItem('u_token') || "",
-        selectedNurseId: null,
-        selectedService: null,
-        userLocation: { lat: 28.61, lng: 77.20 } // Default Delhi
-    };
+    // State
+    let selectedNurseId = null;
+    let selectedService = null;
+    let selectedSlot = null;
+    let nurseServices = [];
+    let checkoutData = null;
 
-    // Initialize - Get user position for distance logic
-    window.onload = () => {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(p => {
-                state.userLocation = { lat: p.coords.latitude, lng: p.coords.longitude };
-            });
-        }
-    };
-
-    // --- NAVIGATION LOGIC ---
-    function navigate(screen) {
-        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-        document.getElementById(`screen-${screen}`).classList.add('active');
-        
-        document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-        // Dynamic back button
-        document.getElementById('backBtn').style.visibility = (screen === 'home') ? 'hidden' : 'visible';
-
-        if (screen === 'my-bookings') fetchMyAppointments();
-    }
-
-    function handleBack() {
-        navigate('home');
-    }
-
-    function toggleLoader(show) {
-        document.getElementById('loadingOverlay').style.display = show ? 'flex' : 'none';
-    }
-
-    // --- API LOGIC (EXACTLY MATCHING YOUR CONTROLLER) ---
-
-    // 1. GET NURSES LISTING (POST /api/user/nurse/list)
-    async function fetchNurseList(spec = null) {
-        toggleLoader(true);
-        const search = document.getElementById('nurseSearch').value;
-        const city = document.getElementById('citySearch').value;
-
-        try {
-            const res = await fetch(`${API_BASE}${USER_PATH}/search`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    lat: state.userLocation.lat,
-                    lng: state.userLocation.lng,
-                    city: city,
-                    search: search,
-                    speciality: spec
-                })
-            });
-            const data = await res.json();
-            
-            if (data.success) {
-                renderNurseList(data.data);
-                document.getElementById('resultCount').innerText = `${data.count} nurses`;
-                navigate('list');
-            }
-        } catch (error) {
-            Swal.fire('Error', 'Unable to fetch nurses. Check backend.', 'error');
-        }
-        toggleLoader(false);
-    }
-
-    function renderNurseList(nurses) {
-        const area = document.getElementById('nurseListArea');
-        area.innerHTML = nurses.map(n => `
-            <div class="nurse-card d-flex align-items-center" onclick="fetchNurseDetails('${n._id}')">
-                <div class="img-wrapper me-3">
-                    <img src="${n.profileImage || 'https://via.placeholder.com/150'}">
-                </div>
+    // 1. GET NURSES
+    async function fetchNurses() {
+        const query = document.getElementById('searchQuery').value;
+        const res = await fetch(`${API_URL}/list`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat: 30.73, lng: 76.77, search: query })
+        });
+        const json = await res.json();
+        document.getElementById('nurseListArea').innerHTML = json.data.map(n => `
+            <div class="card-hk p-3 d-flex align-items-center mb-3" onclick="loadNurseDetails('${n._id}')">
+                <img src="http://localhost:5002/${n.profileImage}" class="nurse-img me-3" onerror="this.src='https://via.placeholder.com/75'">
                 <div class="flex-grow-1">
-                    <div class="d-flex justify-content-between align-items-start">
-                        <h6 class="fw-bold mb-0">${n.name}</h6>
-                        <span class="badge-rating"><i class="fas fa-star"></i> ${n.rating}</span>
-                    </div>
-                    <p class="text-muted small mb-1">${n.speciality} • ${n.experienceYears} Yrs Exp</p>
-                    <div class="d-flex justify-content-between align-items-center">
-                        <span class="small text-muted"><i class="fas fa-map-marker-alt"></i> ${n.distance} km</span>
-                        <span class="price-tag small">Starting ₹${n.startingPrice}</span>
-                    </div>
+                    <h6 class="fw-bold mb-0">${n.name}</h6>
+                    <small class="text-muted d-block">${n.city} • Starts ₹${n.startingPrice}</small>
+                    <div class="mt-2">${n.topServices.map(s => `<span class="badge bg-light text-dark border me-1">${s}</span>`).join('')}</div>
                 </div>
             </div>
         `).join('');
     }
 
-    // 2. GET NURSE DETAILS (GET /api/user/nurse/details/:id)
-    async function fetchNurseDetails(id) {
-        toggleLoader(true);
-        state.selectedNurseId = id;
-        try {
-            // Parallel Fetch: Details and Services
-            const [detRes, servRes] = await Promise.all([
-                fetch(`${API_BASE}${USER_PATH}/details/${id}`),
-                fetch(`${API_BASE}${USER_PATH}/services/${id}`)
-            ]);
-            
-            const detail = await detRes.json();
-            const services = await servRes.json();
-
-            if (detail.success) {
-                const n = detail.data;
-                document.getElementById('nurseDetailUI').innerHTML = `
-                    <div class="detail-header">
-                        <img src="${n.profileImage}" class="rounded-circle border border-4 border-white mb-3" width="100" height="100" style="object-fit:cover">
-                        <h4 class="fw-bold mb-0">${n.name}</h4>
-                        <p class="mb-2 opacity-75">${n.speciality}</p>
-                        <span class="badge bg-white text-success rounded-pill px-3">${n.status}</span>
-                    </div>
-                    <div class="row text-center g-2 mb-4">
-                        <div class="col-6">
-                            <div class="bg-white p-2 rounded-3 shadow-sm">
-                                <small class="text-muted d-block">Experience</small>
-                                <span class="fw-bold">${n.experienceYears} Years</span>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="bg-white p-2 rounded-3 shadow-sm">
-                                <small class="text-muted d-block">Rating</small>
-                                <span class="fw-bold"><i class="fas fa-star text-warning"></i> ${n.rating}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="timing-box mb-3">
-                        <i class="fas fa-clock text-success me-2"></i> ${n.timingLabel}
-                        <div class="mt-1 small text-primary fw-bold">
-                            <i class="fas fa-calendar-check me-2"></i> Next Available: ${n.nextAvailable}
-                        </div>
-                    </div>
-                    <h6 class="fw-bold">About Nurse</h6>
-                    <p class="text-muted small">${n.about || 'Verified professional nursing caregiver.'}</p>
-                `;
-
-                // Render Services/Packages
-                document.getElementById('nurseServicesUI').innerHTML = services.data.map(s => `
-                    <div class="service-select d-flex justify-content-between align-items-center" onclick="selectPkg('${s._id}', '${s.title}', ${s.price}, this)">
-                        <div>
-                            <h6 class="fw-bold mb-0">${s.title}</h6>
-                            <small class="text-muted">Professional Care</small>
-                        </div>
-                        <h6 class="fw-bold text-success">₹${s.price}</h6>
-                    </div>
-                `).join('');
-
-                navigate('details');
-            }
-        } catch (e) { console.error(e); }
-        toggleLoader(false);
+    // 2. GET DETAILS
+    async function loadNurseDetails(id) {
+        selectedNurseId = id;
+        const res = await fetch(`${API_URL}/details/${id}`);
+        const json = await res.json();
+        const n = json.data;
+        nurseServices = n.services || [];
+        document.getElementById('nurseProfileHeader').innerHTML = `
+            <div class="text-center">
+                <img src="http://localhost:5002/${n.profileImage}" class="rounded-circle mb-2" style="width:90px; height:90px; object-fit:cover">
+                <h5 class="fw-bold mb-0">${n.name}</h5>
+                <p class="text-muted small">${n.city}, ${n.state}</p>
+            </div>`;
+        filterServices('Daily Care');
+        showScreen('details');
     }
 
-    function selectPkg(id, title, price, el) {
-        state.selectedService = { id, title, price };
-        document.querySelectorAll('.service-select').forEach(d => d.classList.remove('selected'));
+    function filterServices(type, el) {
+        if(el) { document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active')); el.classList.add('active'); }
+        const area = document.getElementById('servicesArea');
+        const filtered = nurseServices.filter(s => s.type === type);
+        area.innerHTML = filtered.map(s => `
+            <div class="card-hk p-3 mt-2" onclick="selectService('${s._id}')">
+                <div class="d-flex justify-content-between"><h6>${s.title}</h6><b class="text-success">₹${s.price}</b></div>
+                <p class="small text-muted mb-0">${s.description || ''}</p>
+            </div>`).join('');
+    }
+
+    function selectService(id) {
+        selectedService = nurseServices.find(s => s._id === id);
+        showScreen('slots');
+    }
+
+    // 3. GET AVAILABILITY
+    async function fetchAvailability() {
+        const date = document.getElementById('bookDate').value;
+        const res = await fetch(`${API_URL}/availability/${selectedNurseId}?date=${date}`);
+        const json = await res.json();
+        document.getElementById('slotsGrid').innerHTML = json.data.map(s => `
+            <div class="col-4">
+                <div class="slot-box ${s.isAvailable ? '' : 'booked'} ${s.isPremium ? 'premium' : ''}" onclick="setSlot('${s.time}', this)">
+                    ${s.isPremium ? '<span class="service-type-badge">PREMIUM</span>' : ''}
+                    <div class="small fw-bold">${s.displayTime}</div>
+                    ${s.isPremium ? `<small class="text-warning">+₹${s.extraFee}</small>` : ''}
+                </div>
+            </div>`).join('');
+    }
+
+    function setSlot(time, el) {
+        if(el.classList.contains('booked')) return;
+        document.querySelectorAll('.slot-box').forEach(b => b.classList.remove('selected'));
         el.classList.add('selected');
+        selectedSlot = time;
+    }
+
+    // 4. CHECKOUT (Professional Verified Calculation)
+    async function callCheckout() {
+        if(!selectedSlot) return Swal.fire('Error', 'Please select a time slot', 'error');
+        if(!USER_TOKEN) return setAuthToken();
+
+        const res = await fetch(`${API_URL}/checkout`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${USER_TOKEN}` },
+            body: JSON.stringify({
+                nurseId: selectedNurseId,
+                serviceId: selectedService._id,
+                slotTime: selectedSlot,
+                fasterService: document.getElementById('fasterService').checked
+            })
+        });
         
-        document.getElementById('summary_price').innerText = `₹${price}`;
-        document.getElementById('summary_total').innerText = `₹${price + 99}`;
-    }
-
-    function goToBookingStep() {
-        if (!state.selectedService) return Swal.fire('Wait', 'Please select a nursing package', 'warning');
-        navigate('booking');
-    }
-
-    // 3. BOOK NURSE (POST /api/user/nurse/book)
-    async function finalizeBooking() {
-        if (!state.userToken) return Swal.fire('Login Required', 'Please login to book a nurse', 'info');
-
-        const payload = {
-            nurseId: state.selectedNurseId,
-            patientDetails: {
-                name: document.getElementById('book_pname').value,
-                age: document.getElementById('book_page').value,
-                gender: document.getElementById('book_pgender').value
-            },
-            serviceType: state.selectedService.title,
-            schedule: {
-                startDate: document.getElementById('book_date').value,
-                duration: "1 Day"
-            },
-            healthDetails: {
-                condition: document.getElementById('book_health').value
-            },
-            totalPrice: state.selectedService.price + 99,
-            needConsumable: document.getElementById('book_consumables').checked
-        };
-
-        if (!payload.patientDetails.name || !payload.schedule.startDate) {
-            return Swal.fire('Incomplete', 'Please fill Patient Name and Start Date', 'warning');
-        }
-
-        toggleLoader(true);
-        try {
-            const res = await fetch(`${API_BASE}${USER_PATH}/book`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${state.userToken}`
-                },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (data.success) {
-                Swal.fire('Request Sent!', `Booking ID: ${data.data.bookingId}. Waiting for nurse approval.`, 'success');
-                navigate('home');
-            }
-        } catch (e) { Swal.fire('Error', 'Booking failed', 'error'); }
-        toggleLoader(false);
-    }
-
-    // 4. GET MY APPOINTMENTS (GET /api/user/nurse/my-appointments)
-    async function fetchMyAppointments() {
-        if (!state.userToken) return Swal.fire('Auth', 'Login to see bookings', 'warning');
-        toggleLoader(true);
-        try {
-            const res = await fetch(`${API_BASE}${USER_PATH}/my-appointments`, {
-                headers: { 'Authorization': `Bearer ${state.userToken}` }
-            });
-            const data = await res.json();
-            document.getElementById('myBookingsArea').innerHTML = data.data.map(b => `
-                <div class="nurse-card">
-                    <div class="d-flex justify-content-between mb-2">
-                        <span class="badge bg-light text-success border">ID: ${b.bookingId}</span>
-                        <span class="badge ${b.status === 'Pending' ? 'bg-warning' : 'bg-primary'}">${b.status}</span>
+        const json = await res.json();
+        if(json.success) {
+            checkoutData = json.breakdown;
+            
+            // Build Detailed Bill Summary UI
+            document.getElementById('checkoutSummaryArea').innerHTML = `
+                <div class="card-hk p-4 mb-3">
+                    <h6 class="fw-bold border-bottom pb-2 mb-3">Bill Details</h6>
+                    
+                    <div class="price-row">
+                        <span>${checkoutData.serviceName} (${checkoutData.serviceType})</span>
+                        <b>₹${checkoutData.basePrice}</b>
                     </div>
-                    <h6 class="fw-bold mb-1">${b.serviceType}</h6>
-                    <p class="small text-muted mb-2">Nurse: ${b.nurseId?.name || 'N/A'}</p>
-                    <div class="d-flex justify-content-between align-items-center pt-2 border-top">
-                        <small class="text-muted"><i class="far fa-calendar-alt"></i> ${new Date(b.createdAt).toLocaleDateString()}</small>
-                        <span class="fw-bold text-success">₹${b.totalPrice}</span>
+
+                    ${checkoutData.premiumSlotFee > 0 ? `
+                    <div class="price-row">
+                        <span>Premium Slot Surcharge</span>
+                        <b>₹${checkoutData.premiumSlotFee}</b>
+                    </div>` : ''}
+
+                    ${checkoutData.fasterServiceFee > 0 ? `
+                    <div class="price-row">
+                        <span>Emergency Service Fee</span>
+                        <b>₹${checkoutData.fasterServiceFee}</b>
+                    </div>` : ''}
+
+                    <div class="price-row">
+                        <span>Service Taxes</span>
+                        <b>₹${checkoutData.taxAmount}</b>
+                    </div>
+
+                    <div class="total-row mt-3">
+                        <span>Total Amount</span>
+                        <b>₹${checkoutData.totalPayable}</b>
                     </div>
                 </div>
-            `).join('');
-        } catch (e) { console.error(e); }
-        toggleLoader(false);
+
+                <div class="card-hk p-3 bg-light">
+                    <h6 class="fw-bold small text-muted mb-2">Service Highlights</h6>
+                    <div class="small">
+                        <div><i class="fas fa-check text-success me-2"></i> ${checkoutData.procedureIncluded}</div>
+                        <div><i class="fas fa-box text-success me-2"></i> Consumables: ${checkoutData.consumablesIncluded.join(', ') || 'N/A'}</div>
+                    </div>
+                </div>`;
+
+            showScreen('checkout');
+        } else {
+            Swal.fire('Error', json.message, 'error');
+        }
+    }
+    
+    // 5. FINAL BOOKING
+async function placeFinalBooking() {
+    // Check if checkoutData exists
+    if (!checkoutData) return Swal.fire('Error', 'Please verify bill first', 'error');
+
+    try {
+        const payload = {
+            nurseId: selectedNurseId,
+            serviceId: selectedService._id,
+            patientDetails: { 
+                name: document.getElementById('pName')?.value || "Guest", 
+                age: document.getElementById('pAge')?.value || 0,
+                gender: "Female", // Aap iska alag dropdown bhi bana sakte hain
+                relation: document.getElementById('pRelation')?.value || "Self" 
+            },
+            assessmentLocation: document.getElementById('assessmentLoc')?.value || "At Home",
+            healthDetails: { 
+                height: document.getElementById('hHeight')?.value || "",
+                language: document.getElementById('hLang')?.value || "English",
+                specialInstructions: document.getElementById('hInstructions')?.value || "" 
+            },
+            schedule: { 
+                startDate: document.getElementById('bookDate')?.value, 
+                startTime: selectedSlot, 
+                duration: "Single Day" 
+            },
+            totalPrice: checkoutData.totalPayable,
+            basePrice: checkoutData.basePrice,
+            fasterServiceCharge: checkoutData.fasterServiceFee
+        };
+
+        // Date Validation
+        if (!payload.schedule.startDate) {
+            return Swal.fire('Error', 'Please select a booking date', 'error');
+        }
+
+        const res = await fetch(`${API_URL}/book`, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json', 
+                'Authorization': `Bearer ${USER_TOKEN}` 
+            },
+            body: JSON.stringify(payload)
+        });
+
+        const json = await res.json();
+        if(json.success) {
+            Swal.fire('Order Placed!', 'Success ID: ' + json.data.bookingId, 'success');
+            loadTracking(json.data._id);
+        } else {
+            Swal.fire('Error', json.message, 'error');
+        }
+    } catch (err) {
+        console.error("Booking Error:", err);
+        Swal.fire('Error', 'Something went wrong while booking', 'error');
+    }
+}
+
+
+    async function loadTracking(id) {
+        const res = await fetch(`${API_URL}/track/${id}`, { headers: { 'Authorization': `Bearer ${USER_TOKEN}` } });
+        const json = await res.json();
+        const b = json.data;
+        document.getElementById('trackingInfo').innerHTML = `
+            <div class="card-hk p-4 text-center mb-3 bg-success text-white">
+                <h4 class="fw-bold">Status: ${b.orderStatus}</h4>
+                <p class="mb-0">ID: ${b.summary.id}</p>
+            </div>
+            <div class="card-hk p-3">
+                <div class="timeline-item active"><b>Booking Confirmed</b><br><small>Waiting for assignment</small></div>
+            </div>`;
+        showScreen('track');
     }
 
-    // --- AUTH HELPERS ---
-    function toggleAuthModal() {
-        Swal.fire({
-            title: 'User Login',
-            input: 'text',
-            inputPlaceholder: 'Enter User JWT Token',
-            showCancelButton: true,
-            confirmButtonText: 'Save Token',
-            confirmButtonColor: '#00b894'
-        }).then((result) => {
-            if (result.value) {
-                localStorage.setItem('u_token', result.value);
-                state.userToken = result.value;
-                Swal.fire('Success', 'Token Saved', 'success');
-            }
+    async function loadMyAppointments() {
+        if(!USER_TOKEN) return setAuthToken();
+        const res = await fetch(`${API_URL}/my-appointments`, { headers: { 'Authorization': `Bearer ${USER_TOKEN}` } });
+        const json = await res.json();
+        document.getElementById('appointmentsList').innerHTML = json.data.map(b => `
+            <div class="card-hk p-3 mb-2" onclick="loadTracking('${b._id}')">
+                <div class="d-flex justify-content-between"><b>${b.serviceType || 'Care'}</b><span class="text-success">${b.status}</span></div>
+                <small>${moment(b.createdAt).format('lll')}</small>
+            </div>`).join('');
+        showScreen('appointments');
+    }
+
+    // Helpers
+    function showScreen(id) {
+        history.push(id);
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
+        document.getElementById('screen-' + id).classList.add('active-screen');
+        document.getElementById('backBtn').style.visibility = (id === 'list') ? 'hidden' : 'visible';
+    }
+
+    function goBack() {
+        if(history.length > 1) {
+            history.pop();
+            const prev = history[history.length - 1];
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
+            document.getElementById('screen-' + prev).classList.add('active-screen');
+        }
+    }
+
+    function setAuthToken() {
+        Swal.fire({ title: 'Enter Token', input: 'text', inputValue: USER_TOKEN }).then((r) => {
+            if(r.value) { localStorage.setItem('u_token', r.value); USER_TOKEN = r.value; location.reload(); }
         });
     }
 
-    function promptNurseLogin() {
-        Swal.fire({
-            title: 'Provider Dashboard',
-            text: 'Are you a Nurse?',
-            icon: 'question',
-            showCancelButton: true,
-            confirmButtonText: 'Yes, Login'
-        }).then((r) => {
-             if(r.isConfirmed) Swal.fire('Coming Soon', 'Nurse mobile dashboard is under development', 'info');
-        });
-    }
-
+    fetchNurses();
 </script>
 </body>
 </html>

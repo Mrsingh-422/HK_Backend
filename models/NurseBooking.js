@@ -1,23 +1,23 @@
-// models/NurseBooking.js
 const mongoose = require('mongoose');
 
 const nurseBookingSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     nurseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Nurse', required: true },
-    assignedStaffId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Driver' // Yahan 'Driver' hi Staff Nurse hai
-    },
-    bookingId: { type: String, unique: true }, // Add this
+    serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'NurseService' }, // Link to specific service
+    assignedStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }, 
+    bookingId: { type: String, unique: true },
     
     patientDetails: {
         name: String,
         age: Number,
         gender: String,
-        relation: String
+        relation: String,
+        image: String // Figma Screen 3 member image
     },
-    serviceType: String, 
-    healthDetails: { // Figma: Height, DOB, Lang
+    assessmentLocation: { type: String, default: 'At Home' }, // Figma Screen 3
+    triageFacility: String, // Figma Screen 3 dropdown
+
+    healthDetails: { 
         height: String,
         dob: Date,
         language: String,
@@ -26,24 +26,24 @@ const nurseBookingSchema = new mongoose.Schema({
     schedule: {
         startDate: Date,
         startTime: String,
-        duration: String,
+        duration: String, // One Day One Time, etc.
         endDate: Date
     },
-    totalPrice: Number, // Add this
+    
+    // Price breakdown
+    basePrice: Number,
+    slotSurcharge: { type: Number, default: 0 }, // +79
+    fasterServiceCharge: { type: Number, default: 0 }, // +29 per hour
+    totalPrice: Number,
+    
     status: { 
         type: String, 
         enum: ['Pending', 'Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'In-Progress', 'Completed', 'Cancelled'], 
         default: 'Pending' 
     },
-    rejectionReason: String,
-    rejectionNote: String,
-    schedule: {
-        startDate: Date,
-        startTime: String,
-        endDate: Date,
-        duration: String
-    },
-    needConsumable: { type: Boolean, default: false }
+    needConsumable: { type: Boolean, default: false },
+    prescriptionImage: String,
+    couponCode: String
 }, { timestamps: true });
 
 module.exports = mongoose.model('NurseBooking', nurseBookingSchema);

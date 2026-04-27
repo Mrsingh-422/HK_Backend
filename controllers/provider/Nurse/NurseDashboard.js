@@ -1,5 +1,6 @@
 const Nurse = require('../../../models/Nurse');
 const NurseBooking = require('../../../models/NurseBooking');
+const NurseService = require('../../../models/NurseService');
 
 // 1. DASHBOARD STATS (Figma Screen 17)
 const getNurseDashboard = async (req, res) => {
@@ -30,33 +31,27 @@ const getNurseDashboard = async (req, res) => {
 // Add Service to Array
 const addService = async (req, res) => {
     try {
-        const { type, title, price, description, prescriptionRequired } = req.body;
-
-        // Check karein ki 'photos' field mein files hain ya nahi
         let photos = [];
         if (req.files && req.files['photos']) {
             photos = req.files['photos'].map(f => f.path);
         }
 
-        const newService = { 
-            type, 
-            title, 
-            price, 
-            description, 
-            prescriptionRequired: prescriptionRequired === 'true', // String to Boolean fix
-            photos 
-        };
+        // Figma Screen 42 mapping
+        const service = await NurseService.create({
+            nurseId: req.user.id,
+            type: req.body.type, // Daily Care / Package
+            title: req.body.title,
+            description: req.body.description,
+            price: req.body.price,
+            consumablesUsed: req.body.consumablesUsed, // Array
+            procedureIncluded: req.body.procedureIncluded,
+            servicesOffered: req.body.servicesOffered,
+            prescriptionRequired: req.body.prescriptionRequired === 'true',
+            photos: photos
+        });
 
-        const nurse = await Nurse.findByIdAndUpdate(
-            req.user.id,
-            { $push: { offeredServices: newService } },
-            { new: true }
-        );
-        
-        res.json({ success: true, data: nurse.offeredServices });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
-    }
+        res.status(201).json({ success: true, data: service });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // Update Specific Service in Array

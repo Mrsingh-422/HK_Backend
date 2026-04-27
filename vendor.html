@@ -460,7 +460,6 @@
                 document.getElementById('catalogGrid').innerHTML = (r.data || []).map(i => `<div class="col-md-3"><div class="hk-card p-4" onclick="initComparison('${i._id}', 'Lab')" style="cursor:pointer"><h6 class="fw-800">${i.testName || i.packageName}</h6><small>Verified Price</small><b class="text-success d-block">₹${i.minPrice}</b></div></div>`).join('');
             } catch(e) {}
         }
-
         async function loadMedicineMarket() {
             try {
                 const r = await apiFetch('/user/pharmacy/standard-list');
@@ -480,13 +479,16 @@
         async function handleAIScan(event) {
             const file = event.target.files[0];
             if(!file) return;
+
             Swal.fire({ title: 'AI Scanning Prescription...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
             const formData = new FormData();
             formData.append('prescriptionFile', file);
+
             try {
                 const res = await apiFetch('/user/pharmacy/scan-rx', 'POST', formData, true);
                 Swal.close();
                 detectedMeds = res.data.detectedMedicines;
+
                 document.getElementById('aiDetectionArea').classList.remove('d-none');
                 document.getElementById('detectedMedsList').innerHTML = detectedMeds.map(m => `
                     <div class="col-md-4 mb-3">
@@ -504,7 +506,7 @@
         async function initComparison(id, type) {
             currentCompCtx = type;
             try {
-                const endpoint = type === 'Lab' ? `/user/labs/comparison/test/${id}` : `/user/medicine/vendors/${id}`;
+                const endpoint = type === 'Lab' ? `/user/labs/comparison/test/${id}` : `/user/medicine/sellers/${id}`;
                 const res = await apiFetch(endpoint);
                 document.getElementById('masterInfoPanel').innerHTML = `<h5 class="fw-800 text-center text-success">${type} Selection</h5><p class="text-muted small text-center">Available providers near you.</p>`;
                 document.getElementById('comparisonList').innerHTML = res.data.map(s => `
@@ -541,11 +543,9 @@
             }
         }
 
-        // --- NEW LOGIC: CHECKOUT SUMMARY & BOOK ORDER ---
         async function launchCheckoutFlow(type) {
             currentChkCtx = type;
             document.getElementById('checkoutContextTitle').innerText = type;
-            
             Swal.fire({ title: 'Preparing Checkout...', didOpen: () => Swal.showLoading() });
 
             try {
@@ -557,18 +557,22 @@
                 
                 userCartState = cartR.data;
                 couponApplied = null;
+                
+                // 1. Set default address if available
+                if(addrR.data && addrR.data.length > 0) {
+                    selectedAddr = addrR.data.find(x => x.isDefault) || addrR.data[0];
+                }
 
-                // 1. CALL SUMMARY API (Backend logic verification)
+                // 2. Hit Summary API for Pharmacy
                 if(type === 'Pharmacy') {
                     const summaryRes = await apiFetch('/user/pharmacy/checkout', 'POST', {
                         collectionType: pharmaSpeed === 'pickup' ? 'Self Pickup' : 'Home Delivery',
-                        isRapid: pharmaSpeed === 'rapid'
+                        isRapid: pharmaSpeed === 'rapid',
+                        address: selectedAddr // 400 Bad Request fix: Address is mandatory in backend
                     });
-                    // RX Mandatory flag backend se aayega
                     document.getElementById('rxMandatorySection').classList.toggle('d-none', !summaryRes.data.rxMandatory);
                 }
 
-                // UI Loading logic
                 const grid = document.getElementById('chkRecipientGridArea');
                 if(type === 'Lab') {
                     document.getElementById('labRapidFlowUI').classList.remove('d-none'); 
@@ -577,8 +581,13 @@
                 } else {
                     document.getElementById('labRapidFlowUI').classList.add('d-none'); 
                     document.getElementById('pharmaSpeedFlowUI').classList.remove('d-none');
-                    grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4"><div class="address-card ${a.isDefault?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)"><h6>${a.name || 'Recipient'}</h6><small class="d-block text-muted">${a.houseNo}, ${a.city}</small></div></div>`).join('');
-                    if(addrR.data?.find(x => x.isDefault)) selectedAddr = addrR.data.find(x => x.isDefault);
+                    grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4">
+                        <div class="address-card ${ (selectedAddr && selectedAddr._id === a._id) ?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)">
+                            <h6>${a.name || 'Recipient'}</h6><span class="badge bg-light text-dark mb-2" style="font-size:0.65rem;">${a.addressType}</span>
+                            <small class="d-block text-muted">${a.houseNo}, ${a.city}</small>
+                        </div>
+                    </div>`).join('');
+                    updatePharmaSpeed('standard');
                 }
 
                 const charges = await apiFetch(type === 'Lab' ? '/user/labs/delivery-charges' : '/user/pharmacy/delivery-charges');
@@ -586,24 +595,35 @@
                 updateLiveBill();
                 Swal.close();
                 switchView('checkoutView');
-            } catch(e) { Swal.fire('Error', e.message, 'error'); }
+            } catch(e) { 
+                console.error("CHECKOUT_ERROR:", e);
+                Swal.fire('Error', e.message || 'Error preparing checkout', 'error'); 
+            }
         }
 
         async function processFinalBooking() {
             const isRapidCheck = currentChkCtx === 'Lab' ? document.getElementById('labRapidCheck').checked : pharmaSpeed === 'rapid';
             
-            // Prescription validation
             if(currentChkCtx === 'Pharmacy') {
                 const rxFiles = document.getElementById('rxCheckoutFiles').files;
                 const rxVisible = !document.getElementById('rxMandatorySection').classList.contains('d-none');
                 if (rxVisible && rxFiles.length === 0) return Swal.fire('Action Required', 'Please upload Prescription images.', 'warning');
+                if (!selectedAddr) return Swal.fire('Address Required', 'Please select a delivery address.', 'warning');
             }
 
             if(!chkSlot && !isRapidCheck) return Swal.fire('Error', 'Select slot or choose Express Collection', 'error');
 
             const body = new FormData();
             body.append('appointmentDate', document.getElementById('chkDateInp').value || new Date().toISOString().split('T')[0]);
-            body.append('appointmentTime', chkSlot ? chkSlot.time : 'Immediate');
+            
+            let finalTime = 'Immediate';
+            if (chkSlot && chkSlot.time) {
+                finalTime = chkSlot.time;
+            } else if (isRapidCheck) {
+                finalTime = 'Immediate';
+            }
+            body.append('appointmentTime', finalTime);
+
             body.append('collectionType', currentChkCtx === 'Lab' ? labCollMode : (pharmaSpeed==='pickup'?'Self Pickup':'Home Delivery'));
             body.append('isRapid', isRapidCheck);
             body.append('paymentMethod', 'COD');
@@ -616,19 +636,20 @@
 
             Swal.fire({ title: 'Booking your order...', didOpen: () => Swal.showLoading() });
             try {
-                // Endpoint updated to /place-order as per backend split
+                // Endpoint updated to /place-order for Pharmacy
                 const endpoint = currentChkCtx === 'Lab' ? '/user/labs/checkout' : '/user/pharmacy/place-order';
                 const res = await apiFetch(endpoint, 'POST', body, true);
-                Swal.fire('Success!', 'Order placed successfully.', 'success');
-                switchView('historyView');
-                refreshBadge();
+                if(res.success) {
+                    Swal.fire('Success!', 'Order placed successfully.', 'success');
+                    switchView('historyView');
+                    refreshBadge();
+                }
             } catch(e) { Swal.fire('Error', e.message, 'error'); }
         }
 
-        // --- BAaki functions same rahenge (Billing, Slots, UI) ---
         function previewRxFiles() {
             const files = document.getElementById('rxCheckoutFiles').files;
-            document.getElementById('rxPreviewArea').innerHTML = Array.from(files).map(f => `<div class="p-2 border rounded-3 bg-light small"><i class="fas fa-file-image me-1"></i>${f.name.slice(0,10)}</div>`).join('');
+            document.getElementById('rxPreviewArea').innerHTML = Array.from(files).map(f => `<div class="p-2 border rounded-3 bg-light small"><i class="fas fa-file-image me-1"></i>${f.name.slice(0,10)}...</div>`).join('');
         }
 
         function setLabCollectionMode(mode) { labCollMode = mode; document.getElementById('labModeHome').classList.toggle('active', mode === 'Home Collection'); document.getElementById('labModeVisit').classList.toggle('active', mode === 'Visit Lab'); updateLiveBill(); }
@@ -642,7 +663,12 @@
             try {
                 const endpoint = currentChkCtx === 'Lab' ? `/user/labs/slots?labId=${vId}&date=${date}` : `/user/pharmacy/slots?pharmacyId=${vId}&date=${date}`;
                 const r = await apiFetch(endpoint);
-                document.getElementById('chkSlotGridUI').innerHTML = (r.slots || []).map(s => `<div class="slot-box ${s.isFull?'full':''}" onclick="${s.isFull?'':'setSlotSelection(\''+s.time+'\','+s.extraFee+',this)'}"><b>${s.time}</b>${s.extraFee>0?'<small>+₹'+s.extraFee+'</small>':''}</div>`).join('');
+                const gridUI = document.getElementById('chkSlotGridUI');
+                if (r.isClosed) { gridUI.innerHTML = '<div class="alert alert-warning w-100">Closed on this date.</div>'; return; }
+                gridUI.innerHTML = (r.slots || []).map(s => {
+                    const isFull = s.isFull || s.currentBookings >= 1;
+                    return `<div class="slot-box ${isFull ? 'full' : ''}" onclick="${isFull ? '' : `setSlotSelection('${s.time}', ${s.extraFee}, this)`}"><b>${s.time}</b>${s.extraFee > 0 ? `<div class="fee-tag">+₹${s.extraFee}</div>` : ''}</div>`;
+                }).join('');
             } catch(e) {}
         }
 
@@ -678,13 +704,15 @@
             document.getElementById('billFinalValueFinal').innerText = `₹${final.toFixed(0)}`;
             document.getElementById('savingsValueVal').innerText = `₹${(mrpTotal - billTotal + (couponApplied?.amount || 0)).toFixed(0)}`;
             document.getElementById('billExtraChargesArea').innerHTML = rapFee > 0 ? `<div class="bill-row text-danger"><span>Rapid/Slot Charges</span><span>+₹${rapFee}</span></div>` : '';
+            const coupRow = document.getElementById('couponRowUI'); if(coupRow) coupRow.style.display = couponApplied ? 'flex' : 'none';
+            document.getElementById('billCouponVal').innerText = `-₹${couponApplied?.amount || 0}`;
         }
 
         async function fetchCouponsForCheckout() {
             try {
                 const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
                 const res = await apiFetch(`/user/cart/available-coupons?vendorId=${vId}&vendorType=${currentChkCtx}`);
-                document.getElementById('modalCouponListArea').innerHTML = res.data.map(c => `<div class="coupon-card shadow-sm" onclick="applyCouponPostAPI('${c.couponName}')"><b>${c.couponName}</b><br><small>Min order ₹${c.minOrderAmount}</small></div>`).join('');
+                document.getElementById('modalCouponListArea').innerHTML = res.data.map(c => `<div class="coupon-card shadow-sm" onclick="applyCouponPostAPI('${c.couponName}')"><div class="d-flex justify-content-between"><b>${c.couponName}</b><span class="badge bg-success">${c.discountPercentage}% OFF</span></div><small>Min order ₹${c.minOrderAmount}</small></div>`).join('');
             } catch(e) {}
         }
 
@@ -695,9 +723,11 @@
                 const res = await apiFetch(currentChkCtx === 'Lab' ? '/user/labs/validate-coupon' : '/user/pharmacy/validate-coupon', 'POST', { couponName: code, pharmacyId: vId, labId: vId, totalAmount: total });
                 couponApplied = { couponName: code, amount: res.discount };
                 bootstrap.Modal.getInstance(document.getElementById('couponModal')).hide();
-                updateLiveBill();
+                Swal.fire('Success!', `Applied: ₹${res.discount}`, 'success'); updateLiveBill();
             } catch(e) { Swal.fire('Error', e.message, 'error'); }
         }
+
+        function applyManualCouponAPI() { const code = document.getElementById('manualCouponInput').value; if(code) applyCouponPostAPI(code.toUpperCase()); }
 
         async function loadCartDetails() {
             try {
