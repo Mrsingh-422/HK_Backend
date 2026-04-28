@@ -29,11 +29,19 @@ const availabilitySchema = new mongoose.Schema({
         extraFee: { type: Number, default: 0 }
     }],
 
+     // --- NURSE SPECIFIC FIELDS (Figma Match) ---
+    allowedBookingTypes: { 
+        type: [String], 
+        enum: ['One day One Time', 'For Multiple Days', 'Acc. To Per/Hours'],
+        default: ['One day One Time'] 
+    },
+    hourlyRateSurcharge: { type: Number, default: 0 }, // For "Acc. To Per/Hours"
+
     // "Delete" option ke liye: Vendor jin slots ko hide karna chahta hai
     unavailableSlots: [String], // Example: ["10:30", "14:15"]
 
     offDays: [String], // ["Sunday"]
-        blockedDates: [String], // Gap Fix: ["2023-12-25", "2024-01-01"] for holidays
+    blockedDates: [String], // Gap Fix: ["2023-12-25", "2024-01-01"] for holidays
 
     
 

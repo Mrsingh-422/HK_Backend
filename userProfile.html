@@ -2,410 +2,214 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Professional Nurse Booking</title>
-    
-    <!-- Dependencies -->
+    <title>Health Kangaroo | Nurse Flow</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
-
     <style>
-        :root { --hk-green: #00b894; --hk-bg: #f8fbf9; --hk-dark: #2d3436; }
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--hk-bg); color: var(--hk-dark); padding-bottom: 90px; }
-        
+        :root { --hk-green: #00b894; --hk-bg: #f8fbf9; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--hk-bg); padding-bottom: 80px; }
         .hk-nav { background: white; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 1000; }
-        .hk-nav h4 { color: var(--hk-green); font-weight: 800; margin: 0; }
-        
-        .screen { display: none; animation: fadeIn 0.4s ease; padding: 15px; }
+        .screen { display: none; padding: 15px; }
         .active-screen { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-
-        .card-hk { background: white; border-radius: 20px; border: none; box-shadow: 0 8px 24px rgba(0,0,0,0.06); margin-bottom: 15px; overflow: hidden; }
-        .btn-hk { background: var(--hk-green); color: white; border-radius: 12px; padding: 14px; font-weight: 700; width: 100%; border: none; transition: 0.3s; }
-        
-        .nurse-img { width: 75px; height: 75px; border-radius: 15px; object-fit: cover; border: 1px solid #eee; }
-        .slot-box { border: 1.5px solid #eee; border-radius: 12px; padding: 12px; text-align: center; cursor: pointer; position: relative; }
-        .slot-box.selected { border-color: var(--hk-green); background: rgba(0, 184, 148, 0.08); }
-        .slot-box.premium { border-color: #ffd700; background: #fffdf0; }
-        .slot-box.booked { background: #f8f9fa; color: #ced4da; cursor: not-allowed; border-style: dashed; }
-
-        .price-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.95rem; }
-        .total-row { border-top: 1px dashed #ddd; margin-top: 10px; padding-top: 10px; font-weight: 800; font-size: 1.2rem; color: var(--hk-green); }
-
-        .bottom-nav { position: fixed; bottom: 0; width: 100%; background: white; display: flex; justify-content: space-around; padding: 12px; border-top: 1px solid #eee; z-index: 1000; }
-        .nav-item { text-align: center; color: #b2bec3; text-decoration: none; font-size: 0.75rem; cursor: pointer; flex: 1; }
-        .nav-item.active { color: var(--hk-green); }
-        .nav-item i { font-size: 1.3rem; display: block; margin-bottom: 2px; }
-
-        .service-type-badge { position: absolute; top: 0; right: 0; background: #ffeaa7; font-size: 0.6rem; padding: 2px 6px; border-radius: 0 10px 0 10px; font-weight: bold; color: #d4a017; }
+        .card-hk { background: white; border-radius: 20px; padding: 15px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); margin-bottom: 15px; border: none; }
+        .btn-hk { background: var(--hk-green); color: white; border-radius: 12px; padding: 14px; width: 100%; border: none; font-weight: 700; }
+        .slot-btn { border: 1.5px solid #eee; border-radius: 10px; padding: 10px; text-align: center; cursor: pointer; transition: 0.2s; font-size: 0.85rem; }
+        .slot-btn.selected { border-color: var(--hk-green); background: rgba(0, 184, 148, 0.08); }
+        .price-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
     </style>
 </head>
 <body>
 
-<nav class="hk-nav d-flex justify-content-between align-items-center">
-    <div id="backBtn" onclick="goBack()" style="visibility:hidden"><i class="fas fa-chevron-left"></i></div>
-    <h4>Health Kangaroo</h4>
-    <div onclick="setAuthToken()" style="cursor:pointer"><i class="fas fa-user-circle fa-lg text-muted"></i></div>
-</nav>
+<nav class="hk-nav"><h4>Health Kangaroo</h4></nav>
 
 <div class="container mt-2">
 
-    <!-- 1. NURSE LISTING -->
+    <!-- 1. NURSE LIST -->
     <div id="screen-list" class="screen active-screen">
-        <h5 class="fw-bold mb-3">Home Nursing Services</h5>
-        <div class="input-group mb-3">
-            <span class="input-group-text bg-white border-end-0"><i class="fas fa-search text-muted"></i></span>
-            <input type="text" id="searchQuery" class="form-control border-start-0" placeholder="Search speciality (ICU, Cancer...)" onkeyup="fetchNurses()">
-        </div>
+        <h5 class="fw-bold mb-3">Available Nurses</h5>
         <div id="nurseListArea"></div>
     </div>
 
-    <!-- 2. NURSE PROFILE / SERVICES -->
+    <!-- 2. NURSE PROFILE & SERVICES -->
     <div id="screen-details" class="screen">
-        <div id="nurseProfileHeader"></div>
-        <div class="card-hk p-2 mt-3">
-            <ul class="nav nav-pills nav-justified" id="pills-tab">
-                <li class="nav-item"><button class="nav-link active" onclick="filterServices('Daily Care', this)">Daily Care</button></li>
-                <li class="nav-item"><button class="nav-link" onclick="filterServices('Package', this)">Packages</button></li>
-            </ul>
-        </div>
+        <div id="nurseHeader" class="text-center mb-3"></div>
+        <h6 class="fw-bold">Choose Service</h6>
         <div id="servicesArea"></div>
     </div>
 
-    <!-- 3. DATE & SLOTS (Figma Screen 7) -->
-    <div id="screen-slots" class="screen">
-        <h6 class="fw-bold mb-3">Select Schedule</h6>
-        <div class="card-hk p-3">
-            <input type="date" id="bookDate" class="form-control mb-3" onchange="fetchAvailability()">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-                <small class="text-muted">Available Slots</small>
-                <span class="badge bg-warning text-dark small">High Demand +₹79</span>
-            </div>
-            <div class="row g-2" id="slotsGrid"></div>
-        </div>
-        
-        <!-- Faster Service Option -->
-        <div class="card-hk p-3 mt-3 border-success border">
-            <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="fasterService" onchange="updateSummaryUI()">
-                <label class="form-check-label fw-bold">Emergency/Fast Service</label>
-                <p class="small text-muted mb-0">Priority nursing within 6 hrs (Rapid Charge)</p>
-            </div>
-        </div>
-        <button class="btn-hk mt-3" onclick="showScreen('patient')">Next: Patient Details</button>
-    </div>
-
-    <!-- 4. PATIENT DETAILS (Figma Screen 3) -->
-    <div id="screen-patient" class="screen">
-        <h6 class="fw-bold mb-3">Appointment Info</h6>
-        <div class="card-hk p-3 mb-3">
-            <label class="small fw-bold mb-1">Assessment Location</label>
-            <select id="assessmentLoc" class="form-control mb-3">
-                <option value="At Home">At Home</option>
-                <option value="Clinic/Hospital">Clinic/Hospital</option>
+    <!-- 3. FIGMA CONFIGURATION (Screen 2 & 7) -->
+    <div id="screen-config" class="screen">
+        <h6 class="fw-bold mb-3">Schedule Assessment</h6>
+        <div class="card-hk">
+            <label class="small fw-bold">Schedule Type</label>
+            <select id="selectedType" class="form-control mb-3" onchange="updatePriceDisplay()">
+                <option value="One day One Time">One day One Time</option>
+                <option value="For Multiple Days">For Multiple Days</option>
+                <option value="Acc. To Per/Hours">Acc. To Per/Hours</option>
             </select>
-            <div class="row g-2">
-                <div class="col-8"><label class="small fw-bold mb-1">Patient Name</label><input type="text" id="pName" class="form-control mb-3" placeholder="Full Name"></div>
-                <div class="col-4"><label class="small fw-bold mb-1">Age</label><input type="number" id="pAge" class="form-control mb-3" value="30"></div>
-            </div>
-            <label class="small fw-bold mb-1">Health Notes</label>
-            <textarea id="hInstructions" class="form-control" rows="2" placeholder="Instructions for the nurse..."></textarea>
+            
+            <label class="small fw-bold">Select Date</label>
+            <input type="date" id="bookDate" class="form-control mb-3">
+            
+            <label class="small fw-bold mb-2">Select Time</label>
+            <div id="slotsContainer" class="row g-2"></div>
         </div>
-        <button class="btn-hk" onclick="callCheckout()">Verify & View Bill</button>
+
+        <div class="card-hk border-success">
+            <div class="form-check form-switch d-flex justify-content-between align-items-center p-0">
+                <label class="fw-bold">Need Consumables?</label>
+                <input class="form-check-input" type="checkbox" id="needConsumable" style="margin:0; float:none">
+            </div>
+            <div id="consumablesList" class="mt-2"></div>
+        </div>
+
+        <div class="card-hk border-danger" style="background:#fff5f5">
+            <div class="form-check form-switch d-flex justify-content-between align-items-center p-0">
+                <label class="fw-bold text-danger">Emergency Visit</label>
+                <input class="form-check-input" type="checkbox" id="fastDelivery">
+            </div>
+        </div>
+
+        <button class="btn-hk" onclick="goToPatient()">Continue</button>
     </div>
 
-    <!-- 5. CHECKOUT (Figma Screen 8) -->
+    <!-- 4. PATIENT INFO -->
+    <div id="screen-patient" class="screen">
+        <div class="card-hk">
+            <input type="text" id="pName" class="form-control mb-2" placeholder="Patient Name">
+            <input type="number" id="pAge" class="form-control mb-3" placeholder="Age">
+            <input type="text" id="pPhone" class="form-control" placeholder="Phone Number">
+        </div>
+        <button class="btn-hk" onclick="callCheckout()">Verify Bill</button>
+    </div>
+
+    <!-- 5. CHECKOUT -->
     <div id="screen-checkout" class="screen">
-        <h5 class="fw-bold mb-4">Order Summary</h5>
-        <div id="checkoutSummaryArea"></div>
-        <button class="btn-hk mt-4" onclick="placeFinalBooking()">Confirm & Book Now</button>
+        <h5 class="fw-bold mb-3">Order Summary</h5>
+        <div id="summaryArea"></div>
+        <button class="btn-hk mt-4" onclick="placeOrder()">Confirm & Book</button>
     </div>
 
-    <!-- 6. TRACKING / HISTORY -->
-    <div id="screen-track" class="screen">
-        <div id="trackingInfo"></div>
-    </div>
-
-    <div id="screen-appointments" class="screen">
-        <h5 class="fw-bold mb-3">My Bookings</h5>
-        <div id="appointmentsList"></div>
-    </div>
-
-</div>
-
-<!-- Bottom Nav -->
-<div class="bottom-nav">
-    <div class="nav-item active" onclick="showScreen('list')"><i class="fas fa-search"></i>Explore</div>
-    <div class="nav-item" onclick="loadMyAppointments()"><i class="fas fa-calendar-check"></i>Orders</div>
-    <div class="nav-item"><i class="fas fa-user"></i>Account</div>
 </div>
 
 <script>
-    const API_URL = "http://localhost:5002/user/nurse"; // Base path from your router
-    let USER_TOKEN = localStorage.getItem('u_token') || "";
-    let history = ['list'];
+    const API = "http://localhost:5002/user/nurse";
+    let USER_TOKEN = localStorage.getItem('u_token');
+    let nurseData, selectedService, selectedTime, selectedConsumables = [];
 
-    // State
-    let selectedNurseId = null;
-    let selectedService = null;
-    let selectedSlot = null;
-    let nurseServices = [];
-    let checkoutData = null;
-
-    // 1. GET NURSES
     async function fetchNurses() {
-        const query = document.getElementById('searchQuery').value;
-        const res = await fetch(`${API_URL}/list`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat: 30.73, lng: 76.77, search: query })
-        });
+        const res = await fetch(`${API}/list`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({lat:30.7, lng:76.7}) });
         const json = await res.json();
         document.getElementById('nurseListArea').innerHTML = json.data.map(n => `
-            <div class="card-hk p-3 d-flex align-items-center mb-3" onclick="loadNurseDetails('${n._id}')">
-                <img src="http://localhost:5002/${n.profileImage}" class="nurse-img me-3" onerror="this.src='https://via.placeholder.com/75'">
-                <div class="flex-grow-1">
-                    <h6 class="fw-bold mb-0">${n.name}</h6>
-                    <small class="text-muted d-block">${n.city} • Starts ₹${n.startingPrice}</small>
-                    <div class="mt-2">${n.topServices.map(s => `<span class="badge bg-light text-dark border me-1">${s}</span>`).join('')}</div>
-                </div>
-            </div>
-        `).join('');
+            <div class="card-hk d-flex align-items-center" onclick="loadNurseDetails('${n._id}')">
+                <img src="https://ui-avatars.com/api/?name=${n.name}&background=random" style="width:60px; border-radius:10px;" class="me-3">
+                <div><h6 class="mb-0 fw-bold">${n.name}</h6><small>Starts ₹${n.startingPrice}</small></div>
+            </div>`).join('');
     }
 
-    // 2. GET DETAILS
     async function loadNurseDetails(id) {
-        selectedNurseId = id;
-        const res = await fetch(`${API_URL}/details/${id}`);
+        const res = await fetch(`${API}/details/${id}`);
         const json = await res.json();
-        const n = json.data;
-        nurseServices = n.services || [];
-        document.getElementById('nurseProfileHeader').innerHTML = `
-            <div class="text-center">
-                <img src="http://localhost:5002/${n.profileImage}" class="rounded-circle mb-2" style="width:90px; height:90px; object-fit:cover">
-                <h5 class="fw-bold mb-0">${n.name}</h5>
-                <p class="text-muted small">${n.city}, ${n.state}</p>
-            </div>`;
-        filterServices('Daily Care');
+        nurseData = json.data;
+        document.getElementById('nurseHeader').innerHTML = `<h5>${nurseData.name}</h5><small>${nurseData.city}</small>`;
+        document.getElementById('servicesArea').innerHTML = nurseData.services.map(s => `
+            <div class="card-hk border p-3" onclick="openConfig('${s._id}')">
+                <b>${s.title}</b><br><small>Final Price: ₹${s.finalPrice}</small>
+            </div>`).join('');
         showScreen('details');
     }
 
-    function filterServices(type, el) {
-        if(el) { document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active')); el.classList.add('active'); }
-        const area = document.getElementById('servicesArea');
-        const filtered = nurseServices.filter(s => s.type === type);
-        area.innerHTML = filtered.map(s => `
-            <div class="card-hk p-3 mt-2" onclick="selectService('${s._id}')">
-                <div class="d-flex justify-content-between"><h6>${s.title}</h6><b class="text-success">₹${s.price}</b></div>
-                <p class="small text-muted mb-0">${s.description || ''}</p>
-            </div>`).join('');
+    function openConfig(svcId) {
+        selectedService = nurseData.services.find(s => s._id === svcId);
+        renderSlots();
+        renderConsumables();
+        showScreen('config');
     }
 
-    function selectService(id) {
-        selectedService = nurseServices.find(s => s._id === id);
-        showScreen('slots');
+    function renderSlots() {
+        const config = nurseData.availability;
+        const start = moment(config.startTime, "HH:mm");
+        const end = moment(config.endTime, "HH:mm");
+        let html = '';
+        while(start.isBefore(end)) {
+            let t = start.format("HH:mm");
+            html += `<div class="col-4"><div class="slot-btn" onclick="setTime('${t}', this)">${start.format("hh:mm A")}<br><small class="text-success">+₹79</small></div></div>`;
+            start.add(60, 'minutes');
+        }
+        document.getElementById('slotsContainer').innerHTML = html;
     }
 
-    // 3. GET AVAILABILITY
-    async function fetchAvailability() {
-        const date = document.getElementById('bookDate').value;
-        const res = await fetch(`${API_URL}/availability/${selectedNurseId}?date=${date}`);
-        const json = await res.json();
-        document.getElementById('slotsGrid').innerHTML = json.data.map(s => `
-            <div class="col-4">
-                <div class="slot-box ${s.isAvailable ? '' : 'booked'} ${s.isPremium ? 'premium' : ''}" onclick="setSlot('${s.time}', this)">
-                    ${s.isPremium ? '<span class="service-type-badge">PREMIUM</span>' : ''}
-                    <div class="small fw-bold">${s.displayTime}</div>
-                    ${s.isPremium ? `<small class="text-warning">+₹${s.extraFee}</small>` : ''}
-                </div>
-            </div>`).join('');
-    }
-
-    function setSlot(time, el) {
-        if(el.classList.contains('booked')) return;
-        document.querySelectorAll('.slot-box').forEach(b => b.classList.remove('selected'));
+    function setTime(t, el) {
+        document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
         el.classList.add('selected');
-        selectedSlot = time;
+        selectedTime = t;
     }
 
-    // 4. CHECKOUT (Professional Verified Calculation)
-    async function callCheckout() {
-        if(!selectedSlot) return Swal.fire('Error', 'Please select a time slot', 'error');
-        if(!USER_TOKEN) return setAuthToken();
+    function renderConsumables() {
+        document.getElementById('consumablesList').innerHTML = nurseData.consumables.map(c => `
+            <div class="d-flex justify-content-between small mb-1">
+                <span>${c.itemName} (₹${c.price})</span>
+                <input type="checkbox" onchange="toggleCons('${c._id}')">
+            </div>`).join('');
+    }
 
-        const res = await fetch(`${API_URL}/checkout`, {
+    function toggleCons(id) {
+        const idx = selectedConsumables.indexOf(id);
+        if(idx > -1) selectedConsumables.splice(idx, 1);
+        else selectedConsumables.push(id);
+    }
+
+    function goToPatient() { if(!selectedTime) return alert('Select time'); showScreen('patient'); }
+
+    async function callCheckout() {
+        const res = await fetch(`${API}/checkout`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${USER_TOKEN}` },
+            headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${USER_TOKEN}`},
             body: JSON.stringify({
-                nurseId: selectedNurseId,
-                serviceId: selectedService._id,
-                slotTime: selectedSlot,
-                fasterService: document.getElementById('fasterService').checked
+                nurseId: nurseData._id, serviceId: selectedService._id,
+                selectedType: document.getElementById('selectedType').value,
+                slotTime: selectedTime, fasterService: document.getElementById('fastDelivery').checked,
+                selectedConsumables: selectedConsumables
             })
         });
-        
         const json = await res.json();
         if(json.success) {
-            checkoutData = json.breakdown;
-            
-            // Build Detailed Bill Summary UI
-            document.getElementById('checkoutSummaryArea').innerHTML = `
-                <div class="card-hk p-4 mb-3">
-                    <h6 class="fw-bold border-bottom pb-2 mb-3">Bill Details</h6>
-                    
-                    <div class="price-row">
-                        <span>${checkoutData.serviceName} (${checkoutData.serviceType})</span>
-                        <b>₹${checkoutData.basePrice}</b>
-                    </div>
-
-                    ${checkoutData.premiumSlotFee > 0 ? `
-                    <div class="price-row">
-                        <span>Premium Slot Surcharge</span>
-                        <b>₹${checkoutData.premiumSlotFee}</b>
-                    </div>` : ''}
-
-                    ${checkoutData.fasterServiceFee > 0 ? `
-                    <div class="price-row">
-                        <span>Emergency Service Fee</span>
-                        <b>₹${checkoutData.fasterServiceFee}</b>
-                    </div>` : ''}
-
-                    <div class="price-row">
-                        <span>Service Taxes</span>
-                        <b>₹${checkoutData.taxAmount}</b>
-                    </div>
-
-                    <div class="total-row mt-3">
-                        <span>Total Amount</span>
-                        <b>₹${checkoutData.totalPayable}</b>
-                    </div>
-                </div>
-
-                <div class="card-hk p-3 bg-light">
-                    <h6 class="fw-bold small text-muted mb-2">Service Highlights</h6>
-                    <div class="small">
-                        <div><i class="fas fa-check text-success me-2"></i> ${checkoutData.procedureIncluded}</div>
-                        <div><i class="fas fa-box text-success me-2"></i> Consumables: ${checkoutData.consumablesIncluded.join(', ') || 'N/A'}</div>
-                    </div>
+            const b = json.breakdown;
+            document.getElementById('summaryArea').innerHTML = `
+                <div class="card-hk">
+                    <div class="price-row"><span>Base Price (${b.selectedType})</span><b>₹${b.basePrice}</b></div>
+                    <div class="price-row"><span>Slot Surcharge</span><b>₹${b.slotSurcharge}</b></div>
+                    <div class="price-row"><span>Emergency Fee</span><b>₹${b.emergencyFee}</b></div>
+                    <div class="price-row text-success"><span>Consumables</span><b>₹${b.consumableCharge}</b></div>
+                    <hr><div class="price-row"><h5>Total</h5><h5>₹${b.totalPayable}</h5></div>
                 </div>`;
-
             showScreen('checkout');
-        } else {
-            Swal.fire('Error', json.message, 'error');
         }
     }
-    
-    // 5. FINAL BOOKING
-async function placeFinalBooking() {
-    // Check if checkoutData exists
-    if (!checkoutData) return Swal.fire('Error', 'Please verify bill first', 'error');
 
-    try {
+    async function placeOrder() {
         const payload = {
-            nurseId: selectedNurseId,
-            serviceId: selectedService._id,
-            patientDetails: { 
-                name: document.getElementById('pName')?.value || "Guest", 
-                age: document.getElementById('pAge')?.value || 0,
-                gender: "Female", // Aap iska alag dropdown bhi bana sakte hain
-                relation: document.getElementById('pRelation')?.value || "Self" 
-            },
-            assessmentLocation: document.getElementById('assessmentLoc')?.value || "At Home",
-            healthDetails: { 
-                height: document.getElementById('hHeight')?.value || "",
-                language: document.getElementById('hLang')?.value || "English",
-                specialInstructions: document.getElementById('hInstructions')?.value || "" 
-            },
-            schedule: { 
-                startDate: document.getElementById('bookDate')?.value, 
-                startTime: selectedSlot, 
-                duration: "Single Day" 
-            },
-            totalPrice: checkoutData.totalPayable,
-            basePrice: checkoutData.basePrice,
-            fasterServiceCharge: checkoutData.fasterServiceFee
+            nurseId: nurseData._id, serviceId: selectedService._id,
+            assessmentLocation: "At Home", triageFacility: "Routine",
+            patients: [{name: document.getElementById('pName').value, age: document.getElementById('pAge').value}],
+            schedule: {startDate: document.getElementById('bookDate').value, startTime: selectedTime},
+            address: {houseNo: document.getElementById('addrHouse').value, phone: document.getElementById('pPhone').value, city: "Mohali"},
+            totalPrice: 1000 // Just simulation
         };
-
-        // Date Validation
-        if (!payload.schedule.startDate) {
-            return Swal.fire('Error', 'Please select a booking date', 'error');
-        }
-
-        const res = await fetch(`${API_URL}/book`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json', 
-                'Authorization': `Bearer ${USER_TOKEN}` 
-            },
-            body: JSON.stringify(payload)
-        });
-
-        const json = await res.json();
-        if(json.success) {
-            Swal.fire('Order Placed!', 'Success ID: ' + json.data.bookingId, 'success');
-            loadTracking(json.data._id);
-        } else {
-            Swal.fire('Error', json.message, 'error');
-        }
-    } catch (err) {
-        console.error("Booking Error:", err);
-        Swal.fire('Error', 'Something went wrong while booking', 'error');
-    }
-}
-
-
-    async function loadTracking(id) {
-        const res = await fetch(`${API_URL}/track/${id}`, { headers: { 'Authorization': `Bearer ${USER_TOKEN}` } });
-        const json = await res.json();
-        const b = json.data;
-        document.getElementById('trackingInfo').innerHTML = `
-            <div class="card-hk p-4 text-center mb-3 bg-success text-white">
-                <h4 class="fw-bold">Status: ${b.orderStatus}</h4>
-                <p class="mb-0">ID: ${b.summary.id}</p>
-            </div>
-            <div class="card-hk p-3">
-                <div class="timeline-item active"><b>Booking Confirmed</b><br><small>Waiting for assignment</small></div>
-            </div>`;
-        showScreen('track');
+        const res = await fetch(`${API}/book`, { method:'POST', headers:{'Content-Type':'application/json', 'Authorization': `Bearer ${USER_TOKEN}`}, body:JSON.stringify(payload) });
+        if(res.ok) { Swal.fire('Success', 'Booking Placed', 'success'); showScreen('list'); }
     }
 
-    async function loadMyAppointments() {
-        if(!USER_TOKEN) return setAuthToken();
-        const res = await fetch(`${API_URL}/my-appointments`, { headers: { 'Authorization': `Bearer ${USER_TOKEN}` } });
-        const json = await res.json();
-        document.getElementById('appointmentsList').innerHTML = json.data.map(b => `
-            <div class="card-hk p-3 mb-2" onclick="loadTracking('${b._id}')">
-                <div class="d-flex justify-content-between"><b>${b.serviceType || 'Care'}</b><span class="text-success">${b.status}</span></div>
-                <small>${moment(b.createdAt).format('lll')}</small>
-            </div>`).join('');
-        showScreen('appointments');
-    }
-
-    // Helpers
     function showScreen(id) {
-        history.push(id);
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
         document.getElementById('screen-' + id).classList.add('active-screen');
-        document.getElementById('backBtn').style.visibility = (id === 'list') ? 'hidden' : 'visible';
     }
-
-    function goBack() {
-        if(history.length > 1) {
-            history.pop();
-            const prev = history[history.length - 1];
-            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
-            document.getElementById('screen-' + prev).classList.add('active-screen');
-        }
-    }
-
+    
     function setAuthToken() {
-        Swal.fire({ title: 'Enter Token', input: 'text', inputValue: USER_TOKEN }).then((r) => {
-            if(r.value) { localStorage.setItem('u_token', r.value); USER_TOKEN = r.value; location.reload(); }
-        });
+        Swal.fire({title:'User Token', input:'text'}).then(r => { if(r.value){localStorage.setItem('u_token', r.value); USER_TOKEN=r.value; location.reload();} });
     }
-
     fetchNurses();
 </script>
 </body>

@@ -117,6 +117,7 @@ app.use('/provider/pharmacy/orders', require('./routes/provider/Pharmacy/Pharmac
 // --- Provider Nurse Routes ---
 app.use('/provider/nurse/dash', require('./routes/provider/Nurse/NurseDashboardRoute'));
 app.use('/provider/nurse/service', require('./routes/provider/Nurse/NurseServiceRoute'));
+app.use('/provider/nurse/management', require('./routes/provider/Nurse/NurseStaffManagementRoute'));
 ////////////////////// Driver Routes /////////////////////
 app.use('/driver/pharmacy/orders', require('./routes/driver/driverPharmacy/OrdersRoute'));   
 

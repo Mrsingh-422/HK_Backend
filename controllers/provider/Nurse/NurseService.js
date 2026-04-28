@@ -18,25 +18,69 @@ const addNurseService = async (req, res) => {
 const addOrUpdateService = async (req, res) => {
     try {
         const { id } = req.params;
-        const { consumablesUsed } = req.body; // Array of IDs
+        const nurseId = req.user.id;
+
+        // Extracting all Figma Screen 42 fields
+        let { 
+            type, title, description, oneDayPrice, multipleDaysPrice, 
+            hourlyPrice, amount, discountPercentage, consumablesUsed, 
+            procedureIncluded, servicesOffered, prescriptionRequired 
+        } = req.body;
+
+        // Logic: Consumables can be sent as string (JSON) or array
+        if (typeof consumablesUsed === 'string') {
+            consumablesUsed = JSON.parse(consumablesUsed);
+        }
+
+        // Logic: Calculate finalPrice if not sent from frontend
+        const discount = (Number(amount) * Number(discountPercentage)) / 100;
+        const finalPrice = Number(amount) - discount;
+
+        const photos = req.files && req.files['photos'] 
+            ? req.files['photos'].map(f => f.path) 
+            : undefined;
 
         const serviceData = {
-            nurseId: req.user.id,
-            ...req.body,
-            // JSON parse agar stringify hoke aa raha hai
-            consumablesUsed: typeof consumablesUsed === 'string' ? JSON.parse(consumablesUsed) : consumablesUsed,
-            photos: req.files ? req.files.map(f => f.path) : undefined
+            nurseId,
+            type,
+            title,
+            description,
+            oneDayPrice: Number(oneDayPrice),
+            multipleDaysPrice: Number(multipleDaysPrice),
+            hourlyPrice: Number(hourlyPrice),
+            amount: Number(amount),
+            discountPercentage: Number(discountPercentage),
+            finalPrice: finalPrice,
+            consumablesUsed,
+            procedureIncluded,
+            servicesOffered,
+            prescriptionRequired: prescriptionRequired === 'true',
+            ...(photos && { photos })
         };
 
         let service;
         if (id) {
-            service = await NurseService.findByIdAndUpdate(id, serviceData, { new: true });
+            // Update logic
+            service = await NurseService.findOneAndUpdate(
+                { _id: id, nurseId }, 
+                { $set: serviceData }, 
+                { new: true }
+            );
         } else {
+            // Create logic
             service = await NurseService.create(serviceData);
         }
-        res.status(201).json({ success: true, data: service });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        res.status(201).json({ 
+            success: true, 
+            message: id ? "Service Updated" : "Service Added", 
+            data: service 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 const getServicesByStatus = async (req, res) => {
     try {
@@ -49,18 +93,27 @@ const getServicesByStatus = async (req, res) => {
 // 2. GET MY SERVICES (Figma Screen 37: My Services)
 const getMyServices = async (req, res) => {
     try {
-        const services = await NurseService.find({ nurseId: req.user.id });
+        const { status } = req.query;
+        const query = { nurseId: req.user.id };
+        if (status) query.status = status;
+
+        const services = await NurseService.find(query)
+            .populate('consumablesUsed')
+            .sort({ createdAt: -1 });
+
         res.json({ success: true, data: services });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. DELETE SERVICE
+// DELETE SERVICE
 const deleteService = async (req, res) => {
     try {
-        await NurseService.findOneAndDelete({ _id: req.params.id, nurseId: req.user.id });
+        const deleted = await NurseService.findOneAndDelete({ _id: req.params.id, nurseId: req.user.id });
+        if (!deleted) return res.status(404).json({ message: "Service not found" });
         res.json({ success: true, message: "Service removed" });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+ 
 
 const manageConsumable = async (req, res) => {
     try {

@@ -1,4 +1,5 @@
 // utils/timeSlotHelper.js
+const moment = require('moment');
 const generateTimeSlots = (config) => {
     const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots, premiumSlots } = config;
     
@@ -40,4 +41,41 @@ const generateTimeSlots = (config) => {
     return slots;
 };
 
-module.exports = { generateTimeSlots };
+const generateNurseSlots = (config, bookingType) => {
+    const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots, premiumSlots } = config;
+    if (!startTime || !endTime) return [];
+
+    let slots = [];
+    // Figma Hourly logic: Agar 'hourly' hai toh interval 60 min, warna regular slotDuration
+    let interval = (bookingType === 'Acc. To Per/Hours') ? 60 : (slotDuration || 30);
+
+    let start = moment(startTime, "HH:mm");
+    let end = moment(endTime, "HH:mm");
+
+    while (start.isBefore(end)) {
+        let timeString = start.format("HH:mm");
+        if (!unavailableSlots?.includes(timeString)) {
+            const hour = start.hour();
+            
+            // Category check
+            let category = (hour >= 5 && hour < 12) ? "Morning" : (hour >= 12 && hour < 17) ? "Afternoon" : "Evening";
+            const isEnabled = (category === "Morning" && morningSlots) || 
+                              (category === "Afternoon" && afternoonSlots) || 
+                              (category === "Evening" && eveningSlots);
+
+            if (isEnabled) {
+                const premiumInfo = premiumSlots?.find(ps => ps.time === timeString);
+                slots.push({
+                    time: timeString,
+                    displayTime: start.format("hh:mm A"),
+                    category,
+                    extraFee: premiumInfo ? premiumInfo.extraFee : 0
+                });
+            }
+        }
+        start.add(interval, 'minutes');
+    }
+    return slots;
+};
+
+module.exports = { generateTimeSlots, generateNurseSlots };
