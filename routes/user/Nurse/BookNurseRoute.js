@@ -3,9 +3,9 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer');
 const { 
-    getNurses, getNurseDetails,  searchNurses,getNurseAvailability, checkoutNurseBooking, placeNurseBooking, getMyNurseBookings, rateNurseService,
+    getNurses, getNurseDetails,  searchNurses,checkRangeAvailability,getNurseAvailability, checkoutNurseBooking, placeNurseBooking, getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
-    uploadBookingPrescription 
+    uploadBookingPrescription ,getNurseDeliveryConfig
 } = require('../../../controllers/user/Nurse/BookNurse');
 
 // Base URL: /user/nurse
@@ -14,6 +14,8 @@ const {
 router.post('/list', getNurses); 
 router.get('/details/:id', getNurseDetails);
 
+
+router.get('/delivery-config/:nurseId', getNurseDeliveryConfig); // For calculating delivery charges in checkout flow
 // 2. Booking Flow
 router.post('/checkout', protect('user'), checkoutNurseBooking);
 router.post('/book', protect('user'), placeNurseBooking);
@@ -23,6 +25,7 @@ router.get('/track/:id', protect('user'), getAppointmentStatus); // Figma Tracki
 router.patch('/add-prescription/:id', protect('user'), prescriptionUploads.single('prescription'), uploadBookingPrescription);
 
 // 4. Availability
+router.get('/check-range/:nurseId', checkRangeAvailability);
 router.get('/availability/:nurseId', getNurseAvailability); // Screen 7
 router.get('/my-appointments', protect('user'), getMyNurseBookings); // Screen 11
 router.post('/rate', protect('user'), rateNurseService); // Screen 12

@@ -6,6 +6,24 @@ const nurseBookingSchema = new mongoose.Schema({
     serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'NurseService' }, // Link to specific service
     assignedStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }, 
     bookingId: { type: String, unique: true },
+     // Snapshot of service at time of booking
+   serviceDetails: {
+        title: { type: String },
+        type: { type: String }, 
+        duration: { type: String },
+        basePrice: { type: Number },
+        procedureIncluded: { type: String },
+        servicesOffered: { type: String }
+    },
+    
+    // Pricing Breakdown
+    priceBreakdown: {
+        basePrice: Number,
+        slotSurcharge: { type: Number, default: 0 },
+        fasterServiceCharge: { type: Number, default: 0 },
+        taxAmount: { type: Number, default: 0 },
+        totalPrice: { type: Number, required: true }
+    },
     
     patients: [{
         patientId: { type: String }, // 'Self' or family member ID
@@ -32,11 +50,15 @@ const nurseBookingSchema = new mongoose.Schema({
         specialInstructions: String
     },
     schedule: {
-        startDate: Date,
-        startTime: String,
-        duration: String, // One Day One Time, etc.
-        endDate: Date
-    },
+    startDate: Date,
+    endDate: Date,
+    startTime: String, // "14:00"
+    endTime: String,   // "16:00"
+    duration: { 
+        type: String, 
+        enum: ['One day One Time', 'For Multiple Days', 'Acc. To Per/Hours'] 
+    }
+},
     
     // Price breakdown
     basePrice: Number,
@@ -60,7 +82,7 @@ const nurseBookingSchema = new mongoose.Schema({
     
     status: { 
         type: String, 
-        enum: ['Pending', 'Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'In-Progress', 'Completed', 'Cancelled'], 
+         enum: ['Pending', 'Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed', 'Cancelled'],  
         default: 'Pending' 
     },
     selectedConsumables: [{
@@ -71,7 +93,11 @@ const nurseBookingSchema = new mongoose.Schema({
     }],
     needConsumable: { type: Boolean, default: false },
     prescriptionImage: String,
-    couponCode: String
+    couponCode: String,
+
 }, { timestamps: true });
+nurseBookingSchema.index({ nurseId: 1, status: 1 });
+nurseBookingSchema.index({ "schedule.startDate": 1, "schedule.endDate": 1 });
+nurseBookingSchema.index({ userId: 1 });
 
 module.exports = mongoose.model('NurseBooking', nurseBookingSchema);

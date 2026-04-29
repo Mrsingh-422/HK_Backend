@@ -3,7 +3,8 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { nurseServiceUploads } = require('../../../middleware/multer');
-const {getNurseDashboard,addService, updateService, deleteService ,getMyServices, manageConsumable,listConsumables, deleteConsumable } = require('../../../controllers/provider/Nurse/NurseDashboard');
+const {getNurseDashboard,addService, updateService, deleteService ,getMyServices,
+     manageConsumable,listConsumables, deleteConsumable, getNurseStats, manageBookingRequest, getNewRequests  } = require('../../../controllers/provider/Nurse/NurseDashboard');
 
 // Base URL: /provider/nurse/dash
 
@@ -20,4 +21,11 @@ router.get('/services/list', protect('nurse'), getMyServices);
 router.post('/consumables/manage', protect('nurse'), manageConsumable);
 router.get('/consumables/list', protect('nurse'), listConsumables);
 router.delete('/consumables/delete/:id', protect('nurse'), deleteConsumable);
+
+// Nurse Stats
+router.get('/stats', protect('nurse'), getNurseStats);
+
+// Nurse Booking Requests
+router.get('/booking-requests', protect('nurse'), manageBookingRequest);
+router.get('/new-requests', protect('nurse'), getNewRequests);
 module.exports = router;

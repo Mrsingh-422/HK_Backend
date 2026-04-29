@@ -90,13 +90,9 @@ const unblockSlot = async (req, res) => {
 const setNurseAvailability = async (req, res) => {
     try {
         const nurseId = req.user.id;
-        
-        // Validation: Ensure only Nurse allowed types are saved
-        const { allowedBookingTypes, startTime, endTime } = req.body;
-        
-        if (startTime && endTime && startTime >= endTime) {
-            return res.status(400).json({ message: "Start time must be before End time" });
-        }
+        const { startTime, endTime, maxClientsPerSlot, slotDuration, morningSlots, afternoonSlots, eveningSlots } = req.body;
+
+        if (startTime >= endTime) return res.status(400).json({ message: "Start time must be before end time" });
 
         const config = await Availability.findOneAndUpdate(
             { vendorId: nurseId },
@@ -104,31 +100,33 @@ const setNurseAvailability = async (req, res) => {
                 $set: { 
                     ...req.body, 
                     vendorId: nurseId, 
-                    vendorType: 'Nurse' 
+                    vendorType: 'Nurse',
+                    maxClientsPerSlot: Number(maxClientsPerSlot) || 1 
                 } 
             },
             { upsert: true, new: true }
         );
 
-        res.json({ success: true, message: "Nurse schedule settings saved", data: config });
+        res.json({ success: true, message: "Nurse schedule updated", data: config });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. GET NURSE SLOTS (Dashboard Preview)
 const getMyNurseSlots = async (req, res) => {
     try {
         const config = await Availability.findOne({ vendorId: req.user.id });
-        if (!config) return res.json({ success: true, data: null });
+        if (!config) return res.json({ success: true, message: "No settings found" });
 
-        // Nurse ke liye hum teeno types ke slots preview generate kar sakte hain
-        const preview = {
-            oneDay: generateNurseSlots(config, 'One day One Time'),
+        // Generate dynamic slots based on nurse's own config
+        const slots = {
+            regular: generateNurseSlots(config, 'One day One Time'),
             hourly: generateNurseSlots(config, 'Acc. To Per/Hours')
         };
 
-        res.json({ success: true, config, preview });
+        res.json({ success: true, config, slots });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+
 
 // 3. TOGGLE SLOT STATUS (Block/Unblock)
 const toggleNurseSlot = async (req, res) => {

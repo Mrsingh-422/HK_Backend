@@ -77,22 +77,42 @@ const updateService = async (req, res) => {
 // 3. DASHBOARD (Stats remain same)
 const getNurseDashboard = async (req, res) => {
     try {
-        const [stats, bookings] = await Promise.all([
-            NurseBooking.aggregate([
-                { $match: { nurseId: req.user.id } },
-                { $group: {
-                    _id: null,
-                    pending: { $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] } },
-                    accepted: { $sum: { $cond: [{ $eq: ["$status", "Confirmed"] }, 1, 0] } },
-                    completed: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } }
-                }}
-            ]),
-            NurseBooking.find({ nurseId: req.user.id }).sort({ createdAt: -1 }).limit(5)
+        const stats = await NurseBooking.aggregate([
+            { $match: { nurseId: req.user._id } },
+            { $group: {
+                _id: null,
+                todayRequests: { $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] } },
+                accepted: { $sum: { $cond: [{ $eq: ["$status", "Confirmed"] }, 1, 0] } },
+                completed: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } },
+                totalEarnings: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$priceBreakdown.totalPrice", 0] } }
+            }}
         ]);
-        res.json({ success: true, stats: stats[0] || { pending: 0, accepted: 0, completed: 0 }, bookings });
+        res.json({ success: true, stats: stats[0] || { todayRequests:0, accepted:0, completed:0, totalEarnings:0 } });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// 2. ACCEPT/REJECT REQUEST (Figma Image 3 & 4)
+const handleBookingAction = async (req, res) => {
+    try {
+        const { bookingId, action, reason } = req.body; // action: 'Accept' or 'Reject'
+        
+        let update = {};
+        if (action === 'Accept') {
+            update = { status: 'Confirmed' };
+        } else {
+            // Figma Image 4 reasons
+            update = { status: 'Cancelled', rejectionReason: reason };
+        }
+
+        const booking = await NurseBooking.findOneAndUpdate(
+            { _id: bookingId, nurseId: req.user.id },
+            update,
+            { new: true }
+        );
+
+        res.json({ success: true, message: `Booking ${action}ed`, data: booking });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 // 4. DELETE SERVICE
 const deleteService = async (req, res) => {
     try {
@@ -154,4 +174,47 @@ const deleteConsumable = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { getNurseDashboard, addService, updateService, deleteService, getMyServices, manageConsumable,listConsumables, deleteConsumable };
+const getNurseStats = async (req, res) => {
+    try {
+        const today = moment().startOf('day');
+        const stats = await NurseBooking.aggregate([
+            { $match: { nurseId: req.user._id, createdAt: { $gte: today.toDate() } } },
+            { $group: {
+                _id: null,
+                todayRequests: { $sum: 1 },
+                accepted: { $sum: { $cond: [{ $in: ["$status", ["Confirmed", "Assigned"]] }, 1, 0] } },
+                completed: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } },
+                earnings: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$priceBreakdown.totalPrice", 0] } }
+            }}
+        ]);
+        res.json({ success: true, data: stats[0] || { todayRequests: 0, accepted: 0, completed: 0, earnings: 0 } });
+    } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+// 2. ACCEPT/REJECT (Figma Image 3 & 4)
+const manageBookingRequest = async (req, res) => {
+    try {
+        const { bookingId, action, reason } = req.body; // action: 'Accept' or 'Reject'
+        const status = (action === 'Accept') ? 'Confirmed' : 'Cancelled';
+        
+        const booking = await NurseBooking.findOneAndUpdate(
+            { _id: bookingId, nurseId: req.user.id },
+            { status, rejectionReason: reason },
+            { new: true }
+        );
+
+        res.json({ success: true, message: `Booking ${action}ed`, data: booking });
+    } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+// 3. GET NEW REQUESTS (Figma Image 5)
+const getNewRequests = async (req, res) => {
+    try {
+        const requests = await NurseBooking.find({ nurseId: req.user.id, status: 'Pending' })
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: requests });
+    } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+module.exports = { getNurseDashboard, addService, updateService, deleteService, getMyServices,handleBookingAction,
+     manageConsumable,listConsumables, deleteConsumable, getNurseStats, manageBookingRequest, getNewRequests };

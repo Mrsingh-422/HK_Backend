@@ -2,215 +2,323 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Health Kangaroo | Nurse Flow</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HK Care | 100% Dynamic API-Driven Booking</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
     <style>
-        :root { --hk-green: #00b894; --hk-bg: #f8fbf9; }
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--hk-bg); padding-bottom: 80px; }
+        :root { --hk-green: #00b894; --hk-dark: #2d3436; --hk-bg: #f8fbf9; }
+        body { font-family: 'Inter', sans-serif; background: var(--hk-bg); color: var(--hk-dark); padding-bottom: 40px; }
         .hk-nav { background: white; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 1000; }
-        .screen { display: none; padding: 15px; }
-        .active-screen { display: block; }
-        .card-hk { background: white; border-radius: 20px; padding: 15px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); margin-bottom: 15px; border: none; }
-        .btn-hk { background: var(--hk-green); color: white; border-radius: 12px; padding: 14px; width: 100%; border: none; font-weight: 700; }
-        .slot-btn { border: 1.5px solid #eee; border-radius: 10px; padding: 10px; text-align: center; cursor: pointer; transition: 0.2s; font-size: 0.85rem; }
-        .slot-btn.selected { border-color: var(--hk-green); background: rgba(0, 184, 148, 0.08); }
-        .price-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
+        .hk-logo { color: var(--hk-green); font-weight: 800; font-size: 1.4rem; text-decoration: none; }
+        .card-hk { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.04); margin-bottom: 15px; border: 1px solid #edf2f0; }
+        .btn-hk { background: var(--hk-green); color: white; border-radius: 12px; padding: 14px; width: 100%; border: none; font-weight: 600; }
+        .screen { display: none; } .active { display: block; }
+        
+        /* Slots */
+        .slot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .slot-item { border: 1px solid #eee; border-radius: 12px; padding: 10px; text-align: center; cursor: pointer; background: white; transition: 0.2s; }
+        .slot-item.selected { border: 2px solid var(--hk-green); background: #f0fffb; }
+        .slot-surcharge { font-size: 0.65rem; color: #ff7675; font-weight: bold; display: block; }
+        .slot-booked { background: #f1f2f6; color: #ccc; cursor: not-allowed; border: 1px dashed #ddd; }
+
+        /* Billing */
+        .price-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.95rem; }
+        .price-total { border-top: 1px dashed #ddd; padding-top: 10px; font-weight: bold; font-size: 1.25rem; color: var(--hk-green); }
+        .floating-auth { position: fixed; bottom: 20px; right: 20px; z-index: 2000; }
     </style>
 </head>
 <body>
 
-<nav class="hk-nav"><h4>Health Kangaroo</h4></nav>
+<nav class="hk-nav mb-4">
+    <div class="container d-flex justify-content-between align-items-center">
+        <a href="#" class="hk-logo" onclick="location.reload()"><i class="fas fa-briefcase-medical"></i> HK Care</a>
+        <button class="btn btn-sm btn-outline-success" onclick="showScreen('my-bookings'); loadMyBookings();">Appointments</button>
+    </div>
+</nav>
 
-<div class="container mt-2">
+<div class="container" style="max-width: 500px;">
 
-    <!-- 1. NURSE LIST -->
-    <div id="screen-list" class="screen active-screen">
+    <!-- 1. LIST -->
+    <div id="screen-list" class="screen active">
         <h5 class="fw-bold mb-3">Available Nurses</h5>
-        <div id="nurseListArea"></div>
+        <div id="nurseList"><div class="text-center p-5">Loading...</div></div>
     </div>
 
-    <!-- 2. NURSE PROFILE & SERVICES -->
+    <!-- 2. DETAILS -->
     <div id="screen-details" class="screen">
-        <div id="nurseHeader" class="text-center mb-3"></div>
-        <h6 class="fw-bold">Choose Service</h6>
-        <div id="servicesArea"></div>
+        <button class="btn btn-link text-dark p-0 mb-3 text-decoration-none" onclick="showScreen('list')"><i class="fas fa-arrow-left"></i> Back</button>
+        <div id="nurseHeader"></div>
+        <h6 class="fw-bold mt-4 mb-3">Services</h6>
+        <div id="serviceList"></div>
+        <button id="btnProceedConfig" class="btn-hk mt-3" disabled onclick="showScreen('config')">Continue</button>
     </div>
 
-    <!-- 3. FIGMA CONFIGURATION (Screen 2 & 7) -->
+    <!-- 3. CONFIG & SLOTS -->
     <div id="screen-config" class="screen">
-        <h6 class="fw-bold mb-3">Schedule Assessment</h6>
+        <button class="btn btn-link text-dark p-0 mb-3 text-decoration-none" onclick="showScreen('details')"><i class="fas fa-arrow-left"></i> Back</button>
         <div class="card-hk">
-            <label class="small fw-bold">Schedule Type</label>
-            <select id="selectedType" class="form-control mb-3" onchange="updatePriceDisplay()">
-                <option value="One day One Time">One day One Time</option>
+            <h6 class="fw-bold mb-3">Schedule</h6>
+            <select id="selectedType" class="form-select mb-3" onchange="toggleInputs()">
+                <option value="One day One Time">One Day One Time</option>
                 <option value="For Multiple Days">For Multiple Days</option>
                 <option value="Acc. To Per/Hours">Acc. To Per/Hours</option>
             </select>
             
-            <label class="small fw-bold">Select Date</label>
-            <input type="date" id="bookDate" class="form-control mb-3">
+            <label class="small fw-bold">Date</label>
+            <input type="date" id="startDate" class="form-control mb-3" onchange="loadSlots()">
             
-            <label class="small fw-bold mb-2">Select Time</label>
-            <div id="slotsContainer" class="row g-2"></div>
-        </div>
+            <div id="endDateArea" class="d-none">
+                <label class="small fw-bold">Till Date</label>
+                <input type="date" id="endDate" class="form-control mb-3">
+            </div>
 
-        <div class="card-hk border-success">
-            <div class="form-check form-switch d-flex justify-content-between align-items-center p-0">
+            <div id="hourlyDurationArea" class="d-none">
+                <label class="small fw-bold">End Time</label>
+                <input type="time" id="endTime" class="form-control mb-3">
+            </div>
+
+            <div class="form-check form-switch mb-2 p-0 d-flex justify-content-between align-items-center">
                 <label class="fw-bold">Need Consumables?</label>
-                <input class="form-check-input" type="checkbox" id="needConsumable" style="margin:0; float:none">
-            </div>
-            <div id="consumablesList" class="mt-2"></div>
-        </div>
-
-        <div class="card-hk border-danger" style="background:#fff5f5">
-            <div class="form-check form-switch d-flex justify-content-between align-items-center p-0">
-                <label class="fw-bold text-danger">Emergency Visit</label>
-                <input class="form-check-input" type="checkbox" id="fastDelivery">
+                <input class="form-check-input" type="checkbox" id="needConsumable">
             </div>
         </div>
 
-        <button class="btn-hk" onclick="goToPatient()">Continue</button>
+        <div id="slotArea" class="d-none">
+            <h6 class="fw-bold mb-3">Select Slot</h6>
+            <div class="slot-grid" id="slotGrid"></div>
+        </div>
+
+        <button id="btnProceedPatient" class="btn-hk mt-4" disabled onclick="showScreen('patient')">Proceed</button>
     </div>
 
     <!-- 4. PATIENT INFO -->
     <div id="screen-patient" class="screen">
         <div class="card-hk">
-            <input type="text" id="pName" class="form-control mb-2" placeholder="Patient Name">
-            <input type="number" id="pAge" class="form-control mb-3" placeholder="Age">
-            <input type="text" id="pPhone" class="form-control" placeholder="Phone Number">
+            <h6 class="fw-bold mb-3">Patient Details</h6>
+            <input type="text" id="pName" class="form-control mb-2" placeholder="Full Name">
+            <div class="row mb-2">
+                <div class="col-6"><input type="number" id="pAge" class="form-control" placeholder="Age"></div>
+                <div class="col-6"><select id="pGender" class="form-select"><option>Male</option><option>Female</option></select></div>
+            </div>
+            <select id="pRelation" class="form-select mb-3">
+                <option value="Self">Relation: Self</option><option value="Father">Father</option><option value="Mother">Mother</option>
+            </select>
+            <input type="text" id="pHeight" class="form-control mb-2" placeholder="Height (cm)">
+            <input type="date" id="pDob" class="form-control mb-2">
+            <textarea id="pInstructions" class="form-control" placeholder="Instructions..."></textarea>
         </div>
-        <button class="btn-hk" onclick="callCheckout()">Verify Bill</button>
+        <button class="btn-hk" onclick="callCheckout()">Next: Review Bill</button>
     </div>
 
-    <!-- 5. CHECKOUT -->
-    <div id="screen-checkout" class="screen">
+    <!-- 5. SUMMARY -->
+    <div id="screen-summary" class="screen">
         <h5 class="fw-bold mb-3">Order Summary</h5>
-        <div id="summaryArea"></div>
-        <button class="btn-hk mt-4" onclick="placeOrder()">Confirm & Book</button>
+        
+        <div class="card-hk border-success bg-light">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="fw-bold mb-0">Faster Service</h6>
+                    <small class="text-muted" id="fasterPriceLabel"></small>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="fasterSwitch" onchange="toggleFaster()">
+                </div>
+            </div>
+        </div>
+
+        <div id="billBox"></div>
+        <button class="btn-hk mt-4" id="btnFinalPay" onclick="placeBooking()">Confirm & Book</button>
     </div>
 
+    <!-- 6. HISTORY -->
+    <div id="screen-my-bookings" class="screen">
+        <h5 class="fw-bold mb-3">Appointments</h5>
+        <div id="bookingList"></div>
+    </div>
+</div>
+
+<div class="floating-auth">
+    <button class="btn btn-dark rounded-circle p-3 shadow" onclick="setAuthToken()"><i class="fas fa-key"></i></button>
 </div>
 
 <script>
-    const API = "http://localhost:5002/user/nurse";
+    const API_BASE = "http://localhost:5002/user/nurse";
     let USER_TOKEN = localStorage.getItem('u_token');
-    let nurseData, selectedService, selectedTime, selectedConsumables = [];
+    
+    let state = {
+        nurseId: null,
+        serviceId: null,
+        selectedTime: null,
+        bill: null,
+        isFaster: false
+    };
 
-    async function fetchNurses() {
-        const res = await fetch(`${API}/list`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({lat:30.7, lng:76.7}) });
+    window.onload = () => { if(!USER_TOKEN) setAuthToken(); loadNurses(); };
+
+    function toggleInputs() {
+        const type = document.getElementById('selectedType').value;
+        document.getElementById('endDateArea').classList.toggle('d-none', type !== 'For Multiple Days');
+        document.getElementById('hourlyDurationArea').classList.toggle('d-none', type !== 'Acc. To Per/Hours');
+    }
+
+    async function loadNurses() {
+        const res = await fetch(`${API_BASE}/list`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) });
         const json = await res.json();
-        document.getElementById('nurseListArea').innerHTML = json.data.map(n => `
-            <div class="card-hk d-flex align-items-center" onclick="loadNurseDetails('${n._id}')">
-                <img src="https://ui-avatars.com/api/?name=${n.name}&background=random" style="width:60px; border-radius:10px;" class="me-3">
-                <div><h6 class="mb-0 fw-bold">${n.name}</h6><small>Starts ₹${n.startingPrice}</small></div>
+        document.getElementById('nurseList').innerHTML = json.data.map(n => `
+            <div class="card-hk d-flex flex-row align-items-center" onclick="loadDetails('${n._id}')" style="cursor:pointer">
+                <img src="${n.profileImage || 'https://ui-avatars.com/api/?name='+n.name}" class="rounded-3 me-3" style="width:60px; height:60px; object-fit:cover">
+                <div class="flex-grow-1">
+                    <h6 class="mb-0 fw-bold">${n.name}</h6>
+                    <small class="text-muted"><i class="fas fa-star text-warning"></i> ${n.rating} • ${n.experienceYears}Y Exp.</small>
+                    <div class="fw-bold text-success mt-1">From ₹${n.startingPrice}</div>
+                </div>
             </div>`).join('');
     }
 
-    async function loadNurseDetails(id) {
-        const res = await fetch(`${API}/details/${id}`);
-        const json = await res.json();
-        nurseData = json.data;
-        document.getElementById('nurseHeader').innerHTML = `<h5>${nurseData.name}</h5><small>${nurseData.city}</small>`;
-        document.getElementById('servicesArea').innerHTML = nurseData.services.map(s => `
-            <div class="card-hk border p-3" onclick="openConfig('${s._id}')">
-                <b>${s.title}</b><br><small>Final Price: ₹${s.finalPrice}</small>
+    async function loadDetails(id) {
+        state.nurseId = id;
+        const [detRes, delRes] = await Promise.all([
+            fetch(`${API_BASE}/details/${id}`),
+            fetch(`${API_BASE}/delivery-config/${id}`)
+        ]);
+
+        const detJson = await detRes.json();
+        const delJson = await delRes.json();
+        
+        // Dynamic Label from Delivery API
+        document.getElementById('fasterPriceLabel').innerText = `Available at +₹${delJson.data.fastDeliveryExtra}`;
+
+        document.getElementById('nurseHeader').innerHTML = `
+            <div class="card-hk text-center">
+                <h5 class="fw-bold mb-0">${detJson.data.name}</h5>
+                <p class="small text-muted mb-0">${detJson.data.speciality || 'Nurse'}</p>
+            </div>`;
+
+        document.getElementById('serviceList').innerHTML = detJson.data.services.map(s => `
+            <div class="card-hk border service-item" id="svc-${s._id}" onclick="selectService('${s._id}')" style="cursor:pointer">
+                <div class="d-flex justify-content-between"><span>${s.title}</span><b class="text-success">₹${s.finalPrice}</b></div>
             </div>`).join('');
         showScreen('details');
     }
 
-    function openConfig(svcId) {
-        selectedService = nurseData.services.find(s => s._id === svcId);
-        renderSlots();
-        renderConsumables();
-        showScreen('config');
+    function selectService(id) {
+        state.serviceId = id;
+        document.querySelectorAll('.service-item').forEach(el => el.style.borderColor = "#eee");
+        document.getElementById(`svc-${id}`).style.borderColor = "var(--hk-green)";
+        document.getElementById('btnProceedConfig').disabled = false;
     }
 
-    function renderSlots() {
-        const config = nurseData.availability;
-        const start = moment(config.startTime, "HH:mm");
-        const end = moment(config.endTime, "HH:mm");
-        let html = '';
-        while(start.isBefore(end)) {
-            let t = start.format("HH:mm");
-            html += `<div class="col-4"><div class="slot-btn" onclick="setTime('${t}', this)">${start.format("hh:mm A")}<br><small class="text-success">+₹79</small></div></div>`;
-            start.add(60, 'minutes');
-        }
-        document.getElementById('slotsContainer').innerHTML = html;
-    }
-
-    function setTime(t, el) {
-        document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
-        el.classList.add('selected');
-        selectedTime = t;
-    }
-
-    function renderConsumables() {
-        document.getElementById('consumablesList').innerHTML = nurseData.consumables.map(c => `
-            <div class="d-flex justify-content-between small mb-1">
-                <span>${c.itemName} (₹${c.price})</span>
-                <input type="checkbox" onchange="toggleCons('${c._id}')">
+    async function loadSlots() {
+        const date = document.getElementById('startDate').value;
+        const type = document.getElementById('selectedType').value;
+        if(!date) return;
+        Swal.showLoading();
+        const res = await fetch(`${API_BASE}/availability/${state.nurseId}?date=${date}&type=${type}`);
+        const json = await res.json();
+        Swal.close();
+        document.getElementById('slotArea').classList.remove('d-none');
+        document.getElementById('slotGrid').innerHTML = json.data.map(s => `
+            <div class="slot-item ${s.isAvailable ? '' : 'slot-booked'}" onclick="${s.isAvailable ? `selectTime('${s.time}')` : ''}" id="slot-${s.time}">
+                <small class="fw-bold">${s.displayTime}</small>
+                <span class="slot-surcharge">${s.extraFee > 0 ? '+₹'+s.extraFee : 'Free'}</span>
             </div>`).join('');
     }
 
-    function toggleCons(id) {
-        const idx = selectedConsumables.indexOf(id);
-        if(idx > -1) selectedConsumables.splice(idx, 1);
-        else selectedConsumables.push(id);
+    function selectTime(time) {
+        state.selectedTime = time;
+        document.querySelectorAll('.slot-item').forEach(el => el.classList.remove('selected'));
+        document.getElementById(`slot-${time}`).classList.add('selected');
+        document.getElementById('btnProceedPatient').disabled = false;
     }
-
-    function goToPatient() { if(!selectedTime) return alert('Select time'); showScreen('patient'); }
 
     async function callCheckout() {
-        const res = await fetch(`${API}/checkout`, {
-            method: 'POST',
-            headers: {'Content-Type':'application/json', 'Authorization': `Bearer ${USER_TOKEN}`},
-            body: JSON.stringify({
-                nurseId: nurseData._id, serviceId: selectedService._id,
-                selectedType: document.getElementById('selectedType').value,
-                slotTime: selectedTime, fasterService: document.getElementById('fastDelivery').checked,
-                selectedConsumables: selectedConsumables
-            })
+        const payload = {
+            nurseId: state.nurseId, serviceId: state.serviceId,
+            selectedType: document.getElementById('selectedType').value,
+            startDate: document.getElementById('startDate').value,
+            endDate: document.getElementById('endDate').value,
+            startTime: state.selectedTime,
+            endTime: document.getElementById('endTime').value,
+            isFasterService: state.isFaster
+        };
+        const res = await fetch(`${API_BASE}/checkout`, {
+            method: 'POST', headers: {'Content-Type':'application/json', 'Authorization':`Bearer ${USER_TOKEN}`},
+            body: JSON.stringify(payload)
         });
         const json = await res.json();
-        if(json.success) {
+        if(res.ok) {
+            state.bill = json.breakdown;
             const b = json.breakdown;
-            document.getElementById('summaryArea').innerHTML = `
+            // 100% Dynamic Billing Box from API
+            document.getElementById('billBox').innerHTML = `
                 <div class="card-hk">
-                    <div class="price-row"><span>Base Price (${b.selectedType})</span><b>₹${b.basePrice}</b></div>
+                    <div class="price-row"><span>Base Service Fee</span><b>₹${b.basePrice}</b></div>
                     <div class="price-row"><span>Slot Surcharge</span><b>₹${b.slotSurcharge}</b></div>
-                    <div class="price-row"><span>Emergency Fee</span><b>₹${b.emergencyFee}</b></div>
-                    <div class="price-row text-success"><span>Consumables</span><b>₹${b.consumableCharge}</b></div>
-                    <hr><div class="price-row"><h5>Total</h5><h5>₹${b.totalPayable}</h5></div>
+                    <div class="price-row"><span>Faster Service Charge</span><b class="text-danger">₹${b.fasterServiceCharge}</b></div>
+                    <div class="price-row"><span>Tax Amount</span><b>₹${b.taxAmount}</b></div>
+                    <div class="price-total mt-3"><span>Total Payable</span><span>₹${b.totalPrice}</span></div>
                 </div>`;
-            showScreen('checkout');
-        }
+            showScreen('summary');
+        } else { Swal.fire('Error', json.message, 'error'); }
     }
 
-    async function placeOrder() {
+    function toggleFaster() {
+        state.isFaster = document.getElementById('fasterSwitch').checked;
+        callCheckout();
+    }
+
+    async function placeBooking() {
         const payload = {
-            nurseId: nurseData._id, serviceId: selectedService._id,
-            assessmentLocation: "At Home", triageFacility: "Routine",
-            patients: [{name: document.getElementById('pName').value, age: document.getElementById('pAge').value}],
-            schedule: {startDate: document.getElementById('bookDate').value, startTime: selectedTime},
-            address: {houseNo: document.getElementById('addrHouse').value, phone: document.getElementById('pPhone').value, city: "Mohali"},
-            totalPrice: 1000 // Just simulation
+            nurseId: state.nurseId, serviceId: state.serviceId,
+            schedule: {
+                duration: document.getElementById('selectedType').value,
+                startDate: document.getElementById('startDate').value,
+                endDate: document.getElementById('endDate').value || document.getElementById('startDate').value,
+                startTime: state.selectedTime, endTime: document.getElementById('endTime').value
+            },
+            priceBreakdown: state.bill, totalPrice: state.bill.totalPrice,
+            patients: [{
+                name: document.getElementById('pName').value, age: document.getElementById('pAge').value,
+                gender: document.getElementById('pGender').value, relation: document.getElementById('pRelation').value
+            }],
+            healthDetails: {
+                height: document.getElementById('pHeight').value, dob: document.getElementById('pDob').value,
+                language: "English", specialInstructions: document.getElementById('pInstructions').value
+            },
+            address: { houseNo: "User Address", city: "Jaipur", addressType: "Home" },
+            triageFacility: "Routine", assessmentLocation: "At Home"
         };
-        const res = await fetch(`${API}/book`, { method:'POST', headers:{'Content-Type':'application/json', 'Authorization': `Bearer ${USER_TOKEN}`}, body:JSON.stringify(payload) });
-        if(res.ok) { Swal.fire('Success', 'Booking Placed', 'success'); showScreen('list'); }
+        const res = await fetch(`${API_BASE}/book`, {
+            method: 'POST', headers: {'Content-Type':'application/json', 'Authorization':`Bearer ${USER_TOKEN}`},
+            body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if(res.ok) { Swal.fire('Success', 'Booked ID: ' + json.data.bookingId, 'success').then(() => location.reload()); }
+        else { Swal.fire('Error', json.message, 'error'); }
+    }
+
+    async function loadMyBookings() {
+        const res = await fetch(`${API_BASE}/my-appointments`, { headers: {'Authorization':`Bearer ${USER_TOKEN}`} });
+        const json = await res.json();
+        document.getElementById('bookingList').innerHTML = json.data.map(b => `
+            <div class="card-hk">
+                <div class="d-flex justify-content-between"><small>${b.bookingId}</small><span class="badge bg-success">${b.status}</span></div>
+                <h6 class="mt-2 fw-bold">${b.serviceDetails?.title}</h6>
+            </div>`).join('');
     }
 
     function showScreen(id) {
-        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
-        document.getElementById('screen-' + id).classList.add('active-screen');
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById('screen-' + id).classList.add('active');
     }
-    
+
     function setAuthToken() {
-        Swal.fire({title:'User Token', input:'text'}).then(r => { if(r.value){localStorage.setItem('u_token', r.value); USER_TOKEN=r.value; location.reload();} });
+        const t = prompt("Enter User Token:");
+        if(t) { localStorage.setItem('u_token', t); USER_TOKEN = t; location.reload(); }
     }
-    fetchNurses();
 </script>
 </body>
 </html>
