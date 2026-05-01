@@ -37,11 +37,7 @@ const nurseBookingSchema = new mongoose.Schema({
         enum: ['At Home', 'At Hospital'], 
         required: true 
     },
-    triageFacility: { 
-        type: String, 
-        enum: ['Emergency', 'Very Urgent', 'Urgent', 'Routine'],
-        required: true 
-    },
+    
 
     healthDetails: { 
         height: String,

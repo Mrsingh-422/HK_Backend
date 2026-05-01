@@ -14,6 +14,7 @@ const getNurses = async (req, res) => {
     try {
         const { city, search, speciality } = req.body;
         let query = { profileStatus: 'Approved', isActive: true };
+        
         if (city) query.city = new RegExp(city, 'i');
         if (search) query.name = new RegExp(search, 'i');
         if (speciality) query.speciality = speciality;
@@ -22,57 +23,36 @@ const getNurses = async (req, res) => {
         const data = [];
 
         for (let nurse of nurses) {
+            // Nurse ki wahi services fetch karein jo active hain
             const services = await NurseService.find({ nurseId: nurse._id, isActive: true });
+            
             if (services.length > 0) {
-                // Starting price based on finalPrice of services
-                const minPrice = Math.min(...services.map(s => s.finalPrice));
-                data.push({
-                    _id: nurse._id,
-                    name: nurse.name,
-                    profileImage: nurse.profileImage,
-                    rating: nurse.rating,
-                    city: nurse.city,
-                    experienceYears: nurse.experienceYears,
-                    startingPrice: minPrice,
-                    topServices: services.slice(0, 2).map(s => s.title)
-                });
+                // UPDATE: Starting price ab 'oneDayPrice' field se calculate hogi
+                // Filter karke unhi services ka price uthayenge jinka price 0 se zyada hai
+                const validPrices = services.map(s => s.oneDayPrice).filter(p => p > 0);
+                
+                if (validPrices.length > 0) {
+                    const minOneDayPrice = Math.min(...validPrices);
+
+                    data.push({
+                        _id: nurse._id,
+                        name: nurse.name,
+                        profileImage: nurse.profileImage,
+                        rating: nurse.rating,
+                        city: nurse.city,
+                        experienceYears: nurse.experienceYears,
+                        startingPrice: minOneDayPrice, // Ab yahan 1 Day Charge dikhega
+                        topServices: services.slice(0, 2).map(s => s.title)
+                    });
+                }
             }
         }
-        res.json({ success: true, count: data.length, data });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-// 3. GET AVAILABILITY (Slot Generation)
-// const getNurseAvailability = async (req, res) => {
-//     try {
-//         const { nurseId } = req.params;
-//         const { date, type } = req.query;
-
-//         const config = await Availability.findOne({ vendorId: nurseId });
-//         if (!config) return res.status(404).json({ message: "Nurse schedule not found" });
-
-//         let allSlots = generateNurseSlots(config, type);
-//         const queryDate = moment(date).startOf('day').toDate();
         
-//         const bookings = await NurseBooking.find({
-//             nurseId,
-//             "schedule.startDate": queryDate,
-//             status: { $in: ['Confirmed', 'Assigned', 'In-Progress'] }
-//         });
-
-//         const data = allSlots.map(slot => {
-//             const bookingCount = bookings.filter(b => b.schedule.startTime === slot.time).length;
-//             return {
-//                 ...slot,
-//                 isAvailable: config.maxClientsPerSlot === 0 ? true : bookingCount < config.maxClientsPerSlot,
-//                 extraFee: slot.extraFee || 79 // Slot price dynamic from helper
-//             };
-//         });
-
-//         res.json({ success: true, data });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
-
+        res.json({ success: true, count: data.length, data });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
 
 const getNurseDetails = async (req, res) => {
     try {
@@ -96,23 +76,43 @@ const getNurseDetails = async (req, res) => {
 
 const getNurseDeliveryConfig = async (req, res) => {
     try {
-        const { nurseId } = req.params;
-        const [delivery, availability] = await Promise.all([
-            DeliveryCharge.findOne({ vendorId: nurseId }),
-            Availability.findOne({ vendorId: nurseId })
-        ]);
+        const { nurseId } = req.params; // LabId, NurseId ya PharmacyId
+        
+        const config = await DeliveryCharge.findOne({ vendorId: nurseId });
+
+        if (!config) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Delivery configuration not found for this vendor" 
+            });
+        }
 
         res.json({
             success: true,
             data: {
-                fastDeliveryExtra: delivery?.fastDeliveryExtra || 0,
-                baseSurcharge: 79, // Aapka fixed standard slot surcharge
-                pricePerKM: delivery?.pricePerKM || 0,
-                fixedDistance: delivery?.fixedDistance || 0
+                vendorId: config.vendorId,
+                vendorType: config.vendorType,
+                // Base charges
+                fixedPrice: config.fixedPrice,          // Base fee (e.g., 50 Rs)
+                fixedDistance: config.fixedDistance,    // Upto how many KM it's fixed (e.g., 5 KM)
+                pricePerKM: config.pricePerKM,          // Extra charge per KM after fixedDistance
+                
+                // Special charges
+                fastDeliveryExtra: config.fastDeliveryExtra, // Rapid/6-hr delivery extra cost
+                
+                // Thresholds & Taxes
+                freeDeliveryThreshold: config.freeDeliveryThreshold, // Free delivery if order > this
+                taxPercentage: config.taxPercentage,
+                taxInRupees: config.taxInRupees,
+                
+                updatedAt: config.updatedAt
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 const checkRangeAvailability = async (req, res) => {
     try {
@@ -159,123 +159,152 @@ const checkRangeAvailability = async (req, res) => {
 const getNurseAvailability = async (req, res) => {
     try {
         const { nurseId } = req.params;
-        const { date, type } = req.query;
+        const { month } = req.query; // e.g., "2026-05"
 
         const config = await Availability.findOne({ vendorId: nurseId });
-        if (!config) return res.status(404).json({ message: "Nurse schedule not found" });
+        const service = await NurseService.findOne({ nurseId, isActive: true }); // Base price dikhane ke liye
 
-        let allSlots = generateNurseSlots(config, type);
-        const queryDate = moment(date).startOf('day').toDate();
-        
-        const bookings = await NurseBooking.find({
-            nurseId,
-            "schedule.startDate": queryDate,
-            status: { $in: ['Confirmed', 'Assigned', 'In-Progress', 'Pending'] }
+        // Response mein premium dates bhej rahe hain taaki frontend calendar par dikha sake
+        res.json({
+            success: true,
+            basePrice: service?.oneDayPrice || 0,
+            premiumDates: config.premiumDates || [], // [{date: "2026-05-03", extraFee: 500}]
+            timeSlots: generateNurseSlots(config, 'One day One Time')
         });
-
-        const data = allSlots.map(slot => {
-            const bookingCount = bookings.filter(b => b.schedule.startTime === slot.time).length;
-            return {
-                ...slot,
-                isAvailable: config.maxClientsPerSlot === 0 ? true : bookingCount < config.maxClientsPerSlot,
-                // extraFee helper se 0 ya premium price lekar aayega
-            };
-        });
-
-        res.json({ success: true, data });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // 2. Checkout API Fix
 const checkoutNurseBooking = async (req, res) => {
     try {
-        const { nurseId, serviceId, selectedType, startDate, endDate, startTime, endTime, isFasterService } = req.body;
+        const { nurseId, serviceId, selectedType, startDate, endDate, startTime, endTime, isFasterService, patientCount, selectedConsumables } = req.body;
 
-        const [service, delivery, config] = await Promise.all([
+        const [service, config, delivery] = await Promise.all([
             NurseService.findById(serviceId),
-            DeliveryCharge.findOne({ vendorId: nurseId }),
-            Availability.findOne({ vendorId: nurseId })
+            Availability.findOne({ vendorId: nurseId }),
+            DeliveryCharge.findOne({ vendorId: nurseId })
         ]);
 
         if (!service) return res.status(404).json({ message: "Service not found" });
+        const pCount = Number(patientCount) || 1;
 
-        let basePrice = 0;
+        let basePricePerUnit = 0;
+        let totalSurcharge = 0;
         let units = 1;
 
-        // Base Pricing Logic
-        if (selectedType === 'One day One Time') basePrice = service.oneDayPrice || service.finalPrice;
-        else if (selectedType === 'For Multiple Days') {
-            units = moment(endDate).diff(moment(startDate), 'days') + 1;
-            basePrice = (service.multipleDaysPrice || service.finalPrice) * units;
-        } else if (selectedType === 'Acc. To Per/Hours') {
-            units = moment(endTime, "HH:mm").diff(moment(startTime, "HH:mm"), 'hours') || 1;
-            basePrice = (service.hourlyPrice || service.finalPrice) * units;
+        // 1. Core Pricing Selection
+        if (selectedType === 'For Multiple Days') {
+            const start = moment(startDate).startOf('day');
+            const end = moment(endDate).startOf('day');
+            units = end.diff(start, 'days') + 1;
+            basePricePerUnit = service.multipleDaysPrice;
+            let curr = moment(start);
+            while (curr <= end) {
+                const p = config.premiumDates?.find(pd => pd.date === curr.format('YYYY-MM-DD'));
+                if (p) totalSurcharge += p.extraFee;
+                curr.add(1, 'days');
+            }
+        } 
+        else if (selectedType === 'One day One Time') {
+            basePricePerUnit = service.oneDayPrice;
+            const p = config.premiumDates?.find(pd => pd.date === moment(startDate).format('YYYY-MM-DD'));
+            if (p) totalSurcharge = p.extraFee;
+        }
+        else if (selectedType === 'Acc. To Per/Hours') {
+            const hStart = moment(startTime, "HH:mm");
+            const hEnd = moment(endTime, "HH:mm");
+            units = hEnd.diff(hStart, 'hours') || 1;
+            basePricePerUnit = service.hourlyPrice;
+            const p = config.premiumSlots?.find(ps => ps.time === startTime);
+            totalSurcharge = p ? p.extraFee : 0;
         }
 
-        // 1. Dynamic Faster Charge (Using fastDeliveryExtra key only)
+        // 2. Add-ons Calculation
+        const consumableTotal = (selectedConsumables || []).reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
         const fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
+        
+        // Subtotal before tax
+        const subTotalWithPatients = ((basePricePerUnit * units) + totalSurcharge + consumableTotal) * pCount;
+        const subTotalWithFaster = subTotalWithPatients + fasterCharge;
 
-        // 2. Dynamic Slot Surcharge (Only from premiumSlots, otherwise 0)
-        const premiumSlot = config?.premiumSlots?.find(p => p.time === startTime);
-        const slotSurcharge = premiumSlot ? premiumSlot.extraFee : 0; 
-
-        const tax = Math.round(basePrice * 0.05);
+        // 3. DYNAMIC TAX LOGIC (Figma/API Sync)
+        let finalTax = 0;
+        if (delivery) {
+            // Priority: Percentage Tax first, then fixed Rupee tax
+            if (delivery.taxPercentage && delivery.taxPercentage > 0) {
+                finalTax = (subTotalWithFaster * delivery.taxPercentage) / 100;
+            }
+            if (delivery.taxInRupees && delivery.taxInRupees > 0) {
+                finalTax += delivery.taxInRupees;
+            }
+        }
 
         res.json({
             success: true,
             breakdown: {
-                basePrice: Number(basePrice),
-                slotSurcharge: Number(slotSurcharge),
-                fasterServiceCharge: Number(fasterCharge),
-                taxAmount: tax,
-                totalPrice: basePrice + slotSurcharge + fasterCharge + tax,
+                basePrice: basePricePerUnit * units * pCount,
+                slotSurcharge: totalSurcharge * pCount,
+                fasterServiceCharge: fasterCharge,
+                consumableTotal: consumableTotal * pCount,
+                taxAmount: Math.round(finalTax), // DYNAMIC TAX
+                totalPrice: Math.round(subTotalWithFaster + finalTax),
                 units,
-                selectedType
+                pCount
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("Checkout Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
-
-// 2. PLACE BOOKING (Snapshot logic Figma Image 9)
+// 5. PLACE BOOKING (Consumables Fix)
 const placeNurseBooking = async (req, res) => {
     try {
-        const { nurseId, serviceId, schedule, priceBreakdown, healthDetails, patients, address, triageFacility } = req.body;
-
+        const { nurseId, serviceId, schedule, priceBreakdown, patients, healthDetails, address, selectedConsumables, needConsumable, assessmentLocation } = req.body;
         const service = await NurseService.findById(serviceId);
-        const available = await isNurseAvailable(nurseId, { selectedType: schedule.duration, ...schedule }, NurseBooking, Availability);
-        if (!available) return res.status(400).json({ message: "Slot not available!" });
 
         const booking = await NurseBooking.create({
             userId: req.user.id,
-            nurseId,
-            serviceId,
-            bookingId: `NB${Date.now().toString().slice(-6)}`,
+            nurseId, serviceId,
+            bookingId: `NB${Date.now().toString().slice(-8)}`,
             serviceDetails: {
                 title: service.title,
                 type: service.type,
                 duration: schedule.duration,
-                basePrice: service.finalPrice,
-                procedureIncluded: service.procedureIncluded,
-                servicesOffered: service.servicesOffered
+                basePrice: service.finalPrice
             },
-            priceBreakdown,
+            priceBreakdown: {
+                basePrice: priceBreakdown.basePrice,
+                slotSurcharge: priceBreakdown.slotSurcharge,
+                fasterServiceCharge: priceBreakdown.fasterServiceCharge,
+                taxAmount: priceBreakdown.taxAmount,
+                totalPrice: priceBreakdown.totalPrice
+            },
             patients,
             healthDetails,
             schedule: {
-                ...schedule,
                 startDate: moment(schedule.startDate).startOf('day').toDate(),
-                endDate: schedule.duration === 'For Multiple Days' ? moment(schedule.endDate).endOf('day').toDate() : moment(schedule.startDate).endOf('day').toDate()
+                endDate: moment(schedule.endDate).endOf('day').toDate(),
+                startTime: schedule.startTime,
+                endTime: schedule.endTime,
+                duration: schedule.duration
             },
             address,
-            triageFacility,
-            assessmentLocation: req.body.assessmentLocation || 'At Home',
+            assessmentLocation,
+            selectedConsumables: selectedConsumables || [], // SAVE ARRAY
+            needConsumable: needConsumable || false,        // SAVE BOOLEAN
+            totalPrice: priceBreakdown.totalPrice,
             status: 'Pending'
         });
 
         res.status(201).json({ success: true, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("Controller Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 // 6. TRACKING STATUS (Populated Response)
 const getAppointmentStatus = async (req, res) => {

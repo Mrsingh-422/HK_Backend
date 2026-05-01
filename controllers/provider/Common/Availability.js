@@ -90,24 +90,22 @@ const unblockSlot = async (req, res) => {
 const setNurseAvailability = async (req, res) => {
     try {
         const nurseId = req.user.id;
-        const { startTime, endTime, maxClientsPerSlot, slotDuration, morningSlots, afternoonSlots, eveningSlots } = req.body;
-
-        if (startTime >= endTime) return res.status(400).json({ message: "Start time must be before end time" });
+        const { premiumDates, ...rest } = req.body;
 
         const config = await Availability.findOneAndUpdate(
             { vendorId: nurseId },
             { 
                 $set: { 
-                    ...req.body, 
+                    ...rest, 
                     vendorId: nurseId, 
                     vendorType: 'Nurse',
-                    maxClientsPerSlot: Number(maxClientsPerSlot) || 1 
+                    premiumDates: premiumDates // Array of {date: "2026-05-03", extraFee: 500}
                 } 
             },
             { upsert: true, new: true }
         );
 
-        res.json({ success: true, message: "Nurse schedule updated", data: config });
+        res.json({ success: true, message: "Settings saved", data: config });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 

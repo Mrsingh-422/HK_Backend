@@ -35,6 +35,10 @@ const availabilitySchema = new mongoose.Schema({
         enum: ['One day One Time', 'For Multiple Days', 'Acc. To Per/Hours'],
         default: ['One day One Time'] 
     },
+    premiumDates: [{
+        date: { type: String }, // "2026-05-03" (YYYY-MM-DD)
+        extraFee: { type: Number, default: 0 }
+    }],
     hourlyRateSurcharge: { type: Number, default: 0 }, // For "Acc. To Per/Hours"
 
     // "Delete" option ke liye: Vendor jin slots ko hide karna chahta hai
