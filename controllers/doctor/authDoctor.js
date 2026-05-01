@@ -12,40 +12,54 @@ const generateToken = (id, role) => {
 // Endpoint: POST /api/auth/doctor/register
 const registerDoctor = async (req, res) => {
     try {
-        const { name, email, phone, country, state, city, password } = req.body;
+        // countryCode add kiya gaya hai (Optional)
+        const { name, email, phone, countryCode, country, state, city, password } = req.body;
         
-        // Duplicate Check
-        const exists = await Doctor.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }] });
-        if (exists) return res.status(400).json({ message: 'Email or Phone already exists' });
+        // Validation: Email/Phone ki duplicate check
+        const normalizedEmail = email?.toLowerCase();
+        const exists = await Doctor.findOne({ $or: [{ email: normalizedEmail }, { phone }] });
+        if (exists) return res.status(400).json({ success: false, message: 'Email or Phone already exists' });
 
         const hashedPassword = await bcrypt.hash(password, 10);
+        
+        // Doctor creation logic (Logic remains same, countryCode added to object)
         const doctor = await Doctor.create({
             name, 
-            email: email?.toLowerCase(), 
+            email: normalizedEmail, 
             phone, 
-            country, state, city,
+            countryCode, // Agar req.body me nahi hoga toh null/undefined save hoga
+            country, 
+            state, 
+            city,
             password: hashedPassword,
-            role: 'doctor', // Independent Role
+            role: 'doctor',
             profileStatus: 'Incomplete'
         });
 
+        // 🚀 Auto-Login Token: Taaki register ke baad session maintain rahe
+        const token = generateToken(doctor._id, doctor.role);
+        doctor.token = token;
+        await doctor.save();
+
         res.status(201).json({ 
             success: true, 
-            message: 'OTP sent to your phone (Static: 1111)', 
-            doctorId: doctor._id 
+            message: 'Registration successful. OTP sent to your phone (Static: 1111)', 
+            token, 
+            doctorId: doctor._id,
+            profileStatus: doctor.profileStatus
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 2. VERIFY OTP (Static) ---
-// Endpoint: POST /api/auth/doctor/verify-otp
+// --- 2. VERIFY OTP (Step 2) ---
+// Flow: OTP verify hoga -> isPhoneVerified true hoga -> Token refresh/return hoga
 const verifyOTP = async (req, res) => {
     try {
         const { phone, otp } = req.body;
 
-        if (otp !== '1111') return res.status(400).json({ message: 'Invalid OTP' });
+        if (otp !== '1111') return res.status(400).json({ success: false, message: 'Invalid OTP' });
 
         const doctor = await Doctor.findOneAndUpdate(
             { phone }, 
@@ -53,19 +67,25 @@ const verifyOTP = async (req, res) => {
             { new: true }
         );
 
-        if (!doctor) return res.status(404).json({ message: 'Doctor not found' });
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
-        res.json({ success: true, message: 'Phone Verified Successfully' });
+        const token = doctor.token || generateToken(doctor._id, doctor.role);
+
+        res.json({ 
+            success: true, 
+            message: 'Phone Verified Successfully', 
+            token, 
+            profileStatus: doctor.profileStatus 
+        });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 3. UPLOAD DOCUMENTS (Step 3: Professional Info & Docs) ---
-// Endpoint: POST /api/auth/doctor/upload-docs
+// --- 3. UPLOAD DOCUMENTS ---
 const uploadDocuments = async (req, res) => {
     try {
-        const doctorId = req.user.id;
+        const doctorId = req.user.id; // Middleware se aayega
         const { qualification, councilNumber, councilName, licenseNumber, speciality } = req.body;
 
         const updateData = {
@@ -74,7 +94,7 @@ const uploadDocuments = async (req, res) => {
             councilName,
             licenseNumber, 
             speciality,
-            profileStatus: 'Pending' // Wait for Admin
+            profileStatus: 'Pending' 
         };
 
         if (req.files?.profileImage) {
@@ -85,9 +105,16 @@ const uploadDocuments = async (req, res) => {
         }
 
         const updated = await Doctor.findByIdAndUpdate(doctorId, updateData, { new: true });
-        res.json({ success: true, message: 'Documents submitted for approval.', data: updated });
+        
+        res.json({ 
+            success: true, 
+            message: 'Documents submitted for approval.', 
+            profileStatus: 'Pending', // Frontend ko status sync karne ke liye
+            data: updated 
+        });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        // Yahan success: false add kiya hai consistency ke liye
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

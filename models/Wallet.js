@@ -1,13 +1,23 @@
-// models/Wallet.js
 const mongoose = require('mongoose');
+
 const walletSchema = new mongoose.Schema({
-    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider', required: true },
+    // vendorId ab Doctor ya Provider dono ki ID hold kar sakta hai
+    vendorId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        required: true, 
+        refPath: 'vendorModel' 
+    },
+    vendorModel: {
+        type: String,
+        required: true,
+        enum: ['Doctor', 'Provider'] // 'Doctor' collection aur 'Provider' dono ke liye
+    },
     balance: { type: Number, default: 0 },
     transactions: [{
         type: { type: String, enum: ['Credit', 'Debit'] },
         amount: Number,
-        remark: String, // e.g., "Order #123 earnings"
-        userId: String,
+        remark: String, 
+        orderId: String, // Booking ID reference
         date: { type: Date, default: Date.now }
     }],
     bankDetails: {
@@ -19,4 +29,5 @@ const walletSchema = new mongoose.Schema({
         isVerified: { type: Boolean, default: false }
     }
 }, { timestamps: true });
+
 module.exports = mongoose.model('Wallet', walletSchema);

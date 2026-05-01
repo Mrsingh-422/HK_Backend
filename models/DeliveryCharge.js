@@ -10,7 +10,7 @@ const deliveryChargeSchema = new mongoose.Schema({
     },
     vendorType: { 
         type: String, 
-        enum: ['Lab', 'Pharmacy', 'Nurse'], 
+        enum: ['Lab', 'Pharmacy', 'Nurse', 'Doctor'], // 'Doctor' added
         required: true 
     },
 

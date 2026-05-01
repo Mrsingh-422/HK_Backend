@@ -4,6 +4,7 @@ const doctorSchema = new mongoose.Schema({
     hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital', default: null },
     name: { type: String, required: true },
     email: { type: String, unique: true, sparse: true, lowercase: true }, 
+    countryCode: { type: String, default: null }, 
     phone: { type: String, unique: true, sparse: true }, 
     password: { type: String, required: true, select: false },
     role: { type: String, enum: ['doctor', 'hospital-doctor'], default: 'doctor' },

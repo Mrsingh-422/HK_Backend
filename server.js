@@ -51,6 +51,8 @@ app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); //
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
 // --- Admin Lab Routes ---
 app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // Master Lab Test Upload & List Route
+// --- Admin Nurse Routes ---
+app.use('/admin/nurse-csv', require('./routes/admin/Nurse/CategoryUploadRoute')); // Master Nurse Category Upload & List Route
 
 
 
@@ -78,10 +80,13 @@ app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserR
 //////////////// Doctor Routes ///////////////////////
 app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
 app.use('/doctor/appointments', require('./routes/doctor/AppointmentRoute')); // Doctor Appointments Route
+app.use('/doctor/coupon', require('./routes/doctor/DoctorCouponRoute')); // Doctor Coupons Route
+app.use('/doctor/wallet', require('./routes/doctor/DoctorWalletRoute')); // Doctor Wallet Route
+app.use('/doctor/visit-charges', require('./routes/doctor/DoctorVisitChargeRoute')); // Doctor Visit Charges Route
 app.use('/doctor/availability', require('./routes/doctor/DoctorSlotsRoute')); // Doctor Availability Route
 
 
-
+ 
 
 //////////////// Hospital Routes /////////////////////
 app.use('/api/auth/hospital', require('./routes/hospital/authHospital'));

@@ -488,6 +488,26 @@ const nurseServiceUploads = multer({
     { name: 'photos', maxCount: 10 } // Figma Screen 42: "Add Service Photo"
 ]);
 
+// ==========================================
+// EXPORTING ALL UPLOAD CONFIGURATIONS
+// ==========================================
+const careCSVDir = 'public/uploads/care_csv';
+ensureDir(careCSVDir);
+
+const careCSVUpload = multer({ 
+    storage: multer.diskStorage({ 
+        destination: (req, file, cb) => cb(null, careCSVDir), 
+        filename: (req, file, cb) => cb(null, `care-${Date.now()}-${file.originalname}`) 
+    }),
+    fileFilter: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        if (ext === '.csv' || ext === '.xlsx' || ext === '.xls' || file.mimetype.includes('csv') || file.mimetype.includes('excel') || file.mimetype.includes('spreadsheetml')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only CSV, XLSX, and XLS files are allowed'), false);
+        }
+    }
+}).single('file'); // Postman key: 'file'
 
 module.exports = { 
     hospitalUploads,
@@ -518,5 +538,6 @@ module.exports = {
     policeStaffUploads,
     fireCaseUploads,
     categoryTestUploads,
-    nurseServiceUploads
+    nurseServiceUploads,
+    careCSVUpload
 };  

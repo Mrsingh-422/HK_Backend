@@ -4,7 +4,7 @@ const couponSchema = new mongoose.Schema({
     creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     vendorType: {
         type: String,
-        enum: ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance', 'All'],
+        enum: ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance','Doctor', 'All'],
         required: true
     },
     isAdminCreated: { type: Boolean, default: false }, // Flag to identify admin coupons
