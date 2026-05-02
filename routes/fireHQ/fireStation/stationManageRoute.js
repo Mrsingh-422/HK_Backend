@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
+const { fireStaffUploads } = require('../../../middleware/multer');
 const { 
     getStationDashboard, getFreshCases, acceptCase, getAcceptedCases,getCaseHistory,
     getIncidentReport, getNearbyStations,
-    addStaff, getStaffList, addVehicle, getFleetList 
+    addStaff, getStaffList, addVehicle, getFleetList ,getStaffRemovalReasons,
+     updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation
 } = require('../../../controllers/fireHQ/fireStation/stationManage');
 
 // Base URL: /fireStation/management
@@ -29,4 +31,9 @@ router.get('/staff/list', protect('fire-station'), getStaffList);
 router.post('/fleet/add', protect('fire-station'), addVehicle);
 router.get('/fleet/list', protect('fire-station'), getFleetList);
 
+router.put('/staff/update/:id', protect('fire-station'), fireStaffUploads, updateStaff); 
+router.delete('/staff/delete/:id', protect('fire-station'), deleteStaff);
+router.get('/staff/profile/:id', protect('fire-station'), getStaffProfileDetails); // Screen 93
+router.get('/staff/removal-reasons', protect('fire-station'), getStaffRemovalReasons);
+router.post('/add-supporting-station', protect('fire-station'), addSupportingStation);
 module.exports = router;

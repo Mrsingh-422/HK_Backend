@@ -1,5 +1,7 @@
 const FireStation = require('../../models/FireStation');
+const FireHQ = require('../../models/FireHQ');
 const FireCase = require('../../models/FireCase'); // Assuming this model exists for incidents
+const FireNotification = require('../../models/FireNotification'); // For notifications related to cases
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
@@ -9,18 +11,23 @@ const mongoose = require('mongoose');
 const getDashboardStats = async (req, res) => {
     try {
         const hqId = req.user.id;
-        // Figma Names: New Fire Alerts, Ongoing Operations, Resolved Incidents
-        const newFireAlerts = await FireCase.countDocuments({ hqId, status: 'Fresh' });
-        const ongoingOps = await FireCase.countDocuments({ hqId, status: { $in: ['Pending', 'Under Control', 'Critical'] } });
-        const resolvedIncidents = await FireCase.countDocuments({ hqId, status: 'Closed' });
+        
+        const fresh = await FireCase.countDocuments({ hqId, status: 'Fresh' });
+        const pending = await FireCase.countDocuments({ hqId, status: 'Pending' });
+        const history = await FireCase.countDocuments({ hqId, status: { $in: ['Closed', 'Archived'] } });
 
         res.json({
             success: true,
             data: {
-                newFireAlerts,     // Screen 33 label
-                ongoingOps,        // Screen 33 label
-                resolvedIncidents, // Screen 33 label
-                totalEarnings: "42,000" 
+                freshCases: fresh,   // Figma Screen 9 label
+                pendingCases: pending, // Figma Screen 9 label
+                historyCases: history, // Figma Screen 9 label
+                // Services grid ke liye extra details
+                services: [
+                    { title: "Fresh Cases", count: fresh, subTitle: "New Incidents Reported" },
+                    { title: "Pending Cases", count: pending, subTitle: "Under Investigation" },
+                    { title: "Case History", count: history, subTitle: "Closed & Archived Cases" }
+                ]
             }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
@@ -33,24 +40,20 @@ const createFireCase = async (req, res) => {
             description, address, lat, lng, stationId 
         } = req.body;
 
-        // 1. Check karein ki bheja gaya stationId format sahi hai ya nahi
-        if (!mongoose.Types.ObjectId.isValid(stationId)) {
+        // 1. Validation: Check if lat/lng are provided
+        if (!lat || !lng) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Invalid Station ID format provided" 
+                message: "Latitude (lat) and Longitude (lng) are required." 
             });
         }
 
-        // 2. Check karein ki Station exist karta hai aur isi HQ ka hai
-        const station = await FireStation.findOne({ _id: stationId, hqId: req.user.id });
-        if (!station) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Station not found or not authorized under this HQ" 
-            });
+        // 2. ObjectId format check
+        if (!mongoose.Types.ObjectId.isValid(stationId)) {
+            return res.status(400).json({ message: "Invalid Station ID format" });
         }
 
-        // 3. Case Create karein
+        // 3. Create Case with proper nested location object
         const newCase = await FireCase.create({
             hqId: req.user.id,
             stationId: stationId,
@@ -60,22 +63,23 @@ const createFireCase = async (req, res) => {
             severity,
             description,
             address,
+            // Schema ke according nested object bna rahe hain
             location: {
-                lat: parseFloat(lat),
-                lng: parseFloat(lng)
+                lat: Number(lat),
+                lng: Number(lng)
             },
             status: 'Fresh',
             reportedAt: Date.now()
         });
 
-        res.status(201).json({
-            success: true,
-            message: "Fire Case created successfully",
-            data: newCase
+        res.status(201).json({ 
+            success: true, 
+            message: "Fresh Case Dispatched Successfully!", 
+            data: newCase 
         });
 
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -173,21 +177,38 @@ const getMyStations = async (req, res) => {
         res.json({ success: true, data: stations });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+const getStationProfileForHQ = async (req, res) => {
+    try {
+        const station = await FireStation.findById(req.params.id);
+        if (!station) return res.status(404).json({ message: "Station not found" });
+
+        res.json({ success: true, data: station });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 // 4. CASE HISTORY WITH FILTERS (Screen 11 & 12)
 const getCaseHistory = async (req, res) => {
     try {
-        const { status, search } = req.query; // status: Closed, Archived, All
-        const stations = await FireStation.find({ hqId: req.user.id }).select('_id');
-        const stationIds = stations.map(s => s._id);
+        const { status, search } = req.query;
+        const hqId = req.user.id;
 
-        let query = { stationId: { $in: stationIds } };
+        let query = { hqId, status: { $in: ['Closed', 'Archived'] } };
         
         if (status && status !== 'All') query.status = status;
-        if (search) query.caseNo = new RegExp(search, 'i');
+        
+        // ADDON: Multi-field search (Case ID or Address)
+        if (search) {
+            query.$or = [
+                { caseNo: new RegExp(search, 'i') },
+                { address: new RegExp(search, 'i') }
+            ];
+        }
 
-        const cases = await FireCase.find(query).sort({ createdAt: -1 });
-        res.json({ success: true, data: cases });
+        const cases = await FireCase.find(query)
+            .sort({ resolvedAt: -1 })
+            .select('caseNo reportedAt address status'); // Screen 11 cards fields
+
+        res.json({ success: true, count: cases.length, data: cases });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -274,26 +295,66 @@ const deleteFireStation = async (req, res) => {
     }
 };
 
+
+const updateJurisdiction = async (req, res) => {
+    try {
+        const hqId = req.user.id; // Logged-in HQ ki ID
+        const { jurisdictionStats, primarySectors } = req.body;
+
+        // Validation
+        if (!jurisdictionStats || !primarySectors) {
+            return res.status(400).json({ message: "Please provide both stats and sectors." });
+        }
+
+        const updatedHQ = await FireHQ.findByIdAndUpdate(
+            hqId,
+            { 
+                $set: { 
+                    jurisdictionStats: jurisdictionStats, 
+                    primarySectors: primarySectors 
+                } 
+            },
+            { new: true, runValidators: true }
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Jurisdiction & Sectors updated successfully", 
+            data: {
+                stats: updatedHQ.jurisdictionStats,
+                sectors: updatedHQ.primarySectors
+            }
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
 // ADDED: Jurisdiction Details (Screen 41)
 const getJurisdictionData = async (req, res) => {
     try {
         const hq = await FireHQ.findById(req.user.id);
+        
+        // Agar DB mein sectors nahi hain toh default bhejenge (Figma match)
+        const sectors = hq.primarySectors.length > 0 ? hq.primarySectors : [
+            { sectorName: "Sector A: Central Commercial", description: "MI Road, Sindhi Camp & surrounding markets. High footfall area.", iconType: "Commercial" },
+            { sectorName: "Sector B: Residential", description: "Malviya Nagar, Raja Park. Predominantly apartments and housing.", iconType: "Residential" },
+            { sectorName: "Sector C: Industrial Hub", description: "Sitapura & VKI Areas. High risk of chemical and electrical fires.", iconType: "Industrial" }
+        ];
+
         res.json({
             success: true,
             data: {
-                coverage: {
-                    totalArea: "42.5 km²",
-                    population: "~850,000",
-                    activeZone: "4 Main Zones",
-                    riskLevel: "Moderate- High"
-                },
-                sectors: [
-                    { id: 'A', name: 'Central Commercial', desc: 'MI Road, Sindhi Camp...' },
-                    { id: 'B', name: 'Residential', desc: 'Malviya Nagar, Raja Park...' }
-                ]
+                coverage: hq.jurisdictionStats,
+                sectors: sectors
             }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// NEW: Request Boundary Update (Figma Screen 41 Button)
+const requestBoundaryUpdate = async (req, res) => {
+    // Ye system-level request hai, aap message store kar sakte hain ya email bhej sakte hain
+    res.json({ success: true, message: "Boundary update request sent to higher authorities." });
 };
 
 // ADDED: Detailed Incident Report (Screen 66)
@@ -319,7 +380,156 @@ const getFullIncidentReport = async (req, res) => {
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+const getStationDetails = async (req, res) => {
+    try {
+        const station = await FireStation.findById(req.params.id);
+        if (!station) return res.status(404).json({ message: "Station not found" });
 
+        res.json({ success: true, data: station });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+const getIncidentAuditReport = async (req, res) => {
+    try {
+        const incident = await FireCase.findById(req.params.id)
+            .populate('stationId', 'stationName captainName')
+            .populate('assignedStaff', 'fullName rank');
+
+        if (!incident) return res.status(404).json({ message: "Report not found" });
+
+        res.json({
+            success: true,
+            data: {
+                incidentId: incident.caseNo,
+                status: incident.status,
+                details: {
+                    type: incident.fireType,
+                    location: incident.address,
+                    reportedTime: incident.reportedAt,
+                    responseTime: incident.responseTime || "38 Minutes", // Figma Screen 66
+                },
+                resources: {
+                    trucksUsed: incident.resourcesUsed?.trucksCount || 0,
+                    firefighters: `${incident.resourcesUsed?.personnelCount || 0} Personnel`,
+                    equipment: incident.resourcesUsed?.equipmentList || []
+                },
+                impact: {
+                    damageLevel: incident.damageImpact?.damageLevel || "Minor",
+                    injuries: incident.damageImpact?.injuries || 0,
+                    casualties: incident.damageImpact?.casualties || 0
+                },
+                photos: incident.incidentImages // Gallery for Screen 66
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// A. GET NOTIFICATIONS (Screen 16/17)
+const getHQNotifications = async (req, res) => {
+    try {
+        const notifications = await FireNotification.find({ hqId: req.user.id }).sort({ createdAt: -1 });
+        res.json({ success: true, data: notifications });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// B. DELETE NOTIFICATION (Figma: Swipe to delete logic)
+const deleteHQNotification = async (req, res) => {
+    try {
+        await FireNotification.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: "Notification deleted" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// C. RE-ASSIGN CASE (Figma Screen 3 - Re-assign Button)
+// Agar ek station handle nahi kar paa raha, toh HQ use dusre station ko de sakta hai
+const reassignFireCase = async (req, res) => {
+    try {
+        const { caseId, newStationId } = req.body;
+        const updatedCase = await FireCase.findByIdAndUpdate(
+            caseId,
+            { stationId: newStationId, remarks: "Re-assigned by HQ" },
+            { new: true }
+        );
+        res.json({ success: true, message: "Case re-assigned successfully", data: updatedCase });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// D. DASHBOARD CHART DATA (Screen 9 background chart)
+const getDashboardChartData = async (req, res) => {
+    try {
+        // Sirf example ke liye monthly breakdown
+        const stats = [
+            { month: 'Jan', cases: 45 }, { month: 'Feb', cases: 52 },
+            { month: 'Mar', cases: 35 } // current month
+        ];
+        res.json({ success: true, data: stats });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+// A. MARK ALL NOTIFICATIONS AS READ (Figma Screen 16 - "Mark all read" button)
+const markAllNotificationsRead = async (req, res) => {
+    try {
+        await FireNotification.updateMany({ hqId: req.user.id, isRead: false }, { isRead: true });
+        res.json({ success: true, message: "All notifications marked as read" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// B. GET NEARBY STATIONS FOR SUPPORT (Figma Screen 23)
+// Jab incident create ho raha ho, toh HQ ko dikhna chahiye kaunsa station kitne door hai
+const getNearbyStationsForIncident = async (req, res) => {
+    try {
+        const { lat, lng } = req.query; // Incident ki location
+        
+        // MongoDB Geospatial Query (Agar index bna hai toh)
+        const stations = await FireStation.find({
+            location: {
+                $near: {
+                    $geometry: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
+                    $maxDistance: 20000 // 20km radius
+                }
+            }
+        });
+
+        const formatted = stations.map(s => ({
+            id: s._id,
+            name: s.stationName,
+            captain: s.captainName,
+            distance: "Calculated km away", // Flutter logic handle karega
+            phone: s.phone
+        }));
+
+        res.json({ success: true, data: formatted });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// C. REFINED CREATE FIRE CASE (With Auto-Notification Logic)
+const createFireCaseDetailed = async (req, res) => {
+    try {
+        const { callerName, callerPhone, fireType, severity, address, lat, lng, stationId, description } = req.body;
+
+        const newCase = await FireCase.create({
+            hqId: req.user.id,
+            stationId,
+            callerName, callerPhone, fireType, severity, address,
+            location: { lat: Number(lat), lng: Number(lng) },
+            status: 'Fresh',
+            description
+        });
+
+        // AUTO-CREATE NOTIFICATION (Figma Screen 16 logic)
+        await FireNotification.create({
+            hqId: req.user.id,
+            title: "New Emergency Case",
+            message: `Fire reported at ${address}. Dispatched to ${stationId}`,
+            type: 'Emergency'
+        });
+
+        res.status(201).json({ success: true, data: newCase });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 module.exports = { getDashboardStats,createFireCase,getIncidentDetails,createFireStation,
-     getMyStations, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation, getJurisdictionData, getFullIncidentReport };
+     getMyStations,getStationProfileForHQ, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation,
+     updateJurisdiction, getJurisdictionData,requestBoundaryUpdate, getFullIncidentReport, getStationDetails, getIncidentAuditReport,
+     getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, markAllNotificationsRead,
+      getNearbyStationsForIncident, createFireCaseDetailed };

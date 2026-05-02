@@ -89,7 +89,7 @@ const getCaseHistory = async (req, res) => {
         const { status, search, timeframe } = req.query; 
         const stationId = req.user.id;
 
-        let query = { stationId, status: { $in: ['Closed', 'Archived'] } };
+        let query = { stationId, status: { $in: ['Closed', 'Archived', 'Resolved'] } };
 
         if (status && status !== 'All') query.status = status;
         if (search) {
@@ -204,5 +204,113 @@ const getFleetList = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+// ADDON: Get Removal Reasons (Figma Screen 10 - Modal)
+// Flutter dropdown/radio buttons ke liye constants
+const getStaffRemovalReasons = async (req, res) => {
+    const reasons = [
+        "Transferred to another fire station",
+        "Retired from fire service",
+        "Suspended / Disciplinary action",
+        "Resigned from duty",
+        "Medical leave / Unfit for duty",
+        "Duplicate staff record",
+        "Other reason"
+    ];
+    res.json({ success: true, data: reasons });
+};
+
+// ADDON: EDIT STAFF (Figma Screen 92 & Edit Profile screens)
+const updateStaff = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+        
+        const staff = await FireStaff.findById(id);
+        if (!staff) return res.status(404).json({ message: "Staff not found" });
+
+        // Figma logic: Badge ID manually change nahi ho sakti
+        delete updates.badgeId;
+
+        // Agar profile image update ho rahi hai
+        if (req.file) {
+            // purani file delete karne ka logic utils se call karein
+            updates.profileImage = req.file.path;
+        }
+
+        const updatedStaff = await FireStaff.findByIdAndUpdate(
+            id, 
+            { $set: updates }, 
+            { new: true, runValidators: true }
+        );
+
+        res.json({ success: true, message: "Staff updated successfully", data: updatedStaff });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// ADDON: DELETE STAFF (Figma Screen 10 - Remove Staff Member)
+const deleteStaff = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason, otherReason } = req.body; // Screen 10 fields
+
+        const staff = await FireStaff.findById(id);
+        if (!staff) return res.status(404).json({ message: "Staff not found" });
+
+        // Logic: Aap ise hard delete bhi kar sakte hain ya status 'Inactive'
+        // Figma screen 'Remove' kehti hai, toh hum delete kar rahe hain
+        await FireStaff.findByIdAndDelete(id);
+
+        res.json({ 
+            success: true, 
+            message: `Staff member removed. Reason: ${reason === 'Other reason' ? otherReason : reason}` 
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// ADDON: OFFICER PROFILE STATS (Figma Screen 93)
+const getStaffProfileDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const staff = await FireStaff.findById(id).populate('stationId', 'stationName');
+        
+        if (!staff) return res.status(404).json({ message: "Staff not found" });
+
+        res.json({
+            success: true,
+            data: {
+                profile: staff,
+                stats: {
+                    casesAssigned: "12 Active", // Figma Screen 93
+                    attendance: "96%",          // Figma Screen 93
+                    joiningDate: staff.joiningDate || "14 Aug 2018",
+                    station: staff.stationId?.stationName || "N/A"
+                },
+                recentActivity: [
+                    { title: "Filled FIR #2024-892", time: "Today, 10:30 AM" },
+                    { title: "Shift Check-in", time: "Today, 07:55 AM" },
+                    { title: "Patrol: Sector 4", time: "Yesterday, 04:15 PM" }
+                ]
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const addSupportingStation = async (req, res) => {
+    try {
+        const { caseId, supportingStationId } = req.body;
+        
+        const updatedCase = await FireCase.findByIdAndUpdate(
+            caseId,
+            { $addToSet: { supportingStations: supportingStationId } }, // Add if not exists
+            { new: true }
+        );
+
+        res.json({ success: true, message: "Supporting Station Added", data: updatedCase });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
 module.exports = { getStationDashboard, getFreshCases, acceptCase,getAcceptedCases,getCaseHistory,
-    getIncidentReport, getNearbyStations, addStaff, getStaffList, addVehicle, getFleetList };
+    getIncidentReport, getNearbyStations, addStaff, getStaffList, addVehicle, getFleetList, getStaffRemovalReasons, 
+    updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation };

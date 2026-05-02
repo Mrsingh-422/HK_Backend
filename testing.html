@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nurse Service Flow Simulation</title>
+    <!-- Tailwind CSS for Beautiful UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .custom-shadow { box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans">
+
+    <div class="min-h-screen flex flex-col">
+        <!-- Header -->
+        <header class="bg-teal-600 text-white p-4 shadow-md">
+            <div class="container mx-auto flex justify-between items-center">
+                <h1 class="text-xl font-bold">🩺 MedCare - Nursing Flow Simulator</h1>
+                <span class="text-sm bg-teal-700 px-3 py-1 rounded-full">Frontend Design Demo</span>
+            </div>
+        </header>
+
+        <div class="flex-1 container mx-auto py-8 px-4 grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- ========================================== -->
+            <!-- 1. ADMIN PANEL SECTION -->
+            <!-- ========================================== -->
+            <div class="space-y-6">
+                <h2 class="text-lg font-bold text-gray-800 border-b pb-2">🕹️ Admin Section (Uploads)</h2>
+                
+                <!-- Card 1: Care CSV -->
+                <div class="bg-white p-6 rounded-xl custom-shadow border border-gray-100">
+                    <h3 class="font-semibold text-gray-700 mb-2">1. Upload Care Template (CSV)</h3>
+                    <p class="text-xs text-gray-500 mb-4">Ye categories aur sub-categories generate karega (Forward Fill Logic).</p>
+                    <div class="border-2 border-dashed border-teal-200 rounded-lg p-4 text-center cursor-pointer hover:bg-teal-50">
+                        <span class="text-sm text-teal-600">📁 Drop your `.csv` file here</span>
+                    </div>
+                    <button class="w-full mt-3 bg-teal-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-teal-700">Process & Save</button>
+                </div>
+
+                <!-- Card 2: Consumables Excel -->
+                <div class="bg-white p-6 rounded-xl custom-shadow border border-gray-100">
+                    <h3 class="font-semibold text-gray-700 mb-2">2. Upload Master Consumables (Excel)</h3>
+                    <p class="text-xs text-gray-500 mb-4">Ye 100+ items ki master list store karega MRP ke saath.</p>
+                    <div class="border-2 border-dashed border-teal-200 rounded-lg p-4 text-center cursor-pointer hover:bg-teal-50">
+                        <span class="text-sm text-teal-600">📊 Drop your `.xlsx` file here</span>
+                    </div>
+                    <button class="w-full mt-3 bg-teal-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-teal-700">Extract Max Price</button>
+                </div>
+            </div>
+
+            <!-- ========================================== -->
+            <!-- 2. NURSE/VENDOR SECTION (Flow) -->
+            <!-- ========================================== -->
+            <div class="lg:col-span-2 space-y-6">
+                <h2 class="text-lg font-bold text-gray-800 border-b pb-2">👩‍⚕️ Nurse Section (Create Service)</h2>
+
+                <div class="bg-white p-8 rounded-xl custom-shadow border border-gray-100 space-y-6">
+                    
+                    <!-- STEP 1: LINKED DROPDOWNS -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="text-sm font-semibold text-gray-600 mb-2 block">Select Category</label>
+                            <select id="categoryDropdown" class="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none" onchange="loadSubCategories()">
+                                <option value="">-- Select Category --</option>
+                                <option value="Home Personal Care">Home Personal Care</option>
+                                <option value="Home Nursing Care">Home Nursing Care</option>
+                                <option value="Home Therapy">Home Therapy</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-sm font-semibold text-gray-600 mb-2 block">Select Service Title (Sub-Category)</label>
+                            <select id="subCategoryDropdown" class="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none" disabled onchange="simulateAutoFill()">
+                                <option value="">-- Select Sub-Category --</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- AUTO FILL DESCRIPTION -->
+                    <div>
+                        <label class="text-sm font-semibold text-gray-600 mb-2 block">Description (Auto-Filled from Template)</label>
+                        <textarea id="descArea" class="w-full border border-gray-300 rounded-lg p-3 text-sm h-20 focus:ring-2 focus:ring-teal-500 focus:outline-none" placeholder="Description will automatically appear here when you select a sub-category..."></textarea>
+                    </div>
+
+                    <!-- STEP 2: MULTI-PRICING -->
+                    <div>
+                        <label class="text-sm font-semibold text-gray-700 mb-3 block border-b pb-1">💰 Pricing Setup (Set Base & Discounts)</label>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+                            
+                            <!-- One Day Price -->
+                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                <span class="text-sm font-bold text-teal-700">One Day Price</span>
+                                <div class="mt-2 space-y-2">
+                                    <input type="number" id="odBase" class="w-full border p-2 text-sm rounded" placeholder="Base Price" oninput="calcPrice('od')">
+                                    <input type="number" id="odDisc" class="w-full border p-2 text-sm rounded" placeholder="Discount %" oninput="calcPrice('od')">
+                                    <div class="text-sm font-bold text-gray-700">Final: ₹<span id="odFinal">0</span></div>
+                                </div>
+                            </div>
+
+                            <!-- Multi Day Price -->
+                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                <span class="text-sm font-bold text-teal-700">Multi Day Price</span>
+                                <div class="mt-2 space-y-2">
+                                    <input type="number" id="mdBase" class="w-full border p-2 text-sm rounded" placeholder="Base Price" oninput="calcPrice('md')">
+                                    <input type="number" id="mdDisc" class="w-full border p-2 text-sm rounded" placeholder="Discount %" oninput="calcPrice('md')">
+                                    <div class="text-sm font-bold text-gray-700">Final: ₹<span id="mdFinal">0</span></div>
+                                </div>
+                            </div>
+
+                            <!-- Hourly Price -->
+                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                <span class="text-sm font-bold text-teal-700">Hourly Price</span>
+                                <div class="mt-2 space-y-2">
+                                    <input type="number" id="hBase" class="w-full border p-2 text-sm rounded" placeholder="Base Price" oninput="calcPrice('h')">
+                                    <input type="number" id="hDisc" class="w-full border p-2 text-sm rounded" placeholder="Discount %" oninput="calcPrice('h')">
+                                    <div class="text-sm font-bold text-gray-700">Final: ₹<span id="hFinal">0</span></div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    <!-- STEP 3: CONSUMABLES ADDITION -->
+                    <div>
+                        <label class="text-sm font-semibold text-gray-700 mb-2 block border-b pb-1">📦 Consumables Used (Add from Master List)</label>
+                        
+                        <div class="flex gap-4 mt-3">
+                            <select id="masterConsumables" class="flex-1 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none">
+                                <option value="">-- Choose Item from Master List --</option>
+                                <option value="Gauze swab|400|Pack">Gauze swab (MRP: ₹400 / Pack)</option>
+                                <option value="Surgical gloves|1000|Pair">Surgical gloves (MRP: ₹1000 / Pair)</option>
+                                <option value="Syringe 5 ml|15|Piece">Syringe 5 ml (MRP: ₹15 / Piece)</option>
+                                <option value="IV cannula|300|Piece">IV cannula (MRP: ₹300 / Piece)</option>
+                            </select>
+                            <input type="number" id="consDisc" class="w-24 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none" placeholder="Disc %">
+                            <button onclick="addConsumable()" class="bg-teal-600 text-white px-6 rounded-lg text-sm hover:bg-teal-700">+ Add</button>
+                        </div>
+
+                        <!-- Table for Added Consumables -->
+                        <div class="mt-4 border border-gray-200 rounded-lg overflow-hidden">
+                            <table class="w-full text-sm text-left text-gray-600">
+                                <thead class="bg-gray-100 text-xs uppercase text-gray-700">
+                                    <tr>
+                                        <th class="px-4 py-2">Item</th>
+                                        <th class="px-4 py-2">MRP</th>
+                                        <th class="px-4 py-2">Your Discount</th>
+                                        <th class="px-4 py-2">Final Price</th>
+                                        <th class="px-4 py-2">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="consumableTableBody">
+                                    <!-- Dynamic rows will appear here -->
+                                    <tr id="emptyRow"><td colspan="5" class="text-center py-4 text-gray-400">No consumables added yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- FINAL SUBMIT -->
+                    <div class="pt-4">
+                        <button class="w-full bg-teal-600 text-white py-3 rounded-lg text-sm font-bold uppercase hover:bg-teal-700 shadow-lg shadow-teal-100">Create & List Service</button>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT FOR SIMULATION -->
+    <script>
+        // Mock Data for Sub-Categories
+        const subCatData = {
+            "Home Personal Care": ["Check In Visits", "Companionship", "Grocery Shopping"],
+            "Home Nursing Care": ["Blood Glucose Check", "NGT Feeding", "Stoma Bag Drainage"],
+            "Home Therapy": ["Speech Therapy", "Occupational Therapy", "Physiotherapy"]
+        };
+
+        const mockDesc = "This is a pre-defined description generated from the Admin CSV template. Nurses can use this or edit it freely before submitting.";
+
+        // Load Sub-categories based on category
+        function loadSubCategories() {
+            const cat = document.getElementById('categoryDropdown').value;
+            const subDropdown = document.getElementById('subCategoryDropdown');
+            subDropdown.innerHTML = '<option value="">-- Select Sub-Category --</option>';
+            
+            if (cat && subCatData[cat]) {
+                subDropdown.disabled = false;
+                subCatData[cat].forEach(sub => {
+                    const option = document.createElement('option');
+                    option.value = sub;
+                    option.textContent = sub;
+                    subDropdown.appendChild(option);
+                });
+            } else {
+                subDropdown.disabled = true;
+            }
+        }
+
+        // Auto fill description
+        function simulateAutoFill() {
+            const sub = document.getElementById('subCategoryDropdown').value;
+            const descArea = document.getElementById('descArea');
+            if (sub) {
+                descArea.value = `Template description for "${sub}":\n` + mockDesc;
+            } else {
+                descArea.value = "";
+            }
+        }
+
+        // Price calculations
+        function calcPrice(type) {
+            const base = parseFloat(document.getElementById(`${type}Base`).value) || 0;
+            const disc = parseFloat(document.getElementById(`${type}Disc`).value) || 0;
+            const final = base - (base * (disc / 100));
+            document.getElementById(`${type}Final`).innerText = final.toFixed(2);
+        }
+
+        // Add Consumable to Table
+        function addConsumable() {
+            const consumableSelect = document.getElementById('masterConsumables');
+            const discInput = document.getElementById('consDisc');
+            
+            if (!consumableSelect.value) {
+                alert("Please select a consumable!");
+                return;
+            }
+
+            const [name, mrp, unit] = consumableSelect.value.split('|');
+            const discount = parseFloat(discInput.value) || 0;
+            const finalPrice = mrp - (mrp * (discount / 100));
+
+            const tableBody = document.getElementById('consumableTableBody');
+            const emptyRow = document.getElementById('emptyRow');
+            if (emptyRow) emptyRow.remove();
+
+            const row = document.createElement('tr');
+            row.className = "border-b hover:bg-gray-50";
+            row.innerHTML = `
+                <td class="px-4 py-3 font-medium text-gray-800">${name}</td>
+                <td class="px-4 py-3">₹${mrp} / ${unit}</td>
+                <td class="px-4 py-3 text-red-500">${discount}%</td>
+                <td class="px-4 py-3 font-bold text-teal-600">₹${finalPrice.toFixed(2)}</td>
+                <td class="px-4 py-3"><button onclick="this.closest('tr').remove()" class="text-red-500 hover:text-red-700">❌ Remove</button></td>
+            `;
+
+            tableBody.appendChild(row);
+
+            // Reset inputs
+            consumableSelect.value = "";
+            discInput.value = "";
+        }
+    </script>
+</body>
+</html>

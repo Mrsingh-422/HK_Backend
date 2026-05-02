@@ -509,6 +509,37 @@ const careCSVUpload = multer({
     }
 }).single('file'); // Postman key: 'file'
 
+// ==========================================
+// 28. FIRE STAFF UPDATE (Screen 92)
+// ==========================================
+// Staff ki purani folder use karenge 'public/uploads/fire_staff'
+const fireStaffUpdateUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, fireStaffDir),
+        filename: (req, file, cb) => cb(null, `staff-upd-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 2 * 1024 * 1024 } // 2MB
+}).single('profileImage'); // Key for Postman: profileImage
+
+
+// ==========================================
+// 29. FIRE STATION PROFILE UPDATE (Screen 21)
+// ==========================================
+// Station ki purani folder use karenge 'public/uploads/fire_stations'
+const fireStationUpdateUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, fireStationDir),
+        filename: (req, file, cb) => cb(null, `stn-upd-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+}).single('profileImage'); // Key for Postman: profileImage
+
+
+
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -539,5 +570,7 @@ module.exports = {
     fireCaseUploads,
     categoryTestUploads,
     nurseServiceUploads,
-    careCSVUpload
+    careCSVUpload,
+    fireStaffUpdateUploads, // Screen 92: Update Staff Profile
+    fireStationUpdateUploads // Screen 21: Update Station Profile
 };  

@@ -18,6 +18,18 @@ const fireHQSchema = new mongoose.Schema({
     profileImage: { type: String, default: null },
     role: { type: String, default: 'Fire-HQ', immutable: true },
     isActive: { type: Boolean, default: true },
+    primarySectors: [{
+        sectorName: { type: String }, // e.g., "Sector A: Central Commercial"
+        description: { type: String }, // e.g., "MI Road, Sindhi Camp & surrounding..."
+        iconType: { type: String } // "Commercial", "Residential", "Industrial"
+    }],
+
+    jurisdictionStats: {
+        totalArea: { type: String, default: "42.5 km²" },
+        population: { type: String, default: "~850,000" },
+        activeZones: { type: String, default: "4 Main Zones" },
+        riskLevel: { type: String, default: "Moderate- High" }
+    },
     
     // Auth related
     otp: { type: String, select: false },

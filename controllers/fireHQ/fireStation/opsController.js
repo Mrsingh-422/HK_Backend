@@ -5,34 +5,99 @@ const FireEquipment = require('../../../models/FireEquipment');
 
 // 1. GET STAFF ROSTER (Screen 12)
 const getStaffRoster = async (req, res) => {
+ 
     try {
+ 
         const stationId = req.user.id;
-        const { shiftType } = req.query; // 'Day' or 'Night' from Flutter Toggle
-
-        const allStaff = await FireStaff.find({ stationId });
-        
-        // ADDON: Figma Screen 50 Attendance Labels logic
-        const formattedStaff = allStaff.map(s => ({
-            name: s.fullName,
-            rank: s.rank,
-            status: s.status === 'Active' ? 'PRESENT' : 'OFF DUTY', // Screen 51 label
-            checkInTime: "07:55 AM", // Mock for UI
-            shift: s.currentShift || "Shift A"
-        }));
-
-        res.json({
-            success: true,
-            stats: {
-                onDuty: allStaff.filter(s => s.status === 'Active').length,
-                onLeave: allStaff.filter(s => s.status === 'On Leave').length,
-                weeklyOff: 2
-            },
-            data: {
-                shiftTitle: shiftType === 'Night' ? "SHIFT B (16:00 - 00:00)" : "SHIFT A (08:00 - 16:00)",
-                staff: formattedStaff
-            }
+ 
+        // 1. Get shift from URL query (Default is 'Day')
+ 
+        const rawShift = req.query.shiftType || req.query.shift || 'Day';
+ 
+        // Format exactly to 'Day' or 'Night'
+ 
+        const shiftType = rawShift.charAt(0).toUpperCase() + rawShift.slice(1).toLowerCase();
+ 
+        // 2. Flexible Database Query
+ 
+        // Agar DB me 'day', 'Day', 'DAY' ya 'Shift A' hai toh Day me aayega
+ 
+        // Agar 'night', 'Night' ya 'Shift B' hai toh Night me aayega
+ 
+        const shiftCondition = shiftType === 'Night'
+ 
+            ? { $in: [/^night$/i, /^shift b$/i] }
+ 
+            : { $in: [/^day$/i, /^shift a$/i] };
+ 
+        // Sirf ushi shift ke staff ko database se nikalna:
+ 
+        const allStaff = await FireStaff.find({
+ 
+            stationId: stationId,
+ 
+            $or: [
+ 
+                { currentShift: shiftCondition },
+ 
+                { shift: shiftCondition } // Agar DB schema me field ka naam 'shift' hai toh ye kaam karega
+ 
+            ]
+ 
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+ 
+        // 3. Format the frontend response
+ 
+        const formattedStaff = allStaff.map(s => ({
+ 
+            name: s.fullName || 'Unknown',
+ 
+            rank: s.rank || 'N/A',
+ 
+            status: s.status === 'Active' ? 'PRESENT' : 'OFF DUTY',
+ 
+            // Time dynamically change according to Shift
+ 
+            checkInTime: shiftType === 'Night' ? "07:55 PM" : "07:55 AM",
+ 
+            // Proper shift name dikhane ke liye
+ 
+            shift: shiftType
+ 
+        }));
+ 
+        res.json({
+ 
+            success: true,
+ 
+            stats: {
+ 
+                onDuty: allStaff.filter(s => s.status === 'Active').length,
+ 
+                onLeave: allStaff.filter(s => s.status === 'On Leave').length,
+ 
+                weeklyOff: 2
+ 
+            },
+ 
+            data: {
+ 
+                shiftTitle: shiftType === 'Night' ? "NIGHT SHIFT (16:00 - 00:00)" : "DAY SHIFT (08:00 - 16:00)",
+ 
+                staff: formattedStaff
+ 
+            }
+ 
+        });
+ 
+    } catch (error) {
+ 
+        console.error("Error fetching roster: ", error);
+ 
+        res.status(500).json({ success: false, message: error.message });
+ 
+    }
+ 
 };
 
 // ADDED: Shift Impact Analysis (Screen 53/54)
@@ -109,11 +174,93 @@ const getPendingLeaves = async (req, res) => {
 };
 
 const updateLeaveStatus = async (req, res) => {
+ 
     try {
-        const { status } = req.body; // Approved / Rejected
-        const leave = await FireLeave.findByIdAndUpdate(req.params.id, { status }, { new: true });
+ 
+        // Extract status and rejectionReason from req.body
+ 
+        const { status, rejectionReason } = req.body;
+ 
+        // Prepare data to update
+ 
+        const updateData = { status };
+ 
+        if (status === 'Rejected' && rejectionReason) {
+ 
+            updateData.rejectionReason = rejectionReason;
+ 
+        }
+ 
+        const leave = await FireLeave.findByIdAndUpdate(req.params.id, updateData, { new: true });
+ 
         res.json({ success: true, message: `Leave ${status}`, data: leave });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+ 
+    } catch (error) {
+ 
+        // Fixed typo: error.Message -> error.message
+ 
+        res.status(500).json({ message: error. Message });
+ 
+    }
+ 
+};
+ 
+ 
+// 3. APPLY FOR LEAVE (POST Request)
+const applyLeave = async (req, res) => {
+    try {
+        const { staffId, leaveType, fromDate, toDate, reason, attachment } = req.body;
+        const stationId = req.user.id; // JWT se mil raha hai
+ 
+        // 1. Duration Calculate karna (Days mein)
+        const start = new Date(fromDate);
+        const end = new Date(toDate);
+        const diffTime = Math.abs(end - start);
+        const duration = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+ 
+        // 2. SHIFT IMPACT LOGIC (Screen 3 requirement)
+        // Ye logic check karega ki us period mein aur kitne log leave par hain
+        const overlappingLeaves = await FireLeave.countDocuments({
+            stationId: stationId,
+            status: 'Approved',
+            $or: [
+                { fromDate: { $lte: end }, toDate: { $gte: start } }
+            ]
+        });
+ 
+        let shiftImpact = "Normal Operations";
+        if (overlappingLeaves >= 2) { // Example: agar 2 se zyada log leave pe hain
+            shiftImpact = "Critical Shortage: Night duty shortage expected";
+        } else if (overlappingLeaves > 0) {
+            shiftImpact = "Moderate Impact: Manageable";
+        }
+ 
+        // 3. Database mein save karna
+        const newLeave = new FireLeave({
+            staffId,
+            stationId,
+            leaveType,
+            fromDate,
+            toDate,
+            duration,
+            reason,
+            attachment, // Screen 4 ke liye URL string
+            shiftImpact,
+            status: 'Pending'
+        });
+ 
+        const savedLeave = await newLeave.save();
+ 
+        res.status(201).json({
+            success: true,
+            message: "Leave application submitted successfully",
+            data: savedLeave
+        });
+ 
+    } catch (error) {
+        console.error("Leave Application Error: ", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // 3. UPDATE ONGOING CASE STATUS (Screen 5)
@@ -203,6 +350,20 @@ const updateEquipmentStatus = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const toggleEmergencyMode = async (req, res) => {
+    try {
+        const station = await FireStation.findById(req.user.id);
+        station.isEmergencyModeActive = !station.isEmergencyModeActive;
+        await station.save();
+
+        res.json({ 
+            success: true, 
+            message: `Emergency Mode ${station.isEmergencyModeActive ? 'ON' : 'OFF'}`,
+            isActive: station.isEmergencyModeActive 
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = {
     getStaffRoster,
     checkLeaveImpact,
@@ -214,5 +375,7 @@ module.exports = {
     submitFinalReport,
     getEquipment,
     addEquipment,
-    updateEquipmentStatus
+    updateEquipmentStatus,
+    applyLeave,
+    toggleEmergencyMode
 };

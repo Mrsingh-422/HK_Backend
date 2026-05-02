@@ -146,6 +146,17 @@ app.use('/fireStation/management', require('./routes/fireHQ/fireStation/stationM
 app.use('/fireStaff/auth', require('./routes/fireHQ/fireStationStaff/authStaff')); // Fire Station Staff Authentication Route
 app.use('/fireStaff/ops', require('./routes/fireHQ/fireStationStaff/staffOpsRoutes')); // Fire Station Staff Operations Route (Check-in, Leaves, Assigned Cases)
 
+///////////////////////////// policeHQ Routes /////////////////////////
+app.use('/policeHQ/auth', require('./routes/policeHQ/authPoliceHQRoute'));
+app.use('/policeHQ/management', require('./routes/policeHQ/hqManagementRoute')); // Police HQ Management Route (Dashboard, Station Creation, Global History)
+
+// --- Police Station ---
+app.use('/policeStation/auth', require('./routes/policeHQ/policeStation/authPoliceStationRoute'));
+
+// --- Police Station Staff ---
+app.use('/policeStationStaff/auth', require('./routes/policeHQ/policeStationStaff/authStaff'));
+
+
 app.get('/', (req, res) => {
     res.send('HK Backend is running...');
 }); 

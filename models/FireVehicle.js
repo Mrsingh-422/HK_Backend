@@ -14,6 +14,19 @@ const fireVehicleSchema = new mongoose.Schema({
         enum: ['Available', 'Maintenance', 'Out of Service'], 
         default: 'Available' 
     },
+    maintenanceLogs: [{
+        activityName: String, // e.g., "Daily Inspection", "Oil Change"
+        date: { type: Date, default: Date.now },
+        performedBy: String,  // e.g., "Capt. Miller"
+        mileageAtService: String
+    }],
+    specifications: {
+        makeModel: String,
+        year: String,
+        licensePlate: String,
+        pumpCapacity: String,
+        waterTank: String
+    },
     profileImage: { type: String }
 }, { timestamps: true });
 

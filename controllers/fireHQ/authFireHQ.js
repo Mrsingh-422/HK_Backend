@@ -2,6 +2,8 @@ const FireHQ = require('../../models/FireHQ');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
+const FireStation = require('../../models/FireStation');
+const FireStaff = require('../../models/FireStaff');
 
 // Updated Token Generator
 const generateToken = (id, role) => {
@@ -73,5 +75,139 @@ const changePassword = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// const loginFireAll = async (req, res) => {
+//     try {
+//         const { email, password, type } = req.body; // type: 'hq', 'station', 'staff'
+
+//         if (!email || !password || !type) {
+//             return res.status(400).json({ message: "Please provide email, password and type" });
+//         }
+
+//         let user;
+//         let role;
+
+//         // 1. Identify Model based on Type
+//         switch (type.toLowerCase()) {
+//             case 'hq':
+//                 user = await FireHQ.findOne({ email }).select('+password');
+//                 role = 'fire-hq';
+//                 break;
+//             case 'station':
+//                 user = await FireStation.findOne({ email }).select('+password');
+//                 role = 'fire-station';
+//                 break;
+//             case 'staff':
+//                 // Staff model uses 'officialEmail' as per your previous code
+//                 user = await FireStaff.findOne({ officialEmail: email }).select('+password');
+//                 role = 'fire-staff';
+//                 break;
+//             default:
+//                 return res.status(400).json({ message: "Invalid login type" });
+//         }
+
+//         // 2. Validate User & Password
+//         if (!user || !(await bcrypt.compare(password, user.password))) {
+//             return res.status(401).json({ message: "Invalid Credentials" });
+//         }
+
+//         // 3. Check Activation Status
+//         if (user.isActive === false) {
+//             return res.status(403).json({ message: "Account is deactivated" });
+//         }
+
+//         // 4. Generate Token
+//         const token = generateToken(user._id, role);
+//         user.token = token;
+//         await user.save();
+
+//         user.password = undefined; // Security
+//         res.json({
+//             success: true,
+//             type: type.toLowerCase(),
+//             role: role,
+//             token,
+//             data: user
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ message: error.message });
+//     }
+// };
+
+
+const loginFireAll = async (req, res) => {
+    try {
+        const { email, password, type } = req.body; // 'hq', 'station', 'staff'
+
+        if (!email || !password || !type) {
+            return res.status(400).json({ success: false, message: "Email, Password and Type are required" });
+        }
+
+        let user = null;
+        let role = "";
+        let userTypeResponse = "";
+
+        // 1. Logic based on Type
+        switch (type.toLowerCase()) {
+            case 'hq':
+                user = await FireHQ.findOne({ email }).select('+password');
+                role = "Fire-HQ";
+                userTypeResponse = "fire-hq";
+                break;
+
+            case 'station':
+                user = await FireStation.findOne({ email }).select('+password');
+                role = "Fire-Station";
+                userTypeResponse = "fire-station";
+                break;
+
+            case 'staff':
+                // Schema use officialEmail
+                user = await FireStaff.findOne({ officialEmail: email }).select('+password');
+                role = "Fire-Staff";
+                userTypeResponse = "fire-staff";
+                break;
+
+            default:
+                return res.status(400).json({ success: false, message: "Invalid login type. Use 'hq', 'station', or 'staff'." });
+        }
+
+        // 2. Validate User
+        if (!user) {
+            return res.status(401).json({ success: false, message: "Invalid Credentials" });
+        }
+
+        // 3. Password Match
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ success: false, message: "Invalid Credentials" });
+        }
+
+        // 4. Status/Activation Check
+        // Staff has 'status', HQ/Station have 'isActive'
+        if (user.isActive === false || user.status === 'Inactive') {
+            return res.status(403).json({ success: false, message: "Your account is deactivated" });
+        }
+
+        // 5. Token Generation
+        const token = generateToken(user._id, role);
+        user.token = token;
+        await user.save();
+
+        user.password = undefined;
+
+        // 6. Final Response
+        res.status(200).json({
+            success: true,
+            message: "Login successful",
+            type: userTypeResponse,
+            token: token,
+            data: user
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 // Forgot & Reset same rahenge (Bas token gen update ho gaya hai)
-module.exports = { registerHQ, loginHQ, updateHQProfile, changePassword };
+module.exports = { registerHQ, loginHQ, updateHQProfile, changePassword , loginFireAll};

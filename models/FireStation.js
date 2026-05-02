@@ -30,6 +30,11 @@ const fireStationSchema = new mongoose.Schema({
         activeZones: { type: Number, default: 4 },
         riskLevel: { type: String, default: "Moderate-High" }
     },
+    shiftTimings: {
+        shiftA: { start: { type: String, default: "08:00" }, end: { type: String, default: "16:00" } },
+        shiftB: { start: { type: String, default: "16:00" }, end: { type: String, default: "00:00" } }
+    },
+    isEmergencyModeActive: { type: Boolean, default: false }, // Linked to Override toggle
     
     // Auth
     otp: { type: String, select: false },

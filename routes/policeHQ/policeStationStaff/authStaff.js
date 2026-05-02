@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../middleware/authMiddleware');
-const {  loginHQ, updateHQProfile  } = require('../../controllers/policeHQ/authPoliceHQ');
+const { protect } = require('../../../middleware/authMiddleware');
+const {  loginPoliceStaff, updatePoliceStaffProfile  } = require('../../../controllers/policeHQ/policeStationStaff/authStaff');
 
-router.post('/login', loginHQ);
-router.put('/update', protect('Police-Station-Staff'), updateHQProfile);
+// Base URL: /policeStationStaff/auth
+
+router.post('/login', loginPoliceStaff);
+router.put('/update', protect('Police-Station-Staff'), updatePoliceStaffProfile);
 
 
 module.exports = router;

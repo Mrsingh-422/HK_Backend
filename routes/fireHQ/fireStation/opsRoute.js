@@ -13,7 +13,9 @@ const {
     updateEquipmentStatus,
     checkLeaveImpact,
     getEquipmentDetails,
-    getFireTypes
+    getFireTypes,
+    applyLeave,
+    toggleEmergencyMode
 } = require('../../../controllers/fireHQ/fireStation/opsController');
 
 // Base URL: /fireStation/ops
@@ -24,6 +26,7 @@ router.get('/roster', protect('fire-station'), getStaffRoster);
 // Leave Requests
 router.get('/leaves/pending', protect('fire-station'), getPendingLeaves);
 router.put('/leaves/:id/status',protect('fire-station'), updateLeaveStatus);
+router.post('/leaves/post', protect('fire-station'), applyLeave);
 
 // Case Management
 router.put('/cases/:id/severity',protect('fire-station'), updateCaseSeverity);
@@ -36,5 +39,9 @@ router.put('/equipment/:id', protect('fire-station'), updateEquipmentStatus);
 router.get('/equipment/:id', protect('fire-station'), getEquipmentDetails); // Screen 58 detailed specs
 router.get('/leaves/impact', protect('fire-station'), checkLeaveImpact);
 router.get('/fire-types', protect('fire-station'), getFireTypes);
+
+// Emergency Mode
+router.put('/emergency-mode', protect('fire-station'), toggleEmergencyMode);
+
 
 module.exports = router;

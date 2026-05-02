@@ -23,6 +23,11 @@ const fireCaseSchema = new mongoose.Schema({
     },
     assignedStaff: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FireStaff' }],
     assignedVehicles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FireVehicle' }],
+    supportingStations: [{ 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'FireStation' 
+    }],
+    emergencyOverride: { type: Boolean, default: false },
 
     // 3. Caller / Victim Details
     callerName: { type: String, required: true },
@@ -30,15 +35,21 @@ const fireCaseSchema = new mongoose.Schema({
     
     // 4. Incident Details
     fireType: { 
-        type: String, 
-        enum: ['Residential', 'Industrial', 'Forest', 'Vehicle', 'Other'], 
-        default: 'Other' 
-    },
+    type: String, 
+    enum: ['Residential', 'Industrial', 'Forest', 'Vehicle', 'Other', 'Commercial Building Fire', 'Apartment Fire', 'Warehouse Fire'], // NEW: Figma values added
+    default: 'Other' 
+},
     severity: { 
         type: String, 
         enum: ['Low', 'Medium', 'High', 'Critical'], 
         default: 'Medium' 
     },
+    severityStatus: { 
+        type: String, 
+        enum: ['Fire Spreading', 'Fire Contained', 'Cooling Process', 'Under Control'],
+        default: 'Fire Spreading'
+    },
+
     severityLevel: { type: String, default: 'Level 1' }, 
     description: { type: String },
 
@@ -48,7 +59,7 @@ const fireCaseSchema = new mongoose.Schema({
         lat: { type: Number, required: true },
         lng: { type: Number, required: true }
     },
-    responseTime: { type: String },
+    responseTime: { type: String }, 
 
     // 6. Status Tracking (Matches your Controller Logic)
     status: { 
