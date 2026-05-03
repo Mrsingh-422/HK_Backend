@@ -3,11 +3,11 @@ const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
 const { fireStationUploads } = require('../../middleware/multer');
 const { getDashboardStats,createFireCase,getIncidentDetails,
-     createFireStation, getMyStations,getStationProfileForHQ, getCaseHistory,
+     createFireStation, getMyStations, getCaseHistory,
       getAdminContact,updateFireStation, deleteFireStation, updateJurisdiction,getJurisdictionData,
-      requestBoundaryUpdate, getFullIncidentReport,getStationDetails,getIncidentAuditReport,
+      requestBoundaryUpdate, getFullIncidentReport,getStationDetails,
 getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, markAllNotificationsRead,
-      getNearbyStationsForIncident, createFireCaseDetailed } = require('../../controllers/fireHQ/fireHqManage');
+      getNearbyStationsForIncident } = require('../../controllers/fireHQ/fireHqManage');
 
 // base url : /fireHQ/management
 
@@ -16,7 +16,7 @@ router.post('/create-case', protect('fire-hq'), createFireCase);
 router.get('/case/:id', protect('fire-hq'), getIncidentDetails);
 router.post('/create-station', protect('fire-hq'), fireStationUploads, createFireStation);
 router.get('/stations', protect('fire-hq'), getMyStations);
-router.get('/station-profile/:id', protect('fire-hq'), getStationProfileForHQ);
+router.get('/station-profile/:id', protect('fire-hq'), getStationDetails);
 router.get('/cases', protect('fire-hq'), getCaseHistory);
 router.get('/help-contact', protect('fire-hq'), getAdminContact);
 router.put('/update-station/:id', protect('fire-hq'), fireStationUploads, updateFireStation);
@@ -25,8 +25,6 @@ router.put('/update-jurisdiction', protect('fire-hq'), updateJurisdiction);
 router.get('/jurisdiction-data', protect('fire-hq'), getJurisdictionData);
 router.get('/full-report/:id', protect('fire-hq'), getFullIncidentReport);
 router.post('/request-boundary-update', protect('fire-hq'), requestBoundaryUpdate);
-router.get('/station/:id', protect('fire-hq'), getStationDetails);
-router.get('/audit-report/:id', protect('fire-hq'), getIncidentAuditReport);
 
 // Notifications
 router.get('/notifications', protect('fire-hq'), getHQNotifications);
@@ -42,6 +40,4 @@ router.put('/notifications/mark-all-read', protect('fire-hq'), markAllNotificati
 // Discovery
 router.get('/discovery/nearby-stations', protect('fire-hq'), getNearbyStationsForIncident); // Screen 23
 
-// Detailed Case Creation
-router.post('/create-case-detailed', protect('fire-hq'), createFireCaseDetailed);
 module.exports = router;

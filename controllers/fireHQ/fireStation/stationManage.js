@@ -310,7 +310,66 @@ const addSupportingStation = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// NEW: Staff aur Vehicles ko case par assign karna (Figma Screen 100 assignment)
+const assignResourcesToCase = async (req, res) => {
+    try {
+        const { caseId, staffIds, vehicleIds } = req.body;
+
+        const updatedCase = await FireCase.findByIdAndUpdate(
+            caseId,
+            { 
+                assignedStaff: staffIds, 
+                assignedVehicles: vehicleIds,
+                status: 'Pending' // Deployment phase
+            },
+            { new: true }
+        ).populate('assignedStaff assignedVehicles');
+
+        res.json({ success: true, message: "Resources assigned and team dispatched", data: updatedCase });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+// NEW: Vehicle maintenance activity add karna (Figma Screen 7)
+const addVehicleActivityLog = async (req, res) => {
+    try {
+        const { vehicleId, activityName, performedBy, mileage } = req.body;
+
+        const updatedVehicle = await FireVehicle.findByIdAndUpdate(
+            vehicleId,
+            { 
+                $push: { 
+                    maintenanceLogs: { 
+                        activityName, 
+                        performedBy, 
+                        mileageAtService: mileage,
+                        date: Date.now() 
+                    } 
+                } 
+            },
+            { new: true }
+        );
+
+        res.json({ success: true, message: "Activity logged successfully", data: updatedVehicle });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const updateVehicleStatus = async (req, res) => {
+    try {
+        const { vehicleId, status } = req.body; // status: 'Available', 'Maintenance', 'Out of Service'
+        const updated = await FireVehicle.findByIdAndUpdate(vehicleId, { status }, { new: true });
+        res.json({ success: true, message: "Vehicle status updated", data: updated });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+const toggleCaseHoldStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const fireCase = await FireCase.findById(id);
+        fireCase.status = fireCase.status === 'On Hold' ? 'Pending' : 'On Hold';
+        await fireCase.save();
+        res.json({ success: true, message: `Case is now ${fireCase.status}` });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 module.exports = { getStationDashboard, getFreshCases, acceptCase,getAcceptedCases,getCaseHistory,
     getIncidentReport, getNearbyStations, addStaff, getStaffList, addVehicle, getFleetList, getStaffRemovalReasons, 
-    updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation };
+    updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation, assignResourcesToCase, 
+    addVehicleActivityLog, updateVehicleStatus, toggleCaseHoldStatus };

@@ -15,7 +15,7 @@ const {
     getEquipmentDetails,
     getFireTypes,
     applyLeave,
-    toggleEmergencyMode
+    toggleEmergencyMode,reassignStaffShift
 } = require('../../../controllers/fireHQ/fireStation/opsController');
 
 // Base URL: /fireStation/ops
@@ -42,6 +42,8 @@ router.get('/fire-types', protect('fire-station'), getFireTypes);
 
 // Emergency Mode
 router.put('/emergency-mode', protect('fire-station'), toggleEmergencyMode);
+
+router.put('/staff/reassign-shift', protect('fire-station'), reassignStaffShift); // Screen 50
 
 
 module.exports = router;

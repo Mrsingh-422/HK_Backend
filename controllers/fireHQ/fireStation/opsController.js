@@ -364,6 +364,15 @@ const toggleEmergencyMode = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+const reassignStaffShift = async (req, res) => {
+    try {
+        const { staffId, newShift } = req.body; // newShift: 'Shift A' or 'Shift B'
+        await FireStaff.findByIdAndUpdate(staffId, { currentShift: newShift });
+        res.json({ success: true, message: "Shift reassigned successfully" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = {
     getStaffRoster,
     checkLeaveImpact,
@@ -377,5 +386,6 @@ module.exports = {
     addEquipment,
     updateEquipmentStatus,
     applyLeave,
-    toggleEmergencyMode
+    toggleEmergencyMode,
+    reassignStaffShift
 };

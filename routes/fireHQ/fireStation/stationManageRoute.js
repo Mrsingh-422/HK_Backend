@@ -6,7 +6,8 @@ const {
     getStationDashboard, getFreshCases, acceptCase, getAcceptedCases,getCaseHistory,
     getIncidentReport, getNearbyStations,
     addStaff, getStaffList, addVehicle, getFleetList ,getStaffRemovalReasons,
-     updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation
+     updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation,assignResourcesToCase, 
+         addVehicleActivityLog,updateVehicleStatus,toggleCaseHoldStatus
 } = require('../../../controllers/fireHQ/fireStation/stationManage');
 
 // Base URL: /fireStation/management
@@ -36,4 +37,12 @@ router.delete('/staff/delete/:id', protect('fire-station'), deleteStaff);
 router.get('/staff/profile/:id', protect('fire-station'), getStaffProfileDetails); // Screen 93
 router.get('/staff/removal-reasons', protect('fire-station'), getStaffRemovalReasons);
 router.post('/add-supporting-station', protect('fire-station'), addSupportingStation);
+
+router.put('/cases/assign-resources', protect('fire-station'), assignResourcesToCase); // Screen 100
+router.post('/fleet/log-activity', protect('fire-station'), addVehicleActivityLog); // Screen 7
+
+router.put('/fleet/update-status', protect('fire-station'), updateVehicleStatus); // Screen 8
+router.put('/cases/hold-toggle/:id', protect('fire-station'), toggleCaseHoldStatus); // Screen 102
+
+
 module.exports = router;

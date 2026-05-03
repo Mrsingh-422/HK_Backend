@@ -5,6 +5,8 @@ const FireNotification = require('../../models/FireNotification'); // For notifi
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
+const { getDistance } = require('../../utils/helpers');
+
 const mongoose = require('mongoose');
 
 // 1. GET DASHBOARD STATS (Screen 9)
@@ -35,52 +37,30 @@ const getDashboardStats = async (req, res) => {
 
 const createFireCase = async (req, res) => {
     try {
-        const { 
-            callerName, callerPhone, fireType, severity, 
-            description, address, lat, lng, stationId 
-        } = req.body;
+        const { callerName, callerPhone, fireType, severity, description, address, lat, lng, stationId } = req.body;
 
-        // 1. Validation: Check if lat/lng are provided
-        if (!lat || !lng) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Latitude (lat) and Longitude (lng) are required." 
-            });
-        }
+        if (!lat || !lng) return res.status(400).json({ success: false, message: "Lat/Lng required." });
+        if (!mongoose.Types.ObjectId.isValid(stationId)) return res.status(400).json({ message: "Invalid Station ID format" });
 
-        // 2. ObjectId format check
-        if (!mongoose.Types.ObjectId.isValid(stationId)) {
-            return res.status(400).json({ message: "Invalid Station ID format" });
-        }
-
-        // 3. Create Case with proper nested location object
         const newCase = await FireCase.create({
             hqId: req.user.id,
-            stationId: stationId,
-            callerName,
-            callerPhone,
-            fireType,
-            severity,
-            description,
-            address,
-            // Schema ke according nested object bna rahe hain
-            location: {
-                lat: Number(lat),
-                lng: Number(lng)
-            },
+            stationId,
+            callerName, callerPhone, fireType, severity, description, address,
+            location: { lat: Number(lat), lng: Number(lng) },
             status: 'Fresh',
             reportedAt: Date.now()
         });
 
-        res.status(201).json({ 
-            success: true, 
-            message: "Fresh Case Dispatched Successfully!", 
-            data: newCase 
+        // AUTO-CREATE NOTIFICATION (Merged Logic)
+        await FireNotification.create({
+            hqId: req.user.id,
+            title: "New Emergency Case",
+            message: `Fire reported at ${address}. Dispatched to Station ID: ${stationId}`,
+            type: 'Emergency'
         });
 
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
-    }
+        res.status(201).json({ success: true, message: "Fresh Case Dispatched Successfully!", data: newCase });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
 const getIncidentDetails = async (req, res) => {
@@ -177,7 +157,7 @@ const getMyStations = async (req, res) => {
         res.json({ success: true, data: stations });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-const getStationProfileForHQ = async (req, res) => {
+const getStationDetails = async (req, res) => {
     try {
         const station = await FireStation.findById(req.params.id);
         if (!station) return res.status(404).json({ message: "Station not found" });
@@ -360,39 +340,10 @@ const requestBoundaryUpdate = async (req, res) => {
 // ADDED: Detailed Incident Report (Screen 66)
 const getFullIncidentReport = async (req, res) => {
     try {
-        const incident = await FireCase.findById(req.params.id).populate('stationId');
-        if (!incident) return res.status(404).json({ message: "Report not found" });
-
-        res.json({
-            success: true,
-            data: {
-                general: {
-                    incidentId: incident.caseNo,
-                    type: incident.fireType,
-                    location: incident.address,
-                    reportedTime: incident.reportedAt,
-                    responseTime: incident.responseTime || "38 Minutes"
-                },
-                resources: incident.resourcesUsed,
-                impact: incident.damageImpact,
-                photos: incident.incidentImages
-            }
-        });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-const getStationDetails = async (req, res) => {
-    try {
-        const station = await FireStation.findById(req.params.id);
-        if (!station) return res.status(404).json({ message: "Station not found" });
-
-        res.json({ success: true, data: station });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-const getIncidentAuditReport = async (req, res) => {
-    try {
         const incident = await FireCase.findById(req.params.id)
             .populate('stationId', 'stationName captainName')
-            .populate('assignedStaff', 'fullName rank');
+            .populate('assignedStaff', 'fullName rank')
+            .populate('assignedVehicles', 'vehicleName assetId');
 
         if (!incident) return res.status(404).json({ message: "Report not found" });
 
@@ -401,27 +352,26 @@ const getIncidentAuditReport = async (req, res) => {
             data: {
                 incidentId: incident.caseNo,
                 status: incident.status,
-                details: {
+                general: {
                     type: incident.fireType,
                     location: incident.address,
                     reportedTime: incident.reportedAt,
-                    responseTime: incident.responseTime || "38 Minutes", // Figma Screen 66
+                    responseTime: incident.responseTime || "38 Minutes"
                 },
                 resources: {
-                    trucksUsed: incident.resourcesUsed?.trucksCount || 0,
-                    firefighters: `${incident.resourcesUsed?.personnelCount || 0} Personnel`,
-                    equipment: incident.resourcesUsed?.equipmentList || []
+                    trucksUsed: incident.assignedVehicles?.length || incident.resourcesUsed?.trucksCount || 0,
+                    personnel: `${incident.assignedStaff?.length || incident.resourcesUsed?.personnelCount || 0} Personnel`,
+                    equipment: incident.resourcesUsed?.equipmentList || ["Hoses", "Ladders", "BA Sets"]
                 },
-                impact: {
-                    damageLevel: incident.damageImpact?.damageLevel || "Minor",
-                    injuries: incident.damageImpact?.injuries || 0,
-                    casualties: incident.damageImpact?.casualties || 0
-                },
-                photos: incident.incidentImages // Gallery for Screen 66
+                impact: incident.damageImpact || { damageLevel: "Minor", injuries: 0, casualties: 0 },
+                photos: incident.incidentImages
             }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+
+
 
 // A. GET NOTIFICATIONS (Screen 16/17)
 const getHQNotifications = async (req, res) => {
@@ -478,58 +428,61 @@ const markAllNotificationsRead = async (req, res) => {
 // Jab incident create ho raha ho, toh HQ ko dikhna chahiye kaunsa station kitne door hai
 const getNearbyStationsForIncident = async (req, res) => {
     try {
-        const { lat, lng } = req.query; // Incident ki location
-        
-        // MongoDB Geospatial Query (Agar index bna hai toh)
-        const stations = await FireStation.find({
-            location: {
-                $near: {
-                    $geometry: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
-                    $maxDistance: 20000 // 20km radius
-                }
-            }
-        });
+        const { lat, lng } = req.query;
 
-        const formatted = stations.map(s => ({
-            id: s._id,
-            name: s.stationName,
-            captain: s.captainName,
-            distance: "Calculated km away", // Flutter logic handle karega
-            phone: s.phone
+        // 1. Validation: Agar lat/lng missing hain
+        if (!lat || !lng) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Latitude (lat) and Longitude (lng) query parameters are required." 
+            });
+        }
+
+        // 2. HQ ke under ke saare Active Stations nikalna
+        const stations = await FireStation.find({ hqId: req.user.id, isActive: true });
+
+        // 3. Distance calculate karke list taiyar karna
+        const stationsWithDistance = await Promise.all(stations.map(async (s) => {
+            // Agar station ki location set nahi hai toh use skip ya 0 distance dein
+            let distance = 0;
+            if (s.location && s.location.lat && s.location.lng) {
+                distance = await getDistance(
+                    parseFloat(lat),
+                    parseFloat(lng),
+                    s.location.lat,
+                    s.location.lng
+                );
+            }
+
+            return {
+                id: s._id,
+                name: s.stationName,
+                captain: s.captainName,
+                address: s.address,
+                phone: s.phone,
+                // Figma Screen 23 UI format
+                distance: `${distance} km away`, 
+                distanceInKm: distance // Sorting ke liye raw number
+            };
         }));
 
-        res.json({ success: true, data: formatted });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+        // 4. Sabse nazdeek wala station sabse upar (Nearest First)
+        stationsWithDistance.sort((a, b) => a.distanceInKm - b.distanceInKm);
 
-// C. REFINED CREATE FIRE CASE (With Auto-Notification Logic)
-const createFireCaseDetailed = async (req, res) => {
-    try {
-        const { callerName, callerPhone, fireType, severity, address, lat, lng, stationId, description } = req.body;
-
-        const newCase = await FireCase.create({
-            hqId: req.user.id,
-            stationId,
-            callerName, callerPhone, fireType, severity, address,
-            location: { lat: Number(lat), lng: Number(lng) },
-            status: 'Fresh',
-            description
+        res.json({ 
+            success: true, 
+            data: stationsWithDistance 
         });
 
-        // AUTO-CREATE NOTIFICATION (Figma Screen 16 logic)
-        await FireNotification.create({
-            hqId: req.user.id,
-            title: "New Emergency Case",
-            message: `Fire reported at ${address}. Dispatched to ${stationId}`,
-            type: 'Emergency'
-        });
-
-        res.status(201).json({ success: true, data: newCase });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
+
 
 module.exports = { getDashboardStats,createFireCase,getIncidentDetails,createFireStation,
-     getMyStations,getStationProfileForHQ, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation,
-     updateJurisdiction, getJurisdictionData,requestBoundaryUpdate, getFullIncidentReport, getStationDetails, getIncidentAuditReport,
+     getMyStations, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation,
+     updateJurisdiction, getJurisdictionData,requestBoundaryUpdate, getFullIncidentReport, getStationDetails,
      getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, markAllNotificationsRead,
-      getNearbyStationsForIncident, createFireCaseDetailed };
+      getNearbyStationsForIncident };
