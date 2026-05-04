@@ -4,6 +4,8 @@ const FireVehicle = require('../../../models/FireVehicle');
 const bcrypt = require('bcryptjs');
 const FireStation = require('../../../models/FireStation');
 const FireEquipment = require('../../../models/FireEquipment'); // Added for Equipment logic
+const FireNotification = require('../../../models/FireNotification');
+
 
 // 1. STATION DASHBOARD STATS (Figma Screen 33 - Station Home)
 const getStationDashboard = async (req, res) => {
@@ -35,6 +37,48 @@ const getFreshCases = async (req, res) => {
 
         res.json({ success: true, count: cases.length, data: cases });
     } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// NEW: Fresh Case ki Full Details nikalne ke liye (Figma Screen 100 -> View Details)
+const getFreshCaseDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const stationId = req.user.id;
+
+        // Sirf wahi case dikhao jo is station ka ho aur 'Fresh' ho
+        const incident = await FireCase.findOne({ _id: id, stationId: stationId, status: 'Fresh' })
+            .populate('hqId', 'stationName'); // Command Center ka naam dikhane ke liye
+
+        if (!incident) {
+            return res.status(404).json({ success: false, message: "Fresh case not found or already accepted." });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                incidentId: incident.caseNo,
+                status: incident.status,
+                // Figma specific mapping
+                priority: incident.severity === 'Critical' ? 'High Priority' : 'Normal',
+                generalDetails: {
+                    type: incident.fireType,
+                    address: incident.address,
+                    reportedTime: incident.reportedAt,
+                    severity: incident.severity,
+                    severityLevel: incident.severityLevel || "Level 1" // Screen 101/102 mapping
+                },
+                location: incident.location, // lat, lng for Map
+                callerDetails: {
+                    name: incident.callerName,
+                    phone: incident.callerPhone
+                },
+                description: incident.description || "No additional notes provided.",
+                source: incident.hqId?.stationName || "Fire Command Center"
+            }
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Accept Case (Figma Button: "Accept Case")
@@ -369,7 +413,84 @@ const toggleCaseHoldStatus = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { getStationDashboard, getFreshCases, acceptCase,getAcceptedCases,getCaseHistory,
+
+
+
+// A. JURISDICTION DATA (Figma Screen 41)
+const getJurisdictionDetails = async (req, res) => {
+    try {
+        const station = await FireStation.findById(req.user.id).populate('hqId');
+        
+        // Data according to Figma Screen 41
+        res.json({
+            success: true,
+            data: {
+                coverageSummary: {
+                    totalArea: station.jurisdiction?.totalArea || "42.5 km²",
+                    population: station.jurisdiction?.population || "~850,000",
+                    activeZone: station.jurisdiction?.activeZones || "4 Main Zones",
+                    riskLevel: station.jurisdiction?.riskLevel || "Moderate- High"
+                },
+                primarySectors: [
+                    { sector: "Sector A", title: "Central Commercial", desc: "MI Road, Sindhi Camp & surrounding markets. High footfall area." },
+                    { sector: "Sector B", title: "Residential", desc: "Malviya Nagar, Raja Park. Predominantly apartments and housing." },
+                    { sector: "Sector C", title: "Industrial Hub", desc: "Sitapura & VKI Areas. High risk of chemical and electrical fires." }
+                ]
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// B. STATION NOTIFICATIONS (Figma Screen 16/17)
+const getStationNotifications = async (req, res) => {
+    try {
+        const notifications = await FireNotification.find({ 
+            $or: [{ stationId: req.user.id }, { global: true }] 
+        }).sort({ createdAt: -1 });
+
+        // Logic to group Today and Yesterday as per Figma
+        const today = [];
+        const yesterday = [];
+        const now = new Date();
+
+        notifications.forEach(n => {
+            const diff = (now - new Date(n.createdAt)) / (1000 * 60 * 60 * 24);
+            if (diff < 1) today.push(n);
+            else yesterday.push(n);
+        });
+
+        res.json({ success: true, data: { today, yesterday } });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// C. TOGGLE PREFERENCES (Figma Screen 18 - Station Settings)
+const updatePreferences = async (req, res) => {
+    try {
+        const { alertsAndSounds, emergencyNotifications } = req.body;
+        const updated = await FireStation.findByIdAndUpdate(
+            req.user.id,
+            { "notificationSettings.alertsAndSounds": alertsAndSounds, 
+              "notificationSettings.emergencyNotifications": emergencyNotifications },
+            { new: true }
+        );
+        res.json({ success: true, message: "Preferences updated", data: updated.notificationSettings });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// D. HELP & TERMS DATA (Screen 19)
+const getAppLegalInfo = async (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            helpContact: { phone: "+91 9876543210", email: "help@gmail.com" },
+            terms: "Standard Fire Station Terms and Conditions...",
+            about: "Smart Emergency Response & Fire Control System v1.0"
+        }
+    });
+};
+
+module.exports = { getStationDashboard, getFreshCases,getFreshCaseDetails, acceptCase,getAcceptedCases,getCaseHistory,
     getIncidentReport, getNearbyStations, addStaff, getStaffList, addVehicle, getFleetList, getStaffRemovalReasons, 
     updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation, assignResourcesToCase, 
-    addVehicleActivityLog, updateVehicleStatus, toggleCaseHoldStatus };
+    addVehicleActivityLog, updateVehicleStatus, toggleCaseHoldStatus,
+     getJurisdictionDetails, getStationNotifications, updatePreferences, getAppLegalInfo };

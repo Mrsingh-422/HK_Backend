@@ -12,6 +12,9 @@ const Tab = require('../models/Tab'); // Tab model for global tab status check
 const FireHQ = require('../models/FireHQ');
 const FireStation = require('../models/FireStation');
 const FireStaff = require('../models/FireStaff');
+const PoliceHQ = require('../models/PoliceHQ');
+const PoliceStation = require('../models/PoliceStation');
+const PoliceStaff = require('../models/PoliceStaff');
 
 
 // 1. Verify Token & Identify User Type

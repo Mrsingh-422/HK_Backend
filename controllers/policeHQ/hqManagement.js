@@ -1,6 +1,7 @@
 const PoliceStation = require('../../models/PoliceStation');
 const PoliceCase = require('../../models/PoliceCase');
 const bcrypt = require('bcryptjs');
+const PoliceHQ = require('../../models/PoliceHQ');
 
 // 1. GET HQ DASHBOARD (Screen 3)
 const getHQDashboard = async (req, res) => {

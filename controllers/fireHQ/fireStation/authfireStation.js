@@ -98,4 +98,34 @@ const changePassword = async (req, res) => {
     }
 };
 
-module.exports = { loginStation, updateStationProfile, getStationProfile, changePassword };
+// NEW: OTP Verification Logic for Screen 13
+const sendStationOTP = async (req, res) => {
+    try {
+        const { type, value } = req.body; // type: 'email' or 'phone'
+        // Yahan Twilio ya Nodemailer ka logic aayega
+        const otp = Math.floor(1000 + Math.random() * 9000); 
+        
+        // Temporarily saving in Station Model (Auth fields exist already)
+        await FireStation.findByIdAndUpdate(req.user.id, { otp: otp });
+
+        res.json({ success: true, message: `OTP sent to ${value}` });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const verifyStationOTP = async (req, res) => {
+    try {
+        const { otp } = req.body;
+        const station = await FireStation.findById(req.user.id).select('+otp');
+
+        if (station.otp !== otp) {
+            return res.status(400).json({ success: false, message: "Invalid OTP" });
+        }
+
+        // Verification success logic
+        res.json({ success: true, message: "Verified Successfully!" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+module.exports = { loginStation, updateStationProfile, getStationProfile, changePassword,
+     sendStationOTP, verifyStationOTP };

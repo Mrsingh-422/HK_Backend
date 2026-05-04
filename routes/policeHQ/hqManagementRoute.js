@@ -11,10 +11,10 @@ const {
 
 // Base URL: /policeHQ/management
 
-router.get('/dashboard', protect('police-HQ'), getHQDashboard);
-router.post('/create-station', protect('police-HQ'), createStation);
-router.get('/stations', protect('police-HQ'), listMyStations);
-router.get('/cases/history', protect('police-HQ'), getGlobalHistory);
-router.put('/change-password', protect('police-HQ'), changePasswordHQ);
+router.get('/dashboard', protect('police-hq'), getHQDashboard);
+router.post('/create-station', protect('police-hq'), createStation);
+router.get('/stations', protect('police-hq'), listMyStations);
+router.get('/cases/history', protect('police-hq'), getGlobalHistory);
+router.put('/change-password', protect('police-hq'), changePasswordHQ);
 
 module.exports = router;

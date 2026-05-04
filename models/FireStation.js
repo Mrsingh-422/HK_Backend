@@ -35,6 +35,10 @@ const fireStationSchema = new mongoose.Schema({
         shiftB: { start: { type: String, default: "16:00" }, end: { type: String, default: "00:00" } }
     },
     isEmergencyModeActive: { type: Boolean, default: false }, // Linked to Override toggle
+    notificationSettings: {
+    alertsAndSounds: { type: Boolean, default: true },
+    emergencyNotifications: { type: Boolean, default: true } // Screen 18 toggle
+},
     
     // Auth
     otp: { type: String, select: false },
