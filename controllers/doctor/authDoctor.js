@@ -206,4 +206,83 @@ const loginDoctor = async (req, res) => {
     }
 };
 
-module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor };
+// --- 5. UPDATE PROFILE (Bio, Fees, Availability, etc.) ---
+// Endpoint: PUT /api/auth/doctor/update-profile
+const updateDoctorProfile = async (req, res) => {
+    try {
+        const doctorId = req.user.id; // From Protect Middleware
+        const updates = req.body;
+
+        // Security Check: Kuch fields update karne se profileStatus wapas 'Pending' ho sakta hai (Optional Logic)
+        // Agar aap chahte hain ki name ya qualification badalne par dobara verify ho:
+        // if (updates.name || updates.qualification) { updates.profileStatus = 'Pending'; }
+
+        // Handle Profile Image Update (If uploaded)
+        if (req.files && req.files.profileImage) {
+            updates.profileImage = req.files.profileImage[0].path;
+        }
+
+        // Nested objects (fees, availability) ko update karne ke liye $set use hota hai
+        const updatedDoctor = await Doctor.findByIdAndUpdate(
+            doctorId,
+            { $set: updates },
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedDoctor) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Profile updated successfully',
+            data: updatedDoctor
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 6. GET DOCTOR PROFILE (Self) ---
+// Endpoint: GET /api/auth/doctor/profile
+const getDoctorProfile = async (req, res) => {
+    try {
+        // req.user.id protect middleware se aata hai
+        const doctor = await Doctor.findById(req.user.id).populate('hospitalId', 'name address');
+
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: doctor
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 7. GET DOCTOR BY ID (Public/Admin/Patient view) ---
+// Endpoint: GET /api/auth/doctor/:id
+const getDoctorById = async (req, res) => {
+    try {
+        const doctor = await Doctor.findById(req.params.id)
+            .select('-password -token -resetOTP') // Sensitive data hide karein
+            .populate('hospitalId', 'name address');
+
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: doctor
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor, updateDoctorProfile ,getDoctorProfile, getDoctorById };

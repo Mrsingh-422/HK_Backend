@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { fireStaffUploads } = require('../../../middleware/multer');
+const { fireStaffUploads ,fireEvidenceUploads } = require('../../../middleware/multer');
 const { 
     getStationDashboard, getFreshCases,getFreshCaseDetails, acceptCase, getAcceptedCases,getCaseHistory,
-    getIncidentReport, getNearbyStations,
+    getIncidentReport, getNearbyStations,updateIncidentStatusDetailed,
     addStaff, getStaffList, addVehicle, getFleetList ,getStaffRemovalReasons,
      updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation,assignResourcesToCase, 
          addVehicleActivityLog,updateVehicleStatus,toggleCaseHoldStatus,
@@ -26,6 +26,7 @@ router.get('/cases/history', protect('fire-station'), getCaseHistory);
 router.get('/report/:id', protect('fire-station'), getIncidentReport); // Screen 66
 // Nearby Stations
 router.get('/nearby-stations', protect('fire-station'), getNearbyStations); // Screen 23
+router.put('/cases/update-status/:id', protect('fire-station'),fireEvidenceUploads, updateIncidentStatusDetailed); // Screen 101
 // Staff
 router.post('/staff/add', protect('fire-station'), addStaff);
 router.get('/staff/list', protect('fire-station'), getStaffList);

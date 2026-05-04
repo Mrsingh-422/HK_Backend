@@ -116,11 +116,60 @@ const getLeaveCategories = (req, res) => {
     });
 };
 
+// NEW: General Work Request (Screen 15 - Tabs: Present, Shift Change, Overtime)
+const submitWorkRequest = async (req, res) => {
+    try {
+        const { requestType, fromDate, toDate, reason, additionalDetails } = req.body;
+        // requestType enum: ['Present', 'Shift Change', 'Overtime', 'Leave']
+
+        const request = await FireLeave.create({ // Model name Leave hai par ye sab handle karega
+            staffId: req.user.id,
+            stationId: req.user.stationId,
+            leaveType: requestType, // Yahan request type save hoga
+            fromDate, toDate, reason,
+            shiftImpact: additionalDetails, // e.g. "Want Shift B instead of A"
+            status: 'Pending'
+        });
+
+        res.status(201).json({ success: true, message: `${requestType} request submitted`, data: request });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// NEW: Field status update (Figma Screen 100 - Update Status button)
+const updateIncidentProgress = async (req, res) => {
+    try {
+        const { caseId, statusLabel, remarks } = req.body;
+        // statusLabel: 'Fire Contained', 'Cooling Process', 'Under Control'
+
+        const updatedCase = await FireCase.findByIdAndUpdate(
+            caseId,
+            { 
+                severityStatus: statusLabel, // Model ki field
+                remarks: remarks 
+            },
+            { new: true }
+        );
+
+        res.json({ success: true, message: "Status updated to: " + statusLabel, data: updatedCase });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+const getStaffNotifications = async (req, res) => {
+    try {
+        const notifications = await FireNotification.find({ 
+            $or: [{ staffId: req.user.id }, { stationId: req.user.stationId }] 
+        }).sort({ createdAt: -1 });
+
+        res.json({ success: true, data: notifications });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 module.exports = { 
     checkIn, 
     checkOut, // Added
     applyForLeave, 
     getMyAssignedCases, 
     getStaffProfileDetails, 
-    getLeaveCategories 
+    getLeaveCategories ,
+    submitWorkRequest, // Added
+    updateIncidentProgress, // Added
+    getStaffNotifications // Added
 };

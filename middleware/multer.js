@@ -536,6 +536,30 @@ const fireStationUpdateUploads = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB
 }).single('profileImage'); // Key for Postman: profileImage
 
+// ==========================================
+// 30. FIRE INCIDENT EVIDENCE (Screenshot Upload Status)
+// ==========================================
+// Folder: public/uploads/fire_evidence
+const fireEvidenceDir = 'public/uploads/fire_evidence';
+ensureDir(fireEvidenceDir);
+
+const fireEvidenceUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, fireEvidenceDir),
+        filename: (req, file, cb) => cb(null, `evidence-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        // Figma Screenshot ke according: Max 5 photos (JPG, PNG)
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only JPG and PNG images are allowed!'), false);
+        }
+    },
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB per image
+}).fields([
+    { name: 'incidentImages', maxCount: 5 } // Figma key: incidentImages
+]);
 
 
 
@@ -572,5 +596,6 @@ module.exports = {
     nurseServiceUploads,
     careCSVUpload,
     fireStaffUpdateUploads, // Screen 92: Update Staff Profile
-    fireStationUpdateUploads // Screen 21: Update Station Profile
+    fireStationUpdateUploads, // Screen 21: Update Station Profile
+    fireEvidenceUploads // Screen 101: Upload Evidence
 };  

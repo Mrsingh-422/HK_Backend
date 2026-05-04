@@ -5,6 +5,8 @@ const bcrypt = require('bcryptjs');
 const FireStation = require('../../../models/FireStation');
 const FireEquipment = require('../../../models/FireEquipment'); // Added for Equipment logic
 const FireNotification = require('../../../models/FireNotification');
+const { getDistance } = require('../../../utils/helpers'); // Distance calculation helper
+const { deleteFile } = require('../../../utils/fileHandler'); // File deletion helper
 
 
 // 1. STATION DASHBOARD STATS (Figma Screen 33 - Station Home)
@@ -192,18 +194,97 @@ const getIncidentReport = async (req, res) => {
 
 const getNearbyStations = async (req, res) => {
     try {
+        const { lat, lng } = req.query; // Incident ki location
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, message: "Latitude and Longitude are required." });
+        }
+
         const stations = await FireStation.find({ _id: { $ne: req.user.id } });
-        // Figma Screen 23 UI fields
-        const nearby = stations.map(s => ({
-            id: s._id,
-            name: s.stationName,
-            location: s.address,
-            distance: (Math.random() * 10).toFixed(1) + " km away", // Static for now, real calculation below
-            captain: s.captainName
+
+        const nearby = await Promise.all(stations.map(async (s) => {
+            let distance = 0;
+            if (s.location?.lat && s.location?.lng) {
+                // Real distance calculation using your helper
+                distance = await getDistance(
+                    parseFloat(lat), 
+                    parseFloat(lng), 
+                    s.location.lat, 
+                    s.location.lng
+                );
+            }
+            return {
+                id: s._id,
+                name: s.stationName,
+                location: s.address,
+                distance: `${distance} km away`, // Accurate distance
+                distanceRaw: distance, // Sorting ke liye
+                captain: s.captainName
+            };
         }));
+
+        // Sabse pass wala station pehle dikhane ke liye sort karein
+        nearby.sort((a, b) => a.distanceRaw - b.distanceRaw);
+
         res.json({ success: true, data: nearby });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+// NEW: Incident Status Update (Figma Screenshot logic)
+const updateIncidentStatusDetailed = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { statusLabel, situationReport, backupRequired } = req.body;
+
+        // 1. Pehle current case details fetch karein purani images ke liye
+        const currentCase = await FireCase.findById(id);
+        if (!currentCase) return res.status(404).json({ message: "Case not found" });
+
+        let finalStatus = 'Pending'; 
+        if (statusLabel === 'Resolved') finalStatus = 'Closed';
+        else if (statusLabel === 'Under Control') finalStatus = 'Under Control';
+
+        // 2. IMAGE REPLACEMENT & AUTO-DELETE LOGIC
+        let newEvidencePhotos = currentCase.incidentImages; // Default: purani hi rahegi
+
+        // Check karein ki kya naye photos upload huye hain
+        if (req.files && req.files['incidentImages']) {
+            
+            // Step A: Purani photos ko server se delete karein
+            if (currentCase.incidentImages && currentCase.incidentImages.length > 0) {
+                currentCase.incidentImages.forEach(oldImagePath => {
+                    deleteFile(oldImagePath); // Aapka helper function
+                });
+            }
+
+            // Step B: Naye paths ko array mein store karein
+            newEvidencePhotos = req.files['incidentImages'].map(f => f.path);
+        }
+
+        // 3. Database update karein
+        const updatedCase = await FireCase.findByIdAndUpdate(
+            id,
+            { 
+                status: finalStatus,
+                severityStatus: statusLabel,
+                remarks: situationReport,
+                backupRequired: backupRequired, 
+                incidentImages: newEvidencePhotos, // Purani replace ho gayi naye se
+                resolvedAt: statusLabel === 'Resolved' ? Date.now() : currentCase.resolvedAt
+            },
+            { new: true }
+        );
+
+        res.json({ 
+            success: true, 
+            message: statusLabel === 'Resolved' ? "Case Resolved and Cleaned" : "Status Updated (Old images deleted)", 
+            data: updatedCase 
+        });
+
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
 
 // 3. STAFF MANAGEMENT (Screen 8 & 11)
 const addStaff = async (req, res) => {
@@ -415,30 +496,43 @@ const toggleCaseHoldStatus = async (req, res) => {
 
 
 
-
 // A. JURISDICTION DATA (Figma Screen 41)
 const getJurisdictionDetails = async (req, res) => {
     try {
-        const station = await FireStation.findById(req.user.id).populate('hqId');
-        
-        // Data according to Figma Screen 41
+        // Sirf hqId populate karein, baaki fields 'station' object mein pehle se hain
+        const station = await FireStation.findById(req.user.id).populate('hqId', 'stationName');
+
+        if (!station) {
+            return res.status(404).json({ success: false, message: "Station not found" });
+        }
+
         res.json({
             success: true,
             data: {
+                // NEW: Station ki latitude aur longitude coordinates
+                location: {
+                    lat: station.location?.lat || 0,
+                    lng: station.location?.lng || 0
+                },
+                // Figma Screen 41 coverage summary
                 coverageSummary: {
                     totalArea: station.jurisdiction?.totalArea || "42.5 km²",
                     population: station.jurisdiction?.population || "~850,000",
                     activeZone: station.jurisdiction?.activeZones || "4 Main Zones",
                     riskLevel: station.jurisdiction?.riskLevel || "Moderate- High"
                 },
+                // Primary Sectors for Screen 41
                 primarySectors: [
                     { sector: "Sector A", title: "Central Commercial", desc: "MI Road, Sindhi Camp & surrounding markets. High footfall area." },
                     { sector: "Sector B", title: "Residential", desc: "Malviya Nagar, Raja Park. Predominantly apartments and housing." },
                     { sector: "Sector C", title: "Industrial Hub", desc: "Sitapura & VKI Areas. High risk of chemical and electrical fires." }
-                ]
+                ],
+                stationName: station.stationName // For UI Header
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // B. STATION NOTIFICATIONS (Figma Screen 16/17)
@@ -490,7 +584,7 @@ const getAppLegalInfo = async (req, res) => {
 };
 
 module.exports = { getStationDashboard, getFreshCases,getFreshCaseDetails, acceptCase,getAcceptedCases,getCaseHistory,
-    getIncidentReport, getNearbyStations, addStaff, getStaffList, addVehicle, getFleetList, getStaffRemovalReasons, 
+    getIncidentReport, getNearbyStations,updateIncidentStatusDetailed, addStaff, getStaffList, addVehicle, getFleetList, getStaffRemovalReasons, 
     updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation, assignResourcesToCase, 
     addVehicleActivityLog, updateVehicleStatus, toggleCaseHoldStatus,
      getJurisdictionDetails, getStationNotifications, updatePreferences, getAppLegalInfo };

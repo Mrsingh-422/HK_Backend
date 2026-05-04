@@ -6,7 +6,8 @@ const {
     registerDoctor, 
     verifyOTP, 
     uploadDocuments, 
-    loginDoctor 
+    loginDoctor ,
+    updateDoctorProfile,getDoctorProfile, getDoctorById
 } = require('../../controllers/doctor/authDoctor');
 
 // Base route: /api/auth/doctor
@@ -22,5 +23,19 @@ router.put('/upload-docs', protect('doctor'), doctorDocUploads, uploadDocuments)
 
 // 4. Login
 router.post('/login', loginDoctor);
+
+// 5. Update Profile (Optional)
+router.put(
+    '/update-profile', 
+    protect('doctor'), 
+    doctorDocUploads,
+    updateDoctorProfile
+);
+
+// 6. Get Doctor Profile (Self)
+router.get('/profile', protect('doctor'), getDoctorProfile);
+
+// 7. Get Doctor by ID (Public/Admin/Patient view)
+router.get('/profile/:id', protect('doctor'), getDoctorById);
 
 module.exports = router;
