@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
-const { fireStationUploads } = require('../../middleware/multer');
+const { fireStationUploads,fireStationUpdateUploads } = require('../../middleware/multer');
 const { getDashboardStats,createFireCase,getIncidentDetails,
      createFireStation, getMyStations, getCaseHistory,
       getAdminContact,updateFireStation, deleteFireStation, updateJurisdiction,getJurisdictionData,
@@ -19,7 +19,7 @@ router.get('/stations', protect('fire-hq'), getMyStations);
 router.get('/station-profile/:id', protect('fire-hq'), getStationDetails);
 router.get('/cases', protect('fire-hq'), getCaseHistory);
 router.get('/help-contact', protect('fire-hq'), getAdminContact);
-router.put('/update-station/:id', protect('fire-hq'), fireStationUploads, updateFireStation);
+router.put('/update-station/:id', protect('fire-hq'), fireStationUpdateUploads, updateFireStation);
 router.delete('/delete-station/:id', protect('fire-hq'), deleteFireStation);
 router.put('/update-jurisdiction', protect('fire-hq'), updateJurisdiction);
 router.get('/jurisdiction-data', protect('fire-hq'), getJurisdictionData);

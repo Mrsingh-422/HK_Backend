@@ -208,25 +208,17 @@ const getAdminContact = async (req, res) => {
 const updateFireStation = async (req, res) => {
     try {
         const { id } = req.params;
-        const updates = req.body;
-        
-        // Pehle check karein ki ye station isi HQ ka hai ya nahi
+        const updates = req.body; 
+
         const station = await FireStation.findOne({ _id: id, hqId: req.user.id });
-        if (!station) {
-            return res.status(404).json({ message: "Station not found or unauthorized" });
-        }
+        if (!station) return res.status(404).json({ message: "Station not found" });
 
-        // Agar password update ho raha hai to use hash karein
-        if (updates.password) {
-            updates.password = await bcrypt.hash(updates.password, 10);
-        }
-
-        // Agar nayi profile image upload hui hai
+        // Multer single mode (fireStationUpdateUploads) req.file bhejta hai
         if (req.file) {
             if (station.profileImage) {
-                deleteFile(station.profileImage); // Purani image delete karein
+                deleteFile(station.profileImage); 
             }
-            updates.profileImage = req.file.path;
+            updates.profileImage = req.file.path; // Ye path DB mein jayega
         }
 
         const updatedStation = await FireStation.findByIdAndUpdate(
@@ -235,15 +227,8 @@ const updateFireStation = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        res.json({ 
-            success: true, 
-            message: "Station details updated successfully", 
-            data: updatedStation 
-        });
-
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.json({ success: true, message: "Station details updated", data: updatedStation });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // 7. DELETE FIRE STATION

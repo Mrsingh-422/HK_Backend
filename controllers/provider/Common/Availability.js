@@ -1,5 +1,6 @@
 const Availability = require('../../../models/Availability');
 const { generateTimeSlots, generateNurseSlots } = require('../../../utils/timeSlotHelper');
+const NurseService = require('../../../models/NurseService');
 
 // lab ke liye
 // {
@@ -111,17 +112,34 @@ const setNurseAvailability = async (req, res) => {
 
 const getMyNurseSlots = async (req, res) => {
     try {
-        const config = await Availability.findOne({ vendorId: req.user.id });
-        if (!config) return res.json({ success: true, message: "No settings found" });
+        const { serviceId } = req.query;
+        const nurseId = req.user.id;
 
-        // Generate dynamic slots based on nurse's own config
+        const [config, service] = await Promise.all([
+            Availability.findOne({ vendorId: nurseId }),
+            NurseService.findById(serviceId)
+        ]);
+
+        if (!config || !service) {
+            return res.status(404).json({ success: false, message: "Settings or Service not found" });
+        }
+
+        // Logic: NurseService ke 'pricing.oneDay.final' ko base maankar premium add karein
+        const serviceFinalPrice = service.pricing.oneDay.final;
+        const hourlyFinalPrice = service.pricing.hourly.final;
+
         const slots = {
-            regular: generateNurseSlots(config, 'One day One Time'),
-            hourly: generateNurseSlots(config, 'Acc. To Per/Hours')
+            regular: generateNurseSlots(config, 'One day One Time', serviceFinalPrice),
+            hourly: generateNurseSlots(config, 'Acc. To Per/Hours', hourlyFinalPrice),
+            premiumDates: config.premiumDates.map(pd => ({
+                date: pd.date,
+                additionalFee: pd.extraFee,
+                totalPriceOnDate: serviceFinalPrice + pd.extraFee // Date wise total
+            }))
         };
 
         res.json({ success: true, config, slots });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
 

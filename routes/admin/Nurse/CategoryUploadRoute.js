@@ -4,6 +4,7 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { careCSVUpload } = require('../../../middleware/multer');
 const { 
     uploadCareCSV, 
+    uploadMasterConsumables,
     getCareCategories, 
     getCareSubCategories, 
     getCareDetails 
@@ -11,14 +12,14 @@ const {
 
 // Base URL: /admin/nurse-csv
 
-// 1. CSV Upload Route (Admin Only)
+// --- ADMIN UPLOAD ROUTES ---
+// Postman Key for both: 'file'
+router.post('/upload-services', protect('admin'), careCSVUpload, uploadCareCSV);
+router.post('/upload-consumables', protect('admin'), careCSVUpload, uploadMasterConsumables);
 
-// Admin Route (Upload)
-router.post('/upload', protect('admin'), careCSVUpload, uploadCareCSV);
-
-// Public/User Routes (For Flutter Linked Dropdowns)
+// --- USER/NURSE LINKED ROUTES ---
 router.get('/categories', getCareCategories);
-router.get('/sub-categories', getCareSubCategories); // ?category=Home Nursing
-router.get('/details', getCareDetails); // ?category=...&subCategory=...
+router.get('/sub-categories', getCareSubCategories);
+router.get('/details', getCareDetails);
 
 module.exports = router;

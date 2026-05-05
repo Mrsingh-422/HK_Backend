@@ -4,7 +4,8 @@ const NurseService = require('../../../models/NurseService');
 const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const { isNurseAvailable, generateNurseSlots } = require('../../../utils/timeSlotHelper');
-const NurseConsumable = require('../../../models/NurseConsumable');
+const NurseConsumable = require('../../../models/MasterConsumable');
+
 // const { generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const moment = require('moment');
 const crypto = require('crypto');
@@ -13,43 +14,57 @@ const crypto = require('crypto');
 const getNurses = async (req, res) => {
     try {
         const { city, search, speciality } = req.body;
+        
         let query = { profileStatus: 'Approved', isActive: true };
         
+        // Filter logic
         if (city) query.city = new RegExp(city, 'i');
         if (search) query.name = new RegExp(search, 'i');
         if (speciality) query.speciality = speciality;
 
+        // 1. Pehle Approved Nurses dhoondo
         const nurses = await Nurse.find(query).lean();
+        console.log(`Found ${nurses.length} approved nurses in DB`);
+
         const data = [];
 
         for (let nurse of nurses) {
-            // Nurse ki wahi services fetch karein jo active hain
-            const services = await NurseService.find({ nurseId: nurse._id, isActive: true });
-            
-            if (services.length > 0) {
-                // UPDATE: Starting price ab 'oneDayPrice' field se calculate hogi
-                // Filter karke unhi services ka price uthayenge jinka price 0 se zyada hai
-                const validPrices = services.map(s => s.oneDayPrice).filter(p => p > 0);
-                
-                if (validPrices.length > 0) {
-                    const minOneDayPrice = Math.min(...validPrices);
+            // 2. Nurse ki services check karo
+            const services = await NurseService.find({ nurseId: nurse._id });
+            console.log(`Nurse ${nurse.name} has ${services.length} services`);
 
-                    data.push({
-                        _id: nurse._id,
-                        name: nurse.name,
-                        profileImage: nurse.profileImage,
-                        rating: nurse.rating,
-                        city: nurse.city,
-                        experienceYears: nurse.experienceYears,
-                        startingPrice: minOneDayPrice, // Ab yahan 1 Day Charge dikhega
-                        topServices: services.slice(0, 2).map(s => s.title)
-                    });
-                }
+            let minPrice = 0;
+            let serviceTitles = [];
+
+            if (services.length > 0) {
+                // Naya Pricing Logic Check (Final Price)
+                const validPrices = services
+                    .map(s => (s.pricing && s.pricing.oneDay ? s.pricing.oneDay.final : 0))
+                    .filter(p => p > 0);
+                
+                minPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
+                serviceTitles = services.slice(0, 2).map(s => s.title);
             }
+
+            // Data push (Service ho ya na ho, Nurse list mein aayegi)
+            data.push({
+                _id: nurse._id,
+                name: nurse.name,
+                profileImage: nurse.profileImage,
+                rating: nurse.rating || 0,
+                city: nurse.city,
+                experienceYears: nurse.experienceYears || 0,
+                startingPrice: minPrice || 0, 
+                topServices: serviceTitles,
+                location: nurse.location,
+                profileStatus: nurse.profileStatus
+            });
         }
         
         res.json({ success: true, count: data.length, data });
+
     } catch (error) { 
+        console.error("getNurses Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -60,19 +75,20 @@ const getNurseDetails = async (req, res) => {
         const nurse = await Nurse.findById(nurseId).lean();
         if (!nurse) return res.status(404).json({ message: "Nurse not found" });
 
-        // Services aur Consumables dono fetch karein
-        const [services, consumables, availConfig] = await Promise.all([
-            NurseService.find({ nurseId, isActive: true }),
-            NurseConsumable.find({ nurseId, isActive: true }),
+        const [services, config] = await Promise.all([
+            // FIX: 'consumablesUsed.consumableId' ki jagah 'consumablesUsed.masterItemId' use karein
+            NurseService.find({ nurseId, status: 'Approved' })
+                .populate('consumablesUsed.masterItemId'), 
             Availability.findOne({ vendorId: nurseId })
         ]);
 
-        res.json({ 
-            success: true, 
-            data: { ...nurse, services, consumables, availability: availConfig } 
-        });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, data: { ...nurse, services, availability: config } });
+    } catch (e) { 
+        console.error("Details Error:", e);
+        res.status(500).json({ message: e.message }); 
+    }
 };
+
 
 const getNurseDeliveryConfig = async (req, res) => {
     try {
@@ -159,22 +175,29 @@ const checkRangeAvailability = async (req, res) => {
 const getNurseAvailability = async (req, res) => {
     try {
         const { nurseId } = req.params;
-        const { month } = req.query; // e.g., "2026-05"
+        const { serviceId, type } = req.query; // type: 'One day One Time' etc.
 
-        const config = await Availability.findOne({ vendorId: nurseId });
-        const service = await NurseService.findOne({ nurseId, isActive: true }); // Base price dikhane ke liye
+        const [config, service] = await Promise.all([
+            Availability.findOne({ vendorId: nurseId }),
+            NurseService.findById(serviceId)
+        ]);
 
-        // Response mein premium dates bhej rahe hain taaki frontend calendar par dikha sake
+        if (!config || !service) return res.status(404).json({ message: "Config or Service missing" });
+
+        // Select correct price from Triple Pricing
+        let base = service.pricing.oneDay.final;
+        if(type === 'Acc. To Per/Hours') base = service.pricing.hourly.final;
+
         res.json({
             success: true,
-            basePrice: service?.oneDayPrice || 0,
-            premiumDates: config.premiumDates || [], // [{date: "2026-05-03", extraFee: 500}]
-            timeSlots: generateNurseSlots(config, 'One day One Time')
+            serviceBasePrice: base,
+            premiumDates: config.premiumDates, 
+            timeSlots: generateNurseSlots(config, type, base) // Helper logic used
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
-// 2. Checkout API Fix
+// 4. CHECKOUT (The Revamped Pricing Engine)
 const checkoutNurseBooking = async (req, res) => {
     try {
         const { nurseId, serviceId, selectedType, startDate, endDate, startTime, endTime, isFasterService, patientCount, selectedConsumables } = req.body;
@@ -188,120 +211,137 @@ const checkoutNurseBooking = async (req, res) => {
         if (!service) return res.status(404).json({ message: "Service not found" });
         const pCount = Number(patientCount) || 1;
 
-        let basePricePerUnit = 0;
-        let totalSurcharge = 0;
+        let basePrice = 0;
+        let slotSurcharge = 0;
         let units = 1;
 
-        // 1. Core Pricing Selection
+        // Core Triple Pricing Logic
         if (selectedType === 'For Multiple Days') {
-            const start = moment(startDate).startOf('day');
-            const end = moment(endDate).startOf('day');
-            units = end.diff(start, 'days') + 1;
-            basePricePerUnit = service.multipleDaysPrice;
-            let curr = moment(start);
-            while (curr <= end) {
+            units = moment(endDate).diff(moment(startDate), 'days') + 1;
+            basePrice = service.pricing.multipleDays.final * units;
+            
+            // Check premium dates in range
+            let curr = moment(startDate);
+            while (curr <= moment(endDate)) {
                 const p = config.premiumDates?.find(pd => pd.date === curr.format('YYYY-MM-DD'));
-                if (p) totalSurcharge += p.extraFee;
+                if (p) slotSurcharge += p.extraFee;
                 curr.add(1, 'days');
             }
-        } 
-        else if (selectedType === 'One day One Time') {
-            basePricePerUnit = service.oneDayPrice;
-            const p = config.premiumDates?.find(pd => pd.date === moment(startDate).format('YYYY-MM-DD'));
-            if (p) totalSurcharge = p.extraFee;
-        }
-        else if (selectedType === 'Acc. To Per/Hours') {
-            const hStart = moment(startTime, "HH:mm");
-            const hEnd = moment(endTime, "HH:mm");
-            units = hEnd.diff(hStart, 'hours') || 1;
-            basePricePerUnit = service.hourlyPrice;
-            const p = config.premiumSlots?.find(ps => ps.time === startTime);
-            totalSurcharge = p ? p.extraFee : 0;
+        } else if (selectedType === 'One day One Time') {
+            basePrice = service.pricing.oneDay.final;
+            const pDate = config.premiumDates?.find(pd => pd.date === moment(startDate).format('YYYY-MM-DD'));
+            if (pDate) slotSurcharge += pDate.extraFee;
+        } else {
+            units = moment(endTime, "HH:mm").diff(moment(startTime, "HH:mm"), 'hours') || 1;
+            basePrice = service.pricing.hourly.final * units;
         }
 
-        // 2. Add-ons Calculation
+        // Consumable Calculation
         const consumableTotal = (selectedConsumables || []).reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
-        const fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
         
-        // Subtotal before tax
-        const subTotalWithPatients = ((basePricePerUnit * units) + totalSurcharge + consumableTotal) * pCount;
-        const subTotalWithFaster = subTotalWithPatients + fasterCharge;
+        // Multiplier: Patients (Surcharge, Base, aur Consumables par apply hoga)
+        const subTotal = (basePrice + slotSurcharge + consumableTotal) * pCount;
+        
+        // Flat Charges
+        const fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
+        const totalBeforeTax = subTotal + fasterCharge;
 
-        // 3. DYNAMIC TAX LOGIC (Figma/API Sync)
-        let finalTax = 0;
-        if (delivery) {
-            // Priority: Percentage Tax first, then fixed Rupee tax
-            if (delivery.taxPercentage && delivery.taxPercentage > 0) {
-                finalTax = (subTotalWithFaster * delivery.taxPercentage) / 100;
-            }
-            if (delivery.taxInRupees && delivery.taxInRupees > 0) {
-                finalTax += delivery.taxInRupees;
-            }
-        }
+        // Dynamic Tax
+        let tax = 0;
+        if (delivery?.taxPercentage) tax = (totalBeforeTax * delivery.taxPercentage) / 100;
+        if (delivery?.taxInRupees) tax += delivery.taxInRupees;
 
         res.json({
             success: true,
             breakdown: {
-                basePrice: basePricePerUnit * units * pCount,
-                slotSurcharge: totalSurcharge * pCount,
+                baseServicePrice: Math.round(basePrice * pCount),
+                slotSurcharge: Math.round(slotSurcharge * pCount),
+                consumableTotal: Math.round(consumableTotal * pCount),
                 fasterServiceCharge: fasterCharge,
-                consumableTotal: consumableTotal * pCount,
-                taxAmount: Math.round(finalTax), // DYNAMIC TAX
-                totalPrice: Math.round(subTotalWithFaster + finalTax),
+                taxAmount: Math.round(tax),
+                totalPrice: Math.round(totalBeforeTax + tax),
                 units,
                 pCount
             }
         });
-    } catch (error) { 
-        console.error("Checkout Error:", error);
-        res.status(500).json({ message: error.message }); 
-    }
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 5. PLACE BOOKING (Consumables Fix)
+// --- 2. PLACE BOOKING (Mapping all fields correctly) ---
 const placeNurseBooking = async (req, res) => {
     try {
-        const { nurseId, serviceId, schedule, priceBreakdown, patients, healthDetails, address, selectedConsumables, needConsumable, assessmentLocation } = req.body;
+        const { 
+            nurseId, serviceId, schedule, priceBreakdown, patients, 
+            healthDetails, address, selectedConsumables, assessmentLocation 
+        } = req.body;
+
         const service = await NurseService.findById(serviceId);
+        if (!service) return res.status(404).json({ message: "Service not found" });
+
+        // Generate Booking ID
+        const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
         const booking = await NurseBooking.create({
             userId: req.user.id,
-            nurseId, serviceId,
-            bookingId: `NB${Date.now().toString().slice(-8)}`,
+            nurseId,
+            serviceId,
+            bookingId: bId,
             serviceDetails: {
                 title: service.title,
                 type: service.type,
                 duration: schedule.duration,
-                basePrice: service.finalPrice
+                basePrice: service.pricing.oneDay.final // Snapshot individual price
             },
             priceBreakdown: {
-                basePrice: priceBreakdown.basePrice,
+                baseServicePrice: priceBreakdown.baseServicePrice,
                 slotSurcharge: priceBreakdown.slotSurcharge,
+                consumableTotal: priceBreakdown.consumableTotal,
                 fasterServiceCharge: priceBreakdown.fasterServiceCharge,
                 taxAmount: priceBreakdown.taxAmount,
                 totalPrice: priceBreakdown.totalPrice
             },
-            patients,
-            healthDetails,
+            patients: patients.map(p => ({
+                patientId: p.patientId,
+                name: p.name,
+                age: p.age,
+                gender: p.gender,
+                relation: p.relation
+            })),
             schedule: {
-                startDate: moment(schedule.startDate).startOf('day').toDate(),
-                endDate: moment(schedule.endDate).endOf('day').toDate(),
+                startDate: schedule.startDate,
+                endDate: schedule.endDate,
                 startTime: schedule.startTime,
                 endTime: schedule.endTime,
                 duration: schedule.duration
             },
-            address,
+            address: {
+                name: address.name || "Patient",
+                phone: address.phone || "",
+                houseNo: address.houseNo,
+                sector: address.sector || "",
+                landmark: address.landmark || "",
+                city: address.city,
+                state: address.state || "",
+                pincode: address.pincode || "",
+                addressType: address.addressType || "Home"
+            },
             assessmentLocation,
-            selectedConsumables: selectedConsumables || [], // SAVE ARRAY
-            needConsumable: needConsumable || false,        // SAVE BOOLEAN
-            totalPrice: priceBreakdown.totalPrice,
+            selectedConsumables: (selectedConsumables || []).map(c => ({
+                consumableId: c.consumableId,
+                itemName: c.itemName,
+                price: c.price,
+                unitType: c.unitType || "Piece"
+            })),
+            needConsumable: selectedConsumables && selectedConsumables.length > 0,
+            healthDetails,
             status: 'Pending'
         });
 
-        res.status(201).json({ success: true, data: booking });
+        res.status(201).json({ success: true, message: "Booking saved with all details", data: booking });
+
     } catch (error) { 
-        console.error("Controller Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        console.error("Place Booking Error:", error);
+        res.status(500).json({ message: error.message }); 
     }
 };
 

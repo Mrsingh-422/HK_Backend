@@ -209,5 +209,153 @@ const loginFireAll = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+
+// 4. GET PROFILE (Unified for HQ, Station, and Staff)
+const getProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const role = req.user.role; // This comes from the decoded JWT token
+ 
+        let user = null;
+ 
+        // Determine which model to query based on role
+        switch (role) {
+            case 'Fire-HQ':
+                user = await FireHQ.findById(userId);
+                break;
+            case 'Fire-Station':
+                user = await FireStation.findById(userId);
+                break;
+            case 'Fire-Staff':
+                user = await FireStaff.findById(userId);
+                break;
+            default:
+                return res.status(400).json({ success: false, message: "Invalid role in token" });
+        }
+ 
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+ 
+        res.status(200).json({
+            success: true,
+            role: role,
+            data: user
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
+// 5. UPDATE PROFILE (Unified for HQ, Station, and Staff)
+
+const updateProfile = async (req, res) => {
+
+    try {
+
+        const userId = req.user.id;
+
+        const role = req.user.role; // Token se role nikalna
+
+        let Model;
+ 
+        // 1. Role ke basis par Model select karein
+
+        switch (role) {
+
+            case 'Fire-HQ':
+
+                Model = FireHQ;
+
+                break;
+
+            case 'Fire-Station':
+
+                Model = FireStation;
+
+                break;
+
+            case 'Fire-Staff':
+
+                Model = FireStaff;
+
+                break;
+
+            default:
+
+                return res.status(400).json({ success: false, message: "Invalid role in token" });
+
+        }
+ 
+        const updates = req.body;
+ 
+        // 2. Security: In fields ko update karne se rokna (inhe alag APIs se handle karein)
+
+        delete updates.password;
+
+        delete updates.email;
+
+        delete updates.officialEmail;
+
+        delete updates.role;
+
+        delete updates.token;
+ 
+        // 3. Current user ka data fetch karein (Image check karne ke liye)
+
+        const currentUser = await Model.findById(userId);
+
+        if (!currentUser) {
+
+            return res.status(404).json({ success: false, message: "User not found" });
+
+        }
+ 
+        // 4. File Upload Logic (Agar nayi image aayi hai toh purani delete karein)
+
+        if (req.file) {
+
+            if (currentUser.profileImage) {
+
+                deleteFile(currentUser.profileImage); // Purani file delete karna
+
+            }
+
+            updates.profileImage = req.file.path; // Nayi file ka path save karna
+
+        }
+ 
+        // 5. Database update karein
+
+        const updatedUser = await Model.findByIdAndUpdate(
+
+            userId,
+
+            { $set: updates },
+
+            { new: true, runValidators: true }
+
+        );
+ 
+        res.status(200).json({
+
+            success: true,
+
+            message: "Profile updated successfully",
+
+            data: updatedUser
+
+        });
+ 
+    } catch (error) {
+
+        res.status(500).json({ success: false, message: error.message });
+
+    }
+
+};
+ 
 // Forgot & Reset same rahenge (Bas token gen update ho gaya hai)
-module.exports = { registerHQ, loginHQ, updateHQProfile, changePassword , loginFireAll};
+module.exports = { registerHQ, loginHQ, updateHQProfile, changePassword , loginFireAll, getProfile, updateProfile };

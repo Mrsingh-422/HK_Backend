@@ -2,34 +2,31 @@ const mongoose = require('mongoose');
 
 const nurseServiceSchema = new mongoose.Schema({
     nurseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Nurse', required: true },
+    careSubCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'CareService' }, 
+    title: String,
+    description: String,
+    type: { type: String, enum: ['Daily Care', 'Package'], default: 'Daily Care' },
     
-    // Figma dropdown: 'Daily Care' or 'Package'
-    type: { type: String, enum: ['Daily Care', 'Package'], required: true },
-    
-    title: { type: String, required: true }, // Name of service
-    description: String, // Nurse Service Description
+    // Keys aligned with controller: base, discount, final
+    pricing: {
+        oneDay: { base: Number, discount: Number, final: Number },
+        multipleDays: { base: Number, discount: Number, final: Number },
+        hourly: { base: Number, discount: Number, final: Number }
+    },
 
-    // --- FIGMA SCREEN 42 PRICING FIELDS ---
-    oneDayPrice: { type: Number, default: 0 },       // For one day one time price
-    multipleDaysPrice: { type: Number, default: 0 }, // For multiple Days Price
-    hourlyPrice: { type: Number, default: 0 },       // For per hours price
-    
-    amount: { type: Number, default: 0 },            // Base Amount
-    discountPercentage: { type: Number, default: 0 }, // Discount Percentage %
-    finalPrice: { type: Number, required: true },    // Price after discount (Actual price used for booking)
+    consumablesUsed: [{
+        masterItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'MasterConsumable' },
+        discountPercentage: Number,
+        finalPrice: Number
+    }],
 
-    // Figma selection & text fields
-    consumablesUsed: [{ 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'NurseConsumable' 
-    }], 
-    procedureIncluded: String,  // Procedure Included text
-    servicesOffered: String,    // Services Offered text
-    
+    procedureIncluded: String,
+    servicesOffered: String,
+    photos: [String],
     prescriptionRequired: { type: Boolean, default: false },
-    photos: [{ type: String }],
-    status: { type: String, enum: ['Approved', 'Pending', 'Rejected'], default: 'Pending' },
-    isActive: { type: Boolean, default: true }
+    // Direct 'Approved' to skip pending
+    status: { type: String, enum: ['Approved', 'Pending', 'Rejected'], default: 'Approved' },
+    rejectionReason: String
 }, { timestamps: true });
 
 module.exports = mongoose.model('NurseService', nurseServiceSchema);

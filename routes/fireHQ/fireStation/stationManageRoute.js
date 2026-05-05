@@ -32,7 +32,7 @@ router.post('/staff/add', protect('fire-station'), addStaff);
 router.get('/staff/list', protect('fire-station'), getStaffList);
 router.get('/staff/profile/:id', protect('fire-station'), getStaffProfileDetails); // Screen 93
 router.get('/staff/removal-reasons', protect('fire-station'), getStaffRemovalReasons);
-router.put('/staff/update/:id', protect('fire-station'), fireStaffUploads, updateStaff); 
+router.put('/staff/update/:id', protect('fire-station'), fireStaffUploads, updateStaff);  
 router.delete('/staff/delete/:id', protect('fire-station'), deleteStaff);
 
 // Fleet

@@ -2,30 +2,32 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { nurseServiceUploads } = require('../../../middleware/multer');
-const {getNurseDashboard,addService, updateService, deleteService ,getMyServices,
-     manageConsumable,listConsumables, deleteConsumable, getNurseStats, manageBookingRequest, getNewRequests  } = require('../../../controllers/provider/Nurse/NurseDashboard');
+const { nurseServiceUploads, nurseDocUploads,userProfileUpload } = require('../../../middleware/multer');
+const {
+    getProviderDashboard, updateProviderProfile, manageNurseService,
+    getMyServices, deleteService, getBookingRequests,
+    handleBookingAction, getAvailableStaff, assignStaffToBooking, searchMasterConsumables
+} = require('../../../controllers/provider/Nurse/NurseDashboard');
 
-// Base URL: /provider/nurse/dash
+// base URL: /provider/nurse/dash
 
-// Nurse Dashboard
-router.get('/get', protect('nurse'), getNurseDashboard);
+// DASHBOARD & PROFILE
+router.get('/dashboard-stats', protect('nurse'), getProviderDashboard);
+router.put('/profile/update', protect('nurse'), userProfileUpload, updateProviderProfile);
 
-// Nurse Services
-router.post('/services/add', protect('nurse'), nurseServiceUploads, addService);
-router.put('/services/update/:id', protect('nurse'), nurseServiceUploads, updateService);
-router.delete('/services/delete/:id', protect('nurse'), deleteService);
-router.get('/services/list', protect('nurse'), getMyServices);
+// SERVICE MANAGEMENT
+router.post('/service/manage', protect('nurse'), nurseDocUploads, manageNurseService);
+router.put('/service/manage/:id', protect('nurse'), nurseDocUploads, manageNurseService);
+router.get('/service/list', protect('nurse'), getMyServices); // Filter: ?status=Approved
+router.delete('/service/delete/:id', protect('nurse'), deleteService);
 
-// Nurse Consumables
-router.post('/consumables/manage', protect('nurse'), manageConsumable);
-router.get('/consumables/list', protect('nurse'), listConsumables);
-router.delete('/consumables/delete/:id', protect('nurse'), deleteConsumable);
+// STAFF & BOOKING MANAGEMENT
+router.get('/bookings', protect('nurse'), getBookingRequests); // Filter: ?status=Pending
+router.post('/booking/action', protect('nurse'), handleBookingAction);
+router.get('/staff/available', protect('nurse'), getAvailableStaff);
+router.post('/staff/assign', protect('nurse'), assignStaffToBooking);
 
-// Nurse Stats
-router.get('/stats', protect('nurse'), getNurseStats);
+// CONSUMABLES (Master Search)
+router.get('/consumables/search', protect('nurse'), searchMasterConsumables);
 
-// Nurse Booking Requests
-router.get('/booking-requests', protect('nurse'), manageBookingRequest);
-router.get('/new-requests', protect('nurse'), getNewRequests);
 module.exports = router;

@@ -17,12 +17,13 @@ const nurseBookingSchema = new mongoose.Schema({
     },
     
     // Pricing Breakdown
-    priceBreakdown: {
-        basePrice: Number,
-        slotSurcharge: { type: Number, default: 0 },
-        fasterServiceCharge: { type: Number, default: 0 },
-        taxAmount: { type: Number, default: 0 },
-        totalPrice: { type: Number, required: true }
+     priceBreakdown: {
+        baseServicePrice: Number,    // Service final price * units
+        slotSurcharge: Number,       // Premium time/date fee
+        consumableTotal: Number,     // Sum of all items selected
+        fasterServiceCharge: Number, // Express delivery
+        taxAmount: Number,
+        totalPrice: Number           // Final grand total
     },
     
     patients: [{
@@ -82,9 +83,9 @@ const nurseBookingSchema = new mongoose.Schema({
         default: 'Pending' 
     },
     selectedConsumables: [{
-        consumableId: { type: mongoose.Schema.Types.ObjectId, ref: 'NurseConsumable' },
+        consumableId: { type: mongoose.Schema.Types.ObjectId, ref: 'MasterConsumable' },
         itemName: String,
-        price: Number,
+        price: Number, // Price after nurse's discount
         unitType: String
     }],
     needConsumable: { type: Boolean, default: false },

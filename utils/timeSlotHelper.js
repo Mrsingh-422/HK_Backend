@@ -82,32 +82,41 @@ const isNurseAvailable = async (nurseId, payload, NurseBooking, Availability) =>
 };
 
 
-const generateNurseSlots = (config, bookingType) => {
+const generateNurseSlots = (config, bookingType, servicePrice) => {
     const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots, premiumSlots } = config;
     if (!startTime || !endTime) return [];
 
     let slots = [];
+    // Hourly booking mein hamesha 60 min ka interval, warna slotDuration (default 30)
     let interval = (bookingType === 'Acc. To Per/Hours') ? 60 : (slotDuration || 30);
+    
     let start = moment(startTime, "HH:mm");
     let end = moment(endTime, "HH:mm");
 
     while (start.isBefore(end)) {
         let timeString = start.format("HH:mm");
+        
         if (!unavailableSlots?.includes(timeString)) {
             const hour = start.hour();
             let category = (hour >= 5 && hour < 12) ? "Morning" : (hour >= 12 && hour < 17) ? "Afternoon" : "Evening";
-            const isEnabled = (category === "Morning" && morningSlots) || (category === "Afternoon" && afternoonSlots) || (category === "Evening" && eveningSlots);
+            
+            const isEnabled = (category === "Morning" && morningSlots) || 
+                              (category === "Afternoon" && afternoonSlots) || 
+                              (category === "Evening" && eveningSlots);
 
             if (isEnabled) {
-                // Check if this slot is premium
                 const premium = premiumSlots?.find(p => p.time === timeString);
-                
+                const extra = premium ? premium.extraFee : 0;
+
                 slots.push({
                     time: timeString,
                     displayTime: start.format("hh:mm A"),
                     category,
-                    // FIX: Agar premium nahi hai toh 0 dikhao, 79 nahi
-                    extraFee: premium ? premium.extraFee : 0 
+                    // 💰 FINAL PRICE CALCULATION:
+                    // Service ka discounted price + Slot ki premium fee
+                    baseServicePrice: servicePrice,
+                    premiumSurcharge: extra,
+                    totalSlotPrice: servicePrice + extra 
                 });
             }
         }
@@ -115,6 +124,7 @@ const generateNurseSlots = (config, bookingType) => {
     }
     return slots;
 };
+
 
 
 
