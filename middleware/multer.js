@@ -561,7 +561,20 @@ const fireEvidenceUploads = multer({
     { name: 'incidentImages', maxCount: 5 } // Figma key: incidentImages
 ]);
 
+// ==========================================
+// 31. FIRE LEAVE ATTACHMENT (Screen: New Request)
+// ==========================================
+const fireLeaveDir = 'public/uploads/fire_leaves';
+ensureDir(fireLeaveDir);
 
+const fireLeaveUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, fireLeaveDir),
+        filename: (req, file, cb) => cb(null, `leave-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter, // Images and PDF allowed
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+}).single('attachment'); // 👈 Key name matching Figma: 'attachment'
 
 
 module.exports = { 
@@ -597,5 +610,6 @@ module.exports = {
     careCSVUpload,
     fireStaffUpdateUploads, // Screen 92: Update Staff Profile
     fireStationUpdateUploads, // Screen 21: Update Station Profile
-    fireEvidenceUploads // Screen 101: Upload Evidence
+    fireEvidenceUploads, // Screen 101: Upload Evidence
+    fireLeaveUploads // Screen: New Request
 };  

@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FireStaff Terminal | Field Operations</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Fira+Code:wght@400;500&display=swap');
+        body { font-family: 'Outfit', sans-serif; background-color: #f3f4f6; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .btn-action { @apply flex-grow py-3 rounded-2xl font-bold text-sm transition-all active:scale-95 flex flex-col items-center justify-center gap-2 shadow-sm; }
+        .card { @apply bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm; }
+        .input-group input, .input-group select, .input-group textarea { @apply w-full bg-gray-50 border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-orange-500 outline-none; }
+        .terminal-log { font-family: 'Fira Code', monospace; font-size: 11px; }
+        .nav-btn.active { @apply text-orange-600; }
+    </style>
+</head>
+<body class="max-w-md mx-auto bg-gray-100 min-h-screen border-x border-gray-200 flex flex-col shadow-2xl">
+
+    <!-- Auth Overlay -->
+    <div id="authOverlay" class="fixed inset-0 z-[100] bg-slate-900 flex items-center justify-center px-6">
+        <div class="bg-white w-full p-8 rounded-[2.5rem] shadow-2xl border border-white/20">
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 bg-orange-600 rounded-3xl flex items-center justify-center text-white text-3xl mx-auto mb-4 shadow-lg shadow-orange-200">
+                    <i class="fas fa-id-badge"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-slate-800 tracking-tight">Staff Terminal</h2>
+                <p class="text-gray-400 text-sm">Official Field Login</p>
+            </div>
+            <div class="space-y-4">
+                <input id="loginEmail" type="email" placeholder="Official Email" class="w-full bg-gray-50 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-orange-500 font-medium">
+                <input id="loginPassword" type="password" placeholder="Password" class="w-full bg-gray-50 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-orange-500 font-medium">
+                <button onclick="handleLogin()" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 rounded-2xl shadow-xl shadow-orange-100 transition-all active:scale-95">SIGN IN</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="bg-white p-6 pb-4 flex justify-between items-center sticky top-0 z-40 border-b border-gray-50">
+        <div class="flex items-center gap-3">
+            <div id="userImg" class="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-orange-600 font-bold border border-orange-200">JD</div>
+            <div>
+                <h4 id="userName" class="text-sm font-bold text-slate-800">Officer</h4>
+                <p id="userRank" class="text-[10px] font-black text-gray-400 uppercase tracking-widest">Identifying...</p>
+            </div>
+        </div>
+        <button onclick="logout()" class="w-10 h-10 bg-gray-50 rounded-xl text-gray-400 hover:text-red-500 transition-colors"><i class="fas fa-power-off"></i></button>
+    </header>
+
+    <!-- Main Viewport -->
+    <main class="flex-grow p-6 space-y-6 overflow-y-auto" id="mainContainer">
+        
+        <!-- Tab: Home -->
+        <div id="tab-home" class="tab-content active space-y-6">
+            <div class="grid grid-cols-2 gap-4">
+                <div class="card bg-orange-600 text-white shadow-orange-100">
+                    <p class="text-[10px] font-black uppercase opacity-70 tracking-widest">Assigned Cases</p>
+                    <h3 id="caseCount" class="text-3xl font-black">0</h3>
+                </div>
+                <div class="card border-orange-100">
+                    <p class="text-[10px] font-black text-gray-400 uppercase tracking-widest">Attendance</p>
+                    <h3 id="attPercent" class="text-3xl font-black text-slate-800">--%</h3>
+                </div>
+            </div>
+
+            <div class="card space-y-4">
+                <h4 class="font-bold text-slate-800">Shift Operations</h4>
+                <div class="flex gap-4">
+                    <button onclick="shiftAction('check-in')" class="btn-action bg-green-50 text-green-600 border border-green-100 hover:bg-green-100">
+                        <i class="fas fa-clock"></i> CHECK IN
+                    </button>
+                    <button onclick="shiftAction('check-out')" class="btn-action bg-red-50 text-red-600 border border-red-100 hover:bg-red-100">
+                        <i class="fas fa-sign-out-alt"></i> CHECK OUT
+                    </button>
+                </div>
+            </div>
+
+            <div class="card space-y-3">
+                <h4 class="font-bold text-slate-800">Quick Requests</h4>
+                <div class="grid grid-cols-3 gap-2">
+                    <button onclick="log('Shift Change Feature coming soon')" class="p-4 bg-gray-50 rounded-2xl text-[10px] font-black text-gray-500 flex flex-col items-center gap-2 hover:bg-gray-100 transition">
+                        <i class="fas fa-exchange-alt text-lg"></i> SHIFT
+                    </button>
+                    <button onclick="log('Overtime request coming soon')" class="p-4 bg-gray-50 rounded-2xl text-[10px] font-black text-gray-500 flex flex-col items-center gap-2 hover:bg-gray-100 transition">
+                        <i class="fas fa-stopwatch text-lg"></i> OVERTIME
+                    </button>
+                    <button onclick="showTab('leaves'); fetchLeaveCats();" class="p-4 bg-gray-50 rounded-2xl text-[10px] font-black text-gray-500 flex flex-col items-center gap-2 hover:bg-gray-100 transition">
+                        <i class="fas fa-calendar-plus text-lg"></i> LEAVE
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: My Cases -->
+        <div id="tab-cases" class="tab-content space-y-4">
+            <h3 class="text-xl font-bold text-slate-800">Operational Incidents</h3>
+            <div id="caseList" class="space-y-4"></div>
+        </div>
+
+        <!-- Tab: Apply Leave -->
+        <div id="tab-leaves" class="tab-content space-y-6">
+            <div class="card input-group space-y-4">
+                <h3 class="text-xl font-bold text-slate-800">New Leave Request</h3>
+                <select id="lType"><option value="">Loading Categories...</option></select>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-[10px] font-black text-gray-400 uppercase px-1">From Date</label>
+                        <input type="date" id="lFrom" class="mt-1">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black text-gray-400 uppercase px-1">To Date</label>
+                        <input type="date" id="lTo" class="mt-1">
+                    </div>
+                </div>
+                <textarea id="lReason" placeholder="Describe the reason for leave" rows="4"></textarea>
+                <div class="p-5 border-2 border-dashed border-gray-200 rounded-2xl bg-slate-50 flex flex-col items-center gap-2 cursor-pointer hover:border-orange-300 transition">
+                    <i class="fas fa-paperclip text-gray-400"></i>
+                    <label class="text-xs font-bold text-gray-500">Attach Medical Certificate</label>
+                    <input type="file" id="lFile" class="text-[10px] w-full mt-2">
+                </div>
+                <button onclick="submitLeave()" class="w-full bg-slate-900 text-white font-bold py-4 rounded-2xl shadow-xl transition-all active:scale-95">SUBMIT REQUEST</button>
+            </div>
+        </div>
+
+        <!-- Tab: Profile -->
+        <div id="tab-profile" class="tab-content space-y-6 text-center">
+            <div class="card flex flex-col items-center">
+                <div id="profImgLarge" class="w-24 h-24 bg-orange-100 rounded-[2.5rem] flex items-center justify-center text-3xl text-orange-600 font-bold mb-4 border-4 border-white shadow-xl">JD</div>
+                <h3 id="profName" class="text-2xl font-bold text-slate-800">Officer</h3>
+                <p id="profRank" class="text-xs font-black text-gray-400 uppercase tracking-widest">Assistant Sub-Inspector</p>
+                <div class="w-full mt-8 pt-8 border-t border-gray-50 grid grid-cols-2 gap-6">
+                    <div class="text-left">
+                        <p class="text-[10px] font-black text-gray-400 uppercase mb-1">Badge ID</p>
+                        <p id="profBadge" class="text-sm font-bold text-slate-700">#---</p>
+                    </div>
+                    <div class="text-left">
+                        <p class="text-[10px] font-black text-gray-400 uppercase mb-1">Base Station</p>
+                        <p id="profStation" class="text-sm font-bold text-slate-700">Main Station</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Console Viewer -->
+    <div id="console" class="h-32 bg-slate-900 text-green-400 p-4 terminal-log overflow-y-auto border-t border-slate-700 select-all">
+        [SYSTEM] Ready...
+    </div>
+
+    <!-- Bottom Navigation -->
+    <footer class="bg-white border-t border-gray-100 p-4 px-8 flex justify-between items-center sticky bottom-0 z-40">
+        <button onclick="showTab('home')" class="nav-btn active text-gray-400 hover:text-orange-600 transition-colors"><i class="fas fa-home text-lg"></i></button>
+        <button onclick="showTab('cases'); fetchCases();" class="nav-btn text-gray-400 hover:text-orange-600 transition-colors"><i class="fas fa-bullhorn text-lg"></i></button>
+        <button onclick="showTab('leaves'); fetchLeaveCats();" class="nav-btn text-gray-400 hover:text-orange-600 transition-colors"><i class="fas fa-calendar-alt text-lg"></i></button>
+        <button onclick="showTab('profile'); fetchProfile();" class="nav-btn text-gray-400 hover:text-orange-600 transition-colors"><i class="fas fa-user-circle text-lg"></i></button>
+    </footer>
+
+    <script>
+        const baseUrl = "http://localhost:5002";
+        // Default Staff Token (Pre-filled for your testing)
+        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5ZThjNDU1YzBjYjA3MDJkZjA4M2I3MiIsInJvbGUiOiJGaXJlLVN0YWZmIiwiaWF0IjoxNzc3NzExMzkxLCJleHAiOjQ5MzEzMTEzOTF9.KehI4hyyY7ybIDxr9CiPxLqmCnWKu4gkHsCsjunhkH8";
+
+        window.onload = () => {
+            if(token) {
+                document.getElementById('authOverlay').style.display = 'none';
+                log("Session restored from token.");
+                fetchProfile();
+            }
+        };
+
+        function log(msg) {
+            const consoleBox = document.getElementById('console');
+            consoleBox.innerHTML += `<br>> [${new Date().toLocaleTimeString()}] ${msg}`;
+            consoleBox.scrollTop = consoleBox.scrollHeight;
+        }
+
+        async function handleLogin() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            if(!email || !password) return alert("Enter credentials");
+
+            try {
+                const res = await fetch(`${baseUrl}/fire/login-all`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, type: 'staff' })
+                });
+                const data = await res.json();
+                if(data.success) {
+                    token = data.token;
+                    localStorage.setItem('fire_staff_token', token);
+                    document.getElementById('authOverlay').classList.add('hidden');
+                    fetchProfile();
+                    log("Login Success: Welcome " + data.data.fullName);
+                } else {
+                    alert(data.message);
+                }
+            } catch(e) { log("Login Error: " + e.message); }
+        }
+
+        function logout() {
+            localStorage.removeItem('fire_staff_token');
+            location.reload();
+        }
+
+        function showTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active', 'text-orange-600'));
+            
+            document.getElementById('tab-' + tabId).classList.add('active');
+            // Logic for highlighting button could be improved here
+            log("Switched to tab: " + tabId);
+        }
+
+        async function fetchProfile() {
+            try {
+                const res = await fetch(`${baseUrl}/fireStaff/ops/profile`, {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                const { data } = await res.json();
+                document.getElementById('userName').innerText = data.profile.fullName;
+                document.getElementById('userRank').innerText = data.profile.rank;
+                document.getElementById('profName').innerText = data.profile.fullName;
+                document.getElementById('profRank').innerText = data.profile.rank;
+                document.getElementById('profBadge').innerText = data.profile.badgeId;
+                document.getElementById('profStation').innerText = data.stats.station;
+                document.getElementById('caseCount').innerText = data.stats.casesAssigned;
+                document.getElementById('attPercent').innerText = data.stats.attendance;
+                log("Profile statistics updated.");
+            } catch (e) { log("Profile fetch failed."); }
+        }
+
+        async function shiftAction(type) {
+            try {
+                const res = await fetch(`${baseUrl}/fireStaff/ops/${type}`, {
+                    method: 'POST',
+                    headers: { 
+                        'Authorization': 'Bearer ' + token, 
+                        'Content-Type': 'application/json' 
+                    },
+                    body: JSON.stringify({ 
+                        location: { lat: 26.9124, lng: 75.7873 }, 
+                        shift: "Day" 
+                    })
+                });
+                const data = await res.json();
+                log(`${type.toUpperCase()}: ${data.message}`);
+                if(data.success && data.checkInTime) log("Time Registered: " + data.checkInTime);
+            } catch (e) { log("Shift API Error: " + e.message); }
+        }
+
+        async function fetchCases() {
+            try {
+                const res = await fetch(`${baseUrl}/fireStaff/ops/my-cases`, {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                const { data } = await res.json();
+                const list = document.getElementById('caseList');
+                list.innerHTML = data.length ? data.map(c => `
+                    <div class="card border-l-4 border-red-500 hover:bg-red-50/30 transition-colors">
+                        <div class="flex justify-between items-start mb-2">
+                            <span class="text-[10px] font-black text-red-600 uppercase tracking-widest bg-red-50 px-2 py-0.5 rounded">${c.severityStatus}</span>
+                            <span class="text-[10px] font-bold text-gray-300 font-mono">${c.caseNo}</span>
+                        </div>
+                        <h4 class="font-extrabold text-slate-800">${c.fireType}</h4>
+                        <p class="text-xs text-gray-500 mb-4 font-medium leading-relaxed">${c.address}</p>
+                        <button onclick="updateProgress('${c._id}', 'Under Control')" class="w-full py-2.5 bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest rounded-xl">Mark Under Control</button>
+                    </div>
+                `).join('') : '<div class="text-center py-10 opacity-30 font-bold">NO ACTIVE CASES</div>';
+                log("Incidents list refreshed.");
+            } catch (e) { log("Fetch cases failed."); }
+        }
+
+        async function fetchLeaveCats() {
+            try {
+                const res = await fetch(`${baseUrl}/fireStaff/ops/leave-categories`, {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                const { data } = await res.json();
+                document.getElementById('lType').innerHTML = '<option value="">Select Leave Type</option>' + 
+                    data.map(c => `<option value="${c.title}">${c.display}</option>`).join('');
+                log("Leave categories loaded.");
+            } catch(e) { log("Enum fetch failed."); }
+        }
+
+        async function submitLeave() {
+            const fileInput = document.getElementById('lFile');
+            const formData = new FormData();
+            formData.append('leaveType', document.getElementById('lType').value);
+            formData.append('fromDate', document.getElementById('lFrom').value);
+            formData.append('toDate', document.getElementById('lTo').value);
+            formData.append('reason', document.getElementById('lReason').value);
+            
+            // 🚀 KEY FIX: Using 'attachment' as per backend Multer config
+            if(fileInput.files[0]) {
+                formData.append('attachment', fileInput.files[0]);
+            }
+
+            log("Uploading application...");
+            try {
+                const res = await fetch(`${baseUrl}/fireStaff/ops/apply-leave`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token },
+                    body: formData
+                });
+                const data = await res.json();
+                if(data.success) {
+                    alert("Leave Applied Successfully!");
+                    log("SUCCESS: Request ID " + data.data._id);
+                    showTab('home');
+                } else {
+                    alert("Error: " + data.message);
+                    log("FAILED: " + data.message);
+                }
+            } catch(e) { log("Network/Server Error: check console"); }
+        }
+
+        async function updateProgress(id, status) {
+            try {
+                const res = await fetch(`${baseUrl}/fireStaff/ops/update-progress`, {
+                    method: 'PUT',
+                    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ caseId: id, statusLabel: status, remarks: "Field status update" })
+                });
+                const data = await res.json();
+                log("Case " + status + ": " + data.message);
+                fetchCases();
+            } catch(e) { log("Progress update failed."); }
+        }
+    </script>
+</body>
+</html>

@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const fireLeaveSchema = new mongoose.Schema({
     staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'FireStaff', required: true },
     stationId: { type: mongoose.Schema.Types.ObjectId, ref: 'FireStation', required: true },
-    leaveType: { type: String, enum: ['Sick', 'Casual', 'Earned', 'Emergency'], required: true },
+    leaveType: { type: String, enum: ['Sick', 'Casual', 'Earned', 'Emergency','Duty','Paternity'], required: true },
     fromDate: Date,
     toDate: Date,
     duration: Number,

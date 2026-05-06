@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FireStation Pro | New Request UI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
+        .sidebar-link.active { @apply bg-red-600 text-white shadow-lg shadow-red-200; }
+        .req-type-btn.active { @apply bg-green-600 text-white border-green-600; }
+        .req-type-btn { @apply border-2 border-gray-200 px-6 py-2 rounded-xl font-bold text-gray-500 transition-all; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+    </style>
+</head>
+<body class="overflow-hidden">
+
+    <!-- Auth Layer -->
+    <div id="authOverlay" class="fixed inset-0 z-[100] bg-slate-900 flex items-center justify-center">
+        <div class="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md">
+            <h2 class="text-2xl font-black text-center mb-6">Station Login</h2>
+            <div class="space-y-4">
+                <input id="loginEmail" type="email" placeholder="Email" class="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl outline-none">
+                <input id="loginPassword" type="password" placeholder="Password" class="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl outline-none">
+                <button onclick="handleLogin()" class="w-full bg-red-600 text-white font-bold py-4 rounded-2xl">LOGIN</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Layout -->
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <aside class="w-72 bg-white border-r border-slate-100 flex flex-col p-6 space-y-8 h-full">
+            <div class="flex items-center gap-3 px-2">
+                <div class="bg-red-600 p-2.5 rounded-xl text-white"><i class="fas fa-fire-alt"></i></div>
+                <span class="font-black text-xl tracking-tight uppercase">FireOps<span class="text-red-600">.</span></span>
+            </div>
+            <nav class="flex-grow space-y-2">
+                <button onclick="switchTab('dashboard')" class="sidebar-link active w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
+                    <i class="fas fa-grid-2"></i> Dashboard
+                </button>
+                <button onclick="switchTab('new-request')" class="sidebar-link w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
+                    <i class="fas fa-plus-circle"></i> New Request (Figma)
+                </button>
+                <button onclick="switchTab('staff')" class="sidebar-link w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
+                    <i class="fas fa-users-viewfinder"></i> Personnel Roster
+                </button>
+                <button onclick="switchTab('leaves')" class="sidebar-link w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
+                    <i class="fas fa-calendar-check"></i> Leave Requests
+                </button>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-grow flex flex-col h-full overflow-hidden">
+            <header class="h-24 bg-white border-b border-slate-100 flex items-center justify-between px-10">
+                <h2 id="pageTitle" class="text-2xl font-black text-slate-800">Station Overview</h2>
+                <div class="bg-slate-50 px-5 py-3 rounded-2xl border border-slate-100"><span class="text-[10px] font-black text-slate-600 uppercase">Server: Online</span></div>
+            </header>
+
+            <div id="viewport" class="p-10 overflow-y-auto flex-grow bg-slate-50/50"></div>
+        </main>
+    </div>
+
+    <script>
+        const baseUrl = "http://localhost:5002";
+        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5ZTc1MWJhNDFkMWQ2NWYyNzliZjlhMSIsInJvbGUiOiJGaXJlLVN0YXRpb24iLCJpYXQiOjE3NzgwNDM2NjEsImV4cCI6NDkzMTY0MzY2MX0.TX5DkoM85xMqbGyhX2thxGZ0nCSBjZI0KddifJF15Ss";
+
+        window.onload = () => { if(token) { document.getElementById('authOverlay').classList.add('hidden'); switchTab('dashboard'); } };
+
+        async function switchTab(tab) {
+            document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
+            event?.currentTarget?.classList.add('active');
+            if(tab === 'dashboard') loadDashboard();
+            if(tab === 'new-request') loadNewRequestUI();
+            if(tab === 'staff') loadStaff();
+            if(tab === 'leaves') loadLeaveRequests();
+        }
+
+        // --- FIGMA SCREEN UI: NEW REQUEST ---
+        async function loadNewRequestUI() {
+            document.getElementById('pageTitle').innerText = "New Request";
+            
+            // 1. Fetch Dropdown Data
+            const staffRes = await fetch(`${baseUrl}/fireStation/ops/staff-dropdown`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const staffList = (await staffRes.json()).data;
+            
+            const enumRes = await fetch(`${baseUrl}/fireStation/ops/leaves/enums`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const leaveEnums = (await enumRes.json()).data;
+
+            document.getElementById('viewport').innerHTML = `
+                <div class="max-w-2xl mx-auto space-y-8">
+                    <!-- Request Type Selector -->
+                    <div>
+                        <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Request Type</p>
+                        <div class="flex gap-3">
+                            <button class="req-type-btn active">Leave</button>
+                            <button class="req-type-btn">Present</button>
+                            <button class="req-type-btn">Shift Change</button>
+                            <button class="req-type-btn">Overtime</button>
+                        </div>
+                    </div>
+
+                    <!-- Main Form Card -->
+                    <div class="bg-white p-10 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6">
+                        <div>
+                            <label class="text-xs font-bold text-slate-400 uppercase">Requesting For</label>
+                            <select id="reqStaff" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700">
+                                ${staffList.map(s => `<option value="${s._id}">${s.fullName} (${s.rank})</option>`).join('')}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="text-xs font-bold text-slate-400 uppercase">Leave Category</label>
+                            <select id="reqCategory" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700">
+                                ${leaveEnums.map(e => `<option value="${e}">${e} Leave</option>`).join('')}
+                            </select>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="text-xs font-bold text-slate-400 uppercase">From</label>
+                                <input id="reqFrom" type="date" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold">
+                            </div>
+                            <div>
+                                <label class="text-xs font-bold text-slate-400 uppercase">To</label>
+                                <input id="reqTo" type="date" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="text-xs font-bold text-slate-400 uppercase">Reason</label>
+                            <textarea id="reqReason" placeholder="Describe the reason for leave" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-medium" rows="4"></textarea>
+                        </div>
+
+                        <div class="p-4 border-2 border-dashed border-gray-100 rounded-2xl flex items-center gap-4 text-green-600 font-bold cursor-pointer">
+                            <i class="fas fa-paperclip"></i>
+                            <span class="text-sm">Attach Medical Certificate (Optional)</span>
+                        </div>
+
+                        <button onclick="submitStationRequest()" class="w-full bg-green-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-green-100 hover:bg-green-700 transition-all">
+                            Submit Request
+                        </button>
+                    </div>
+                </div>`;
+        }
+
+        async function submitStationRequest() {
+            const body = {
+                staffId: document.getElementById('reqStaff').value,
+                leaveType: document.getElementById('reqCategory').value,
+                fromDate: document.getElementById('reqFrom').value,
+                toDate: document.getElementById('reqTo').value,
+                reason: document.getElementById('reqReason').value
+            };
+
+            const res = await fetch(`${baseUrl}/fireStation/ops/leaves/post`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if(data.success) {
+                alert("Leave applied for staff member!");
+                switchTab('leaves');
+            } else alert(error.message);
+        }
+
+        // --- DASHBOARD LOADER ---
+        async function loadDashboard() {
+            document.getElementById('pageTitle').innerText = "Station Overview";
+            const res = await fetch(`${baseUrl}/fireStation/management/dashboard`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const { data } = await res.json();
+            document.getElementById('viewport').innerHTML = `
+                <div class="grid grid-cols-3 gap-8">
+                    <div class="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex items-center gap-6"><div class="w-16 h-16 bg-red-50 text-red-600 rounded-3xl flex items-center justify-center text-2xl shadow-inner"><i class="fas fa-bullhorn"></i></div><div><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">New Alerts</p><h3 class="text-4xl font-black text-slate-800">${data.newFireAlerts || 0}</h3></div></div>
+                    <div class="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex items-center gap-6"><div class="w-16 h-16 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-2xl shadow-inner"><i class="fas fa-truck-fast"></i></div><div><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ongoing</p><h3 class="text-4xl font-black text-slate-800">${data.ongoingOperations || 0}</h3></div></div>
+                    <div class="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex items-center gap-6"><div class="w-16 h-16 bg-green-50 text-green-600 rounded-3xl flex items-center justify-center text-2xl shadow-inner"><i class="fas fa-check-circle"></i></div><div><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Resolved</p><h3 class="text-4xl font-black text-slate-800">${data.resolvedIncidents || 0}</h3></div></div>
+                </div>`;
+        }
+
+        // --- ROSTER & LEAVES SAME AS BEFORE ---
+        async function loadStaff() {
+            document.getElementById('pageTitle').innerText = "Duty Roster";
+            const res = await fetch(`${baseUrl}/fireStation/ops/roster`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const { data } = await res.json();
+            let rows = data.map(s => `<tr class="border-b border-slate-50"><td class="py-5 px-8 text-sm font-bold text-slate-800">${s.name}</td><td class="py-5 text-xs font-bold text-slate-500 font-mono">${s.badge}</td><td class="py-5 text-xs font-bold">${s.checkInTime || '--:--'}</td><td class="py-5"><span class="px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${s.dutyStatus === 'ON-DUTY' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}">${s.dutyStatus}</span></td></tr>`).join('');
+            document.getElementById('viewport').innerHTML = `<div class="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden"><table class="w-full text-left"><thead><tr class="bg-slate-50/50"><th class="py-5 px-8 text-[10px] font-black text-slate-400 uppercase">Personnel</th><th class="py-5 text-[10px] font-black text-slate-400 uppercase">Badge</th><th class="py-5 text-[10px] font-black text-slate-400 uppercase">Check-in</th><th class="py-5 text-[10px] font-black text-slate-400 uppercase">Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        }
+
+        async function loadLeaveRequests() {
+            document.getElementById('pageTitle').innerText = "Pending Leaves";
+            const res = await fetch(`${baseUrl}/fireStation/ops/leaves/pending`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const { data } = await res.json();
+            let cards = data.map(l => `<div class="bg-white p-8 rounded-[2.5rem] border border-slate-100 flex flex-col gap-4"><div class="bg-orange-50 text-orange-600 px-4 py-1 rounded-full text-[10px] font-black uppercase w-fit">${l.leaveType}</div><h4 class="text-lg font-black">${l.staffId?.fullName || 'Staff'}</h4><p class="text-xs text-slate-500">${l.reason}</p><div class="pt-4 border-t flex gap-3"><button onclick="updateLeave('${l._id}', 'Approved')" class="flex-grow bg-green-600 text-white py-3 rounded-2xl text-[10px] font-black uppercase">Approve</button></div></div>`).join('');
+            document.getElementById('viewport').innerHTML = `<div class="grid grid-cols-3 gap-8">${cards}</div>`;
+        }
+    </script>
+</body>
+</html>

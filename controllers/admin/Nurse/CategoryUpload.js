@@ -140,8 +140,56 @@ const getCareSubCategories = async (req, res) => {
 };
 
 const getCareDetails = async (req, res) => {
-    const details = await CareService.findOne({ category: req.query.category, subCategory: req.query.subCategory });
-    res.json({ success: true, data: details });
+    try {
+        const { category, subCategory } = req.query;
+        
+        // 1. Service Template fetch karein
+        const details = await CareService.findOne({ category, subCategory }).lean();
+        
+        if (!details) return res.status(404).json({ message: "Service not found" });
+
+        let resolvedConsumables = [];
+
+        // 2. String parsing logic
+        if (details.consumablesUsed && typeof details.consumablesUsed === 'string') {
+            // "Item [Size] || Item [Size]" ko alag karein
+            const itemStrings = details.consumablesUsed.split('||').map(s => s.trim());
+
+            // Sabhi items ko Master list mein search karein (Parallel processing)
+            resolvedConsumables = await Promise.all(itemStrings.map(async (str) => {
+                // Regex to extract: Group 1 = Name, Group 2 = Size
+                const regex = /(.+?)\s*\[(.+?)\]/; 
+                const match = str.match(regex);
+
+                if (match) {
+                    const itemName = match[1].trim();
+                    const size = match[2].trim();
+
+                    // Master list mein search (Case-insensitive)
+                    return await MasterConsumable.findOne({
+                        itemName: { $regex: new RegExp("^" + itemName + "$", "i") },
+                        size: { $regex: new RegExp("^" + size + "$", "i") }
+                    });
+                }
+                return null;
+            }));
+
+            // Null values hatayein (agar koi item master list mein na mile)
+            resolvedConsumables = resolvedConsumables.filter(item => item !== null);
+        }
+
+        res.json({ 
+            success: true, 
+            data: { 
+                ...details, 
+                resolvedConsumables // Yeh list dropdown mein dikhegi
+            } 
+        });
+
+    } catch (error) { 
+        console.error("Error fetching service details:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 module.exports = { uploadCareCSV, uploadMasterConsumables, getCareCategories, getCareSubCategories, getCareDetails };

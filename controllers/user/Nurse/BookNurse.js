@@ -215,38 +215,42 @@ const checkoutNurseBooking = async (req, res) => {
         let slotSurcharge = 0;
         let units = 1;
 
-        // Core Triple Pricing Logic
         if (selectedType === 'For Multiple Days') {
             units = moment(endDate).diff(moment(startDate), 'days') + 1;
             basePrice = service.pricing.multipleDays.final * units;
             
-            // Check premium dates in range
             let curr = moment(startDate);
             while (curr <= moment(endDate)) {
                 const p = config.premiumDates?.find(pd => pd.date === curr.format('YYYY-MM-DD'));
                 if (p) slotSurcharge += p.extraFee;
                 curr.add(1, 'days');
             }
-        } else if (selectedType === 'One day One Time') {
+        } 
+        else if (selectedType === 'One day One Time') {
             basePrice = service.pricing.oneDay.final;
             const pDate = config.premiumDates?.find(pd => pd.date === moment(startDate).format('YYYY-MM-DD'));
             if (pDate) slotSurcharge += pDate.extraFee;
-        } else {
-            units = moment(endTime, "HH:mm").diff(moment(startTime, "HH:mm"), 'hours') || 1;
+            
+            const pSlot = config.premiumSlots?.find(ps => ps.time === startTime);
+            if (pSlot) slotSurcharge += pSlot.extraFee;
+        } 
+        else if (selectedType === 'Acc. To Per/Hours') {
+            const hStart = moment(startTime, "HH:mm");
+            const hEnd = moment(endTime, "HH:mm");
+            // Agar 8 to 10 book kiya hai toh 2 hours hue
+            units = hEnd.diff(hStart, 'hours') || 1;
             basePrice = service.pricing.hourly.final * units;
+
+            // 🚀 FIXED: Sirf STARTING slot ka premium check karein
+            const pSlot = config.premiumSlots?.find(ps => ps.time === startTime);
+            if (pSlot) slotSurcharge = pSlot.extraFee;
         }
 
-        // Consumable Calculation
         const consumableTotal = (selectedConsumables || []).reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
-        
-        // Multiplier: Patients (Surcharge, Base, aur Consumables par apply hoga)
         const subTotal = (basePrice + slotSurcharge + consumableTotal) * pCount;
-        
-        // Flat Charges
         const fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
         const totalBeforeTax = subTotal + fasterCharge;
 
-        // Dynamic Tax
         let tax = 0;
         if (delivery?.taxPercentage) tax = (totalBeforeTax * delivery.taxPercentage) / 100;
         if (delivery?.taxInRupees) tax += delivery.taxInRupees;
@@ -259,7 +263,7 @@ const checkoutNurseBooking = async (req, res) => {
                 consumableTotal: Math.round(consumableTotal * pCount),
                 fasterServiceCharge: fasterCharge,
                 taxAmount: Math.round(tax),
-                totalPrice: Math.round(totalBeforeTax + tax),
+                totalPrice: Math.round(totalBeforeTax + tax), // 🚀 FIXED: Surcharge included here
                 units,
                 pCount
             }
@@ -267,83 +271,31 @@ const checkoutNurseBooking = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 2. PLACE BOOKING (Mapping all fields correctly) ---
+// --- PLACE BOOKING ---
 const placeNurseBooking = async (req, res) => {
     try {
-        const { 
-            nurseId, serviceId, schedule, priceBreakdown, patients, 
-            healthDetails, address, selectedConsumables, assessmentLocation 
-        } = req.body;
-
+        const { nurseId, serviceId, schedule, priceBreakdown, patients, healthDetails, address, selectedConsumables, assessmentLocation } = req.body;
         const service = await NurseService.findById(serviceId);
-        if (!service) return res.status(404).json({ message: "Service not found" });
-
-        // Generate Booking ID
         const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
         const booking = await NurseBooking.create({
             userId: req.user.id,
-            nurseId,
-            serviceId,
-            bookingId: bId,
-            serviceDetails: {
-                title: service.title,
-                type: service.type,
-                duration: schedule.duration,
-                basePrice: service.pricing.oneDay.final // Snapshot individual price
-            },
-            priceBreakdown: {
-                baseServicePrice: priceBreakdown.baseServicePrice,
-                slotSurcharge: priceBreakdown.slotSurcharge,
-                consumableTotal: priceBreakdown.consumableTotal,
-                fasterServiceCharge: priceBreakdown.fasterServiceCharge,
-                taxAmount: priceBreakdown.taxAmount,
-                totalPrice: priceBreakdown.totalPrice
-            },
-            patients: patients.map(p => ({
-                patientId: p.patientId,
-                name: p.name,
-                age: p.age,
-                gender: p.gender,
-                relation: p.relation
-            })),
-            schedule: {
-                startDate: schedule.startDate,
-                endDate: schedule.endDate,
-                startTime: schedule.startTime,
-                endTime: schedule.endTime,
-                duration: schedule.duration
-            },
-            address: {
-                name: address.name || "Patient",
-                phone: address.phone || "",
-                houseNo: address.houseNo,
-                sector: address.sector || "",
-                landmark: address.landmark || "",
-                city: address.city,
-                state: address.state || "",
-                pincode: address.pincode || "",
-                addressType: address.addressType || "Home"
-            },
+            nurseId, serviceId, bookingId: bId,
+            serviceDetails: { title: service.title, type: service.type, duration: schedule.duration, basePrice: service.pricing.oneDay.final },
+            priceBreakdown,
+            patients,
+            schedule,
+            address,
             assessmentLocation,
-            selectedConsumables: (selectedConsumables || []).map(c => ({
-                consumableId: c.consumableId,
-                itemName: c.itemName,
-                price: c.price,
-                unitType: c.unitType || "Piece"
-            })),
-            needConsumable: selectedConsumables && selectedConsumables.length > 0,
+            selectedConsumables,
+            needConsumable: selectedConsumables.length > 0,
             healthDetails,
             status: 'Pending'
         });
-
-        res.status(201).json({ success: true, message: "Booking saved with all details", data: booking });
-
-    } catch (error) { 
-        console.error("Place Booking Error:", error);
-        res.status(500).json({ message: error.message }); 
-    }
+        res.status(201).json({ success: true, data: booking });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 
 // 6. TRACKING STATUS (Populated Response)

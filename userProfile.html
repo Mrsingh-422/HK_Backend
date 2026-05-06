@@ -13,7 +13,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
 
     <style>
-        /* --- PROFESSIONAL DESIGN TOKENS --- */
         :root {
             --hk-primary: #00b894;
             --hk-primary-soft: #f0fdf4;
@@ -29,40 +28,17 @@
             --hk-shadow: 0 15px 50px rgba(0,0,0,0.05);
         }
 
-        /* --- GLOBAL UI --- */
-        body { 
-            font-family: 'Plus Jakarta Sans', sans-serif; 
-            background-color: var(--hk-bg); 
-            color: var(--hk-dark); 
-            padding-top: 100px; 
-            letter-spacing: -0.4px;
-            overflow-x: hidden;
-        }
-
-        /* --- NAVIGATION --- */
-        .hk-navbar {
-            background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(20px); height: 85px;
-            position: fixed; top: 0; width: 100%; z-index: 1050; border-bottom: 2.5px solid var(--hk-primary);
-            display: flex; align-items: center; justify-content: space-between; padding: 0 6%;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.02);
-        }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--hk-bg); color: var(--hk-dark); padding-top: 100px; letter-spacing: -0.4px; overflow-x: hidden; }
+        .hk-navbar { background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(20px); height: 85px; position: fixed; top: 0; width: 100%; z-index: 1050; border-bottom: 2.5px solid var(--hk-primary); display: flex; align-items: center; justify-content: space-between; padding: 0 6%; box-shadow: 0 4px 20px rgba(0,0,0,0.02); }
         .hk-logo { font-weight: 800; font-size: 1.8rem; color: var(--hk-primary); text-decoration: none; display: flex; align-items: center; gap: 12px; cursor: pointer; }
         .hk-logo i { background: var(--hk-primary); color: white; padding: 12px; border-radius: 16px; font-size: 1.2rem; }
-
-        /* --- SCREEN ENGINE --- */
         .screen-container { max-width: 580px; margin: 0 auto; padding: 0 20px 100px; }
         .view-screen { display: none; opacity: 0; transform: translateY(15px); transition: 0.4s ease-out; }
         .view-screen.active { display: block; opacity: 1; transform: translateY(0); }
-
-        /* --- CARD SYSTEM --- */
         .card-hk { background: var(--hk-white); border-radius: var(--hk-radius-lg); padding: 30px; border: 1.5px solid var(--hk-border); box-shadow: var(--hk-shadow); margin-bottom: 25px; transition: 0.3s; }
         .card-hk:hover { transform: translateY(-4px); box-shadow: 0 20px 60px rgba(0,0,0,0.08); }
-
-        /* --- PROVIDER LISTING --- */
         .nurse-listing-card { display: flex; align-items: center; cursor: pointer; padding: 20px; }
         .nurse-pfp { width: 85px; height: 85px; border-radius: 24px; object-fit: cover; background: #eee; margin-right: 20px; border: 4px solid #fff; box-shadow: 0 8px 20px rgba(0,0,0,0.06); }
-        
-        /* --- YEARLY CALENDAR ENGINE --- */
         .calendar-wrapper { height: 480px; overflow-y: auto; background: #fff; border-radius: 25px; border: 1px solid #eee; padding: 20px; scroll-behavior: smooth; }
         .month-label { font-weight: 800; text-align: center; margin: 25px 0 15px; font-size: 0.95rem; text-transform: uppercase; color: var(--hk-dark); letter-spacing: 1.5px; border-bottom: 2px solid var(--hk-bg); padding-bottom: 10px; }
         .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
@@ -70,43 +46,26 @@
         .cal-day-cell { height: 60px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; border-radius: 16px; transition: 0.2s; border: 1.5px solid #f9fafb; }
         .cal-day-num { font-size: 0.95rem; font-weight: 700; }
         .cal-day-price { font-size: 0.58rem; font-weight: 800; color: var(--hk-primary); }
-        .cal-day-price.is-premium { color: var(--hk-danger); }
-
-        /* Selection Overlays */
+        .cal-day-price.is-premium { color: var(--hk-danger) !important; }
         .day-selected { background: var(--hk-secondary) !important; color: #fff !important; box-shadow: 0 8px 20px rgba(9,132,227,0.35); }
         .day-selected .cal-day-price { color: #fff !important; }
         .day-in-range { background: #ebf5ff !important; border-radius: 0; }
         .day-disabled { opacity: 0.2; cursor: not-allowed; filter: grayscale(1); }
-
-        /* --- HOURLY SLOTS GRID --- */
         .slot-grid-container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
         .slot-card { background: #fff; border: 2.5px solid var(--hk-border); border-radius: 22px; padding: 18px 5px; text-align: center; cursor: pointer; transition: 0.3s; }
         .slot-card.active { border-color: var(--hk-primary); background: var(--hk-primary-soft); box-shadow: 0 8px 20px rgba(0,184,148,0.1); }
         .slot-time-label { font-size: 0.9rem; font-weight: 700; display: block; margin-bottom: 2px; }
         .slot-price-label { font-size: 0.65rem; font-weight: 800; color: var(--hk-primary); }
-        .slot-price-label.is-premium { color: var(--hk-danger); }
-
-        /* --- CONSUMABLES SYSTEM --- */
+        .slot-price-label.is-premium { color: var(--hk-danger) !important; }
         .con-item { display: flex; justify-content: space-between; align-items: center; padding: 18px; border: 2.5px solid var(--hk-border); border-radius: 22px; margin-bottom: 12px; cursor: pointer; transition: 0.3s; background: #fff; }
         .con-item.active { border-color: var(--hk-primary); background: var(--hk-primary-soft); }
         .con-item input { width: 22px; height: 22px; accent-color: var(--hk-primary); pointer-events: none; }
-        .con-meta b { font-size: 1rem; color: var(--hk-dark); }
-        .con-meta small { font-weight: 700; color: #636e72; }
-
-        /* --- MULTI-SELECTION CARDS --- */
         .picker-card { border: 2.5px solid var(--hk-border); border-radius: 22px; padding: 24px; cursor: pointer; position: relative; transition: 0.3s; background: #fff; }
         .picker-card.active { border-color: var(--hk-primary); background: var(--hk-primary-soft); }
         .picker-card.active::after { content: '\f058'; font-family: 'Font Awesome 6 Free'; font-weight: 900; position: absolute; top: 15px; right: 15px; color: var(--hk-primary); font-size: 1.4rem; }
-
-        /* --- FINAL BILLING SUMMARY --- */
         .bill-row { display: flex; justify-content: space-between; margin-bottom: 14px; font-size: 1rem; color: #636e72; font-weight: 600; }
         .bill-grand-total { border-top: 3px dashed var(--hk-border); padding-top: 20px; margin-top: 20px; font-weight: 800; font-size: 1.6rem; color: var(--hk-primary); }
-
-        /* --- BUTTONS --- */
         .btn-hk-action { background: var(--hk-primary); color: #fff; border-radius: 24px; padding: 22px; width: 100%; border: none; font-weight: 800; font-size: 1.2rem; transition: 0.3s; box-shadow: 0 12px 35px rgba(0,184,148,0.25); }
-        .btn-hk-action:hover { transform: translateY(-3px); filter: brightness(0.96); }
-        .btn-hk-action:disabled { background: #cbd5e0; box-shadow: none; }
-
         .floating-token { position: fixed; bottom: 35px; right: 35px; z-index: 2000; }
     </style>
 </head>
@@ -165,9 +124,9 @@
                     <label class="small fw-800">Booking Date</label>
                     <input type="date" id="hourlyBaseDate" class="form-control border-0 bg-light mb-4 fw-bold">
                     <h6 class="fw-800 mb-2">Hourly Selection</h6>
-                    <div class="slot-grid-container" id="hourlySlotGrid"></div> <!-- FIXED ID -->
+                    <div class="slot-grid-container" id="hourlySlotGrid"></div>
                     <label class="small fw-800 mt-4 mb-1">Duration End Time</label>
-                    <input type="time" id="hourlyCompletionTime" class="form-control border-0 bg-light">
+                    <input type="time" id="hourlyCompletionTime" class="form-control border-0 bg-light" readonly>
                 </div>
             </div>
 
@@ -264,8 +223,7 @@
                     <div class="d-flex justify-content-between"><span>${s.title}</span><b class="text-success">₹${s.pricing.oneDay.final}</b></div>
                 </div>`).join('');
             
-            Swal.close();
-            showScreen('screen-details');
+            Swal.close(); showScreen('screen-details');
         } catch(e) { console.error(e); }
     }
 
@@ -310,16 +268,50 @@
     }
 
     function renderHourlyRange() {
-        const grid = document.getElementById('hourlySlotGrid'); // FIXED: Matches HTML ID
+        const grid = document.getElementById('hourlySlotGrid');
         grid.innerHTML = state.avail.timeSlots.map(s => `
             <div class="slot-card" id="slot-${s.time}" onclick="handleHourlyClick('${s.time}')">
                 <span class="slot-time-label">${s.displayTime}</span>
-                <span class="slot-price-label">₹${s.totalSlotPrice}</span>
+                <b class="slot-price-label ${s.premiumSurcharge > 0 ? 'is-premium' : 'text-success'} small">₹${s.totalSlotPrice}</b>
             </div>`).join('');
     }
 
+    function handleHourlyClick(t) {
+        if(!state.startTime || (state.startTime && state.endTime)) {
+            state.startTime = t;
+            state.endTime = null;
+        } else {
+            const allTimes = state.avail.timeSlots.map(x => x.time);
+            const sIdx = allTimes.indexOf(state.startTime);
+            const eIdx = allTimes.indexOf(t);
+            if(eIdx < sIdx) { state.startTime = t; state.endTime = null; } 
+            else { state.endTime = t; }
+        }
+        updateSlotUI();
+        if(state.endTime) {
+            // Auto-calculate end time for duration display (Next hour of selection)
+            let durationEnd = moment(state.endTime, "HH:mm").add(1, 'hour').format("hh:mm A");
+            document.getElementById('hourlyCompletionTime').value = durationEnd;
+        } else {
+            // Default 1 hour if only start is selected
+            document.getElementById('hourlyCompletionTime').value = moment(state.startTime, "HH:mm").add(1, 'hour').format("hh:mm A");
+        }
+    }
+
+    function updateSlotUI() {
+        document.querySelectorAll('.slot-card').forEach(el => el.classList.remove('active'));
+        if(state.startTime) document.getElementById(`slot-${state.startTime}`).classList.add('active');
+        if(state.endTime) {
+            let inRange = false;
+            state.avail.timeSlots.forEach(s => {
+                if(s.time === state.startTime) inRange = true;
+                if(inRange) document.getElementById(`slot-${s.time}`).classList.add('active');
+                if(s.time === state.endTime) inRange = false;
+            });
+        }
+    }
+
     function renderConsumableGrid() {
-        // FIXED: Using c.finalPrice from NurseService object
         document.getElementById('consumablesListGrid').innerHTML = (state.selectedSvc.consumablesUsed || []).map(c => `
             <div class="con-item" id="con-${c.masterItemId._id}" onclick="handleConClick('${c.masterItemId._id}', '${c.masterItemId.itemName}', ${c.finalPrice}, '${c.masterItemId.unitType}')">
                 <div class="con-meta"><b>${c.masterItemId.itemName}</b><br><small>₹${c.finalPrice} / ${c.masterItemId.unitType}</small></div>
@@ -340,7 +332,7 @@
         if(mode === 'One day One Time') { state.startDate = d; state.endDate = d; }
         else {
             if(!state.startDate || (state.startDate && state.endDate)) { state.startDate = d; state.endDate = null; }
-            else { state.endDate = d; }
+            else { if(moment(d).isBefore(state.startDate)) state.startDate = d; else state.endDate = d; }
         }
         updateCalUI();
     }
@@ -356,26 +348,24 @@
         }
     }
 
-    function handleHourlyClick(t) {
-        state.startTime = t;
-        document.querySelectorAll('.slot-card').forEach(el => el.classList.remove('active'));
-        document.getElementById(`slot-${t}`).classList.add('active');
-    }
-
     async function validateScheduleThenProceed() {
         const mode = document.getElementById('scheduleMode').value;
         if(mode === 'For Multiple Days' && (!state.startDate || !state.endDate)) return alert("Pick Range");
+        if(mode === 'Acc. To Per/Hours' && !state.startTime) return alert("Pick Slot");
+
         Swal.showLoading();
-        const [pRes, aRes] = await Promise.all([
-            fetch(`${API_AUTH}/profile`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} }),
-            fetch(`${API_AUTH}/addresses`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} })
-        ]);
-        const pJ = await pRes.json(), aJ = await aRes.json();
-        document.getElementById('patientMultiGrid').innerHTML = [{ _id:'Self', name:pJ.data.name, relation:'Self' }, ...(pJ.data.familyMember || [])].map(p => `
-            <div class="col-6"><div class="picker-card" id="p-sel-${p._id}" onclick="togglePatSel('${p._id}', '${p.name}', '${p.relation}')"><small><b>${p.name}</b><br>${p.relation}</small></div></div>`).join('');
-        document.getElementById('savedAddrGrid').innerHTML = aJ.data.map(a => `
-            <div class="picker-card mb-2" id="a-sel-${a._id}" onclick="pickAddrObj(${JSON.stringify(a).replace(/"/g, '&quot;')})"><b>${a.addressType}</b><br><small>${a.houseNo}, ${a.city}</small></div>`).join('');
-        Swal.close(); showScreen('screen-recipient');
+        try {
+            const [pRes, aRes] = await Promise.all([
+                fetch(`${API_AUTH}/profile`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} }),
+                fetch(`${API_AUTH}/addresses`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} })
+            ]);
+            const pJ = await pRes.json(), aJ = await aRes.json();
+            document.getElementById('patientMultiGrid').innerHTML = [{ _id:'Self', name:pJ.data.name, relation:'Self' }, ...(pJ.data.familyMember || [])].map(p => `
+                <div class="col-6"><div class="picker-card" id="p-sel-${p._id}" onclick="togglePatSel('${p._id}', '${p.name}', '${p.relation}')"><small><b>${p.name}</b><br>${p.relation}</small></div></div>`).join('');
+            document.getElementById('savedAddrGrid').innerHTML = aJ.data.map(a => `
+                <div class="picker-card mb-2" id="a-sel-${a._id}" onclick="pickAddrObj(${JSON.stringify(a).replace(/"/g, '&quot;')})"><b>${a.addressType}</b><br><small>${a.houseNo}, ${a.city}</small></div>`).join('');
+            Swal.close(); showScreen('screen-recipient');
+        } catch(e) { console.error(e); }
     }
 
     function togglePatSel(id, name, rel) {
@@ -389,12 +379,19 @@
 
     async function initiateFinalCheckout() {
         const mode = document.getElementById('scheduleMode').value;
+        
+        // 🚀 End Time logic for backend: If single hour select kiya hai toh startTime + 1 hour bhejenge
+        let finalEndTime = state.endTime;
+        if(mode === 'Acc. To Per/Hours' && !state.endTime) {
+            finalEndTime = moment(state.startTime, "HH:mm").add(1, 'hour').format("HH:mm");
+        }
+
         const payload = {
             nurseId: state.nurseId, serviceId: state.selectedSvc._id, selectedType: mode,
             startDate: mode === 'Acc. To Per/Hours' ? document.getElementById('hourlyBaseDate').value : state.startDate,
             endDate: state.endDate || state.startDate,
             startTime: mode === 'Acc. To Per/Hours' ? state.startTime : document.getElementById('visitArrivalInput').value,
-            endTime: document.getElementById('hourlyCompletionTime').value,
+            endTime: mode === 'Acc. To Per/Hours' ? finalEndTime : null,
             isFasterService: document.getElementById('expressToggle').checked,
             patientCount: state.selectedPatients.length || 1,
             selectedConsumables: state.selectedConsumables
@@ -407,10 +404,10 @@
             document.getElementById('fastPriceRateUI').innerText = `Available at +₹${state.delivery.fastDeliveryExtra}`;
             document.getElementById('finalInvoiceBox').innerHTML = `
                 <div class="card-hk">
-                    <div class="bill-row"><span>Service Fee</span><b>₹${j.breakdown.baseServicePrice}</b></div>
+                    <div class="bill-row"><span>Service Fee (x${j.breakdown.pCount})</span><b>₹${j.breakdown.baseServicePrice}</b></div>
                     <div class="bill-row"><span>Surcharge Total</span><b>₹${j.breakdown.slotSurcharge}</b></div>
                     <div class="bill-row text-primary"><span>Add-ons</span><b>₹${j.breakdown.consumableTotal}</b></div>
-                    <div class="bill-row text-danger"><span>Express Fee</span><b>+₹${j.breakdown.fasterServiceCharge}</b></div>
+                    <div class="bill-row text-danger"><span>Express Response</span><b>+₹${j.breakdown.fasterServiceCharge}</b></div>
                     <div class="bill-row"><span>Taxes</span><b>₹${j.breakdown.taxAmount}</b></div>
                     <div class="bill-grand-total"><span>Total Payable</span><span>₹${j.breakdown.totalPrice}</span></div>
                 </div>`;
@@ -421,9 +418,12 @@
     async function processFinalBookingSubmission() {
         const btn = document.getElementById('btnPlaceFinalOrder'); btn.disabled = true;
         const mode = document.getElementById('scheduleMode').value;
+        const sDate = mode === 'Acc. To Per/Hours' ? document.getElementById('hourlyBaseDate').value : state.startDate;
+        const eDate = (mode === 'For Multiple Days') ? state.endDate : sDate;
+
         const payload = {
             nurseId: state.nurseId, serviceId: state.selectedSvc._id,
-            schedule: { duration: mode, startDate: state.startDate, endDate: state.endDate || state.startDate, startTime: state.startTime || document.getElementById('visitArrivalInput').value, endTime: document.getElementById('hourlyCompletionTime').value },
+            schedule: { duration: mode, startDate: sDate, endDate: eDate, startTime: state.startTime, endTime: state.endTime },
             priceBreakdown: state.bill, patients: state.selectedPatients,
             healthDetails: { height: document.getElementById('pHeightVal').value, language: "English", specialInstructions: document.getElementById('pSpecialNotes').value },
             address: { name:"Patient", phone:"", houseNo:state.selectedAddress.houseNo, city:state.selectedAddress.city, addressType:state.selectedAddress.addressType },
@@ -431,14 +431,14 @@
         };
 
         const res = await fetch(`${API_USER}/book`, { method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${USER_TOKEN}`}, body:JSON.stringify(payload) });
-        if(res.ok) { await Swal.fire('Confirmed!', 'Your appointment is being processed.', 'success'); window.location.reload(); }
-        else { btn.disabled = false; }
+        if(res.ok) { await Swal.fire('Confirmed!', 'Success.', 'success'); window.location.reload(); }
+        else btn.disabled = false;
     }
 
     async function fetchUserHistory() {
         const res = await fetch(`${API_USER}/my-appointments`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} });
         const j = await res.json();
-        document.getElementById('historyListArea').innerHTML = (j.data || []).map(b => `<div class="card-hk py-3 mb-2 shadow-sm border-0"><b>ID: ${b.bookingId}</b><br><small>${b.serviceDetails.title} • ₹${b.priceBreakdown.totalPrice}</small></div>`).join('');
+        document.getElementById('historyListArea').innerHTML = (j.data || []).map(b => `<div class="card-hk py-3 mb-2 shadow-sm border-0"><b>ID: ${b.bookingId}</b><br><small>${b.serviceDetails.title} - ${b.status}</small></div>`).join('');
     }
 
     function resetSelection() { state.startDate = null; state.endDate = null; state.startTime = null; state.endTime = null; }

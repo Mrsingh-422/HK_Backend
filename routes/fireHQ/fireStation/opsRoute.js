@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { fireCaseUploads } = require('../../../middleware/multer');
+const { fireCaseUploads,fireLeaveUploads } = require('../../../middleware/multer');
+
 const {
     getStaffRoster,
     getPendingLeaves,
@@ -15,7 +16,7 @@ const {
     getEquipmentDetails,
     getFireTypes,
     applyLeave,
-    toggleEmergencyMode,reassignStaffShift
+    toggleEmergencyMode,reassignStaffShift,getStaffForDropdown, getLeaveEnums
 } = require('../../../controllers/fireHQ/fireStation/opsController');
 
 // Base URL: /fireStation/ops
@@ -26,7 +27,10 @@ router.get('/roster', protect('fire-station'), getStaffRoster);
 // Leave Requests
 router.get('/leaves/pending', protect('fire-station'), getPendingLeaves);
 router.put('/leaves/:id/status',protect('fire-station'), updateLeaveStatus);
-router.post('/leaves/post', protect('fire-station'), applyLeave);
+
+router.get('/leaves/enums', protect('fire-station'), getLeaveEnums); // For dropdown options in leave approval form
+router.get('/staff-dropdown', protect('fire-station'), getStaffForDropdown); // For reassigning shifts in emergency mode
+router.post('/leaves/post', protect('fire-station'),fireLeaveUploads, applyLeave);
 
 // Case Management
 router.put('/cases/:id/severity',protect('fire-station'), updateCaseSeverity);

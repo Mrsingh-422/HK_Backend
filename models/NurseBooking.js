@@ -59,9 +59,9 @@ const nurseBookingSchema = new mongoose.Schema({
     
     // Price breakdown
     basePrice: Number,
-    slotSurcharge: { type: Number, default: 0 }, // +79
-    fasterServiceCharge: { type: Number, default: 0 }, // +29 per hour
-    taxAmount: { type: Number, default: 0 },
+    // slotSurcharge: { type: Number, default: 0 }, // +79
+    // fasterServiceCharge: { type: Number, default: 0 }, // +29 per hour
+    // taxAmount: { type: Number, default: 0 },
     totalPrice: Number,
     address: {
         name: String,        // Delivery Recipient Name
