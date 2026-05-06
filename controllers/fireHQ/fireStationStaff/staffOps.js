@@ -3,98 +3,106 @@ const FireLeave = require('../../../models/FireLeave');
 const FireCase = require('../../../models/FireCase');
 const FireStaff = require('../../../models/FireStaff');
 const FireStation = require('../../../models/FireStation');
+const FireNotification = require('../../../models/FireNotification');
 
-// 1. SHIFT CHECK-IN (Syncs with Staff Status)
+
+
+
+
+
+// 1. SHIFT CHECK-IN (With Status Sync & Leave-Day Warning)
 const checkIn = async (req, res) => {
     try {
         const staffId = req.user.id;
-        const { shift, location } = req.body;
+        const today = new Date();
 
-        const activeShift = await FireAttendance.findOne({ staffId, checkOut: { $exists: false } });
-        if (activeShift) return res.status(400).json({ message: "Already on an active shift." });
+        // Prevent double check-in
+        const existing = await FireAttendance.findOne({ staffId, checkOut: { $exists: false } });
+        if (existing) return res.status(400).json({ message: "Already checked in." });
+
+        // Check if today is an approved leave day
+        const onLeaveToday = await FireLeave.findOne({
+            staffId,
+            status: 'Approved',
+            fromDate: { $lte: today },
+            toDate: { $gte: today }
+        });
 
         const attendance = await FireAttendance.create({
             staffId,
             stationId: req.user.stationId,
-            shift: shift || 'Day',
-            location,
-            status: 'Present',
-            checkIn: Date.now() // Explicitly set check-in time
+            shift: req.body.shift || 'Day',
+            location: req.body.location,
+            status: 'Present'
         });
 
-        // Sync: Update Staff status
+        // SYNC: Change staff status to Active
         await FireStaff.findByIdAndUpdate(staffId, { status: 'Active' });
 
-        // Format time for UI (e.g., "07:55 AM")
-        const formattedTime = new Date(attendance.checkIn).toLocaleTimeString([], { 
-            hour: '2-digit', 
-            minute: '2-digit', 
-            hour12: true 
-        });
+        const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
 
         res.json({ 
             success: true, 
-            message: "Shift Started at " + formattedTime, 
-            checkInTime: formattedTime, // 🚀 Flutter UI key
-            data: attendance 
+            message: onLeaveToday ? "Check-in successful (Working on Leave Day)" : "Shift Started",
+            checkInTime: formattedTime,
+            isOnLeaveDay: !!onLeaveToday 
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. SHIFT CHECK-OUT (With Formatted Time)
+// 2. SHIFT CHECK-OUT (With Status Sync)
 const checkOut = async (req, res) => {
     try {
-        const currentTime = Date.now();
         const attendance = await FireAttendance.findOneAndUpdate(
             { staffId: req.user.id, checkOut: { $exists: false } },
-            { checkOut: currentTime },
+            { checkOut: Date.now() },
             { new: true, sort: { createdAt: -1 } }
         );
+        if (!attendance) return res.status(404).json({ message: "No active shift found." });
 
-        if (!attendance) return res.status(404).json({ message: "No active shift found to end." });
-
-        // Sync: Update Staff status
+        // SYNC: Change staff status back to Inactive
         await FireStaff.findByIdAndUpdate(req.user.id, { status: 'Inactive' });
 
-        const formattedTime = new Date(currentTime).toLocaleTimeString([], { 
-            hour: '2-digit', 
-            minute: '2-digit', 
-            hour12: true 
-        });
-
-        res.json({ 
-            success: true, 
-            message: "Shift Ended at " + formattedTime, 
-            checkOutTime: formattedTime, // 🚀 Flutter UI key
-            data: attendance 
-        });
+        const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+        res.json({ success: true, message: "Shift Ended", checkOutTime: formattedTime });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. APPLY FOR LEAVE (Enum Matched & Emergency Check)
+// 3. APPLY FOR LEAVE (With Date Overlap Check & Full Enums)
 const applyForLeave = async (req, res) => {
     try {
         const { leaveType, fromDate, toDate, reason } = req.body;
-        
-        // Allowed Enums as per your schema
-        const allowed = ['Sick', 'Casual', 'Earned', 'Emergency'];
+        const staffId = req.user.id;
+
+        // A. Enum Match (Updated with all 6 types)
+        const allowed = ['Sick', 'Casual', 'Earned', 'Emergency', 'Duty', 'Paternity'];
         if(!allowed.includes(leaveType)) return res.status(400).json({ message: "Invalid Leave Type" });
 
-        // Emergency Override Check (Station side control)
+        // B. Date Overlap Check (Pehle se us date par koi leave toh nahi?)
+        const overlap = await FireLeave.findOne({
+            staffId,
+            status: { $in: ['Pending', 'Approved'] },
+            $or: [
+                { fromDate: { $lte: new Date(toDate) }, toDate: { $gte: new Date(fromDate) } }
+            ]
+        });
+        if (overlap) return res.status(400).json({ message: "You already have a leave request for these dates." });
+
+        // C. Emergency Override Check
         const station = await FireStation.findById(req.user.stationId);
         if (station?.isEmergencyModeActive && leaveType !== 'Sick') {
-            return res.status(403).json({ message: "EMERGENCY ACTIVE: Only Sick leave allowed." });
+            return res.status(403).json({ message: "Emergency Override active. Only Sick Leave allowed." });
         }
 
         const leave = await FireLeave.create({
-            staffId: req.user.id,
+            staffId,
             stationId: req.user.stationId,
             leaveType, fromDate, toDate, reason,
             attachment: req.file ? req.file.path : null,
             status: 'Pending'
         });
 
-        res.status(201).json({ success: true, message: "Leave applied. Pending Station Approval.", data: leave });
+        res.status(201).json({ success: true, message: "Leave applied. Pending approval.", data: leave });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -111,79 +119,66 @@ const getMyAssignedCases = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 4. STAFF PROFILE DETAILS (Figma Screen 93)
+// 4. STAFF PROFILE DETAILS (Full Dynamic Status & Real-time Stats)
 const getStaffProfileDetails = async (req, res) => {
     try {
         const staff = await FireStaff.findById(req.user.id).populate('stationId', 'stationName');
-        if (!staff) return res.status(404).json({ message: "Staff not found" });
-
         const today = new Date();
 
-        // 1. Automatic Leave Check: Kya aaj staff approved leave par hai?
+        // A. Dynamic Status Logic
         const activeLeave = await FireLeave.findOne({
             staffId: req.user.id,
             status: 'Approved',
-            fromDate: { $lte: today }, // Start date aaj ya aaj se pehle ho
-            toDate: { $gte: today }    // End date aaj ya aaj ke baad ho
+            fromDate: { $lte: today },
+            toDate: { $gte: today }
         });
 
-        // 2. Determine Dynamic Status
         let dynamicStatus = "Off Duty"; 
-        if (activeLeave) {
-            dynamicStatus = "On Leave"; // Agar aaj chutti hai
-        } else if (staff.status === 'Active') {
-            dynamicStatus = "On Duty"; // Agar staff ne check-in kiya hua hai
-        }
+        if (activeLeave) dynamicStatus = "On Leave";
+        else if (staff.status === 'Active') dynamicStatus = "On Duty";
 
-        // 3. Fetch latest attendance to show last check-in time
-        const lastAttendance = await FireAttendance.findOne({ staffId: req.user.id }).sort({ createdAt: -1 });
-        let lastCheckIn = "Not Checked-In";
-        
-        if(lastAttendance) {
-            lastCheckIn = new Date(lastAttendance.checkIn).toLocaleTimeString([], { 
-                hour: '2-digit', 
-                minute: '2-digit',
-                hour12: true 
-            });
-        }
+        // B. Last Check-in Time
+        const lastAtt = await FireAttendance.findOne({ staffId: req.user.id }).sort({ createdAt: -1 });
+        const lastCheckIn = lastAtt ? new Date(lastAtt.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Not Checked-In";
 
-        // 4. Count total cases assigned to this staff
         const totalCases = await FireCase.countDocuments({ assignedStaff: req.user.id });
 
         res.json({
             success: true,
             data: {
                 profile: staff,
-                currentStatus: dynamicStatus, // 🚀 NEW: Automatic status (On Duty / Off Duty / On Leave)
+                currentStatus: dynamicStatus, 
                 stats: {
                     casesAssigned: `${totalCases} Cases`,
                     attendance: (staff.attendancePercentage || 0) + "%",
-                    lastCheckIn: lastCheckIn, 
+                    lastCheckIn: lastCheckIn,
                     station: staff.stationId?.stationName || "N/A"
-                },
-                // Optional: Agar leave par hai toh detail bhi bhej sakte hain
-                activeLeaveInfo: activeLeave ? {
-                    type: activeLeave.leaveType,
-                    until: activeLeave.toDate
-                } : null
+                }
             }
         });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
-    }
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // 5. LEAVE CATEGORIES (Screen 84)
 const getLeaveCategories = (req, res) => {
-    res.json({
-        success: true,
-        data: [
-            { title: "Sick", display: "Sick Leave (Medical)" },
-            { title: "Casual", display: "Casual Leave (Short Break)" },
-            { title: "Earned", display: "Earned Leave (Planned)" },
-            { title: "Emergency", display: "Emergency Leave (Critical)" }
-        ]
-    });
+    try {
+        // 🚀 Mongoose Schema se 'leaveType' ke saare Enums nikalna
+        const leaveEnums = FireLeave.schema.path('leaveType').enumValues;
+
+        // Flutter UI ke liye thoda format karke bhejna (Optional formatting)
+        const categories = leaveEnums.map(type => ({
+            title: type,          // Backend key (e.g. "Sick")
+            display: `${type} Leave` // UI label (e.g. "Sick Leave")
+        }));
+
+        res.json({
+            success: true,
+            count: leaveEnums.length,
+            data: categories
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // NEW: General Work Request (Screen 15 - Tabs: Present, Shift Change, Overtime)
@@ -232,6 +227,136 @@ const getStaffNotifications = async (req, res) => {
         res.json({ success: true, data: notifications });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+
+
+
+
+// 1. DASHBOARD STATS (Figma: Dashboard Screen)
+const getStaffDashboard = async (req, res) => {
+    try {
+        const stationId = req.user.stationId; // User model se
+        
+        const stats = {
+            newFireAlerts: await FireCase.countDocuments({ stationId, status: 'Fresh' }),
+            ongoingOperations: await FireCase.countDocuments({ 
+                stationId, 
+                status: { $in: ['Pending', 'Under Control', 'Critical'] } 
+            }),
+            resolvedIncidents: await FireCase.countDocuments({ stationId, status: 'Closed' })
+        };
+
+        res.json({ success: true, data: stats });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 2. FRESH CASES LIST (Figma Screen: Fresh Cases)
+const getFreshCases = async (req, res) => {
+    try {
+        const { filter, search } = req.query; 
+        let query = { stationId: req.user.stationId, status: 'Fresh' };
+
+        if (filter === 'High Priority') query.severity = 'High';
+        
+        // Figma Search logic
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const cases = await FireCase.find(query).sort({ reportedAt: -1 });
+        res.json({ success: true, count: cases.length, data: cases });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+// 3. INCIDENT DETAILS (Figma Screen: Incident Details)
+const getCaseDetails = async (req, res) => {
+    try {
+        const incident = await FireCase.findById(req.params.id)
+            .populate('assignedStaff', 'fullName rank')
+            .populate('assignedVehicles', 'vehicleName assetId');
+
+        if (!incident) return res.status(404).json({ message: "Incident not found" });
+
+        // Figma mapping: Caller details and description
+        res.json({ success: true, data: incident });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 4. INCIDENT HISTORY (Figma Screen: Incident History)
+const getIncidentHistory = async (req, res) => {
+    try {
+        const { search, timeframe } = req.query; 
+        let query = { stationId: req.user.stationId, status: 'Closed' };
+
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Figma Filter: This Month / Last Month
+        if (timeframe === 'This Month') {
+            const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+            query.resolvedAt = { $gte: startOfMonth };
+        } else if (timeframe === 'Last Month') {
+            const startOfLastMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+            const endOfLastMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 0);
+            query.resolvedAt = { $gte: startOfLastMonth, $lte: endOfLastMonth };
+        }
+
+        const history = await FireCase.find(query).sort({ resolvedAt: -1 });
+        res.json({ success: true, count: history.length, data: history });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const markAllNotificationsRead = async (req, res) => {
+    try {
+        await FireNotification.updateMany(
+            { $or: [{ staffId: req.user.id }, { stationId: req.user.stationId }], isRead: false },
+            { isRead: true }
+        );
+        res.json({ success: true, message: "All notifications marked as read" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 5. ACCEPT CASE (Figma Button: "Accept Case")
+const acceptCase = async (req, res) => {
+    try {
+        const updated = await FireCase.findByIdAndUpdate(
+            req.params.id,
+            { 
+                $addToSet: { assignedStaff: req.user.id }, // Staff khud ko assign kar raha hai
+                status: 'Pending' 
+            },
+            { new: true }
+        );
+        res.json({ success: true, message: "Case Accepted", data: updated });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 6. ADD SUPPORTING STATION (Figma Button at bottom of Details)
+const requestBackup = async (req, res) => {
+    try {
+        const { caseId, reason } = req.body; // Params ki jagah body se lena better hai
+
+        const updatedCase = await FireCase.findByIdAndUpdate(
+            caseId,
+            { 
+                backupRequested: true,
+                backupReason: reason,
+                $push: { remarks: `BACKUP REQUESTED BY ${req.user.fullName}` }
+            },
+            { new: true }
+        );
+
+        res.json({ success: true, message: "Backup request sent to HQ", data: updatedCase });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
 module.exports = { 
     checkIn, 
     checkOut, // Added
@@ -241,5 +366,6 @@ module.exports = {
     getLeaveCategories ,
     submitWorkRequest, // Added
     updateIncidentProgress, // Added
-    getStaffNotifications // Added
+    getStaffNotifications, // Added
+    getStaffDashboard, getFreshCases , getCaseDetails, getIncidentHistory,markAllNotificationsRead, acceptCase, requestBackup
 };

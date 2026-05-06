@@ -33,13 +33,23 @@ const getStationDashboard = async (req, res) => {
 // Get Fresh Cases (Figma Screen 100/101 - Filter "New Cases")
 const getFreshCases = async (req, res) => {
     try {
-        const cases = await FireCase.find({ stationId: req.user.id, status: 'Fresh' })
-            .sort({ reportedAt: -1 })
-            .select('caseNo reportedAt address severity fireType status'); // Added severity & fireType for UI cards
+        const { search, filter } = req.query;
+        let query = { stationId: req.user.id, status: 'Fresh' };
 
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+        
+        if (filter === 'High Priority') query.severity = 'High';
+
+        const cases = await FireCase.find(query).sort({ reportedAt: -1 });
         res.json({ success: true, count: cases.length, data: cases });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 // NEW: Fresh Case ki Full Details nikalne ke liye (Figma Screen 100 -> View Details)
 const getFreshCaseDetails = async (req, res) => {
@@ -102,27 +112,29 @@ const acceptCase = async (req, res) => {
 // Get Accepted/Ongoing Cases (Figma Screen 100 - Tabs: All, Under Control, Critical)
 const getAcceptedCases = async (req, res) => {
     try {
-        const stationId = req.user.id;
-        const { type } = req.query; 
-
+        const { type, search } = req.query; 
         let query = { 
-            stationId, 
+            stationId: req.user.id, 
             status: { $in: ['Pending', 'Under Control', 'Critical'] } 
         };
 
-        if (type && type !== 'All') { query.status = type; }
+        if (type && type !== 'All') query.status = type;
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
 
         const cases = await FireCase.find(query)
-            .sort({ dispatchedAt: -1 })
             .populate('assignedStaff', 'fullName rank') 
             .populate('assignedVehicles', 'vehicleName assetId');
 
-        // ADDON: Flutter UI needs specific labels from Figma Screen 100
         const formattedCases = cases.map(c => ({
             ...c._doc,
-            teamLead: c.assignedStaff.length > 0 ? c.assignedStaff[0].fullName : "Not Assigned", // Screen 100 requirement
-            trucksCount: c.assignedVehicles.length, // Screen 100 requirement
-            severityLabel: c.status === 'Critical' ? 'Fire Spreading' : 'Fire Contained' // Figma red/green labels
+            teamLead: c.assignedStaff.length > 0 ? c.assignedStaff[0].fullName : "Not Assigned",
+            trucksCount: c.assignedVehicles.length,
+            severityLabel: c.status === 'Critical' ? 'Fire Spreading' : 'Fire Contained'
         }));
 
         res.json({ success: true, count: formattedCases.length, data: formattedCases });
@@ -296,20 +308,34 @@ const addStaff = async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(password, 10);
         
-        const staff = await FireStaff.create({
+        const staffData = {
             stationId: req.user.id,
-            hqId: req.user.hqId, // FireStation model se HQ ID leni hogi
+            hqId: req.user.hqId,
             fullName, badgeId, rank, mobileNumber, officialEmail, address,
             password: hashedPassword
-        });
+        };
 
+        // Figma support: Add profile image if uploaded
+        if (req.file) staffData.profileImage = req.file.path;
+
+        const staff = await FireStaff.create(staffData);
         res.status(201).json({ success: true, message: "Staff Added Successfully", data: staff });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 const getStaffList = async (req, res) => {
     try {
-        const staff = await FireStaff.find({ stationId: req.user.id });
+        const { search } = req.query;
+        let query = { stationId: req.user.id };
+
+        if (search) {
+            query.$or = [
+                { fullName: { $regex: search, $options: 'i' } },
+                { badgeId: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const staff = await FireStaff.find(query).sort({ fullName: 1 });
         res.json({ success: true, data: staff });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
@@ -324,10 +350,21 @@ const addVehicle = async (req, res) => {
 
 const getFleetList = async (req, res) => {
     try {
-        const vehicles = await FireVehicle.find({ stationId: req.user.id });
+        const { search } = req.query;
+        let query = { stationId: req.user.id };
+
+        if (search) {
+            query.$or = [
+                { vehicleName: { $regex: search, $options: 'i' } },
+                { assetId: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const vehicles = await FireVehicle.find(query);
         res.json({ success: true, data: vehicles });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 
 // ADDON: Get Removal Reasons (Figma Screen 10 - Modal)

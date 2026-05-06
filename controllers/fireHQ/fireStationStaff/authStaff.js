@@ -27,18 +27,24 @@ const loginStaff = async (req, res) => {
 const updateStaffProfile = async (req, res) => {
     try {
         const staffId = req.user.id;
-        const updates = req.body;
-        const currentStaff = await FireStaff.findById(staffId);
+        const { fullName, rank, mobileNumber, address } = req.body;
         
-        if (!currentStaff) return res.status(404).json({ message: "Staff not found" });
+        let updateData = { fullName, rank, mobileNumber, address };
 
+        // Profile Image replacement logic
         if (req.file) {
+            const currentStaff = await FireStaff.findById(staffId);
             if (currentStaff.profileImage) deleteFile(currentStaff.profileImage);
-            updates.profileImage = req.file.path;
+            updateData.profileImage = req.file.path;
         }
 
-        const updatedStaff = await FireStaff.findByIdAndUpdate(staffId, updates, { new: true });
-        res.json({ success: true, message: "Staff Profile Updated", data: updatedStaff });
+        const updatedStaff = await FireStaff.findByIdAndUpdate(
+            staffId, 
+            { $set: updateData }, 
+            { new: true, runValidators: true }
+        );
+
+        res.json({ success: true, message: "Profile Updated Successfully!", data: updatedStaff });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -98,4 +104,24 @@ const resetPassword = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { loginStaff, updateStaffProfile, forgotPassword, verifyOTP, resetPassword };
+// Missing: Authenticated Change Password (Figma Screen Settings)
+const changePassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        const staff = await FireStaff.findById(req.user.id).select('+password');
+
+        // Check if old password is correct
+        const isMatch = await bcrypt.compare(oldPassword, staff.password);
+        if (!isMatch) return res.status(400).json({ success: false, message: "Old password does not match" });
+
+        // Hash and Save new password
+        const salt = await bcrypt.genSalt(10);
+        staff.password = await bcrypt.hash(newPassword, salt);
+        await staff.save();
+
+        res.json({ success: true, message: "Password updated successfully" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+module.exports = { loginStaff, updateStaffProfile, forgotPassword, verifyOTP, resetPassword, changePassword };

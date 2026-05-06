@@ -3,7 +3,9 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { fireStaffUploads,fireLeaveUploads } = require('../../../middleware/multer');
 const { checkIn,checkOut, applyForLeave, getMyAssignedCases,getStaffProfileDetails, getLeaveCategories,
-        submitWorkRequest, updateIncidentProgress, getStaffNotifications
+        submitWorkRequest, updateIncidentProgress, getStaffNotifications,
+        getStaffDashboard, getFreshCases , getCaseDetails, getIncidentHistory,markAllNotificationsRead,
+         acceptCase, requestBackup
  } = require('../../../controllers/fireHQ/fireStationStaff/staffOps');
 
 // Base URL: /fireStaff/ops
@@ -18,4 +20,15 @@ router.get('/leave-categories', protect('fire-staff'), getLeaveCategories);
 router.post('/work-request', protect('fire-staff'), submitWorkRequest); // Screen 15
 router.put('/update-progress', protect('fire-staff'), updateIncidentProgress); // Screen 100
 router.get('/notifications', protect('fire-staff'), getStaffNotifications); // Screen 16
+router.put('/notifications/mark-all-read', protect('fire-staff'), markAllNotificationsRead); // Screen 16
+
+
+
+
+
+router.get('/dashboard', protect('fire-staff'), getStaffDashboard); // Screen 17
+router.get('/cases/fresh', protect('fire-staff'), getFreshCases); // Screen 18
+router.get('/cases/:id', protect('fire-staff'), getCaseDetails); // Screen 19
+router.get('/cases/history', protect('fire-staff'), getIncidentHistory); router.put('/cases/:id/accept', protect('fire-staff'), acceptCase); // Screen 21
+router.post('/cases/request-backup', protect('fire-staff'), requestBackup); // Screen 22
 module.exports = router; 

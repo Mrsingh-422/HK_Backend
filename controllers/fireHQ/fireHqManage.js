@@ -14,21 +14,25 @@ const getDashboardStats = async (req, res) => {
     try {
         const hqId = req.user.id;
         
-        const fresh = await FireCase.countDocuments({ hqId, status: 'Fresh' });
-        const pending = await FireCase.countDocuments({ hqId, status: 'Pending' });
-        const history = await FireCase.countDocuments({ hqId, status: { $in: ['Closed', 'Archived'] } });
+        // Dynamic counts for HQ perspective
+        const [fresh, pending, resolved, totalStations] = await Promise.all([
+            FireCase.countDocuments({ hqId, status: 'Fresh' }),
+            FireCase.countDocuments({ hqId, status: 'Pending' }),
+            FireCase.countDocuments({ hqId, status: { $in: ['Closed', 'Archived'] } }),
+            FireStation.countDocuments({ hqId, isActive: true })
+        ]);
 
         res.json({
             success: true,
             data: {
-                freshCases: fresh,   // Figma Screen 9 label
-                pendingCases: pending, // Figma Screen 9 label
-                historyCases: history, // Figma Screen 9 label
-                // Services grid ke liye extra details
+                freshCases: fresh,
+                pendingCases: pending,
+                historyCases: resolved,
+                activeStations: totalStations, // Added for HQ overview
                 services: [
                     { title: "Fresh Cases", count: fresh, subTitle: "New Incidents Reported" },
                     { title: "Pending Cases", count: pending, subTitle: "Under Investigation" },
-                    { title: "Case History", count: history, subTitle: "Closed & Archived Cases" }
+                    { title: "Case History", count: resolved, subTitle: "Closed & Archived Cases" }
                 ]
             }
         });
@@ -40,22 +44,28 @@ const createFireCase = async (req, res) => {
         const { callerName, callerPhone, fireType, severity, description, address, lat, lng, stationId } = req.body;
 
         if (!lat || !lng) return res.status(400).json({ success: false, message: "Lat/Lng required." });
-        if (!mongoose.Types.ObjectId.isValid(stationId)) return res.status(400).json({ message: "Invalid Station ID format" });
+
+        // Generate a readable Case No (Figma Match: Fire-2026-XXXX)
+        const year = new Date().getFullYear();
+        const randomStr = Math.floor(10000 + Math.random() * 90000);
+        const caseNo = `Fire-${year}-${randomStr}`;
 
         const newCase = await FireCase.create({
             hqId: req.user.id,
             stationId,
+            caseNo, // Custom generated
             callerName, callerPhone, fireType, severity, description, address,
             location: { lat: Number(lat), lng: Number(lng) },
             status: 'Fresh',
             reportedAt: Date.now()
         });
 
-        // AUTO-CREATE NOTIFICATION (Merged Logic)
+        // Notify the specific station
         await FireNotification.create({
+            stationId: stationId, // Station ko notification bhejna zaroori hai
             hqId: req.user.id,
-            title: "New Emergency Case",
-            message: `Fire reported at ${address}. Dispatched to Station ID: ${stationId}`,
+            title: "New Emergency Case Dispatched",
+            message: `Emergency at ${address}. Incident ID: ${caseNo}`,
             type: 'Emergency'
         });
 
@@ -169,14 +179,14 @@ const getStationDetails = async (req, res) => {
 // 4. CASE HISTORY WITH FILTERS (Screen 11 & 12)
 const getCaseHistory = async (req, res) => {
     try {
-        const { status, search } = req.query;
+        const { status, search, timeframe } = req.query; // timeframe: 'This Month', 'Last Month'
         const hqId = req.user.id;
 
+        // Default: sirf closed/archived cases dikhao
         let query = { hqId, status: { $in: ['Closed', 'Archived'] } };
         
         if (status && status !== 'All') query.status = status;
         
-        // ADDON: Multi-field search (Case ID or Address)
         if (search) {
             query.$or = [
                 { caseNo: new RegExp(search, 'i') },
@@ -184,11 +194,25 @@ const getCaseHistory = async (req, res) => {
             ];
         }
 
+        // Timeframe filter (Figma Screen logic)
+        if (timeframe === 'This Month') {
+            const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+            query.resolvedAt = { $gte: startOfMonth };
+        }
+
         const cases = await FireCase.find(query)
             .sort({ resolvedAt: -1 })
-            .select('caseNo reportedAt address status'); // Screen 11 cards fields
+            .populate('stationId', 'stationName'); // Taaki pta chale kis station ne resolve kiya
 
-        res.json({ success: true, count: cases.length, data: cases });
+        res.json({ 
+            success: true, 
+            count: cases.length, 
+            data: cases.map(c => ({
+                ...c._doc,
+                timeAgo: "2 Days Ago", // Flutter side logic ke liye helpful placeholder
+                displayStatus: c.status === 'Closed' ? 'Investigation Completed' : 'Case Archived' // Figma Labels
+            }))
+        });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -464,10 +488,36 @@ const getNearbyStationsForIncident = async (req, res) => {
     }
 };
 
+const getBackupRequests = async (req, res) => {
+    try {
+        // HQ sirf apne jurisdiction ki backup requests dekhega
+        const requests = await FireCase.find({ 
+            hqId: req.user.id, 
+            backupRequested: true,
+            status: { $ne: 'Closed' } 
+        }).populate('stationId', 'stationName');
 
+        res.json({ success: true, data: requests });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// HQ backup assign karega
+const assignBackupStation = async (req, res) => {
+    try {
+        const { caseId, supportStationId } = req.body;
+
+        await FireCase.findByIdAndUpdate(caseId, {
+            $addToSet: { supportingStations: supportStationId },
+            backupRequested: false // Request resolve ho gayi
+        });
+
+        res.json({ success: true, message: "Supporting station dispatched!" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 module.exports = { getDashboardStats,createFireCase,getIncidentDetails,createFireStation,
      getMyStations, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation,
      updateJurisdiction, getJurisdictionData,requestBoundaryUpdate, getFullIncidentReport, getStationDetails,
-     getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, markAllNotificationsRead,
+     getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, 
+     markAllNotificationsRead, getBackupRequests, assignBackupStation,
       getNearbyStationsForIncident };

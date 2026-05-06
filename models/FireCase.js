@@ -93,6 +93,8 @@ const fireCaseSchema = new mongoose.Schema({
         injuries: { type: Number, default: 0 },
         casualties: { type: Number, default: 0 }
     },
+    backupRequested: { type: Boolean, default: false },
+backupReason: { type: String },
 
 }, { timestamps: true });
 

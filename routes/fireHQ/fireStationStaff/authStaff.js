@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { loginStaff, updateStaffProfile, forgotPassword, 
     verifyOTP, 
-    resetPassword  } = require('../../../controllers/fireHQ/fireStationStaff/authStaff');
+    resetPassword , changePassword } = require('../../../controllers/fireHQ/fireStationStaff/authStaff');
 const { protect } = require('../../../middleware/authMiddleware');
 const { upload } = require('../../../middleware/multer'); 
 
@@ -19,5 +19,7 @@ router.put('/profile/update', protect('fire-staff'), updateStaffProfile);
 router.post('/forgot-password', forgotPassword);
 router.post('/verify-otp', verifyOTP);
 router.post('/reset-password', resetPassword);
+
+router.post('/change-password', protect('fire-staff'), changePassword); // For authenticated users changing password in settings
 
 module.exports = router;
