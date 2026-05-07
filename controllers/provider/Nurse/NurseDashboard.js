@@ -110,7 +110,7 @@ const getMyServices = async (req, res) => {
         const query = { nurseId: req.user.id };
         if (status) query.status = status;
 
-        const services = await NurseService.find(query).populate('consumablesUsed.consumableId').sort({ createdAt: -1 });
+        const services = await NurseService.find(query).populate('consumablesUsed.masterItemId').sort({ createdAt: -1 });
         res.json({ success: true, data: services });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };

@@ -515,9 +515,40 @@ const assignBackupStation = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// 1. Assign or Re-Assign Resources
+const assignResources = async (req, res) => {
+    try {
+        const { caseId, stationId, supportingStationIds, status } = req.body;
+ 
+        if (!caseId || !stationId) {
+            return res.status(400).json({ success: false, message: "Case ID and Primary Station are required" });
+        }
+ 
+        const updatedCase = await FireCase.findByIdAndUpdate(
+            caseId,
+            {
+                $set: {
+                    stationId: stationId, // Primary Station handle karega
+                    supportingStations: supportingStationIds || [], // Backup stations ki list
+                    status: status || 'Pending',
+                    dispatchedAt: Date.now()
+                }
+            },
+            { new: true }
+        ).populate('stationId supportingStations');
+ 
+        res.json({
+            success: true,
+            message: "Case assigned to stations successfully",
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error. Message });
+    }
+};
 module.exports = { getDashboardStats,createFireCase,getIncidentDetails,createFireStation,
      getMyStations, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation,
      updateJurisdiction, getJurisdictionData,requestBoundaryUpdate, getFullIncidentReport, getStationDetails,
      getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, 
      markAllNotificationsRead, getBackupRequests, assignBackupStation,
-      getNearbyStationsForIncident };
+      getNearbyStationsForIncident, assignResources };

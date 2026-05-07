@@ -6,7 +6,7 @@ const {
     addPill,
     recordPillAction,
     updatePill,
-    deletePill
+    deletePill,updatePillSettings
 } = require('../../../controllers/user/Doctor/Pills');
 
 // Base route: /user/doctor/pills
@@ -17,5 +17,8 @@ router.post('/add', protect('user'), addPill);              // Add medication sc
 router.patch('/action/:pillId', protect('user'), recordPillAction); // Taken/Snooze buttons
 router.put('/update/:id', protect('user'), updatePill);     // Edit screen
 router.delete('/delete/:id', protect('user'), deletePill);  // Delete button in edit
+
+router.put('/update-pill-settings/:id', protect('user'), updatePillSettings); // Update pill settings (e.g., dosage, time) without changing the name
+
 
 module.exports = router;

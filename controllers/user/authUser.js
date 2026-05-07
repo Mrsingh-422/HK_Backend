@@ -4,6 +4,10 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto'); // Built-in Node module for random numbers
 const sendEmailOTP = require('../../utils/emailService'); // Email sending utility
 
+const HealthData = require('../../models/HealthData');
+const PillReminder = require('../../models/PillReminder');
+const HealthNews = require('../../models/HealthNews'); // New Model
+
 // Helper: Generate Token
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -967,6 +971,73 @@ const getFamilyAccounts = async (req, res) => {
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+const getUserDashboard = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // 1. Fetch User Profile for Greeting (Screenshot 1: "Hello, Kautsar")
+        const user = await User.findById(userId).select('name profilePic city');
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        // 2. Fetch Key Metrics (Screenshot 1: Heart Rate, Steps, Calories)
+        // We get the most recent reading for each type
+        const metricTypes = ['Heart rate', 'Steps', 'Calories', 'Blood Pressure'];
+        const keyMetrics = {};
+
+        for (const type of metricTypes) {
+            const latest = await HealthData.findOne({ userId, type }).sort({ date: -1 });
+            keyMetrics[type] = latest ? {
+                value: latest.value,
+                unit: latest.unit,
+                status: "Stable today" // Static for now, can be calculated logic-wise
+            } : { value: "0", unit: "", status: "No data" };
+        }
+
+        // 3. Pill Reminder Summary (Screenshot 1: "3 medication today")
+        const todayPillsCount = await PillReminder.countDocuments({ 
+            userId, 
+            status: 'Active' 
+        });
+
+        // 4. Health Articles (Screenshot 1 Bottom)
+        const articles = await HealthNews.find({ isActive: true })
+            .sort({ createdAt: -1 })
+            .limit(5); // Fetch top 5 for horizontal scroll
+
+        // 5. Response Assembly
+        res.status(200).json({
+            success: true,
+            data: {
+                header: {
+                    userName: user.name,
+                    profilePic: user.profilePic,
+                    location: user.city || "Mohali"
+                },
+                healthTracker: {
+                    heartRate: keyMetrics['Heart rate'],
+                    steps: keyMetrics['Steps'],
+                    calories: keyMetrics['Calories'],
+                    bloodPressure: keyMetrics['Blood Pressure']
+                },
+                pillReminder: {
+                    count: todayPillsCount,
+                    text: `${todayPillsCount} medication today`
+                },
+                articles: articles.map(art => ({
+                    id: art._id,
+                    title: art.title,
+                    category: art.category,
+                    image: art.image
+                }))
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     registerUser, 
     loginUser, 
@@ -1002,4 +1073,5 @@ module.exports = {
     getEmergencyList,
     removeAddress,
     removeEmergency,
+    getUserDashboard
 };

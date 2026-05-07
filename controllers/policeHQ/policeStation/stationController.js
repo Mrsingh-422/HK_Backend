@@ -224,20 +224,57 @@ const updateStationProfile = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
  
+const getPendingCases = async (req, res) => {
+    try {
+        // We look for cases belonging to this station that are 'Fresh' or 'Pending'
+        // Usually, 'Fresh' means newly reported and 'Pending' means acknowledged but not yet active
+        const query = {
+            stationId: req.user.id,
+            status: { $in: ['Fresh', 'Pending'] }
+        };
+ 
+        const pendingCases = await PoliceCase.find(query)
+            .populate('assignedStaff')
+            .sort({ createdAt: -1 }); // Newest first
+ 
+        res.json({
+            success: true,
+            count: pendingCases.length,
+            data: pendingCases
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+ 
+const getCaseHistory = async (req, res) => {
+    try {
+        // History usually consists of resolved or archived cases
+        const query = {
+            stationId: req.user.id,
+            status: { $in: ['Closed', 'Archived'] }
+        };
+ 
+        const history = await PoliceCase.find(query)
+            .populate('assignedStaff')
+            .sort({ resolvedAt: -1, updatedAt: -1 }); // Show most recently resolved cases first
+ 
+        res.json({
+            success: true,
+            count: history.length,
+            data: history
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+ 
 module.exports = {
-    getStationDashboard,
-    addStaff,
-    updateStaff,
-    getStaffList,
-    removeStaff,
-    getStationCases,
-    acceptCase,
-    assignStaffToCase,
-    updateCaseProgress,
-    closeCase,
-    getStaffRoster,
-    manageLeaveRequest,
-    getStationProfile,
-    updateStationProfile
+    getStationDashboard,addStaff,
+    updateStaff,getStaffList,removeStaff,
+    getStationCases,acceptCase,
+    assignStaffToCase,updateCaseProgress,closeCase,getStaffRoster,
+    manageLeaveRequest,getStationProfile,
+    updateStationProfile, getPendingCases, getCaseHistory
 };
  

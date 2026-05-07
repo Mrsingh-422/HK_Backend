@@ -110,6 +110,23 @@ const bookAppointment = async (req, res) => {
     }
 };
 
+const verifyTrackingOTP = async (req, res) => {
+    try {
+        const { appointmentId, otp } = req.body;
+        const appointment = await Appointment.findById(appointmentId);
+
+        if (appointment.tracking.otp !== otp) {
+            return res.status(400).json({ success: false, message: "Invalid OTP. Please check with the patient." });
+        }
+
+        appointment.status = 'In-Progress';
+        await appointment.save();
+
+        res.json({ success: true, message: "Visit started successfully" });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
 // 5. GET USER APPOINTMENTS (Figma: My Bookings)
 // endpoint: GET /user/doctors/my-appointments
 const getUserAppointments = async (req, res) => {
@@ -233,14 +250,46 @@ const getAvailableSlots = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const getTrackingStatus = async (req, res) => {
+    try {
+        const appointment = await Appointment.findById(req.params.id)
+            .populate('doctorId', 'name phone profileImage averageRating totalReviews');
+
+        if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+
+        res.json({
+            success: true,
+            data: {
+                doctorName: appointment.doctorId.name,
+                status: appointment.status, // "On the way"
+                eta: "12 min", // Dr. calculation logic later
+                otp: appointment.tracking.otp, // Screen 22: 8902
+                liveLocation: appointment.tracking.liveLocation,
+                contact: {
+                    phone: appointment.doctorId.phone,
+                    chatAvailable: true
+                }
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// B. Share Live Status (Screenshot 21)
+// Sirf link generate karke dena hai
+const getShareableTrackingLink = async (req, res) => {
+    const link = `https://hk.app/track/live/${req.params.id}`;
+    res.json({ success: true, link });
+};
+
 module.exports = { 
     getSpecializations, 
     searchDoctors, 
     getDoctorDetails, 
     bookAppointment, 
+    verifyTrackingOTP,
     getUserAppointments,
     userCancelAppointment,
     trackAppointment ,
     getMyPrescriptions,
-    getAvailableSlots
+    getAvailableSlots,getTrackingStatus,getShareableTrackingLink
 };

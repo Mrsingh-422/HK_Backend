@@ -14,6 +14,8 @@ const {
     changePassword,
     submitLeave
 } = require('../../../controllers/policeHQ/policeStationStaff/staffController');
+
+// Base URL: /policeStationStaff/staff
  
 // All routes are protected for 'police-staff' role
 router.use(protect('police-staff'));

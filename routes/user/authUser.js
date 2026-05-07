@@ -30,11 +30,12 @@ const {
     getAddressList,
     getEmergencyList,
     removeAddress,
-    removeEmergency,
+    removeEmergency,getUserDashboard
 } = require('../../controllers/user/authUser.js'); 
 
 // Base route: /api/auth/user
 
+router.get('/dashboard', protect('user'), getUserDashboard); // User Dashboard Stats
 // Auth
 router.post('/register', registerUser);
 router.post('/login', loginUser);
@@ -114,5 +115,8 @@ router.put('/update-locker-pin', protect('user'), updateLockerPin);
 // Referral
 router.get('/referral-details', protect('user'), getReferralDetails);
 router.get('/family-accounts', protect('user'), getFamilyAccounts);
+
+
+
 
 module.exports = router;

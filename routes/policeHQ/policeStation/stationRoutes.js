@@ -16,7 +16,10 @@ const {
     getStaffRoster,
     manageLeaveRequest,
     getStationProfile,
-    updateStationProfile
+    updateStationProfile,
+    getPendingCases,
+    getCaseHistory
+
 } = require('../../../controllers/policeHQ/policeStation/stationController');
  
 // All routes require 'police-station' role
@@ -46,6 +49,8 @@ router.put('/cases/close/:id', closeCase); // Screen 11 (Close btn)
 /** PROFILE & JURISDICTION **/
 router.get('/profile', getStationProfile); // Screen 17, 19
 router.put('/profile', policeStationUploads, updateStationProfile); // Screen 18, 21
+router.get('/pending', getPendingCases);
+router.get('/history', getCaseHistory);
  
 module.exports = router;
  

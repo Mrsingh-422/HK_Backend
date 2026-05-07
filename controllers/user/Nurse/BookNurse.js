@@ -448,7 +448,83 @@ const searchNurses = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const getGlobalPackages = async (req, res) => {
+    try {
+        const { lat, lng, search } = req.body;
+
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, message: "Location (lat, lng) is required to find nearby packages" });
+        }
+
+        // AGGREGATION PIPELINE
+        const packages = await Nurse.aggregate([
+            {
+                // STEP 1: Find nearby Nurses first
+                $geoNear: {
+                    near: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
+                    distanceField: "distance", // Distance calculate karke is field mein dalega
+                    spherical: true,
+                    query: { profileStatus: 'Approved', isActive: true } // Sirf approved vendors
+                }
+            },
+            {
+                // STEP 2: Join with NursePackage collection
+                $lookup: {
+                    from: "nursepackages", // MongoDB collection name (usually plural)
+                    localField: "_id",
+                    foreignField: "nurseId",
+                    as: "vendorPackages"
+                }
+            },
+            {
+                // STEP 3: Unwind packages so each package becomes a separate document
+                $unwind: "$vendorPackages"
+            },
+            {
+                // STEP 4: Filter only Approved and Active packages
+                $match: {
+                    "vendorPackages.status": "Approved",
+                    "vendorPackages.isActive": true,
+                    ...(search ? { "vendorPackages.packageName": new RegExp(search, 'i') } : {})
+                }
+            },
+            {
+                // STEP 5: Format the output
+                $project: {
+                    _id: "$vendorPackages._id",
+                    packageName: "$vendorPackages.packageName",
+                    description: "$vendorPackages.description",
+                    pricing: "$vendorPackages.pricing",
+                    photos: "$vendorPackages.photos",
+                    includedServices: "$vendorPackages.includedServices",
+                    vendorDetails: {
+                        _id: "$_id",
+                        name: "$name",
+                        profileImage: "$profileImage",
+                        rating: "$rating",
+                        city: "$city",
+                        distance: { $divide: ["$distance", 1000] } // Meters to KM
+                    }
+                }
+            },
+            {
+                // STEP 6: Sort by distance (Geonear already does this, but keeping it explicit)
+                $sort: { "vendorDetails.distance": 1 }
+            }
+        ]);
+
+        res.json({
+            success: true,
+            count: packages.length,
+            data: packages
+        });
+
+    } catch (error) {
+        console.error("Global Package Error:", error);
+        res.status(500).json({ message: error.message });
+    }
+};
 
 module.exports = { getNurses,getNurseDetails,searchNurses,checkoutNurseBooking, placeNurseBooking,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
-    uploadBookingPrescription,getNurseDeliveryConfig  };
+    uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages };

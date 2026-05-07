@@ -127,9 +127,67 @@ const getHealthHistory = async (req, res) => {
     }
 };
 
+const addMeal = async (req, res) => {
+    try {
+        const { mealType, items } = req.body; 
+        // items: [{ name: 'Apple', kcal: 95, qty: 1 }, { name: 'Banana', kcal: 105, qty: 1 }]
+        
+        const totalKcal = items.reduce((sum, item) => sum + (item.kcal * item.qty), 0);
+
+        const mealData = await HealthData.create({
+            userId: req.user.id,
+            type: 'Calories',
+            value: `${totalKcal} kcal`,
+            numericValue: totalKcal,
+            unit: 'kcal',
+            note: JSON.stringify({ mealType, items }), // Breakdown save karne ke liye
+            date: new Date()
+        });
+
+        res.status(201).json({ success: true, message: "Meal added", data: mealData });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// B. Get Calorie Breakdown (Screenshot 10)
+const getCalorieBreakdown = async (req, res) => {
+    try {
+        const today = moment().startOf('day').toDate();
+        const records = await HealthData.find({
+            userId: req.user.id,
+            type: 'Calories',
+            date: { $gte: today }
+        });
+
+        let breakdown = { Breakfast: 0, Lunch: 0, Dinner: 0, Snacks: 0 };
+        let totalBurned = 0;
+
+        records.forEach(r => {
+            try {
+                const details = JSON.parse(r.note);
+                if (breakdown[details.mealType] !== undefined) {
+                    breakdown[details.mealType] += r.numericValue;
+                    totalBurned += r.numericValue;
+                }
+            } catch (e) { totalBurned += r.numericValue; }
+        });
+
+        res.json({
+            success: true,
+            data: {
+                totalBurned,
+                goal: 2000,
+                percentage: Math.round((totalBurned / 2000) * 100),
+                breakdown,
+                activityBurn: { walking: 120, running: 350, workout: 210 } // Static as per UI
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 module.exports = { 
     addHealthMetric, 
     getHealthStats, 
     getDashboardSummary, 
-    getHealthHistory 
+    getHealthHistory,
+    addMeal,
+    getCalorieBreakdown
 };

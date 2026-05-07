@@ -30,6 +30,10 @@ const fireHQSchema = new mongoose.Schema({
         activeZones: { type: String, default: "4 Main Zones" },
         riskLevel: { type: String, default: "Moderate- High" }
     },
+    location: {
+        lat: { type: Number, default: 30.702215 },
+        lng: { type: Number, default: 76.732798 }
+    },
     
     // Auth related
     otp: { type: String, select: false },

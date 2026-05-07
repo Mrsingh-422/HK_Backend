@@ -112,12 +112,38 @@ const deletePill = async (req, res) => {
         res.json({ success: true, message: "Medication deleted" });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+const updatePillSettings = async (req, res) => {
+    try {
+        const { times, isReminderOn, notes, endDate } = req.body;
+        
+        // Frontend se times array me aayega ["09:00 AM", "01:00 PM"]
+        const formattedTimes = times.map(t => ({
+            time: t,
+            isTakenToday: false
+        }));
 
+        const updatedPill = await PillReminder.findByIdAndUpdate(
+            req.params.id,
+            { 
+                $set: { 
+                    times: formattedTimes, 
+                    isReminderOn, 
+                    notes,
+                    endDate: endDate === "No end date" ? null : endDate
+                } 
+            },
+            { new: true }
+        );
+
+        res.json({ success: true, message: "Changes saved", data: updatedPill });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 module.exports = { 
     addPill, 
     getTodaySchedule, 
     recordPillAction, 
     getMyPills, 
     updatePill, 
+    updatePillSettings,
     deletePill 
 };

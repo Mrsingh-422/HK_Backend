@@ -7,7 +7,7 @@ const { getDashboardStats,createFireCase,getIncidentDetails,
       getAdminContact,updateFireStation, deleteFireStation, updateJurisdiction,getJurisdictionData,
       requestBoundaryUpdate, getFullIncidentReport,getStationDetails,
 getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, markAllNotificationsRead,getBackupRequests, assignBackupStation,
-      getNearbyStationsForIncident } = require('../../controllers/fireHQ/fireHqManage');
+      getNearbyStationsForIncident,assignResources } = require('../../controllers/fireHQ/fireHqManage');
 
 // base url : /fireHQ/management
 
@@ -43,4 +43,5 @@ router.get('/discovery/nearby-stations', protect('fire-hq'), getNearbyStationsFo
 // Backup Requests
 router.get('/backup-requests', protect('fire-hq'), getBackupRequests); // Screen 24
 router.post('/assign-backup', protect('fire-hq'), assignBackupStation); // Screen 25
+router.post('/assign-resources', protect('fire-hq'), assignResources); // Screen 26
 module.exports = router;
