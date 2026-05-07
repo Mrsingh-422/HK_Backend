@@ -123,6 +123,7 @@ app.use('/provider/pharmacy/orders', require('./routes/provider/Pharmacy/Pharmac
 app.use('/provider/nurse/dash', require('./routes/provider/Nurse/NurseDashboardRoute'));
 app.use('/provider/nurse/service', require('./routes/provider/Nurse/NurseServiceRoute'));
 app.use('/provider/nurse/management', require('./routes/provider/Nurse/NurseStaffManagementRoute'));
+app.use('/provider/nurse/package', require('./routes/provider/Nurse/NursePackageRoute'));
 
 ////////////////////// Driver Routes /////////////////////
 app.use('/driver/pharmacy/orders', require('./routes/driver/driverPharmacy/OrdersRoute'));  
@@ -149,12 +150,14 @@ app.use('/fireStaff/ops', require('./routes/fireHQ/fireStationStaff/staffOpsRout
 ///////////////////////////// policeHQ Routes /////////////////////////
 app.use('/policeHQ/auth', require('./routes/policeHQ/authPoliceHQRoute'));
 app.use('/policeHQ/management', require('./routes/policeHQ/hqManagementRoute')); // Police HQ Management Route (Dashboard, Station Creation, Global History)
-
+ 
 // --- Police Station ---
 app.use('/policeStation/auth', require('./routes/policeHQ/policeStation/authPoliceStationRoute'));
-
+app.use('/policeStation/station', require('./routes/policeHQ/policeStation/stationRoutes'));
+ 
 // --- Police Station Staff ---
 app.use('/policeStationStaff/auth', require('./routes/policeHQ/policeStationStaff/authStaff'));
+app.use('/policeStationStaff/staff', require('./routes/policeHQ/policeStationStaff/staffRoutes'));
 
 
 app.get('/', (req, res) => {

@@ -122,10 +122,14 @@ const getMyAssignedCases = async (req, res) => {
 // 4. STAFF PROFILE DETAILS (Full Dynamic Status & Real-time Stats)
 const getStaffProfileDetails = async (req, res) => {
     try {
-        const staff = await FireStaff.findById(req.user.id).populate('stationId', 'stationName');
-        const today = new Date();
+        // 1. Populate 'stationId' completely to get shiftTimings
+        const staff = await FireStaff.findById(req.user.id).populate('stationId');
+        if (!staff) return res.status(404).json({ message: "Staff not found" });
 
-        // A. Dynamic Status Logic
+        const today = new Date();
+        const station = staff.stationId;
+
+        // --- A. Dynamic Status Logic (Keep Existing) ---
         const activeLeave = await FireLeave.findOne({
             staffId: req.user.id,
             status: 'Approved',
@@ -137,12 +141,24 @@ const getStaffProfileDetails = async (req, res) => {
         if (activeLeave) dynamicStatus = "On Leave";
         else if (staff.status === 'Active') dynamicStatus = "On Duty";
 
-        // B. Last Check-in Time
+        // --- B. Last Check-in Time (Keep Existing) ---
         const lastAtt = await FireAttendance.findOne({ staffId: req.user.id }).sort({ createdAt: -1 });
-        const lastCheckIn = lastAtt ? new Date(lastAtt.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Not Checked-In";
+        const lastCheckIn = lastAtt ? new Date(lastAtt.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : "Not Checked-In";
 
         const totalCases = await FireCase.countDocuments({ assignedStaff: req.user.id });
 
+        // --- C. NEW: Shift Timing Logic (Add-on) ---
+        let shiftTimingLabel = "Not Assigned";
+        if (station && station.shiftTimings) {
+            // Check if currentShift is A or B and pick timing from Station model
+            if (staff.currentShift === 'Shift A') {
+                shiftTimingLabel = `${station.shiftTimings.shiftA.start} - ${station.shiftTimings.shiftA.end}`;
+            } else if (staff.currentShift === 'Shift B') {
+                shiftTimingLabel = `${station.shiftTimings.shiftB.start} - ${station.shiftTimings.shiftB.end}`;
+            }
+        }
+
+        // --- FINAL RESPONSE (Synced & Extended) ---
         res.json({
             success: true,
             data: {
@@ -152,11 +168,19 @@ const getStaffProfileDetails = async (req, res) => {
                     casesAssigned: `${totalCases} Cases`,
                     attendance: (staff.attendancePercentage || 0) + "%",
                     lastCheckIn: lastCheckIn,
-                    station: staff.stationId?.stationName || "N/A"
+                    station: station?.stationName || "N/A"
+                },
+                // 🚀 NEW ADD-ON FOR FIGMA SCREEN 93
+                activeShift: {
+                    name: staff.currentShift || "Shift A", // e.g., "Shift A"
+                    timing: shiftTimingLabel,            // e.g., "08:00 - 16:00"
+                    displayLabel: `Station Duty - ${shiftTimingLabel}` // Full Figma Text
                 }
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 5. LEAVE CATEGORIES (Screen 84)

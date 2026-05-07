@@ -4,6 +4,7 @@ const nurseBookingSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     nurseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Nurse', required: true },
     serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'NurseService' }, // Link to specific service
+    packageId: { type: mongoose.Schema.Types.ObjectId, ref: 'NursePackage' },
     assignedStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }, 
     bookingId: { type: String, unique: true },
      // Snapshot of service at time of booking

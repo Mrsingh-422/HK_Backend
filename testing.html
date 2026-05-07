@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nurse Service - List & Price Sync</title>
+    <title>Nurse Panel - Service & Package Management</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .custom-shadow { box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
         .loading-overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.7); z-index: 50; align-items: center; justify-content: center; }
+        .tab-active { border-bottom: 3px solid #0d9488; color: #0d9488; font-weight: bold; }
     </style>
 </head>
 <body class="bg-gray-50 font-sans">
@@ -30,88 +31,125 @@
             <div class="space-y-6">
                 <h2 class="text-lg font-bold text-gray-800 border-b pb-2">📋 Instructions</h2>
                 <div class="bg-white p-6 rounded-xl custom-shadow border text-sm text-gray-600 space-y-3">
-                    <p>1. <b>Service Select:</b> Category & Sub-category pick karein.</p>
-                    <p>2. <b>Linked Consumables:</b> Dropdown mein wahi items aayenge jo Admin ne is service ke liye set kiye hain.</p>
-                    <p>3. <b>Auto-Pricing:</b> Base prices and MRP CSV se load honge.</p>
+                    <p><b>Service:</b> Pick category and template to list a single service.</p>
+                    <p><b>Package:</b> Combine multiple master services into a bundle.</p>
                 </div>
             </div>
 
             <div class="lg:col-span-2 space-y-6">
-                <form id="serviceForm" class="bg-white p-8 rounded-xl custom-shadow border space-y-6">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label class="text-sm font-semibold text-gray-600 mb-2 block">Category</label>
-                            <select id="categoryDropdown" required class="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500">
-                                <option value="">Loading...</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="text-sm font-semibold text-gray-600 mb-2 block">Service Title (Sub-Category)</label>
-                            <select id="subCategoryDropdown" required class="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500" disabled>
-                                <option value="">-- Select Service --</option>
-                            </select>
-                            <input type="hidden" id="careSubCategoryId">
-                        </div>
-                    </div>
+                <div class="flex border-b border-gray-200 mb-4 bg-white rounded-t-xl px-4">
+                    <button onclick="switchTab('service-sec')" id="tab-service" class="px-6 py-3 text-sm tab-active">Add Service</button>
+                    <button onclick="switchTab('package-sec')" id="tab-package" class="px-6 py-3 text-sm text-gray-500">Create Package</button>
+                    <button onclick="switchTab('list-sec'); fetchMyPackages();" id="tab-list" class="px-6 py-3 text-sm text-gray-500">My Packages</button>
+                </div>
 
-                    <div>
-                        <label class="text-sm font-semibold text-gray-600 mb-2 block">Description</label>
+                <!-- 1. ADD SERVICE SECTION (Existing Logic Preserved) -->
+                <div id="service-sec" class="tab-content">
+                    <form id="serviceForm" class="bg-white p-8 rounded-b-xl custom-shadow border space-y-6">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label class="text-sm font-semibold text-gray-600 mb-2 block">Category</label>
+                                <select id="categoryDropdown" required class="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500">
+                                    <option value="">Loading...</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-sm font-semibold text-gray-600 mb-2 block">Service Title</label>
+                                <select id="subCategoryDropdown" required class="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500" disabled>
+                                    <option value="">-- Select Service --</option>
+                                </select>
+                                <input type="hidden" id="careSubCategoryId">
+                            </div>
+                        </div>
                         <textarea id="descArea" required class="w-full border rounded-lg p-3 text-sm h-24" placeholder="Description..."></textarea>
-                    </div>
 
-                    <div>
-                        <label class="text-sm font-semibold text-gray-700 mb-3 block border-b pb-1">💰 Pricing Configuration (Base Price from CSV)</label>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
-                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 pricing-box" id="box-oneDay">
+                            <div class="bg-gray-50 p-4 rounded-lg border pricing-box" id="box-oneDay">
                                 <span class="text-xs font-bold text-teal-700 uppercase">One Day Price</span>
                                 <input type="number" class="base-input w-full mt-2 border p-2 text-sm rounded bg-gray-100 font-bold" readonly>
                                 <input type="number" class="disc-input w-full mt-1 border p-2 text-sm rounded" placeholder="Discount %" value="0">
-                                <div class="mt-2 text-xs font-semibold text-gray-600">Final: <span class="text-teal-600">₹<span class="final-val">0</span></span></div>
+                                <div class="mt-2 text-xs">Final: ₹<span class="final-val">0</span></div>
                             </div>
-                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 pricing-box" id="box-multiDay">
+                            <div class="bg-gray-50 p-4 rounded-lg border pricing-box" id="box-multiDay">
                                 <span class="text-xs font-bold text-teal-700 uppercase">Multi Day Price</span>
                                 <input type="number" class="base-input w-full mt-2 border p-2 text-sm rounded bg-gray-100 font-bold" readonly>
                                 <input type="number" class="disc-input w-full mt-1 border p-2 text-sm rounded" placeholder="Discount %" value="0">
-                                <div class="mt-2 text-xs font-semibold text-gray-600">Final: <span class="text-teal-600">₹<span class="final-val">0</span></span></div>
+                                <div class="mt-2 text-xs">Final: ₹<span class="final-val">0</span></div>
                             </div>
-                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 pricing-box" id="box-hourly">
+                            <div class="bg-gray-50 p-4 rounded-lg border pricing-box" id="box-hourly">
                                 <span class="text-xs font-bold text-teal-700 uppercase">Hourly Price</span>
                                 <input type="number" class="base-input w-full mt-2 border p-2 text-sm rounded bg-gray-100 font-bold" readonly>
                                 <input type="number" class="disc-input w-full mt-1 border p-2 text-sm rounded" placeholder="Discount %" value="0">
-                                <div class="mt-2 text-xs font-semibold text-gray-600">Final: <span class="text-teal-600">₹<span class="final-val">0</span></span></div>
+                                <div class="mt-2 text-xs">Final: ₹<span class="final-val">0</span></div>
                             </div>
                         </div>
-                    </div>
 
-                    <div>
-                        <label class="text-sm font-semibold text-gray-700 mb-2 block border-b pb-1">📦 Consumables for this Service</label>
                         <div class="flex gap-4 mt-3">
-                            <!-- This will now be populated dynamically based on Service -->
-                            <select id="masterConsumables" class="flex-1 border rounded-lg p-3 text-sm">
-                                <option value="">-- First Select a Service --</option>
-                            </select>
+                            <select id="masterConsumables" class="flex-1 border rounded-lg p-3 text-sm"><option value="">-- Select Service First --</option></select>
                             <input type="number" id="consDisc" class="w-24 border rounded-lg p-3 text-sm" placeholder="Disc %">
-                            <button type="button" onclick="addConsumableToRow()" class="bg-teal-600 text-white px-6 rounded-lg text-sm font-bold hover:bg-teal-700">Add</button>
+                            <button type="button" onclick="addConsumableToRow('service')" class="bg-teal-600 text-white px-6 rounded-lg text-sm font-bold">Add</button>
                         </div>
-
                         <div class="mt-4 border rounded-lg overflow-hidden">
-                            <table class="w-full text-sm text-left">
-                                <thead class="bg-gray-100 text-xs text-gray-700 uppercase">
-                                    <tr>
-                                        <th class="px-4 py-2">Item</th>
-                                        <th class="px-4 py-2">MRP</th>
-                                        <th class="px-4 py-2">Discount</th>
-                                        <th class="px-4 py-2">Final</th>
-                                        <th class="px-4 py-2">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="consumableTableBody"></tbody>
-                            </table>
+                            <table class="w-full text-sm text-left"><tbody id="consumableTableBody"></tbody></table>
                         </div>
-                    </div>
+                        <button type="submit" class="w-full bg-teal-600 text-white py-4 rounded-lg text-sm font-bold uppercase shadow-xl">List Service Now</button>
+                    </form>
+                </div>
 
-                    <button type="submit" class="w-full bg-teal-600 text-white py-4 rounded-lg text-sm font-bold uppercase hover:bg-teal-700 shadow-xl">List Service Now (Approved)</button>
-                </form>
+                <!-- 2. CREATE PACKAGE SECTION -->
+                <div id="package-sec" class="tab-content hidden">
+                    <form id="packageForm" class="bg-white p-8 rounded-b-xl custom-shadow border space-y-6">
+                        <div>
+                            <label class="text-sm font-semibold text-gray-600 mb-2 block">Package Name</label>
+                            <input type="text" id="pkgName" required class="w-full border rounded-lg p-3 text-sm" placeholder="e.g. Elderly Full Care Bundle">
+                        </div>
+
+                        <div>
+                            <label class="text-sm font-semibold text-gray-600 mb-2 block text-teal-600">Select Master Services to Bundle</label>
+                            <div id="pkgServiceCheckboxes" class="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto border p-4 rounded-lg bg-gray-50">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="bg-teal-50 p-4 rounded-lg border border-teal-100 pkg-pricing-box" id="pkg-box-oneDay">
+                                <span class="text-xs font-bold text-teal-700 uppercase">Package One Day</span>
+                                <input type="number" class="pkg-base w-full mt-2 border p-2 text-sm rounded" placeholder="Base ₹">
+                                <input type="number" class="pkg-disc w-full mt-1 border p-2 text-sm rounded" placeholder="Disc %" value="0">
+                                <div class="mt-2 text-xs font-bold">Final: ₹<span class="pkg-final">0</span></div>
+                            </div>
+                            <div class="bg-teal-50 p-4 rounded-lg border border-teal-100 pkg-pricing-box" id="pkg-box-multiDay">
+                                <span class="text-xs font-bold text-teal-700 uppercase">Package Multi Day</span>
+                                <input type="number" class="pkg-base w-full mt-2 border p-2 text-sm rounded" placeholder="Base ₹">
+                                <input type="number" class="pkg-disc w-full mt-1 border p-2 text-sm rounded" placeholder="Disc %" value="0">
+                                <div class="mt-2 text-xs font-bold">Final: ₹<span class="pkg-final">0</span></div>
+                            </div>
+                            <div class="bg-teal-50 p-4 rounded-lg border border-teal-100 pkg-pricing-box" id="pkg-box-hourly">
+                                <span class="text-xs font-bold text-teal-700 uppercase">Package Hourly</span>
+                                <input type="number" class="pkg-base w-full mt-2 border p-2 text-sm rounded" placeholder="Base ₹">
+                                <input type="number" class="pkg-disc w-full mt-1 border p-2 text-sm rounded" placeholder="Disc %" value="0">
+                                <div class="mt-2 text-xs font-bold">Final: ₹<span class="pkg-final">0</span></div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="text-sm font-semibold text-gray-600 mb-2 block">Extra Consumables for Package</label>
+                            <div class="flex gap-4">
+                                <select id="pkgMasterConsumables" class="flex-1 border rounded-lg p-3 text-sm"></select>
+                                <input type="number" id="pkgConsDisc" class="w-24 border rounded-lg p-3 text-sm" placeholder="Disc %">
+                                <button type="button" onclick="addConsumableToRow('package')" class="bg-teal-600 text-white px-6 rounded-lg text-sm font-bold">Add</button>
+                            </div>
+                            <div class="mt-4 border rounded-lg overflow-hidden">
+                                <table class="w-full text-sm text-left"><tbody id="pkgConsumableTableBody"></tbody></table>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="w-full bg-teal-600 text-white py-4 rounded-lg text-sm font-bold uppercase shadow-xl">List Package Bundle</button>
+                    </form>
+                </div>
+
+                <div id="list-sec" class="tab-content hidden">
+                    <div id="myPackagesContainer" class="grid grid-cols-1 gap-4"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -120,12 +158,23 @@
         const API_BASE_URL = "http://localhost:5002"; 
         const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5Yjk5MzFiOGVmZWI1YWRiY2NlNzM5ZCIsInJvbGUiOiJOdXJzZSIsImlhdCI6MTc3NzI3NTIzMywiZXhwIjo0OTMwODc1MjMzfQ.woa9g6Ku7tv7G8_ZW0406qMxkuya4fHDmgo6Q0_pBJo";
 
-        let selectedConsumables = [];
+        let svcSelectedConsumables = [];
+        let pkgSelectedConsumables = [];
 
         window.onload = () => {
             fetchCategories();
+            fetchNurseServicesForPkg();
+            fetchMasterConsumablesForAll();
         };
 
+        function switchTab(id) {
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+            document.getElementById(id).classList.remove('hidden');
+            document.querySelectorAll('[id^="tab-"]').forEach(t => t.className = "px-6 py-3 text-sm text-gray-500");
+            document.getElementById('tab-' + id.split('-')[0]).className = "px-6 py-3 text-sm tab-active";
+        }
+
+        // --- SERVICE LOGIC ---
         async function fetchCategories() {
             const res = await fetch(`${API_BASE_URL}/admin/nurse-csv/categories`);
             const result = await res.json();
@@ -145,69 +194,117 @@
             result.data.forEach(sub => subDropdown.innerHTML += `<option value="${sub}">${sub}</option>`);
         };
 
-        // 🚀 CRITICAL UPDATE: Populating Consumables Dropdown from Service Template
         document.getElementById('subCategoryDropdown').onchange = async (e) => {
             const cat = document.getElementById('categoryDropdown').value;
             const sub = e.target.value;
             document.getElementById('loader').style.display = 'flex';
-            
             const res = await fetch(`${API_BASE_URL}/admin/nurse-csv/details?category=${cat}&subCategory=${sub}`);
             const result = await res.json();
             document.getElementById('loader').style.display = 'none';
-            
             if(result.data) {
                 document.getElementById('careSubCategoryId').value = result.data._id;
                 document.getElementById('descArea').value = result.data.description;
-
-                // Sync pricing from CSV
                 document.querySelector('#box-oneDay .base-input').value = result.data.oneDayOneTimePrice || 0;
                 document.querySelector('#box-multiDay .base-input').value = result.data.forMultipleDaysPrice || 0;
                 document.querySelector('#box-hourly .base-input').value = result.data.pricePerHour || 0;
                 refreshFinalPrices();
 
-                // 📦 Populate Consumables Dropdown specifically for this service
                 const conDropdown = document.getElementById('masterConsumables');
                 conDropdown.innerHTML = '<option value="">-- Select Consumable --</option>';
-                
-                if (result.data.resolvedConsumables && result.data.resolvedConsumables.length > 0) {
+                if (result.data.resolvedConsumables) {
                     result.data.resolvedConsumables.forEach(item => {
                         conDropdown.innerHTML += `<option value="${item._id}" data-mrp="${item.mrp}" data-name="${item.itemName}" data-unit="${item.unitType}">${item.itemName} (${item.size}) - ₹${item.mrp}</option>`;
                     });
-                } else {
-                    conDropdown.innerHTML = '<option value="">No consumables found for this service</option>';
                 }
             }
         };
 
-        function addConsumableToRow() {
-            const select = document.getElementById('masterConsumables');
-            const discInput = document.getElementById('consDisc');
+        function addConsumableToRow(target) {
+            const isPkg = target === 'package';
+            const selectId = isPkg ? 'pkgMasterConsumables' : 'masterConsumables';
+            const discId = isPkg ? 'pkgConsDisc' : 'consDisc';
+            const tableId = isPkg ? 'pkgConsumableTableBody' : 'consumableTableBody';
+            const select = document.getElementById(selectId);
             const opt = select.options[select.selectedIndex];
-            if(!select.value || !opt.dataset.mrp) return alert("Select an item");
+            if(!select.value) return;
 
             const masterItemId = select.value;
-            const name = opt.dataset.name;
             const mrp = parseFloat(opt.dataset.mrp);
-            const unit = opt.dataset.unit;
-            const discountPercentage = parseFloat(discInput.value) || 0;
-            const finalPrice = Math.round(mrp - (mrp * (discountPercentage/100)));
+            const disc = parseFloat(document.getElementById(discId).value) || 0;
+            const final = Math.round(mrp - (mrp * (disc/100)));
 
-            selectedConsumables.push({ masterItemId, discountPercentage });
+            const itemObj = { masterItemId, discountPercentage: disc };
+            if(isPkg) pkgSelectedConsumables.push(itemObj); else svcSelectedConsumables.push(itemObj);
 
-            document.getElementById('consumableTableBody').innerHTML += `
-                <tr class="border-b">
-                    <td class="px-4 py-3 font-medium">${name}</td>
-                    <td class="px-4 py-3">₹${mrp}</td>
-                    <td class="px-4 py-3 text-red-500">${discountPercentage}%</td>
-                    <td class="px-4 py-3 font-bold text-teal-600">₹${finalPrice}</td>
-                    <td class="px-4 py-3"><button type="button" class="text-red-400" onclick="removeConRow(this, '${masterItemId}')">Remove</button></td>
-                </tr>`;
-            discInput.value = "";
+            document.getElementById(tableId).innerHTML += `<tr class="border-b"><td class="p-2">${opt.dataset.name}</td><td class="p-2">₹${mrp}</td><td class="p-2 text-red-500">${disc}%</td><td class="p-2 font-bold">₹${final}</td></tr>`;
         }
 
-        function removeConRow(btn, id) {
-            selectedConsumables = selectedConsumables.filter(x => x.masterItemId !== id);
-            btn.closest('tr').remove();
+        async function fetchNurseServicesForPkg() {
+            const res = await fetch(`${API_BASE_URL}/provider/nurse/package/nurse-services`, { headers: { 'Authorization': `Bearer ${TOKEN}` }});
+            const result = await res.json();
+            document.getElementById('pkgServiceCheckboxes').innerHTML = result.data.map(s => `
+                <label class="flex items-center gap-2 text-sm bg-white p-3 border rounded-xl cursor-pointer hover:border-teal-500"><input type="checkbox" name="pkgServices" value="${s._id}" class="w-4 h-4 accent-teal-600"><div><b>${s.subCategory}</b><br><small class="text-gray-400">${s.category}</small></div></label>`).join('');
+        }
+
+        async function fetchMasterConsumablesForAll() {
+            const res = await fetch(`${API_BASE_URL}/provider/nurse/dash/consumables/search`, { headers: { 'Authorization': `Bearer ${TOKEN}` }});
+            const result = await res.json();
+            const dropdown = document.getElementById('pkgMasterConsumables');
+            dropdown.innerHTML = '<option value="">Search Consumable...</option>';
+            result.data.forEach(item => {
+                dropdown.innerHTML += `<option value="${item._id}" data-mrp="${item.mrp}" data-name="${item.itemName}">${item.itemName} (${item.size})</option>`;
+            });
+        }
+
+        document.querySelectorAll('.pkg-base, .pkg-disc').forEach(el => {
+            el.oninput = () => {
+                document.querySelectorAll('.pkg-pricing-box').forEach(box => {
+                    const base = parseFloat(box.querySelector('.pkg-base').value) || 0;
+                    const disc = parseFloat(box.querySelector('.pkg-disc').value) || 0;
+                    box.querySelector('.pkg-final').innerText = Math.round(base - (base * (disc / 100)));
+                });
+            }
+        });
+
+        // 🚀 FIX: Handle Package Submission with JSON Stringify for specific fields
+        document.getElementById('packageForm').onsubmit = async (e) => {
+            e.preventDefault();
+            document.getElementById('loader').style.display = 'flex';
+
+            const payload = {
+                packageName: document.getElementById('pkgName').value,
+                description: "Nurse Bundle Package",
+                includedServices: JSON.stringify(Array.from(document.querySelectorAll('input[name="pkgServices"]:checked')).map(el => el.value)),
+                pricing: JSON.stringify({
+                    oneDay: { base: document.querySelector('#pkg-box-oneDay .pkg-base').value, discount: document.querySelector('#pkg-box-oneDay .pkg-disc').value },
+                    multipleDays: { base: document.querySelector('#pkg-box-multiDay .pkg-base').value, discount: document.querySelector('#pkg-box-multiDay .pkg-disc').value },
+                    hourly: { base: document.querySelector('#pkg-box-hourly .pkg-base').value, discount: document.querySelector('#pkg-box-hourly .pkg-disc').value }
+                }),
+                consumablesUsed: JSON.stringify(pkgSelectedConsumables)
+            };
+
+            const formData = new FormData();
+            Object.keys(payload).forEach(key => formData.append(key, payload[key]));
+
+            const res = await fetch(`${API_BASE_URL}/provider/nurse/package/manage`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${TOKEN}` },
+                body: formData
+            });
+            const result = await res.json();
+            document.getElementById('loader').style.display = 'none';
+            if(result.success) { alert("✅ Package Created!"); location.reload(); }
+            else { alert("❌ Error: " + result.message); }
+        };
+
+        async function fetchMyPackages() {
+            const res = await fetch(`${API_BASE_URL}/provider/nurse/package/my-packages`, { headers: { 'Authorization': `Bearer ${TOKEN}` }});
+            const result = await res.json();
+            document.getElementById('myPackagesContainer').innerHTML = result.data.map(p => `
+                <div class="bg-white p-5 rounded-2xl border custom-shadow flex justify-between items-center">
+                    <div><h4 class="font-bold text-teal-700 text-lg">${p.packageName}</h4><p class="text-xs text-gray-500">${p.includedServices.length} Services Bundle</p></div>
+                    <div class="text-right"><div class="text-xl font-black text-gray-800">₹${p.pricing.oneDay.final}</div><small class="text-gray-400">One-Day Price</small></div>
+                </div>`).join('') || '<p class="text-center text-gray-400">No packages yet.</p>';
         }
 
         function refreshFinalPrices() {
@@ -221,30 +318,27 @@
 
         document.getElementById('serviceForm').onsubmit = async (e) => {
             e.preventDefault();
-            document.getElementById('loader').style.display = 'flex';
-
             const payload = {
                 careSubCategoryId: document.getElementById('careSubCategoryId').value,
                 careCategoryId: document.getElementById('categoryDropdown').value,
                 title: document.getElementById('subCategoryDropdown').value,
                 description: document.getElementById('descArea').value,
-                pricing: {
+                pricing: JSON.stringify({
                     oneDay: { base: document.querySelector('#box-oneDay .base-input').value, discount: document.querySelector('#box-oneDay .disc-input').value },
                     multipleDays: { base: document.querySelector('#box-multiDay .base-input').value, discount: document.querySelector('#box-multiDay .disc-input').value },
                     hourly: { base: document.querySelector('#box-hourly .base-input').value, discount: document.querySelector('#box-hourly .disc-input').value }
-                },
-                consumablesUsed: selectedConsumables,
+                }),
+                consumablesUsed: JSON.stringify(svcSelectedConsumables),
                 status: 'Approved'
             };
-            
+            const formData = new FormData();
+            Object.keys(payload).forEach(key => formData.append(key, payload[key]));
             const res = await fetch(`${API_BASE_URL}/provider/nurse/dash/service/manage`, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                headers: { 'Authorization': `Bearer ${TOKEN}` },
+                body: formData
             });
-            const result = await res.json();
-            document.getElementById('loader').style.display = 'none';
-            if(result.success) { alert("✅ Service listed and approved!"); location.reload(); }
+            if((await res.json()).success) { alert("✅ Service Added!"); location.reload(); }
         };
     </script>
 </body>

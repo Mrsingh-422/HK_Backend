@@ -577,6 +577,24 @@ const fireLeaveUploads = multer({
 }).single('attachment'); // 👈 Key name matching Figma: 'attachment'
 
 
+// ==========================================
+// 32. NURSE PACKAGES (Multiple Photos)
+// ==========================================
+const nursePackageDir = 'public/uploads/nurse_packages';
+ensureDir(nursePackageDir);
+
+const nursePackageUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, nursePackageDir),
+        filename: (req, file, cb) => cb(null, `pkg-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+}).fields([
+    { name: 'photos', maxCount: 10 } // Key name: photos
+]);
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -611,5 +629,7 @@ module.exports = {
     fireStaffUpdateUploads, // Screen 92: Update Staff Profile
     fireStationUpdateUploads, // Screen 21: Update Station Profile
     fireEvidenceUploads, // Screen 101: Upload Evidence
-    fireLeaveUploads // Screen: New Request
+    fireLeaveUploads, // Screen: New Request
+    nursePackageUploads // Screen: New Package
+
 };  

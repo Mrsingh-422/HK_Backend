@@ -1,6 +1,7 @@
 const Nurse = require('../../../models/Nurse');
 const NurseBooking = require('../../../models/NurseBooking');
 const NurseService = require('../../../models/NurseService');
+const NursePackage = require('../../../models/NursePackage'); 
 const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const { isNurseAvailable, generateNurseSlots } = require('../../../utils/timeSlotHelper');
@@ -72,20 +73,35 @@ const getNurses = async (req, res) => {
 const getNurseDetails = async (req, res) => {
     try {
         const nurseId = req.params.id;
+        if (!nurseId) return res.status(400).json({ message: "Nurse ID required" });
+
         const nurse = await Nurse.findById(nurseId).lean();
         if (!nurse) return res.status(404).json({ message: "Nurse not found" });
 
-        const [services, config] = await Promise.all([
-            // FIX: 'consumablesUsed.consumableId' ki jagah 'consumablesUsed.masterItemId' use karein
+        // Parallel fetching for performance
+        const [services, packages, config] = await Promise.all([
             NurseService.find({ nurseId, status: 'Approved' })
-                .populate('consumablesUsed.masterItemId'), 
-            Availability.findOne({ vendorId: nurseId })
+                .populate('consumablesUsed.masterItemId')
+                .lean(),
+            NursePackage.find({ nurseId, status: 'Approved' })
+                .populate('includedServices')
+                .populate('consumablesUsed.masterItemId')
+                .lean(),
+            Availability.findOne({ vendorId: nurseId }).lean()
         ]);
 
-        res.json({ success: true, data: { ...nurse, services, availability: config } });
+        res.json({ 
+            success: true, 
+            data: { 
+                ...nurse, 
+                services: services || [], 
+                packages: packages || [], 
+                availability: config || null 
+            } 
+        });
     } catch (e) { 
-        console.error("Details Error:", e);
-        res.status(500).json({ message: e.message }); 
+        console.error("Critical Details Error:", e);
+        res.status(500).json({ success: false, message: "Server encountered an error loading details" }); 
     }
 };
 
@@ -175,24 +191,24 @@ const checkRangeAvailability = async (req, res) => {
 const getNurseAvailability = async (req, res) => {
     try {
         const { nurseId } = req.params;
-        const { serviceId, type } = req.query; // type: 'One day One Time' etc.
+        const { serviceId, packageId, isPackage, type } = req.query;
 
-        const [config, service] = await Promise.all([
+        const [config, item] = await Promise.all([
             Availability.findOne({ vendorId: nurseId }),
-            NurseService.findById(serviceId)
+            isPackage === 'true' ? NursePackage.findById(packageId) : NurseService.findById(serviceId)
         ]);
 
-        if (!config || !service) return res.status(404).json({ message: "Config or Service missing" });
+        if (!config || !item) return res.status(404).json({ message: "Config or Item missing" });
 
-        // Select correct price from Triple Pricing
-        let base = service.pricing.oneDay.final;
-        if(type === 'Acc. To Per/Hours') base = service.pricing.hourly.final;
+        // Triple Pricing Logic (Dono models mein key same hai: pricing.oneDay.final)
+        let base = item.pricing.oneDay.final;
+        if(type === 'Acc. To Per/Hours') base = item.pricing.hourly.final;
 
         res.json({
             success: true,
             serviceBasePrice: base,
             premiumDates: config.premiumDates, 
-            timeSlots: generateNurseSlots(config, type, base) // Helper logic used
+            timeSlots: generateNurseSlots(config, type, base) 
         });
     } catch (e) { res.status(500).json({ message: e.message }); }
 };
@@ -200,24 +216,30 @@ const getNurseAvailability = async (req, res) => {
 // 4. CHECKOUT (The Revamped Pricing Engine)
 const checkoutNurseBooking = async (req, res) => {
     try {
-        const { nurseId, serviceId, selectedType, startDate, endDate, startTime, endTime, isFasterService, patientCount, selectedConsumables } = req.body;
+        const { 
+            nurseId, serviceId, packageId, isPackage, selectedType, 
+            startDate, endDate, startTime, endTime, isFasterService, 
+            patientCount, selectedConsumables 
+        } = req.body;
 
-        const [service, config, delivery] = await Promise.all([
-            NurseService.findById(serviceId),
+        // 1. Fetch correct booking item (Service or Package)
+        const [item, config, delivery] = await Promise.all([
+            isPackage ? NursePackage.findById(packageId) : NurseService.findById(serviceId),
             Availability.findOne({ vendorId: nurseId }),
             DeliveryCharge.findOne({ vendorId: nurseId })
         ]);
 
-        if (!service) return res.status(404).json({ message: "Service not found" });
+        if (!item) return res.status(404).json({ message: "Service/Package not found" });
         const pCount = Number(patientCount) || 1;
 
         let basePrice = 0;
         let slotSurcharge = 0;
         let units = 1;
 
+        // 2. Triple Pricing Logic (Universal for Service & Package)
         if (selectedType === 'For Multiple Days') {
             units = moment(endDate).diff(moment(startDate), 'days') + 1;
-            basePrice = service.pricing.multipleDays.final * units;
+            basePrice = item.pricing.multipleDays.final * units;
             
             let curr = moment(startDate);
             while (curr <= moment(endDate)) {
@@ -227,7 +249,7 @@ const checkoutNurseBooking = async (req, res) => {
             }
         } 
         else if (selectedType === 'One day One Time') {
-            basePrice = service.pricing.oneDay.final;
+            basePrice = item.pricing.oneDay.final;
             const pDate = config.premiumDates?.find(pd => pd.date === moment(startDate).format('YYYY-MM-DD'));
             if (pDate) slotSurcharge += pDate.extraFee;
             
@@ -235,22 +257,19 @@ const checkoutNurseBooking = async (req, res) => {
             if (pSlot) slotSurcharge += pSlot.extraFee;
         } 
         else if (selectedType === 'Acc. To Per/Hours') {
-            const hStart = moment(startTime, "HH:mm");
-            const hEnd = moment(endTime, "HH:mm");
-            // Agar 8 to 10 book kiya hai toh 2 hours hue
-            units = hEnd.diff(hStart, 'hours') || 1;
-            basePrice = service.pricing.hourly.final * units;
-
-            // 🚀 FIXED: Sirf STARTING slot ka premium check karein
+            units = moment(endTime, "HH:mm").diff(moment(startTime, "HH:mm"), 'hours') || 1;
+            basePrice = item.pricing.hourly.final * units;
             const pSlot = config.premiumSlots?.find(ps => ps.time === startTime);
             if (pSlot) slotSurcharge = pSlot.extraFee;
         }
 
+        // 3. Add-ons & Surcharges
         const consumableTotal = (selectedConsumables || []).reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
         const subTotal = (basePrice + slotSurcharge + consumableTotal) * pCount;
         const fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
         const totalBeforeTax = subTotal + fasterCharge;
 
+        // 4. Dynamic Tax
         let tax = 0;
         if (delivery?.taxPercentage) tax = (totalBeforeTax * delivery.taxPercentage) / 100;
         if (delivery?.taxInRupees) tax += delivery.taxInRupees;
@@ -263,7 +282,7 @@ const checkoutNurseBooking = async (req, res) => {
                 consumableTotal: Math.round(consumableTotal * pCount),
                 fasterServiceCharge: fasterCharge,
                 taxAmount: Math.round(tax),
-                totalPrice: Math.round(totalBeforeTax + tax), // 🚀 FIXED: Surcharge included here
+                totalPrice: Math.round(totalBeforeTax + tax),
                 units,
                 pCount
             }
@@ -274,26 +293,57 @@ const checkoutNurseBooking = async (req, res) => {
 // --- PLACE BOOKING ---
 const placeNurseBooking = async (req, res) => {
     try {
-        const { nurseId, serviceId, schedule, priceBreakdown, patients, healthDetails, address, selectedConsumables, assessmentLocation } = req.body;
-        const service = await NurseService.findById(serviceId);
+        const { 
+            nurseId, serviceId, packageId, isPackage, schedule, 
+            priceBreakdown, patients, healthDetails, address, 
+            selectedConsumables, assessmentLocation 
+        } = req.body;
+
+        // Fetch Individual Price Snapshot
+        const item = isPackage ? await NursePackage.findById(packageId) : await NurseService.findById(serviceId);
+        
         const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
         const booking = await NurseBooking.create({
             userId: req.user.id,
-            nurseId, serviceId, bookingId: bId,
-            serviceDetails: { title: service.title, type: service.type, duration: schedule.duration, basePrice: service.pricing.oneDay.final },
-            priceBreakdown,
+            nurseId,
+            serviceId: isPackage ? null : serviceId, // Link service if not package
+            packageId: isPackage ? packageId : null, // Link package if selected
+            bookingId: bId,
+            serviceDetails: {
+                title: isPackage ? item.packageName : item.title,
+                type: isPackage ? "Package Bundle" : item.type,
+                duration: schedule.duration,
+                basePrice: item.pricing.oneDay.final // Individual snapshot
+            },
+            priceBreakdown: {
+                baseServicePrice: priceBreakdown.baseServicePrice,
+                slotSurcharge: priceBreakdown.slotSurcharge,
+                consumableTotal: priceBreakdown.consumableTotal,
+                fasterServiceCharge: priceBreakdown.fasterServiceCharge,
+                taxAmount: priceBreakdown.taxAmount,
+                totalPrice: priceBreakdown.totalPrice
+            },
             patients,
             schedule,
             address,
             assessmentLocation,
-            selectedConsumables,
-            needConsumable: selectedConsumables.length > 0,
+            selectedConsumables: (selectedConsumables || []).map(c => ({
+                consumableId: c.consumableId,
+                itemName: c.itemName,
+                price: c.price,
+                unitType: c.unitType
+            })),
+            needConsumable: selectedConsumables && selectedConsumables.length > 0,
             healthDetails,
             status: 'Pending'
         });
-        res.status(201).json({ success: true, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        res.status(201).json({ success: true, message: "Booking Success", data: booking });
+    } catch (error) { 
+        console.error("Booking Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 

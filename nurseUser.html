@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo | Premium Elder Care Plans</title>
+    
+    <!-- UI Frameworks -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <style>
+        :root {
+            --primary: #00b894;
+            --primary-dark: #009677;
+            --secondary: #6c5ce7;
+            --bg-soft: #f4f7f6;
+        }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--bg-soft); }
+        
+        .custom-shadow { box-shadow: 0 20px 50px rgba(0,0,0,0.05); }
+        .glass-nav { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); }
+        
+        /* Plan Card Animations */
+        .plan-card { transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .plan-card:hover { transform: translateY(-10px); }
+        
+        /* Tab Slider */
+        .tab-active { color: white; background: var(--primary); }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e0; border-radius: 10px; }
+
+        .benefit-list i { color: #00b894; font-size: 0.8rem; }
+        .purple-badge { background: #f3f0ff; color: #6c5ce7; }
+        
+        .screen-transition { transition: opacity 0.5s ease; }
+        .hidden-screen { display: none; opacity: 0; }
+    </style>
+</head>
+<body class="text-gray-800">
+
+    <!-- NAVBAR -->
+    <nav class="fixed top-0 w-full z-50 glass-nav border-b border-gray-100 py-4 px-6 md:px-12 flex justify-between items-center">
+        <div class="flex items-center gap-2">
+            <div class="w-10 h-10 bg-[#00b894] rounded-xl flex items-center justify-center text-white shadow-lg">
+                <i class="fas fa-hand-holding-heart text-xl"></i>
+            </div>
+            <span class="text-xl font-extrabold tracking-tight text-gray-900">HealthKangaroo <span class="text-[#00b894]">Plans</span></span>
+        </div>
+        <div class="flex items-center gap-6">
+            <button onclick="resetFlow()" class="text-sm font-bold text-gray-500 hover:text-teal-600 transition">Browse Plans</button>
+            <button class="bg-gray-900 text-white px-6 py-2 rounded-full font-bold text-sm shadow-xl hover:bg-black transition">Sign In</button>
+        </div>
+    </nav>
+
+    <!-- MAIN CONTENT CONTAINER -->
+    <main class="mt-24 pb-20 px-4 md:px-12 max-w-7xl mx-auto">
+
+        <!-- ========================================== -->
+        <!-- SCREEN 1: PLAN EXPLORATION -->
+        <!-- ========================================== -->
+        <section id="screen-plans" class="screen-transition">
+            <div class="text-center mb-12">
+                <h1 class="text-4xl md:text-5xl font-extrabold text-gray-900 mb-4">Our <span class="text-teal-600 underline decoration-teal-200">Subscription</span> Plans</h1>
+                <p class="text-gray-500 max-w-2xl mx-auto font-medium">Choose a care plan that fits your family's needs. We provide verified professional nurses and care managers at your doorstep.</p>
+            </div>
+
+            <!-- MAIN CATEGORY TABS -->
+            <div class="flex justify-center mb-12">
+                <div class="bg-white p-1.5 rounded-2xl shadow-sm border border-gray-100 flex gap-2 overflow-x-auto no-scrollbar">
+                    <button onclick="switchCategory('Elder Care Plan')" id="btn-elder" class="px-8 py-3 rounded-xl font-bold text-sm transition-all tab-active">
+                        <i class="fas fa-user-friends mr-2"></i> Elder Care Plan
+                    </button>
+                    <button onclick="switchCategory('Condition Management Plan')" id="btn-condition" class="px-8 py-3 rounded-xl font-bold text-sm text-gray-500 hover:bg-gray-50 transition-all">
+                        <i class="fas fa-stethoscope mr-2"></i> Condition Management Plan
+                    </button>
+                    <button onclick="switchCategory('Elite Plan')" id="btn-elite" class="px-8 py-3 rounded-xl font-bold text-sm text-gray-500 hover:bg-gray-50 transition-all">
+                        <i class="fas fa-crown mr-2"></i> Elite Plan
+                    </button>
+                </div>
+            </div>
+
+            <!-- CURRENCY TOGGLE (Anvayaa Style) -->
+            <div class="flex justify-center items-center gap-4 mb-12">
+                <span class="text-xs font-bold text-gray-400 uppercase tracking-widest">INR (₹)</span>
+                <div class="w-12 h-6 bg-teal-100 rounded-full p-1 flex justify-end cursor-pointer">
+                    <div class="w-4 h-4 bg-teal-600 rounded-full shadow-md"></div>
+                </div>
+                <span class="text-xs font-bold text-teal-600 uppercase tracking-widest">USD ($)</span>
+            </div>
+
+            <!-- PLANS GRID -->
+            <div id="plans-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                <!-- Plan Cards will be injected by JavaScript -->
+            </div>
+        </section>
+
+
+        <!-- ========================================== -->
+        <!-- SCREEN 2: CHECKOUT & PAYMENT -->
+        <!-- ========================================== -->
+        <section id="screen-checkout" class="screen-transition hidden-screen">
+            <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-12 pt-10">
+                
+                <!-- Left: Order Summary -->
+                <div class="space-y-6">
+                    <h2 class="text-3xl font-black">Booking Summary</h2>
+                    <div id="checkout-card" class="bg-white p-8 rounded-[40px] shadow-2xl border border-teal-50">
+                        <!-- Content Injected -->
+                    </div>
+                </div>
+
+                <!-- Right: Payment Simulation -->
+                <div class="bg-white p-10 rounded-[40px] shadow-2xl space-y-8">
+                    <h3 class="text-xl font-bold border-b pb-4">Secure Checkout</h3>
+                    <div class="space-y-4">
+                        <div class="border-2 border-teal-500 bg-teal-50 p-4 rounded-2xl flex items-center justify-between cursor-pointer">
+                            <div class="flex items-center gap-3">
+                                <i class="fas fa-credit-card text-teal-600"></i>
+                                <span class="font-bold">Credit / Debit Card</span>
+                            </div>
+                            <div class="w-5 h-5 rounded-full border-4 border-teal-500"></div>
+                        </div>
+                        <div class="border-2 border-gray-100 p-4 rounded-2xl flex items-center justify-between cursor-not-allowed opacity-50">
+                            <div class="flex items-center gap-3">
+                                <i class="fas fa-university text-gray-400"></i>
+                                <span class="font-bold">Net Banking</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-4 pt-6">
+                        <input type="text" placeholder="Card Holder Name" class="w-full bg-gray-50 p-4 rounded-2xl border-none focus:ring-2 focus:ring-teal-500 outline-none font-medium">
+                        <input type="text" placeholder="Card Number" class="w-full bg-gray-50 p-4 rounded-2xl border-none focus:ring-2 focus:ring-teal-500 outline-none font-medium">
+                    </div>
+
+                    <button onclick="simulatePayment()" class="w-full bg-teal-600 text-white py-5 rounded-[25px] font-black text-lg shadow-2xl shadow-teal-200 hover:bg-teal-700 transition transform hover:scale-105 active:scale-95">
+                        PAY & SUBSCRIBE NOW
+                    </button>
+                    <p class="text-center text-xs text-gray-400 font-medium">Transaction protected by 256-bit SSL encryption</p>
+                </div>
+            </div>
+        </section>
+
+
+        <!-- ========================================== -->
+        <!-- SCREEN 3: POST-PURCHASE DASHBOARD -->
+        <!-- ========================================== -->
+        <section id="screen-dashboard" class="screen-transition hidden-screen">
+            <div class="max-w-5xl mx-auto space-y-12">
+                <div class="bg-gradient-to-r from-teal-600 to-blue-600 p-12 rounded-[50px] text-white flex flex-col md:flex-row items-center justify-between shadow-2xl relative overflow-hidden">
+                    <div class="relative z-10">
+                        <h2 class="text-4xl font-black mb-4">Welcome to Your Care Plan!</h2>
+                        <p class="text-teal-100 font-medium max-w-md">Your optimal health and comfort is our priority. Our administrators are currently reviewing your location to assign the best Nurse Bureau.</p>
+                    </div>
+                    <div class="mt-8 md:mt-0 relative z-10 text-center">
+                        <div class="bg-white/20 backdrop-blur-md p-6 rounded-3xl">
+                            <p class="text-xs font-bold uppercase tracking-widest text-teal-100 mb-2">Current Status</p>
+                            <span class="bg-yellow-400 text-gray-900 px-6 py-2 rounded-full font-black text-sm animate-pulse">Assigning Professional Bureau...</span>
+                        </div>
+                    </div>
+                    <i class="fas fa-briefcase-medical absolute -bottom-10 -right-10 text-white/10 text-[200px]"></i>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <!-- Plan Details -->
+                    <div class="lg:col-span-2 bg-white p-10 rounded-[40px] custom-shadow">
+                        <h3 class="text-2xl font-black mb-8">Plan Utilities</h3>
+                        <div id="dashboard-benefits" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Populated via JS -->
+                        </div>
+                    </div>
+
+                    <!-- Bureau Assignment Status -->
+                    <div class="bg-white p-10 rounded-[40px] custom-shadow text-center">
+                        <div class="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <i class="fas fa-user-md text-4xl text-gray-300"></i>
+                        </div>
+                        <h4 class="text-xl font-bold mb-2">Assigned Bureau</h4>
+                        <p class="text-gray-400 text-sm font-medium leading-relaxed">Admin will assign a verified Nurse Provider within 2-4 business hours based on your city.</p>
+                        <hr class="my-8 border-gray-50">
+                        <button class="w-full border-2 border-gray-100 text-gray-400 py-4 rounded-3xl font-bold text-sm cursor-not-allowed">CHAT WITH NURSE</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="py-12 bg-white border-t border-gray-100 mt-20">
+        <div class="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-8">
+            <div class="text-gray-400 text-sm font-medium">© 2026 HealthKangaroo Nursing Ecosystem. All Rights Reserved.</div>
+            <div class="flex gap-8">
+                <a href="#" class="text-gray-400 hover:text-teal-600 transition"><i class="fab fa-facebook-f"></i></a>
+                <a href="#" class="text-gray-400 hover:text-teal-600 transition"><i class="fab fa-twitter"></i></a>
+                <a href="#" class="text-gray-400 hover:text-teal-600 transition"><i class="fab fa-linkedin-in"></i></a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+        // --- MASTER DATA ---
+        const CARE_PLANS = [
+            {
+                id: '1',
+                mainCategory: 'Elder Care Plan',
+                name: 'Basic Annual Care',
+                price: 85,
+                tagline: "Trusted round-the-clock care so you can relax, even if you're far away.",
+                theme: '#00b894',
+                exclusiveCover: '38,000',
+                benefits: [
+                    { category: 'Health Assistance', items: ['Fixing doctor appointments', '6 accompanied doctor visits', 'Medicine delivery at home'] },
+                    { category: 'Emergency', items: ['On-demand ambulance on call', '24/7 non-medical crisis support', 'Unlimited care manager visits'] }
+                ]
+            },
+            {
+                id: '2',
+                mainCategory: 'Elder Care Plan',
+                name: 'Optimal Annual Plan',
+                price: 125,
+                tagline: "More extensive care for specific services your loved ones need.",
+                theme: '#0984e3',
+                exclusiveCover: '63,000',
+                benefits: [
+                    { category: 'Health Assistance', items: ['Everything in Basic Plan', 'At-home diagnostics & X-rays', '12 accompanied doctor visits'] },
+                    { category: 'Comfort', items: ['Home repairs and maintenance', 'Doorstep grocery delivery', 'Plumber, electrician, and carpenter'] }
+                ]
+            },
+            {
+                id: '3',
+                mainCategory: 'Elder Care Plan',
+                name: 'Comprehensive Annual',
+                price: 175,
+                tagline: "Complete peace of mind offering full support for well-being.",
+                theme: '#6c5ce7',
+                exclusiveCover: '80,000',
+                benefits: [
+                    { category: 'Daily Care', items: ['Essential arrangements for Daily Maid', 'Fresh homemade meal delivery', 'Phone and internet how-to help'] },
+                    { category: 'Leisure', items: ['Planning family events', 'Day outings & park walks', '48 companionship visits'] }
+                ]
+            },
+            {
+                id: '4',
+                mainCategory: 'Condition Management Plan',
+                name: 'Dementia Care Plan',
+                price: 381,
+                tagline: "Specialized care, fun activities, and regular visits to keep them safe and happy.",
+                theme: '#e17055',
+                exclusiveCover: '50,000',
+                benefits: [
+                    { category: 'Specialized', items: ['Virtual assessment by specialized team', 'Cognitive stimulation like jigsaw puzzles', 'Behavioral pattern tracking'] }
+                ]
+            },
+            {
+                id: '5',
+                mainCategory: 'Condition Management Plan',
+                name: 'Dialysis Care Plan',
+                price: 325,
+                tagline: "Regular nursing and support for dialysis patients at home.",
+                theme: '#d63031',
+                exclusiveCover: '40,000',
+                benefits: [
+                    { category: 'Clinical', items: ['Home physiotherapy sessions', 'Post-dialysis health monitoring', 'Dietary tracking'] }
+                ]
+            },
+            {
+                id: '6',
+                mainCategory: 'Elite Plan',
+                name: 'Concierge Elite Plan',
+                price: 999,
+                tagline: "Designed exclusively for level of care beyond standard senior support.",
+                theme: '#2d3436',
+                exclusiveCover: '150,000',
+                benefits: [
+                    { category: 'Exclusivity', items: ['Bespoke wellness routines', 'Pure companionship', 'Premium healthcare manager'] }
+                ]
+            }
+        ];
+
+        let state = {
+            currentCategory: 'Elder Care Plan',
+            selectedPlan: null,
+            activeSubscription: null
+        };
+
+        // --- NAVIGATION & TABS ---
+        function switchCategory(cat) {
+            state.currentCategory = cat;
+            
+            // Update UI buttons
+            document.querySelectorAll('[id^="btn-"]').forEach(btn => {
+                btn.classList.remove('tab-active');
+                btn.classList.add('text-gray-500');
+            });
+            const activeBtnId = cat === 'Elder Care Plan' ? 'btn-elder' : (cat === 'Elite Plan' ? 'btn-elite' : 'btn-condition');
+            document.getElementById(activeBtnId).classList.add('tab-active');
+            document.getElementById(activeBtnId).classList.remove('text-gray-500');
+
+            renderPlans();
+        }
+
+        // --- RENDERING ENGINE ---
+        function renderPlans() {
+            const grid = document.getElementById('plans-grid');
+            const filtered = CARE_PLANS.filter(p => p.mainCategory === state.currentCategory);
+            
+            grid.innerHTML = filtered.map(p => `
+                <div class="plan-card bg-white rounded-[40px] p-8 custom-shadow border border-gray-50 flex flex-col">
+                    <h2 class="text-xl font-black mb-1">${p.name}</h2>
+                    <div class="text-4xl font-black text-gray-900 mb-4">$${p.price}<span class="text-sm text-gray-400">/mo *</span></div>
+                    <p class="text-xs font-bold text-gray-400 mb-6 uppercase tracking-widest">Billed yearly (taxes at actuals)</p>
+                    
+                    <p class="text-sm text-gray-500 font-medium mb-8 leading-relaxed">${p.tagline}</p>
+                    
+                    <button onclick="goToCheckout('${p.id}')" class="w-full py-4 rounded-2xl bg-white border-2 border-teal-600 text-teal-600 font-black text-sm hover:bg-teal-600 hover:text-white transition-all flex justify-between items-center px-6 mb-10 group">
+                        Buy Now <i class="fas fa-arrow-right group-hover:translate-x-1 transition"></i>
+                    </button>
+
+                    <div class="flex-grow space-y-6">
+                        ${p.benefits.map(b => `
+                            <div>
+                                <div class="flex justify-between items-center cursor-pointer mb-3">
+                                    <span class="text-xs font-black uppercase text-gray-400 tracking-wider">${b.category}</span>
+                                    <i class="fas fa-chevron-up text-[10px] text-gray-300"></i>
+                                </div>
+                                <ul class="benefit-list space-y-3">
+                                    ${b.items.map(item => `
+                                        <li class="flex items-start gap-3 text-sm font-semibold">
+                                            <i class="fas fa-check mt-1"></i>
+                                            <span>${item}</span>
+                                        </li>
+                                    `).join('')}
+                                </ul>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <div class="mt-10 p-5 rounded-3xl purple-badge flex justify-between items-center">
+                        <span class="text-xs font-bold leading-tight">Exclusive Expenses Worth <br> <b class="text-sm">₹${p.exclusiveCover} Covered</b></span>
+                        <i class="fas fa-chevron-down text-xs"></i>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // --- FLOW CONTROLS ---
+        function goToCheckout(id) {
+            state.selectedPlan = CARE_PLANS.find(p => p.id === id);
+            
+            const card = document.getElementById('checkout-card');
+            card.innerHTML = `
+                <div class="flex items-center gap-4 mb-8 text-teal-600">
+                    <i class="fas fa-shield-halved text-2xl"></i>
+                    <h4 class="font-black tracking-tight">${state.selectedPlan.mainCategory}</h4>
+                </div>
+                <h3 class="text-2xl font-black mb-2">${state.selectedPlan.name}</h3>
+                <p class="text-gray-400 text-sm font-bold mb-8 uppercase tracking-widest leading-loose">Annual Subscription</p>
+                
+                <div class="space-y-4 border-t border-gray-50 pt-8">
+                    <div class="flex justify-between font-bold text-gray-500">
+                        <span>Platform Fee (Yearly)</span>
+                        <span>$${state.selectedPlan.price * 12}</span>
+                    </div>
+                    <div class="flex justify-between font-bold text-gray-500">
+                        <span>GST (18%)</span>
+                        <span>$${Math.round(state.selectedPlan.price * 12 * 0.18)}</span>
+                    </div>
+                    <div class="flex justify-between text-2xl font-black pt-6 text-gray-900">
+                        <span>Total Pay</span>
+                        <span>$${Math.round(state.selectedPlan.price * 12 * 1.18)}</span>
+                    </div>
+                </div>
+            `;
+
+            showScreen('screen-checkout');
+        }
+
+        async function simulatePayment() {
+            Swal.fire({
+                title: 'Processing Payment',
+                html: 'Securing your care plan...',
+                timer: 2000,
+                timerProgressBar: true,
+                didOpen: () => { Swal.showLoading() }
+            }).then(() => {
+                state.activeSubscription = state.selectedPlan;
+                renderDashboard();
+                showScreen('screen-dashboard');
+                
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Subscription Active!',
+                    text: 'You are now a Health Kangaroo member.',
+                    confirmButtonColor: '#00b894'
+                });
+            });
+        }
+
+        function renderDashboard() {
+            const p = state.activeSubscription;
+            const container = document.getElementById('dashboard-benefits');
+            
+            container.innerHTML = p.benefits.map(b => `
+                <div class="bg-gray-50 p-6 rounded-3xl border border-gray-100">
+                    <h5 class="text-xs font-black uppercase text-teal-600 mb-4 tracking-widest">${b.category}</h5>
+                    <ul class="space-y-3">
+                        ${b.items.map(item => `
+                            <li class="flex items-center gap-3 text-sm font-bold">
+                                <div class="w-6 h-6 bg-teal-100 rounded-full flex items-center justify-center text-[10px] text-teal-600">
+                                    <i class="fas fa-check"></i>
+                                </div>
+                                ${item}
+                            </li>
+                        `).join('')}
+                    </ul>
+                </div>
+            `).join('');
+        }
+
+        function showScreen(screenId) {
+            document.querySelectorAll('section').forEach(s => {
+                s.classList.add('hidden-screen');
+                s.style.display = 'none';
+            });
+            const target = document.getElementById(screenId);
+            target.style.display = screenId === 'screen-plans' ? 'block' : (screenId === 'screen-checkout' ? 'grid' : 'block');
+            setTimeout(() => target.classList.remove('hidden-screen'), 50);
+        }
+
+        function resetFlow() {
+            state.activeSubscription = null;
+            showScreen('screen-plans');
+        }
+
+        // Initialize
+        renderPlans();
+
+    </script>
+</body>
+</html>
