@@ -46,18 +46,37 @@ const loginHQ = async (req, res) => {
 const updateHQProfile = async (req, res) => {
     try {
         const hqId = req.user.id;
-        const updates = req.body;
+        const updates = { ...req.body }; // req.body ki copy lo
         const currentHQ = await FireHQ.findById(hqId);
         if (!currentHQ) return res.status(404).json({ message: "HQ not found" });
-
-        if (req.file) {
-            if (currentHQ.profileImage) deleteFile(currentHQ.profileImage);
-            updates.profileImage = req.file.path;
+ 
+        // FIX: Multer .fields() use karne par data req.files mein aata hai
+        if (req.files && req.files['profileImage']) {
+            const file = req.files['profileImage'][0]; // Pehli image uthao
+            // Purani image delete karein agar exist karti hai
+            if (currentHQ.profileImage) {
+                deleteFile(currentHQ.profileImage); 
+            }
+            // Nayi image ka path save karein
+            updates.profileImage = file.path;
         }
-
-        const updatedHQ = await FireHQ.findByIdAndUpdate(hqId, updates, { new: true });
-        res.json({ success: true, message: "HQ Profile Updated", data: updatedHQ });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+ 
+        // Profile update karein
+        const updatedHQ = await FireHQ.findByIdAndUpdate(hqId, updates, { 
+            new: true,
+            runValidators: true 
+        });
+ 
+        res.json({ 
+            success: true, 
+            message: "HQ Profile Updated Successfully", 
+            data: updatedHQ 
+        });
+ 
+    } catch (error) { 
+        console.error("Update Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 const changePassword = async (req, res) => {

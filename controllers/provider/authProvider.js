@@ -361,5 +361,27 @@ const resetPasswordProvider = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// ==========================================
+// 6. GET PROVIDER PROFILE (Unified)
+// endpoint: GET /api/auth/provider/profile
+// ==========================================
+const getProviderProfile = async (req, res) => {
+    try {
+        const { id, role } = req.user; // Auth Middleware se mil raha hai
+        const Model = getModelByCategory(role); // Aapka pehle se defined helper
 
-module.exports = { registerProvider, loginProvider, uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs,forgotPasswordProvider, resetPasswordProvider };
+        if (!Model) return res.status(400).json({ message: "Invalid Provider Role" });
+
+        const profile = await Model.findById(id);
+
+        if (!profile) return res.status(404).json({ message: "Profile not found" });
+
+        res.json({ 
+            success: true, 
+            data: profile 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+module.exports = { registerProvider, loginProvider, uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs,forgotPasswordProvider, resetPasswordProvider, getProviderProfile };

@@ -22,9 +22,16 @@ const nurseBookingSchema = new mongoose.Schema({
         baseServicePrice: Number,    // Service final price * units
         slotSurcharge: Number,       // Premium time/date fee
         consumableTotal: Number,     // Sum of all items selected
+        couponDiscount: { type: Number, default: 0 }, // 👈 Added this
         fasterServiceCharge: Number, // Express delivery
         taxAmount: Number,
         totalPrice: Number           // Final grand total
+    },
+    couponCode: { type: String, uppercase: true },
+    appliedCoupon: {
+        couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
+        discountAmount: { type: Number, default: 0 },
+        couponName: String
     },
     
     patients: [{

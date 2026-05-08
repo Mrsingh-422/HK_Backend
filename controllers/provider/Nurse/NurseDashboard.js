@@ -163,6 +163,29 @@ const assignStaffToBooking = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const getStaffByStatus = async (req, res) => {
+    try {
+        // Example usage: /staff/list?status=Busy,Offline
+        const { status } = req.query;
+        
+        let query = { vendorId: req.user.id, vendorType: 'Nurse' };
+        
+        if (status) {
+            // Split by comma if multiple statuses are passed
+            const statusArray = status.split(',');
+            query.status = { $in: statusArray };
+        } else {
+            // Default to Available if no query is provided
+            query.status = 'Available';
+        }
+
+        const staff = await Driver.find(query);
+        res.json({ success: true, data: staff });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
 // ==========================================
 // 4. CONSUMABLES (Master List Search)
 // ==========================================
@@ -180,5 +203,5 @@ const searchMasterConsumables = async (req, res) => {
 module.exports = { 
     getProviderDashboard, updateProviderProfile, manageNurseService, 
     getMyServices, deleteService, getBookingRequests, 
-    handleBookingAction, getAvailableStaff, assignStaffToBooking, searchMasterConsumables 
+    handleBookingAction, getAvailableStaff, assignStaffToBooking, searchMasterConsumables, getStaffByStatus
 };

@@ -381,6 +381,94 @@ const requestBackup = async (req, res) => {
 };
 
 
+
+// 1. GET ACCEPTED/ONGOING CASES (Staff Perspective - Figma Screen 100/101)
+// Ye wo cases hain jahan staff member currently assigned hai aur kaam chal raha hai
+const getAcceptedCases = async (req, res) => {
+    try {
+        const { search, type } = req.query; // type: 'All', 'Under Control', 'Critical'
+        
+        let query = { 
+            assignedStaff: req.user.id, 
+            status: { $in: ['Pending', 'Under Control', 'Critical'] } 
+        };
+
+        // Figma Tabs Filter
+        if (type && type !== 'All') {
+            query.status = type;
+        }
+
+        // Figma Search Filter
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const cases = await FireCase.find(query)
+            .sort({ dispatchedAt: -1 })
+            .populate('assignedStaff', 'fullName rank')
+            .populate('assignedVehicles', 'vehicleName assetId');
+
+        res.json({
+            success: true,
+            count: cases.length,
+            data: cases.map(c => ({
+                ...c._doc,
+                // UI Friendly Labels for Figma
+                timeActive: "2 hours ago", 
+                severityLabel: c.status === 'Critical' ? 'Fire Spreading' : 'Fire Contained - Cooling Process'
+            }))
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+// 2. GET INCIDENT HISTORY (Figma Screen 102 - Incident History)
+// Ye wo cases hain jo resolve ho chuke hain aur staff unka hissa tha
+const getIncidentHistoryAll = async (req, res) => {
+    try {
+        const { search, timeframe } = req.query; // timeframe: 'All', 'This Month', 'Last Month'
+        
+        let query = { 
+            assignedStaff: req.user.id, 
+            status: { $in: ['Closed', 'Archived'] } 
+        };
+
+        // Figma Search
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Figma Timeframe Filter
+        const now = new Date();
+        if (timeframe === 'This Month') {
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            query.resolvedAt = { $gte: startOfMonth };
+        } else if (timeframe === 'Last Month') {
+            const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+            query.resolvedAt = { $gte: startOfLastMonth, $lte: endOfLastMonth };
+        }
+
+        const history = await FireCase.find(query).sort({ resolvedAt: -1 });
+
+        res.json({
+            success: true,
+            count: history.length,
+            data: history.map(h => ({
+                ...h._doc,
+                // Additional fields for History Card (Screen 102)
+                resolvedDateFormatted: new Date(h.resolvedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+                timeAgo: "3 Days Ago", // Staff can calculate this or use resolvedAt
+                finalStatus: h.status === 'Closed' ? 'Investigation Completed' : 'Case Archived'
+            }))
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { 
     checkIn, 
     checkOut, // Added
@@ -391,5 +479,5 @@ module.exports = {
     submitWorkRequest, // Added
     updateIncidentProgress, // Added
     getStaffNotifications, // Added
-    getStaffDashboard, getFreshCases , getCaseDetails, getIncidentHistory,markAllNotificationsRead, acceptCase, requestBackup
+    getStaffDashboard, getFreshCases , getCaseDetails,getAcceptedCases,getIncidentHistoryAll,getIncidentHistory,markAllNotificationsRead, acceptCase, requestBackup
 };

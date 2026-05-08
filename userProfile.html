@@ -111,6 +111,11 @@
         /* --- TAB STYLES --- */
         .tab-btn { flex: 1; padding: 12px; font-weight: 700; border-bottom: 3px solid transparent; color: #a4b0be; cursor: pointer; }
         .tab-btn.active { color: var(--hk-primary); border-color: var(--hk-primary); }
+
+        /* --- COUPON STYLES --- */
+        .coupon-card { border: 1.5px dashed var(--hk-primary); border-radius: 15px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: 0.2s; background: #f0fdf4; }
+        .coupon-card:hover { background: #dcfce7; }
+        .coupon-code-badge { background: var(--hk-primary); color: #fff; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 800; }
     </style>
 </head>
 <body>
@@ -213,10 +218,22 @@
         <!-- SCREEN 5: FINAL SUMMARY -->
         <section id="screen-summary" class="view-screen">
             <h4 class="fw-800 mb-4">Order Summary</h4>
+            
+            <!-- COUPON SECTION -->
+            <div class="card-hk py-3 mb-4 border-primary">
+                <h6 class="fw-800 mb-3 small text-uppercase">Apply Coupon</h6>
+                <div class="input-group mb-3">
+                    <input type="text" id="couponInput" class="form-control border-0 bg-light fw-bold" placeholder="Enter Code">
+                    <button class="btn btn-primary fw-bold" type="button" onclick="applyCouponManually()">APPLY</button>
+                </div>
+                <div id="availableCouponsArea" class="mt-2"></div>
+            </div>
+
             <div class="card-hk border-success bg-light d-flex justify-content-between align-items-center mb-4">
                 <div><h6 class="fw-800 mb-0 text-success">Faster Response</h6><small class="text-muted" id="fastPriceRateUI"></small></div>
                 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="expressToggle" onchange="initiateFinalCheckout()"></div>
             </div>
+
             <div id="finalInvoiceBox"></div>
             <button class="btn-hk-action mt-4" id="btnPlaceFinalOrder" onclick="processFinalBookingSubmission()">PLACE BOOKING NOW <i class="fas fa-lock ms-2"></i></button>
         </section>
@@ -237,7 +254,7 @@
         nurseId: null, nurseData: null, selectedSvc: null, selectedPkg: null, isPackage: false,
         avail: null, delivery: null, startDate: null, endDate: null, startTime: null, endTime: null,
         selectedPatients: [], selectedAddress: null, selectedConsumables: [],
-        assessLoc: 'At Home', bill: null
+        assessLoc: 'At Home', bill: null, appliedCoupon: null, couponCode: ""
     };
 
     window.onload = () => { if(USER_TOKEN) fetchNurses(); else authPrompt(); };
@@ -248,7 +265,7 @@
         window.scrollTo(0,0);
     }
 
-    // 1. Fetch Nurses
+    // 1. Fetch Approved Nurses
     async function fetchNurses() {
         const r = await fetch(`${API_USER}/list`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({}) });
         const j = await r.json();
@@ -263,63 +280,70 @@
             </div>`).join('');
     }
 
-    // 2. Fetch Details (Sync with Populated masterItemId)
+    // 2. Fetch Details
     async function fetchNurseProfile(id) {
         state.nurseId = id;
         Swal.showLoading();
         try {
-            const [pRes, dRes] = await Promise.all([
+            const [pRes, dRes, cRes] = await Promise.all([
                 fetch(`${API_USER}/details/${id}`), 
-                fetch(`${API_USER}/delivery-config/${id}`)
+                fetch(`${API_USER}/delivery-config/${id}`),
+                fetch(`${API_USER}/coupons/${id}`) // 🎫 Fetch Available Coupons
             ]);
-
             const pData = await pRes.json();
             const dData = await dRes.json();
+            const cData = await cRes.json();
 
-            if (!pData.success) {
-                throw new Error(pData.message || "Failed to load nurse data");
-            }
+            if (!pData.success) throw new Error(pData.message || "Failed to load nurse data");
 
             state.nurseData = pData.data;
             state.delivery = dData.data || { fastDeliveryExtra: 0 };
-
-            // UI Rendering with Safety Checks
-            const nurseName = state.nurseData.name || "Nurse Bureau";
-            const nurseImg = state.nurseData.profileImage || `https://ui-avatars.com/api/?name=${nurseName}`;
+            
+            // Render Coupons to UI
+            renderCouponList(cData.data || []);
 
             document.getElementById('nurseProfileHero').innerHTML = `
                 <div class="card-hk text-center border-0 text-white" style="background:linear-gradient(135deg, #00b894, #0984e3);">
-                    <img src="${nurseImg}" class="rounded-circle border border-4 border-white mb-2 shadow" width="90" height="90" onerror="this.src='https://ui-avatars.com/api/?name=Nurse'">
-                    <h4 class="fw-800 m-0">${nurseName}</h4>
+                    <img src="${state.nurseData.profileImage || 'https://ui-avatars.com/api/?name='+state.nurseData.name}" class="rounded-circle border border-4 border-white mb-2 shadow" width="90" height="90">
+                    <h4 class="fw-800 m-0">${state.nurseData.name}</h4>
                 </div>`;
 
-            // Render Services
-            const services = state.nurseData.services || [];
-            document.getElementById('careServiceList').innerHTML = services.map(s => `
+            document.getElementById('careServiceList').innerHTML = state.nurseData.services.map(s => `
                 <div class="card-hk border-2 care-svc-box" id="cs-${s._id}" onclick="pickItem(${JSON.stringify(s).replace(/"/g, '&quot;')}, false)">
-                    <div class="d-flex justify-content-between">
-                        <span>${s.title}</span>
-                        <b class="text-success">₹${s.pricing?.oneDay?.final || 0}</b>
-                    </div>
-                </div>`).join('') || '<p class="text-center text-muted">No services listed</p>';
+                    <div class="d-flex justify-content-between"><span>${s.title}</span><b class="text-success">₹${s.pricing?.oneDay?.final || 0}</b></div>
+                </div>`).join('');
 
-            // Render Packages
-            const packages = state.nurseData.packages || [];
-            document.getElementById('nursePackageList').innerHTML = packages.map(p => `
+            document.getElementById('nursePackageList').innerHTML = (state.nurseData.packages || []).map(p => `
                 <div class="card-hk border-2 care-svc-box" id="pkg-${p._id}" onclick="pickItem(${JSON.stringify(p).replace(/"/g, '&quot;')}, true)">
-                    <div class="d-flex justify-content-between">
-                        <span>${p.packageName}</span>
-                        <b class="text-success">₹${p.pricing?.oneDay?.final || 0}</b>
-                    </div>
+                    <div class="d-flex justify-content-between"><span>${p.packageName}</span><b class="text-success">₹${p.pricing?.oneDay?.final || 0}</b></div>
                 </div>`).join('') || '<p class="text-center text-muted">No packages available</p>';
             
-            Swal.close(); 
-            showScreen('screen-details');
-        } catch(e) { 
-            console.error("Frontend Error:", e);
-            Swal.fire("Error", e.message, "error");
-        }
+            Swal.close(); showScreen('screen-details');
+        } catch(e) { console.error(e); Swal.fire("Error", e.message, "error"); }
     }
+
+    function renderCouponList(coupons) {
+        const area = document.getElementById('availableCouponsArea');
+        area.innerHTML = coupons.map(c => `
+            <div class="coupon-card" onclick="document.getElementById('couponInput').value='${c.couponName}'; applyCouponManually();">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div><span class="coupon-code-badge">${c.couponName}</span><br><small class="fw-bold">${c.discountPercentage}% OFF (Max ₹${c.maxDiscount})</small></div>
+                    <i class="fas fa-plus-circle text-success"></i>
+                </div>
+            </div>
+        `).join('') || '<p class="text-xs text-muted">No offers currently available.</p>';
+    }
+
+    async function applyCouponManually() {
+        const code = document.getElementById('couponInput').value.trim();
+        if(!code) return alert("Enter code");
+        
+        state.couponCode = code.toUpperCase();
+        // After applying, we re-run checkout to see discounted price
+        initiateFinalCheckout();
+        Swal.fire("Coupon Set!", "Code " + code + " has been applied.", "success");
+    }
+
     function switchDetailTab(type) {
         state.selectedSvc = null; state.selectedPkg = null;
         document.getElementById('btnGotoSchedule').disabled = true;
@@ -333,7 +357,6 @@
         state.isPackage = isPkg;
         if(isPkg) { state.selectedPkg = item; state.selectedSvc = null; }
         else { state.selectedSvc = item; state.selectedPkg = null; }
-        
         document.querySelectorAll('.care-svc-box').forEach(el => el.style.borderColor = "#edf2f7");
         const idPrefix = isPkg ? 'pkg-' : 'cs-';
         document.getElementById(`${idPrefix}${item._id}`).style.borderColor = "var(--hk-primary)";
@@ -342,19 +365,15 @@
 
     function initiateSchedulingUI() { showScreen('screen-config'); syncPricingUI(); }
 
-    // 3. Sync Pricing Logic (Triple Pricing + Premium Dates/Slots)
     async function syncPricingUI() {
         const type = document.getElementById('scheduleMode').value;
         const isH = (type === 'Acc. To Per/Hours');
         document.getElementById('calendarFlowArea').classList.toggle('d-none', isH);
         document.getElementById('hourlyFlowArea').classList.toggle('d-none', !isH);
-
         const itemId = state.isPackage ? state.selectedPkg._id : state.selectedSvc._id;
         const query = `serviceId=${!state.isPackage?itemId:''}&packageId=${state.isPackage?itemId:''}&isPackage=${state.isPackage}&type=${type}`;
-        
         const res = await fetch(`${API_USER}/availability/${state.nurseId}?${query}`);
         state.avail = await res.json();
-
         if(isH) renderHourlyRange(); else renderYearlyCalendar();
         renderConsumableGrid();
     }
@@ -365,7 +384,6 @@
         const item = state.isPackage ? state.selectedPkg : state.selectedSvc;
         const basePrice = mode === 'For Multiple Days' ? item.pricing.multipleDays.final : item.pricing.oneDay.final;
         const m = moment();
-
         const grid = document.createElement('div'); grid.className = 'calendar-grid';
         ['S','M','T','W','T','F','S'].forEach(d => grid.innerHTML += `<div class="day-label">${d}</div>`);
         for(let d=0; d<30; d++) {
@@ -388,21 +406,15 @@
     }
 
     function handleHourlyClick(t) {
-        if(!state.startTime || (state.startTime && state.endTime)) {
-            state.startTime = t; state.endTime = null;
-        } else {
+        if(!state.startTime || (state.startTime && state.endTime)) { state.startTime = t; state.endTime = null; }
+        else {
             const allTimes = state.avail.timeSlots.map(x => x.time);
-            const sIdx = allTimes.indexOf(state.startTime);
-            const eIdx = allTimes.indexOf(t);
-            if(eIdx < sIdx) { state.startTime = t; state.endTime = null; } 
-            else { state.endTime = t; }
+            const sIdx = allTimes.indexOf(state.startTime), eIdx = allTimes.indexOf(t);
+            if(eIdx < sIdx) { state.startTime = t; state.endTime = null; } else { state.endTime = t; }
         }
         updateSlotUI();
-        if(state.endTime) {
-            document.getElementById('hourlyCompletionTime').value = moment(state.endTime, "HH:mm").add(1, 'hour').format("hh:mm A");
-        } else if(state.startTime) {
-            document.getElementById('hourlyCompletionTime').value = moment(state.startTime, "HH:mm").add(1, 'hour').format("hh:mm A");
-        }
+        if(state.endTime) document.getElementById('hourlyCompletionTime').value = moment(state.endTime, "HH:mm").add(1, 'hour').format("hh:mm A");
+        else if(state.startTime) document.getElementById('hourlyCompletionTime').value = moment(state.startTime, "HH:mm").add(1, 'hour').format("hh:mm A");
     }
 
     function updateSlotUI() {
@@ -410,11 +422,7 @@
         if(state.startTime) document.getElementById(`slot-${state.startTime}`).classList.add('active');
         if(state.endTime) {
             let inRange = false;
-            state.avail.timeSlots.forEach(s => {
-                if(s.time === state.startTime) inRange = true;
-                if(inRange) document.getElementById(`slot-${s.time}`).classList.add('active');
-                if(s.time === state.endTime) inRange = false;
-            });
+            state.avail.timeSlots.forEach(s => { if(s.time === state.startTime) inRange = true; if(inRange) document.getElementById(`slot-${s.time}`).classList.add('active'); if(s.time === state.endTime) inRange = false; });
         }
     }
 
@@ -438,10 +446,7 @@
     function handleDateSelect(d) {
         const mode = document.getElementById('scheduleMode').value;
         if(mode === 'One day One Time') { state.startDate = d; state.endDate = d; }
-        else {
-            if(!state.startDate || (state.startDate && state.endDate)) { state.startDate = d; state.endDate = null; }
-            else { state.endDate = d; }
-        }
+        else { if(!state.startDate || (state.startDate && state.endDate)) { state.startDate = d; state.endDate = null; } else { state.endDate = d; } }
         updateCalUI();
     }
 
@@ -460,28 +465,17 @@
         const mode = document.getElementById('scheduleMode').value;
         if(mode === 'For Multiple Days' && (!state.startDate || !state.endDate)) return alert("Pick Range");
         if(mode === 'Acc. To Per/Hours' && !state.startTime) return alert("Pick Slot");
-
         Swal.showLoading();
-        try {
-            const [pRes, aRes] = await Promise.all([
-                fetch(`${API_AUTH}/profile`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} }),
-                fetch(`${API_AUTH}/addresses`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} })
-            ]);
-            const pJ = await pRes.json(), aJ = await aRes.json();
-            document.getElementById('patientMultiGrid').innerHTML = [{ _id:'Self', name:pJ.data.name, relation:'Self' }, ...(pJ.data.familyMember || [])].map(p => `
-                <div class="col-6"><div class="picker-card" id="p-sel-${p._id}" onclick="togglePatSel('${p._id}', '${p.name}', '${p.relation}')"><small><b>${p.name}</b><br>${p.relation}</small></div></div>`).join('');
-            document.getElementById('savedAddrGrid').innerHTML = aJ.data.map(a => `
-                <div class="picker-card mb-2" id="a-sel-${a._id}" onclick="pickAddrObj(${JSON.stringify(a).replace(/"/g, '&quot;')})"><b>${a.addressType}</b><br><small>${a.houseNo}, ${a.city}</small></div>`).join('');
-            Swal.close(); showScreen('screen-recipient');
-        } catch(e) { console.error(e); }
+        const [pRes, aRes] = await Promise.all([ fetch(`${API_AUTH}/profile`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} }), fetch(`${API_AUTH}/addresses`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} }) ]);
+        const pJ = await pRes.json(), aJ = await aRes.json();
+        document.getElementById('patientMultiGrid').innerHTML = [{ _id:'Self', name:pJ.data.name, relation:'Self' }, ...(pJ.data.familyMember || [])].map(p => `
+            <div class="col-6"><div class="picker-card" id="p-sel-${p._id}" onclick="togglePatSel('${p._id}', '${p.name}', '${p.relation}')"><small><b>${p.name}</b><br>${p.relation}</small></div></div>`).join('');
+        document.getElementById('savedAddrGrid').innerHTML = aJ.data.map(a => `
+            <div class="picker-card mb-2" id="a-sel-${a._id}" onclick="pickAddrObj(${JSON.stringify(a).replace(/"/g, '&quot;')})"><b>${a.addressType}</b><br><small>${a.houseNo}, ${a.city}</small></div>`).join('');
+        Swal.close(); showScreen('screen-recipient');
     }
 
-    function togglePatSel(id, name, rel) {
-        const i = state.selectedPatients.findIndex(x => x.patientId === id);
-        if(i > -1) state.selectedPatients.splice(i, 1); else state.selectedPatients.push({ patientId: id, name, relation: rel });
-        document.getElementById(`p-sel-${id}`).classList.toggle('active');
-    }
-
+    function togglePatSel(id, name, rel) { const i = state.selectedPatients.findIndex(x => x.patientId === id); if(i > -1) state.selectedPatients.splice(i, 1); else state.selectedPatients.push({ patientId: id, name, relation: rel }); document.getElementById(`p-sel-${id}`).classList.toggle('active'); }
     function pickAddrObj(a) { state.selectedAddress = a; document.querySelectorAll('#savedAddrGrid .picker-card').forEach(el => el.classList.remove('active')); document.getElementById(`a-sel-${a._id}`).classList.add('active'); }
     function updateAssessLoc(l) { state.assessLoc = l; document.getElementById('loc-home').classList.toggle('active', l==='At Home'); document.getElementById('loc-hosp').classList.toggle('active', l==='At Hospital'); }
 
@@ -489,37 +483,28 @@
     async function initiateFinalCheckout() {
         const mode = document.getElementById('scheduleMode').value;
         const itemId = state.isPackage ? state.selectedPkg._id : state.selectedSvc._id;
-        
-        let finalEndTime = state.endTime;
-        if(mode === 'Acc. To Per/Hours' && !state.endTime) {
-            finalEndTime = moment(state.startTime, "HH:mm").add(1, 'hour').format("HH:mm");
-        }
+        let finalEndTime = state.endTime; if(mode === 'Acc. To Per/Hours' && !state.endTime) finalEndTime = moment(state.startTime, "HH:mm").add(1, 'hour').format("HH:mm");
 
         const payload = {
-            nurseId: state.nurseId, 
-            serviceId: !state.isPackage ? itemId : null,
-            packageId: state.isPackage ? itemId : null,
-            isPackage: state.isPackage,
-            selectedType: mode,
-            startDate: mode === 'Acc. To Per/Hours' ? document.getElementById('hourlyBaseDate').value : state.startDate,
-            endDate: state.endDate || state.startDate,
-            startTime: mode === 'Acc. To Per/Hours' ? state.startTime : document.getElementById('visitArrivalInput').value,
-            endTime: mode === 'Acc. To Per/Hours' ? finalEndTime : null,
-            isFasterService: document.getElementById('expressToggle').checked,
-            patientCount: state.selectedPatients.length || 1,
-            selectedConsumables: state.selectedConsumables
+            nurseId: state.nurseId, serviceId: !state.isPackage ? itemId : null, packageId: state.isPackage ? itemId : null, isPackage: state.isPackage,
+            selectedType: mode, startDate: mode === 'Acc. To Per/Hours' ? document.getElementById('hourlyBaseDate').value : state.startDate, endDate: state.endDate || state.startDate,
+            startTime: mode === 'Acc. To Per/Hours' ? state.startTime : document.getElementById('visitArrivalInput').value, endTime: mode === 'Acc. To Per/Hours' ? finalEndTime : null,
+            isFasterService: document.getElementById('expressToggle').checked, patientCount: state.selectedPatients.length || 1, selectedConsumables: state.selectedConsumables,
+            couponCode: state.couponCode // 👈 Added Coupon Code here
         };
 
         const res = await fetch(`${API_USER}/checkout`, { method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${USER_TOKEN}`}, body:JSON.stringify(payload) });
         const j = await res.json();
         if(j.success) {
             state.bill = j.breakdown;
+            state.appliedCoupon = j.breakdown.appliedCoupon; // 👈 Store coupon id if valid
             document.getElementById('fastPriceRateUI').innerText = `Available at +₹${state.delivery.fastDeliveryExtra}`;
             document.getElementById('finalInvoiceBox').innerHTML = `
                 <div class="card-hk">
                     <div class="bill-row"><span>Service/Pkg Fee (x${j.breakdown.pCount})</span><b>₹${j.breakdown.baseServicePrice}</b></div>
                     <div class="bill-row"><span>Surcharge Total</span><b>₹${j.breakdown.slotSurcharge}</b></div>
                     <div class="bill-row text-primary"><span>Add-ons</span><b>₹${j.breakdown.consumableTotal}</b></div>
+                    <div class="bill-row text-success"><span>Coupon Savings</span><b>-₹${j.breakdown.couponDiscount}</b></div>
                     <div class="bill-row text-danger"><span>Express Response</span><b>+₹${j.breakdown.fasterServiceCharge}</b></div>
                     <div class="bill-row"><span>Taxes</span><b>₹${j.breakdown.taxAmount}</b></div>
                     <div class="bill-grand-total"><span>Total Payable</span><span>₹${j.breakdown.totalPrice}</span></div>
@@ -528,41 +513,26 @@
         } else alert(j.message);
     }
 
-    // 5. Final Submission (Sync with Universal Booking Mapping)
     async function processFinalBookingSubmission() {
         const btn = document.getElementById('btnPlaceFinalOrder'); btn.disabled = true;
         const mode = document.getElementById('scheduleMode').value;
         const itemId = state.isPackage ? state.selectedPkg._id : state.selectedSvc._id;
-        const sDate = mode === 'Acc. To Per/Hours' ? document.getElementById('hourlyBaseDate').value : state.startDate;
-        const eDate = (mode === 'For Multiple Days') ? state.endDate : sDate;
-
         const payload = {
-            nurseId: state.nurseId,
-            serviceId: !state.isPackage ? itemId : null,
-            packageId: state.isPackage ? itemId : null,
-            isPackage: state.isPackage,
-            schedule: { duration: mode, startDate: sDate, endDate: eDate, startTime: state.startTime || document.getElementById('visitArrivalInput').value, endTime: state.endTime },
-            priceBreakdown: state.bill, patients: state.selectedPatients,
-            healthDetails: { height: document.getElementById('pHeightVal').value, language: "English", specialInstructions: document.getElementById('pSpecialNotes').value },
-            address: { 
-                name: state.selectedAddress.name || "Patient", 
-                phone: state.selectedAddress.phone || "",
-                houseNo: state.selectedAddress.houseNo, 
-                city: state.selectedAddress.city, 
-                addressType: state.selectedAddress.addressType 
-            },
-            assessmentLocation: state.assessLoc, selectedConsumables: state.selectedConsumables
+            nurseId: state.nurseId, serviceId: !state.isPackage ? itemId : null, packageId: state.isPackage ? itemId : null, isPackage: state.isPackage,
+            schedule: { duration: mode, startDate: state.startDate, endDate: state.endDate || state.startDate, startTime: state.startTime || document.getElementById('visitArrivalInput').value, endTime: state.endTime },
+            priceBreakdown: state.bill, patients: state.selectedPatients, healthDetails: { height: document.getElementById('pHeightVal').value, language: "English", specialInstructions: document.getElementById('pSpecialNotes').value },
+            address: { name: state.selectedAddress.addressType, phone: "", houseNo: state.selectedAddress.houseNo, city: state.selectedAddress.city, addressType: state.selectedAddress.addressType },
+            assessmentLocation: state.assessLoc, selectedConsumables: state.selectedConsumables,
+            appliedCoupon: state.appliedCoupon // 👈 Pass coupon tracker for history
         };
-
         const res = await fetch(`${API_USER}/book`, { method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${USER_TOKEN}`}, body:JSON.stringify(payload) });
-        if(res.ok) { await Swal.fire('Confirmed!', 'Success.', 'success'); window.location.reload(); }
-        else { alert("Booking failed"); btn.disabled = false; }
+        if(res.ok) { await Swal.fire('Confirmed!', 'Success.', 'success'); window.location.reload(); } else btn.disabled = false;
     }
 
     async function fetchUserHistory() {
         const res = await fetch(`${API_USER}/my-appointments`, { headers: {'Authorization': `Bearer ${USER_TOKEN}`} });
         const j = await res.json();
-        document.getElementById('historyListArea').innerHTML = (j.data || []).map(b => `<div class="card-hk py-3 mb-2 shadow-sm border-0"><b>ID: ${b.bookingId}</b><br><small>${b.serviceDetails.title} - ${b.status}</small></div>`).join('');
+        document.getElementById('historyListArea').innerHTML = (j.data || []).map(b => `<div class="card-hk py-3 mb-2 shadow-sm border-0"><b>ID: ${b.bookingId}</b><br><small>${b.serviceDetails.title} - ${b.status} • ₹${b.priceBreakdown.totalPrice}</small></div>`).join('');
     }
 
     function resetSelection() { state.startDate = null; state.endDate = null; state.startTime = null; state.endTime = null; }

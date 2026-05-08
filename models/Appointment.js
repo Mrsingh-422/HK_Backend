@@ -1,3 +1,4 @@
+// models/Appointment.js
 const mongoose = require('mongoose');
 
 const appointmentSchema = new mongoose.Schema({
@@ -22,44 +23,32 @@ const appointmentSchema = new mongoose.Schema({
         required: true 
     },
     
-    // Payments
-    totalAmount: { type: Number, required: true },
-    doctorFees: { type: Number },
-    platformFees: { type: Number },
+    // --- Pricing & Coupon Logic ---
+    pricingBreakdown: {
+        baseFee: { type: Number, required: true },
+        visitCharges: { type: Number, default: 0 }, // Distance based
+        extraCharges: { type: Number, default: 0 }, // Fast delivery/Emergency
+        discountAmount: { type: Number, default: 0 },
+        subtotal: { type: Number }
+    },
+    couponDetails: {
+        couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
+        couponCode: { type: String },
+        discountValue: { type: Number }
+    },
+
+    totalAmount: { type: Number }, // Final Payable
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
     transactionId: { type: String },
-    medicalReport: { type: String }, // Figma: Upload Medical Report path
-
-    // --- Production Flow Status ---
+    
+    // System Fields
     status: { 
         type: String, 
-        enum: [
-            'Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 
-            'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 
-            'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'
-        ], 
+        enum: ['Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'], 
         default: 'Pending' 
     },
+       bookingId: { type: String, unique: true },
 
-    // --- Step 4 & 5 Logic: Video Call & Live Tracking ---
-    videoRoomId: { type: String, default: null }, // Meeting ID for Video Call
-    tracking: {
-        otp: { type: String }, // Figma: 8902
-        liveLocation: {
-            lat: Number,
-            lng: Number,
-            lastUpdated: Date
-        },
-        eta: { type: String } // e.g., "12 min"
-    },
-
-    cancellationDetails: {
-        cancelledBy: { type: mongoose.Schema.Types.ObjectId },
-        reason: String,
-        cancelledAt: Date
-    },
-
-    bookingId: { type: String, unique: true } 
 }, { timestamps: true });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);

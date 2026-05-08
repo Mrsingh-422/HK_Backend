@@ -6,7 +6,7 @@ const { userReportUploads } = require('../../../middleware/multer');
 const { 
     getSpecializations, 
     searchDoctors, 
-    getDoctorDetails, 
+    getDoctorDetails, getAvailableCoupons,validateCoupon, getCheckoutSummary,
     bookAppointment, verifyTrackingOTP,
     getUserAppointments, 
     userCancelAppointment,
@@ -19,6 +19,10 @@ const {
 router.get('/specializations', getSpecializations);
 router.get('/list', searchDoctors);
 router.get('/details/:id', getDoctorDetails);
+
+router.get('/coupons/:doctorId', protect('user'), getAvailableCoupons);
+router.post('/validate-coupon', protect('user'), validateCoupon);
+router.post('/checkout-summary', protect('user'), getCheckoutSummary);
 
 // PROTECTED (Requires User token)
 router.post('/book', protect('user'),userReportUploads, bookAppointment);

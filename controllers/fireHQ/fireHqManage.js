@@ -546,9 +546,73 @@ const assignResources = async (req, res) => {
         res.status(500).json({ success: false, message: error. Message });
     }
 };
+
+const getAllStationsForHQ = async (req, res) => {
+    try {
+        // Query mein 'isUpdateRequested: true' add kiya gaya hai
+        const pendingRequests = await FireStation.find({
+            hqId: req.user.id,
+            isUpdateRequested: true
+        })
+        .select('stationName stationCode isUpdateRequested jurisdiction requestDate primarySectors');
+ 
+        res.json({
+            success: true,
+            count: pendingRequests.length,
+            message: pendingRequests.length > 0 ? "Pending update requests found" : "No pending requests",
+            data: pendingRequests
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+const approveAndUpdateJurisdiction = async (req, res) => {
+    try {
+        const { stationId } = req.params;
+        const { jurisdiction, primarySectors } = req.body;
+ 
+        // 1. Station ko find karein
+        const station = await FireStation.findById(stationId);
+ 
+        if (!station) {
+            return res.status(404).json({ success: false, message: "Station not found" });
+        }
+ 
+        // 2. Jurisdiction Update karein (Field by field)
+        if (jurisdiction) {
+            station.jurisdiction.totalArea = jurisdiction.totalArea || station.jurisdiction.totalArea;
+            station.jurisdiction.population = jurisdiction.population || station.jurisdiction.population;
+            station.jurisdiction.activeZones = jurisdiction.activeZones || station.jurisdiction.activeZones;
+            station.jurisdiction.riskLevel = jurisdiction.riskLevel || station.jurisdiction.riskLevel;
+        }
+        if (primarySectors && Array.isArray(primarySectors)) {
+            // Purane sectors hata kar naye sectors daalna
+            station.primarySectors = primarySectors;
+        }
+ 
+        // 4. Request status reset karein
+        station.isUpdateRequested = false;
+ 
+        const savedStation = await station.save();
+ 
+        res.json({
+            success: true,
+            message: "Jurisdiction & Sectors Updated Successfully",
+            data: savedStation
+        });
+ 
+    } catch (error) {
+        console.error("Update Error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Server Error: " + error.message
+        });
+    }
+};
+ 
 module.exports = { getDashboardStats,createFireCase,getIncidentDetails,createFireStation,
      getMyStations, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation,
      updateJurisdiction, getJurisdictionData,requestBoundaryUpdate, getFullIncidentReport, getStationDetails,
      getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, 
      markAllNotificationsRead, getBackupRequests, assignBackupStation,
-      getNearbyStationsForIncident, assignResources };
+      getNearbyStationsForIncident, assignResources,getAllStationsForHQ, approveAndUpdateJurisdiction };

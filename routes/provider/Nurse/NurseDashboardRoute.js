@@ -6,7 +6,7 @@ const { nurseServiceUploads, nurseDocUploads,userProfileUpload } = require('../.
 const {
     getProviderDashboard, updateProviderProfile, manageNurseService,
     getMyServices, deleteService, getBookingRequests,
-    handleBookingAction, getAvailableStaff, assignStaffToBooking, searchMasterConsumables
+    handleBookingAction, getAvailableStaff, assignStaffToBooking,getStaffByStatus, searchMasterConsumables
 } = require('../../../controllers/provider/Nurse/NurseDashboard');
 
 // base URL: /provider/nurse/dash
@@ -26,7 +26,7 @@ router.get('/bookings', protect('nurse'), getBookingRequests); // Filter: ?statu
 router.post('/booking/action', protect('nurse'), handleBookingAction);
 router.get('/staff/available', protect('nurse'), getAvailableStaff);
 router.post('/staff/assign', protect('nurse'), assignStaffToBooking);
-
+router.get('/staff/status', protect('nurse'), getStaffByStatus); // Filter: ?status=Available/Busy/Off-Duty
 // CONSUMABLES (Master Search)
 router.get('/consumables/search', protect('nurse'), searchMasterConsumables);
 

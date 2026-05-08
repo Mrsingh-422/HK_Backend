@@ -536,39 +536,48 @@ const toggleCaseHoldStatus = async (req, res) => {
 // A. JURISDICTION DATA (Figma Screen 41)
 const getJurisdictionDetails = async (req, res) => {
     try {
-        // Sirf hqId populate karein, baaki fields 'station' object mein pehle se hain
         const station = await FireStation.findById(req.user.id).populate('hqId', 'stationName');
-
+ 
         if (!station) {
             return res.status(404).json({ success: false, message: "Station not found" });
         }
-
+ 
         res.json({
             success: true,
             data: {
-                // NEW: Station ki latitude aur longitude coordinates
                 location: {
                     lat: station.location?.lat || 0,
                     lng: station.location?.lng || 0
                 },
-                // Figma Screen 41 coverage summary
                 coverageSummary: {
-                    totalArea: station.jurisdiction?.totalArea || "42.5 km²",
-                    population: station.jurisdiction?.population || "~850,000",
-                    activeZone: station.jurisdiction?.activeZones || "4 Main Zones",
-                    riskLevel: station.jurisdiction?.riskLevel || "Moderate- High"
+                    totalArea: station.jurisdiction?.totalArea || "N/A",
+                    population: station.jurisdiction?.population || "N/A",
+                    activeZone: station.jurisdiction?.activeZones || 0,
+                    riskLevel: station.jurisdiction?.riskLevel || "N/A"
                 },
-                // Primary Sectors for Screen 41
-                primarySectors: [
-                    { sector: "Sector A", title: "Central Commercial", desc: "MI Road, Sindhi Camp & surrounding markets. High footfall area." },
-                    { sector: "Sector B", title: "Residential", desc: "Malviya Nagar, Raja Park. Predominantly apartments and housing." },
-                    { sector: "Sector C", title: "Industrial Hub", desc: "Sitapura & VKI Areas. High risk of chemical and electrical fires." }
-                ],
-                stationName: station.stationName // For UI Header
+                // FIXED: Schema fields (sector, title, desc) use karein
+                primarySectors: station.primarySectors.map(s => ({
+                    sector: s.sector,
+                    title: s.title,
+                    desc: s.desc
+                })),
+                stationName: station.stationName
             }
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+// Endpoint;  /fireStation/management/request-jurisdiction-update
+const requestJurisdictionUpdate = async (req, res) => {
+    try {
+        await FireStation.findByIdAndUpdate(req.user.id, {
+            isUpdateRequested: true,
+            requestDate: Date.now()
+        });
+        res.json({ success: true, message: "Update request sent to HQ" });
+    } catch (error) {
+        res.status(500).json({ message: error. Message });
     }
 };
 
@@ -624,4 +633,4 @@ module.exports = { getStationDashboard, getFreshCases,getFreshCaseDetails, accep
     getIncidentReport, getNearbyStations,updateIncidentStatusDetailed, addStaff, getStaffList, addVehicle, getFleetList, getStaffRemovalReasons, 
     updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation, assignResourcesToCase, 
     addVehicleActivityLog, updateVehicleStatus, toggleCaseHoldStatus,
-     getJurisdictionDetails, getStationNotifications, updatePreferences, getAppLegalInfo };
+     getJurisdictionDetails,requestJurisdictionUpdate, getStationNotifications, updatePreferences, getAppLegalInfo };

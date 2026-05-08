@@ -8,7 +8,7 @@ const {
     addStaff, getStaffList, addVehicle, getFleetList ,getStaffRemovalReasons,
      updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation,assignResourcesToCase, 
          addVehicleActivityLog,updateVehicleStatus,toggleCaseHoldStatus,
-          getJurisdictionDetails, getStationNotifications, updatePreferences, getAppLegalInfo
+          getJurisdictionDetails,requestJurisdictionUpdate, getStationNotifications, updatePreferences, getAppLegalInfo
 } = require('../../../controllers/fireHQ/fireStation/stationManage');
 
 // Base URL: /fireStation/management
@@ -50,6 +50,7 @@ router.put('/fleet/update-status', protect('fire-station'), updateVehicleStatus)
 router.put('/cases/hold-toggle/:id', protect('fire-station'), toggleCaseHoldStatus); // Screen 102
 
 router.get('/jurisdiction', protect('fire-station'), getJurisdictionDetails);
+router.put('/request-jurisdiction-update', protect('fire-station'), requestJurisdictionUpdate)
 
 
 

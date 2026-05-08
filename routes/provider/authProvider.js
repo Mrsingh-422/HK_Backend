@@ -6,7 +6,7 @@ const {
     registerProvider, 
     loginProvider, 
     uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs,
-    forgotPasswordProvider, resetPasswordProvider 
+    forgotPasswordProvider, resetPasswordProvider ,getProviderProfile
 } = require('../../controllers/provider/authProvider.js');
 
 // Base route: /api/auth/provider
@@ -27,6 +27,9 @@ router.put('/upload-docs/lab', protect('lab'), labDocUploads, uploadLabDocs);
 router.put('/upload-docs/pharmacy', protect('pharmacy'), pharmacyDocUploads, uploadPharmacyDocs);
 // Nurse
 router.put('/upload-docs/nurse', protect('nurse'), nurseDocUploads, uploadNurseDocs);
+
+// 4. Get Profile (For Dashboard)
+router.get('/profile', protect('provider'), getProviderProfile);
 
 
 

@@ -30,6 +30,14 @@ const fireStationSchema = new mongoose.Schema({
         activeZones: { type: Number, default: 4 },
         riskLevel: { type: String, default: "Moderate-High" }
     },
+    primarySectors: [{
+        sector: String, // Sector A: Central Commercial
+        desc: String,
+        title: { type: String, enum: ['Commercial', 'Residential', 'Industrial'] }
+    }],
+    isUpdateRequested: { type: Boolean, default: false }, // Kya update ki request aayi hai?
+    requestDate: { type: Date },
+ 
     shiftTimings: {
         shiftA: { start: { type: String, default: "08:00" }, end: { type: String, default: "16:00" } },
         shiftB: { start: { type: String, default: "16:00" }, end: { type: String, default: "00:00" } }

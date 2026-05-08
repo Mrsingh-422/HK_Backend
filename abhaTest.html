@@ -1,339 +1,649 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="hi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Find Labs</title>
+    <title>Health Kangaroo - Enterprise Master Flow v2.4</title>
     
-    <!-- External Dependencies -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <!-- Enterprise Frameworks -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-
+    
     <style>
-        :root {
-            --hk-success: #00b894;
-            --hk-dark: #2d3436;
-            --hk-bg: #f4f7f6;
-            --hk-border: #edf2f7;
-            --hk-shadow: 0 10px 30px rgba(0,0,0,0.05);
+        /* CORE DESIGN SYSTEM */
+        :root { 
+            --brand: #00B377; 
+            --brand-light: #E6F7F1; 
+            --orange: #FF8A00; 
+            --red: #FF4D4D; 
+            --slate: #64748B; 
         }
 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--hk-bg); color: var(--hk-dark); min-height: 100vh; display: flex; overflow-x: hidden; }
-
-        /* Sidebar */
-        .sidebar { width: 280px; background: white; height: 100vh; position: fixed; border-right: 1px solid var(--hk-border); padding: 30px 20px; z-index: 1050; }
-        .sidebar-brand { font-weight: 800; font-size: 1.5rem; color: var(--hk-success); margin-bottom: 50px; display: flex; align-items: center; gap: 12px; }
-        .nav-link-custom { color: #636e72; padding: 14px 20px; border-radius: 18px; margin-bottom: 10px; cursor: pointer; transition: 0.3s; font-weight: 600; display: flex; align-items: center; text-decoration: none; }
-        .nav-link-custom:hover, .nav-link-custom.active { background: #e3fcef; color: var(--hk-success); }
-        .nav-link-custom i { width: 35px; font-size: 1.2rem; }
-
-        /* Main Area */
-        .main-content { margin-left: 280px; width: calc(100% - 280px); padding: 40px 60px; min-height: 100vh; }
-        .tab-content { animation: fadeIn 0.4s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-        /* Cards */
-        .hk-card { background: white; border-radius: 25px; border: 1px solid transparent; box-shadow: var(--hk-shadow); padding: 25px; transition: all 0.3s ease; height: 100%; position: relative; }
-        .hk-card:hover { transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.08); border-color: var(--hk-success); }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F8FAFB; color: #1E293B; overflow-x: hidden; }
         
-        .lab-img { width: 100%; height: 160px; object-fit: cover; border-radius: 18px; margin-bottom: 15px; background: #eee; }
-        .chip-badge { font-size: 10px; font-weight: 800; padding: 5px 12px; border-radius: 50px; margin-right: 5px; text-transform: uppercase; }
-        .chip-home { background: #e3fcef; color: #00b894; }
-        .chip-rapid { background: #fff4e5; color: #ff9f00; }
+        .app-container { max-width: 450px; margin: 0 auto; background: white; min-height: 100vh; position: relative; box-shadow: 0 0 100px rgba(0,0,0,0.1); border-left: 1px solid #F1F5F9; border-right: 1px solid #F1F5F9; }
         
-        /* Suggestion Box Styles */
-        .suggestion-box { position: absolute; background: white; width: 100%; z-index: 1000; border-radius: 15px; box-shadow: var(--hk-shadow); margin-top: 5px; max-height: 300px; overflow-y: auto; border: 1px solid var(--hk-border); }
-        .suggestion-item { padding: 12px 20px; cursor: pointer; border-bottom: 1px solid #f8f9fa; transition: 0.2s; }
-        .suggestion-item:hover { background: #e3fcef; }
+        .screen { display: none; min-height: 100vh; padding-bottom: 160px; background: white; animation: figmaIn 0.4s ease-out; }
+        .screen.active { display: block; }
+        @keyframes figmaIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* CARDS & UI */
+        .figma-card { background: #FFFFFF; border-radius: 32px; border: 1px solid #F1F5F9; box-shadow: 0 15px 35px -12px rgba(0,0,0,0.05); }
+        .btn-brand { background: var(--brand); color: white; border-radius: 24px; font-weight: 800; transition: 0.3s; display: flex; align-items: center; justify-content: center; gap: 12px; box-shadow: 0 12px 25px rgba(0, 179, 119, 0.2); }
+        .btn-brand:active { transform: scale(0.96); }
 
-        .btn-hk { background: var(--hk-success); color: white; border-radius: 50px; padding: 12px 35px; border: none; font-weight: 700; transition: 0.3s; }
-        .hidden { display: none !important; }
-        .fw-800 { font-weight: 800; }
+        /* SLOTS GRID (THE FIX) */
+        .slot-master-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 4px; }
+        .slot-btn { border: 2px solid #F1F5F9; border-radius: 20px; padding: 18px 4px; font-size: 11px; font-weight: 900; text-align: center; background: white; color: var(--slate); transition: 0.2s; cursor: pointer; }
+        .slot-btn.available { color: var(--brand); border-color: var(--brand-light); background: var(--brand-light); }
+        .slot-btn.selected { background: var(--brand) !important; color: white !important; border-color: var(--brand) !important; box-shadow: 0 8px 20px rgba(0, 179, 119, 0.3); transform: translateY(-2px); }
+        .slot-btn.unavailable { background: #F8FAFC; color: #CBD5E1; border-color: #F8FAFC; cursor: not-allowed; opacity: 0.6; }
+
+        /* CONSULTATION UI */
+        .type-pill { flex: 1; padding: 14px; font-size: 10px; font-weight: 900; border-radius: 18px; color: var(--slate); text-align: center; transition: 0.3s; }
+        .type-pill.active { background: white; color: var(--brand); box-shadow: 0 6px 15px rgba(0,0,0,0.06); }
+
+        .coupon-box { min-width: 175px; border: 2.5px dashed #E2E8F0; padding: 18px; border-radius: 28px; background: white; cursor: pointer; position: relative; transition: 0.3s; }
+        .coupon-box.active { border-color: var(--brand); background: var(--brand-light); border-style: solid; }
+        .coupon-box.active::after { content: '✓'; position: absolute; -top: 10px; -right: 10px; background: var(--brand); color: white; width: 22px; height: 22px; border-radius: 50%; font-size: 11px; display: flex; items-center; justify-content: center; font-weight: 900; }
+
+        /* NAV & FOOTER */
+        .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 450px; background: white; border-top: 1px solid #F1F5F9; display: flex; justify-content: space-around; padding: 15px 10px 40px; z-index: 500; }
+        .tab-btn.active { color: var(--brand); font-weight: 900; }
+        
+        .checkout-footer { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 450px; background: white; padding: 25px 24px 45px; border-top: 1px solid #F1F5F9; z-index: 550; display: none; box-shadow: 0 -20px 50px rgba(0,0,0,0.06); }
+
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .currency-symbol::before { content: '₹'; margin-right: 2px; }
     </style>
 </head>
-<body>
+<body class="bg-gray-100">
 
-    <!-- SIDEBAR -->
-    <div class="sidebar shadow-sm">
-        <div class="sidebar-brand"><i class="fas fa-hand-holding-medical"></i><span>HK.User</span></div>
-        <nav>
-            <div class="nav-link-custom active" onclick="switchSection('labSec')">
-                <i class="fas fa-search-location"></i><span>Find Labs</span>
+<div class="app-container">
+
+    <!-- MASTER SYNC CONTROL -->
+    <header class="sticky top-0 bg-white z-[1000] p-4 border-b border-gray-100 shadow-sm">
+        <div class="flex justify-between items-center mb-4 px-1">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-brand rounded-2xl flex items-center justify-center text-white shadow-xl shadow-brand/20">
+                    <i data-lucide="shield-check" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="font-black text-[13px] uppercase tracking-widest leading-none">Health Master</h1>
+                    <p class="text-[8px] text-gray-400 font-black mt-1 uppercase">Cloud Gateway : 5002</p>
+                </div>
             </div>
-            <div class="nav-link-custom" onclick="switchSection('profileSec')">
-                <i class="fas fa-user-circle"></i><span>My Profile</span>
+            <div class="bg-green-50 px-3 py-1.5 rounded-full border border-green-100 flex items-center gap-2">
+                <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <span class="text-[9px] font-black text-brand uppercase">Sync v2.4 Active</span>
             </div>
-            <hr class="my-4" style="opacity: 0.1;">
-            <div class="nav-link-custom text-danger" onclick="handleLogout()">
-                <i class="fas fa-sign-out-alt"></i><span>Sign Out</span>
+        </div>
+        <div class="flex gap-2">
+            <input id="sync-token-input" type="text" placeholder="JWT Token from LocalStorage" class="flex-1 bg-gray-50 border rounded-2xl p-4 text-[10px] font-bold outline-none focus:ring-2 focus:ring-brand/20 transition">
+            <button onclick="igniteSync()" class="bg-black text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest">Connect</button>
+        </div>
+    </header>
+
+    <!-- 1. DASHBOARD SCREEN -->
+    <div id="home-screen" class="screen active p-6 space-y-8">
+        <div class="flex justify-between items-center">
+            <div class="flex items-center gap-4">
+                <img id="u-pfp-master" src="https://i.pravatar.cc/100?u=hk" class="w-16 h-16 rounded-[28px] border-4 border-brand-light object-cover shadow-lg bg-gray-100">
+                <div>
+                    <p id="u-greet-txt" class="text-gray-400 text-[10px] font-black uppercase tracking-[2.5px]">नमस्ते, User</p>
+                    <div class="flex items-center gap-1 font-black text-xl tracking-tighter">
+                        <i data-lucide="map-pin" class="w-4 h-4 text-red-500"></i> <span id="u-loc-txt">Detecting...</span>
+                    </div>
+                </div>
             </div>
-        </nav>
+            <div class="w-14 h-14 rounded-full border-[6px] border-brand-light flex items-center justify-center bg-white shadow-inner">
+                <span id="u-score-val" class="font-black text-[13px] text-brand">--</span>
+            </div>
+        </div>
+
+        <div id="home-summary-grid" class="grid grid-cols-2 gap-5"></div>
+
+        <div class="figma-card p-6 border-brand/5 bg-brand-light/20 flex justify-between items-center group cursor-pointer" onclick="navigateTo('pills')">
+            <div class="flex items-center gap-5">
+                <div class="bg-brand text-white p-4 rounded-2xl shadow-2xl transition group-hover:rotate-12"><i data-lucide="pill" class="w-7 h-7"></i></div>
+                <div>
+                    <h4 class="font-black text-sm text-gray-800 uppercase tracking-tighter">Pill Reminder</h4>
+                    <p id="pill-summary-count" class="text-[10px] text-brand font-black uppercase tracking-widest mt-1">Checking Schedule...</p>
+                </div>
+            </div>
+            <i data-lucide="chevron-right" class="w-5 h-5 text-brand"></i>
+        </div>
+
+        <div class="space-y-4">
+            <div class="flex justify-between items-center px-1">
+                <h3 class="font-black text-xl text-gray-800 tracking-tighter">Health Insights</h3>
+                <button class="text-[10px] font-black text-brand uppercase border-b-2 border-brand/20">See All</button>
+            </div>
+            <div id="dashboard-articles-reel" class="flex gap-5 overflow-x-auto no-scrollbar pb-4"></div>
+        </div>
     </div>
 
-    <!-- MAIN CONTENT -->
-    <div class="main-content">
-        
-        <!-- SECTION: LAB DISCOVERY -->
-        <section id="labSec" class="tab-content">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h2 class="fw-800 m-0">Discover Labs</h2>
-                <div id="locationStatus" class="small text-muted fw-bold text-uppercase"></div>
-            </div>
-            
-            <div class="row g-3 mb-5">
-                <!-- 1. City/Area Search with Strict Match Suggestions -->
-                <div class="col-md-5 position-relative">
-                    <div class="input-group input-group-lg bg-white rounded-pill overflow-hidden shadow-sm border">
-                        <span class="input-group-text bg-transparent border-0"><i class="fas fa-map-marker-alt text-danger"></i></span>
-                        <input type="text" id="citySearch" class="form-control border-0" placeholder="City or Area..." onkeyup="fetchCitySuggestions(this.value)">
-                    </div>
-                    <div id="citySuggestionList" class="suggestion-box hidden"></div>
-                </div>
-
-                <!-- 2. Lab Name Search with Live Suggestions -->
-                <div class="col-md-5 position-relative">
-                    <div class="input-group input-group-lg bg-white rounded-pill overflow-hidden shadow-sm border">
-                        <span class="input-group-text bg-transparent border-0"><i class="fas fa-search text-muted"></i></span>
-                        <input type="text" id="labNameSearch" class="form-control border-0" placeholder="Search Lab Name..." onkeyup="fetchLabNameSuggestions(this.value)">
-                    </div>
-                    <div id="labNameSuggestionList" class="suggestion-box hidden"></div>
-                </div>
-                
-                <!-- 3. GPS Button -->
-                <div class="col-md-2">
-                    <button class="btn btn-outline-success w-100 h-100 rounded-pill fw-bold" onclick="getUserLocation()">
-                        <i class="fas fa-location-arrow me-2"></i>Near Me
-                    </button>
-                </div>
-            </div>
-
-            <!-- Loading Indicator -->
-            <div id="lab-loading" class="text-center py-5 hidden">
-                <div class="spinner-border text-success"></div>
-                <p class="mt-2 text-muted fw-bold">Fetching Best Labs...</p>
-            </div>
-
-            <!-- Lab Results Grid -->
-            <div class="row g-4" id="labGrid"></div>
-        </section>
-
-        <!-- SECTION: PROFILE -->
-        <section id="profileSec" class="tab-content hidden">
-            <h2 class="fw-800 mb-4">My Account</h2>
-            <div class="hk-card" id="profileViewArea"></div>
-        </section>
-
+    <!-- 2. DOCTOR LISTING -->
+    <div id="doctors-screen" class="screen p-6 space-y-7">
+        <div class="flex items-center gap-5">
+            <button onclick="navigateTo('home')" class="p-4 bg-gray-100 rounded-3xl"><i data-lucide="arrow-left" class="w-6 h-6 text-gray-700"></i></button>
+            <h2 class="text-3xl font-black tracking-tighter text-gray-800">Specialists</h2>
+        </div>
+        <div id="specs-list" class="flex gap-4 overflow-x-auto no-scrollbar pb-2"></div>
+        <div id="docs-list-main" class="space-y-6 mt-4"></div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- 3. DOCTOR PROFILE & SLOTS -->
+    <div id="profile-screen" class="screen">
+        <div class="relative h-80">
+            <img id="p-hero-img" class="w-full h-full object-cover bg-gray-50">
+            <button onclick="navigateTo('doctors')" class="absolute top-8 left-6 bg-white/20 backdrop-blur-3xl p-4 rounded-[22px] text-white shadow-xl">
+                <i data-lucide="arrow-left" class="w-6 h-6"></i>
+            </button>
+        </div>
 
-    <script>
-        const API_BASE = "http://localhost:5002";
-        const TOKEN = localStorage.getItem('token');
-
-        let userLat = null, userLng = null;
-        
-        // Strict matching filters for clicked suggestions
-        let selectedLoc = { city: null, state: null, country: null };
-
-        // --- NAVIGATION ---
-        function switchSection(id) {
-            document.querySelectorAll('.tab-content').forEach(s => s.classList.add('hidden'));
-            document.querySelectorAll('.nav-link-custom').forEach(l => l.classList.remove('active'));
-            document.getElementById(id).classList.remove('hidden');
-            event.target.closest('.nav-link-custom').classList.add('active');
-            if(id === 'labSec') loadLabs();
-            if(id === 'profileSec') loadProfile();
-        }
-
-        // --- 1. CITY SUGGESTIONS (STRICT MATCH) ---
-        async function fetchCitySuggestions(query) {
-            const box = document.getElementById('citySuggestionList');
-            if(query.length < 2) { box.classList.add('hidden'); return; }
-            
-            try {
-                const res = await fetch(`${API_BASE}/user/labs/suggestions?query=${query}`);
-                const result = await res.json();
-                
-                if(result.data.length > 0) {
-                    box.classList.remove('hidden');
-                    box.innerHTML = result.data.map(s => `
-                        <div class="suggestion-item" onclick="selectCity('${s.city}', '${s.state}', '${s.country}')">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-city me-3 text-muted"></i>
-                                <div>
-                                    <div class="fw-bold">${s.city}</div>
-                                    <small class="text-muted">${s.state}, ${s.country}</small>
-                                </div>
-                            </div>
-                        </div>
-                    `).join('');
-                } else { box.classList.add('hidden'); }
-            } catch (err) { console.error(err); }
-        }
-
-        function selectCity(city, state, country) {
-            document.getElementById('citySearch').value = `${city}, ${state}`;
-            selectedLoc = { city, state, country }; // Capture strict metadata
-            document.getElementById('citySuggestionList').classList.add('hidden');
-            loadLabs();
-        }
-
-        // --- 2. LAB NAME SUGGESTIONS ---
-        async function fetchLabNameSuggestions(query) {
-            const box = document.getElementById('labNameSuggestionList');
-            if(query.length < 2) { 
-                box.classList.add('hidden'); 
-                loadLabs(); // Reload all if cleared
-                return; 
-            }
-            
-            try {
-                // Endpoint: /user/labs/name-suggestions
-                const res = await fetch(`${API_BASE}/user/labs/lab-suggestions?query=${query}`);
-                const result = await res.json();
-                
-                if(result.data.length > 0) {
-                    box.classList.remove('hidden');
-                    box.innerHTML = result.data.map(s => `
-                        <div class="suggestion-item" onclick="selectLabName('${s.name}')">
-                            <div class="d-flex align-items-center">
-                                <img src="${s.image || 'https://placehold.co/30'}" class="rounded-circle me-3 border" width="30" height="30" onerror="this.src='https://placehold.co/30'">
-                                <div>
-                                    <div class="fw-bold small">${s.name}</div>
-                                    <small class="text-muted" style="font-size: 10px;">${s.city}</small>
-                                </div>
-                            </div>
-                        </div>
-                    `).join('');
-                } else { 
-                    box.classList.add('hidden'); 
-                    loadLabs(); // Just perform a normal search hit
-                }
-            } catch (err) { console.error(err); }
-        }
-
-        function selectLabName(name) {
-            document.getElementById('labNameSearch').value = name;
-            document.getElementById('labNameSuggestionList').classList.add('hidden');
-            loadLabs();
-        }
-
-        // --- 3. GEOLOCATION ---
-        function getUserLocation() {
-            if (navigator.geolocation) {
-                document.getElementById('locationStatus').innerText = "Fetching Coordinates...";
-                navigator.geolocation.getCurrentPosition((pos) => {
-                    userLat = pos.coords.latitude;
-                    userLng = pos.coords.longitude;
-                    selectedLoc = { city: null, state: null, country: null }; // Reset city filters
-                    document.getElementById('citySearch').value = "";
-                    document.getElementById('locationStatus').innerText = "📍 Using Near Me";
-                    loadLabs();
-                });
-            }
-        }
-
-        // --- 4. MAIN LOAD LABS (POST API) ---
-        async function loadLabs() {
-            const grid = document.getElementById('labGrid');
-            const loader = document.getElementById('lab-loading');
-            loader.classList.remove('hidden');
-
-            const searchName = document.getElementById('labNameSearch').value;
-            const cityInputText = document.getElementById('citySearch').value;
-
-            // Reset strict city metadata if input is cleared manually
-            if (!cityInputText) {
-                selectedLoc = { city: null, state: null, country: null };
-            }
-
-            try {
-                const res = await fetch(`${API_BASE}/user/labs/list`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${TOKEN}`
-                    },
-                    body: JSON.stringify({ 
-                        lat: userLat, 
-                        lng: userLng, 
-                        search: searchName, // Used for lab name filter
-                        city: selectedLoc.city,
-                        state: selectedLoc.state,
-                        country: selectedLoc.country
-                    })
-                });
-                
-                const result = await res.json();
-                loader.classList.add('hidden');
-                
-                if(!result.data || result.data.length === 0) {
-                    grid.innerHTML = `<div class="col-12 text-center py-5"><h5>No Labs Found</h5><p class="text-muted">Try a different search term or city.</p></div>`;
-                    return;
-                }
-
-                grid.innerHTML = result.data.map(lab => `
-                    <div class="col-md-4">
-                        <div class="hk-card d-flex flex-column">
-                            <img src="${lab.profileImage ? lab.profileImage : 'https://placehold.co/400x250?text='+lab.name}" class="lab-img">
-                            
-                            <div class="d-flex justify-content-between align-items-start">
-                                <h5 class="fw-800 m-0">${lab.name}</h5>
-                                <span class="badge bg-success"><i class="fas fa-star me-1"></i>${lab.rating}</span>
-                            </div>
-                            
-                            <p class="text-muted small mt-1 mb-2">
-                                <i class="fas fa-map-marker-alt me-1 text-danger"></i> ${lab.city}, ${lab.state}
-                                ${lab.distance !== "N/A" ? `<span class="ms-2 fw-bold text-dark">• ${lab.distance} KM</span>` : ''}
-                            </p>
-                            
-                            <div class="mb-3">
-                                ${lab.isHomeCollectionAvailable ? '<span class="chip-badge chip-home"><i class="fas fa-house-user me-1"></i>Home Visit</span>' : ''}
-                                ${lab.isRapidServiceAvailable ? '<span class="chip-badge chip-rapid"><i class="fas fa-bolt me-1"></i>Rapid</span>' : ''}
-                            </div>
-
-                            <div class="mt-auto d-flex justify-content-between align-items-center border-top pt-3">
-                                <div>
-                                    <small class="text-muted d-block" style="font-size: 11px;">Starting From</small>
-                                    <h5 class="fw-800 text-success m-0">₹${lab.startingPrice}</h5>
-                                </div>
-                                <button class="btn btn-dark btn-sm rounded-pill px-4 fw-bold">Book Now</button>
-                            </div>
-                        </div>
+        <div class="relative z-10 -mt-16 bg-white rounded-t-[60px] p-8 space-y-10 min-h-screen border-t border-gray-100">
+            <div class="text-center space-y-3">
+                <h2 id="p-doc-name" class="text-3xl font-black tracking-tighter text-gray-900 leading-none">--</h2>
+                <div class="flex justify-center items-center gap-3">
+                    <span id="p-doc-spec" class="bg-brand text-white font-black text-[10px] px-4 py-1.5 rounded-full uppercase tracking-[2px]">--</span>
+                    <div class="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-50 rounded-xl border border-yellow-100">
+                        <i data-lucide="star" class="w-3.5 h-3.5 fill-yellow-400 text-yellow-400"></i>
+                        <span id="p-doc-rating" class="text-sm font-black text-yellow-800">--</span>
                     </div>
-                `).join('');
-            } catch (err) { loader.classList.add('hidden'); }
+                </div>
+            </div>
+
+            <div class="cons-type-reel">
+                <button onclick="switchType('Clinic Visit')" id="cs-clinic" class="type-pill active">CLINIC</button>
+                <button onclick="switchType('Video Consult')" id="cs-video" class="type-pill">VIDEO</button>
+                <button onclick="switchType('Home Visit')" id="cs-home" class="type-pill">HOME</button>
+            </div>
+
+            <div class="figma-card p-6 bg-gray-50 flex justify-between items-center border-dashed border-2">
+                <div>
+                    <p class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Standard Fee</p>
+                    <p id="p-fee-display" class="font-black text-brand text-3xl currency-symbol">0</p>
+                </div>
+                <div class="bg-brand text-white p-3 rounded-2xl shadow-lg shadow-brand/20"><i data-lucide="credit-card" class="w-7 h-7"></i></div>
+            </div>
+
+            <div class="space-y-6 pb-40">
+                <div class="flex justify-between items-center px-1">
+                    <h4 class="font-black text-gray-800 text-lg uppercase tracking-widest">Select Slot</h4>
+                    <span class="text-[10px] bg-black text-white px-3 py-1 rounded-full font-black uppercase">MAY 2026</span>
+                </div>
+                <div id="doctor-slots-grid-container" class="slot-master-grid">
+                    <!-- Dynamic Slots Restoration Fix -->
+                </div>
+            </div>
+
+            <div class="fixed bottom-0 left-0 w-full p-6 bg-white border-t z-[300] flex gap-4">
+                 <button id="p-btn-action-next" onclick="prepareBookingCheckout()" class="btn-brand w-full py-5 text-base shadow-2xl shadow-brand/40 disabled:opacity-30" disabled>Select a Slot First</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. CHECKOUT SCREEN -->
+    <div id="checkout-screen" class="screen p-6 space-y-7">
+        <div class="flex items-center gap-5">
+            <button onclick="navigateTo('profile')" class="p-4 bg-gray-100 rounded-3xl"><i data-lucide="arrow-left" class="w-6 h-6"></i></button>
+            <h2 class="text-3xl font-black tracking-tighter text-gray-800 leading-none">Checkout Summary</h2>
+        </div>
+
+        <div class="figma-card p-6 border-orange-100 bg-orange-50/10 flex justify-between items-center">
+            <div class="flex items-center gap-5">
+                <div class="bg-orange-100 p-4 rounded-2xl text-orange-600 shadow-inner"><i data-lucide="zap" class="w-6 h-6"></i></div>
+                <div>
+                    <h4 class="font-black text-sm text-orange-900 tracking-tight leading-none">Emergency Visit?</h4>
+                    <p class="text-[10px] text-orange-600 font-black uppercase mt-2 tracking-tighter">₹200 Extra Surcharge</p>
+                </div>
+            </div>
+            <!-- FIXED ID: Matches syncRecalcTotal -->
+            <input type="checkbox" id="emergency-toggle-switch" onchange="syncRecalcTotal()" class="w-7 h-7 accent-orange-500 rounded-lg">
+        </div>
+
+        <div class="figma-card p-8 space-y-4 border-2 border-gray-50 bg-white" id="checkout-price-reel"></div>
+
+        <div class="space-y-4">
+            <h3 class="font-black text-gray-800 uppercase text-xs tracking-widest px-1">Apply Promo Offers</h3>
+            <div id="coupons-scroll-reel" class="flex gap-5 overflow-x-auto no-scrollbar pb-6"></div>
+        </div>
+
+        <div class="checkout-footer" id="checkout-footer-panel">
+            <div class="flex justify-between items-end mb-6 px-1">
+                <div>
+                    <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">Grand Total</p>
+                    <p id="txt-final-total" class="text-4xl font-black text-brand tracking-tighter currency-symbol">0</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-[9px] text-brand font-black uppercase border-b-2 border-brand/20 pb-0.5 tracking-tighter">₹ Saved today</p>
+                    <p id="txt-saved-amt" class="text-lg font-black text-gray-800 mt-1 currency-symbol">0</p>
+                </div>
+            </div>
+            <button onclick="executeEnterpriseBooking()" class="btn-brand w-full py-5 text-base shadow-2xl shadow-brand/40 uppercase tracking-widest active:scale-95 transition">Pay & Finalize Appointment</button>
+        </div>
+    </div>
+
+    <!-- 5. TRACKING -->
+    <div id="tracking-screen" class="screen p-10 text-center bg-white">
+        <div class="flex justify-between items-center mb-10">
+            <button onclick="navigateTo('home')" class="p-4 bg-gray-50 rounded-3xl shadow-sm"><i data-lucide="chevron-left" class="w-6 h-6 text-gray-800"></i></button>
+            <h3 class="font-black text-xl tracking-tight text-gray-800 uppercase">Confirmed</h3>
+            <div class="w-10"></div>
+        </div>
+        <div class="bg-brand-light p-14 rounded-[75px] border-4 border-dashed border-brand/20 relative shadow-inner overflow-hidden mb-12">
+            <p class="text-[14px] font-black text-brand uppercase tracking-[6.5px] mb-2 tracking-widest">SECURITY OTP</p>
+            <h1 id="track-otp-ui-display" class="text-7xl font-black text-brand my-12 tracking-[20px]">----</h1>
+            <p class="text-[10px] text-gray-400 font-black px-8 uppercase tracking-widest opacity-80 leading-relaxed tracking-tighter">Code valid for visit only</p>
+            <i data-lucide="check-circle" class="absolute -bottom-16 -right-16 w-48 h-44 text-brand opacity-10"></i>
+        </div>
+        <div id="track-info-card-box" class="figma-card p-6 flex items-center gap-6 text-left border-2 border-brand/10 mb-8 shadow-lg"></div>
+        <button onclick="navigateTo('home')" class="bg-black text-white py-5 rounded-[32px] font-black text-xs uppercase tracking-widest shadow-2xl w-full">Go to Dashboard</button>
+    </div>
+
+    <!-- DATA VIEWS -->
+    <div id="tracker-screen" class="screen p-6 space-y-8">
+        <h2 class="text-3xl font-black tracking-tighter text-gray-800 uppercase tracking-widest">My Stats</h2>
+        <div id="calorie-master-ui" class="bg-orange-50 border border-orange-100 p-8 rounded-[55px] space-y-7 shadow-sm"></div>
+        <div id="hist-list-ui" class="space-y-4"></div>
+    </div>
+
+    <div id="pills-screen" class="screen p-6 space-y-8">
+        <h2 class="text-3xl font-black tracking-tighter text-center text-gray-800 uppercase tracking-widest">Pills</h2>
+        <div id="active-pills-list" class="space-y-6"></div>
+    </div>
+
+    <div id="prescription-screen" class="screen p-6 space-y-8">
+        <h2 class="text-3xl font-black tracking-tighter text-gray-800 uppercase tracking-widest">Reports</h2>
+        <div id="records-list-container" class="grid grid-cols-1 gap-6"></div>
+    </div>
+
+    <!-- BOTTOM TAB NAVIGATION -->
+    <nav class="bottom-nav">
+        <button onclick="navigateTo('home', this)" class="tab-btn active flex flex-col items-center gap-2" data-id="home"><i data-lucide="home"></i><span class="text-[8px] font-black uppercase tracking-widest">Home</span></button>
+        <button onclick="navigateTo('tracker', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="tracker"><i data-lucide="activity"></i><span class="text-[8px] font-black uppercase tracking-widest">Stats</span></button>
+        <button onclick="navigateTo('pills', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="pills"><i data-lucide="clock"></i><span class="text-[8px] font-black uppercase tracking-widest">Pills</span></button>
+        <button onclick="navigateTo('doctors', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="doctors"><i data-lucide="plus-circle"></i><span class="text-[8px] font-black uppercase tracking-widest">Book</span></button>
+        <button onclick="navigateTo('prescription', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="prescription"><i data-lucide="file-text"></i><span class="text-[8px] font-black uppercase tracking-widest">Records</span></button>
+    </nav>
+
+</div>
+
+<script>
+    const MASTER_API = "http://localhost:5002";
+    
+    // Global Enterprise State
+    let MASTER_HK_STORE = {
+        token: localStorage.getItem('token') || "",
+        docId: "",
+        slotVal: null,
+        consType: "Clinic Visit",
+        coupon: null,
+        pricing: { base: 0, visit: 0, extra: 0, disc: 0, sub: 0, total: 0 },
+        fees: { clinic: 0, video: 0, home: 0 }
+    };
+function syncRecalcTotal() {
+    // Isse calculation trigger hogi jab emergency toggle change hoga
+    console.log("Recalculating totals...");
+    syncFinalRecalc(); 
+}
+    // --- Master API Sync Engine (Fixed HTML Response Protection) ---
+    async function apiRequest(path, method = 'GET', data = null) {
+        const h = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MASTER_HK_STORE.token}` };
+        const conf = { method, headers: h };
+        if(data) conf.body = JSON.stringify(data);
+        
+        try {
+            const res = await fetch(`${MASTER_API}${path}`, conf);
+            
+            // Critical HTML error shield
+            const cType = res.headers.get("content-type");
+            if (!cType || !cType.includes("application/json")) {
+                console.error(`404/500 Error @ ${path}: Received non-JSON response.`);
+                return { success: false, message: "Endpoint Mismatch (HTML Error)" };
+            }
+
+            const json = await res.json();
+            if(!json.success) console.warn(`Sync Issue [${path}]: ${json.message}`);
+            return json;
+        } catch (e) {
+            console.error("Critical Failure:", e);
+            return { success: false, message: "Sync Engine Crashed" };
+        }
+    }
+
+    function navigateTo(id, trigger) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(`${id}-screen`).classList.add('active');
+        if(trigger) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active', 'text-brand'));
+            trigger.classList.add('active', 'text-brand');
+        }
+        document.getElementById('checkout-footer-panel').style.display = (id === 'checkout') ? 'block' : 'none';
+
+        // Controller Routing
+        if(id === 'home') syncHome();
+        if(id === 'doctors') syncDoctorEnviroment();
+        if(id === 'tracker') syncTrackerBalance();
+        if(id === 'pills') syncPills();
+        if(id === 'prescription') syncReports();
+        
+        lucide.createIcons();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function igniteSync() {
+        const inp = document.getElementById('sync-token-input').value;
+        if(inp) {
+            MASTER_HK_STORE.token = inp;
+            localStorage.setItem('token', inp); 
+        } else if(!localStorage.getItem('token')) {
+            return alert("JWT Token required for sync.");
+        }
+        navigateTo('home');
+    }
+
+    // --- 1. DASHBOARD CONTROLLER ---
+    async function syncHome() {
+        const d = await apiRequest('/api/auth/user/dashboard');
+        const s = await apiRequest('/user/health-records/summary');
+
+        if(d.success) {
+            const h = d.data.header;
+            document.getElementById('u-greet-txt').innerText = `नमस्ते, ${h.userName}`;
+            document.getElementById('u-loc-txt').innerText = h.location || "Mohali, Punjab";
+            document.getElementById('u-pfp-master').src = h.profilePic || "https://i.pravatar.cc/100?u=hk";
+            
+            document.getElementById('dashboard-articles-reel').innerHTML = d.data.articles.map(art => `
+                <div class="min-w-[210px] figma-card overflow-hidden border shadow-sm">
+                    <img src="${art.image}" class="h-32 w-full object-cover">
+                    <div class="p-4"><p class="text-[8px] font-black text-brand uppercase mb-1">${art.category}</p>
+                    <p class="text-xs font-black truncate text-gray-800">${art.title}</p></div>
+                </div>
+            `).join('');
         }
 
-        // --- 5. PROFILE & UTILS ---
-        async function loadProfile() {
-            try {
-                const res = await fetch(`${API_BASE}/api/auth/user/profile`, { headers: {'Authorization': `Bearer ${TOKEN}`} });
-                const result = await res.json();
-                const u = result.data;
-                document.getElementById('profileViewArea').innerHTML = `
-                    <div class="row align-items-center">
-                        <div class="col-md-2"><img src="https://ui-avatars.com/api/?name=${u.name}&background=00b894&color=fff&size=100" class="rounded-circle shadow-sm"></div>
-                        <div class="col-md-10"><h3 class="fw-800 m-0">${u.name}</h3><p class="text-muted m-0">${u.email}</p><p class="text-muted m-0">${u.phone || 'No phone linked'}</p></div>
-                    </div>`;
-            } catch (err) { console.error(err); }
+        if(s.success) {
+            document.getElementById('u-score-val').innerText = `${s.healthScore}%`;
+            const keys = [
+                { k: 'Heart rate', icon: 'heart', color: 'red' },
+                { k: 'Blood Pressure', icon: 'droplet', color: 'purple' },
+                { k: 'Calories', icon: 'flame', color: 'orange' },
+                { k: 'Steps', icon: 'footprints', color: 'blue' }
+            ];
+            document.getElementById('home-summary-grid').innerHTML = keys.map(m => {
+                const i = s.data[m.k];
+                return `<div class="figma-card p-5 border-l-4 border-l-${m.color}-500 shadow-sm bg-white">
+                    <div class="flex justify-between mb-2">
+                        <span class="text-[9px] text-gray-400 font-black uppercase tracking-tighter">${m.k}</span>
+                        <i data-lucide="${m.icon}" class="w-4 h-4 text-${m.color}-500"></i>
+                    </div>
+                    <p class="font-black text-base tracking-tighter text-gray-800">${i ? i.value : '--'}</p>
+                    <p class="text-[7px] text-brand font-black mt-1 uppercase">● Synced</p>
+                </div>`;
+            }).join('');
+        }
+        
+        const sch = await apiRequest('/user/doctor/pills/today');
+        document.getElementById('pill-summary-count').innerText = `${sch.data.length || 0} medications today`;
+        lucide.createIcons();
+    }
+
+    // --- 2. DOCTOR & SLOTS (RESTORED GRID) ---
+    async function syncDoctorEnviroment() {
+        const specs = await apiRequest('/user/doctors/specializations');
+        const list = await apiRequest('/user/doctors/list');
+
+        document.getElementById('specs-list').innerHTML = specs.data.map(s => `
+            <div class="bg-white p-3.5 border-2 border-gray-50 rounded-3xl text-center min-w-[115px] figma-card">
+                <div class="bg-brand-light p-2 rounded-2xl text-brand mx-auto w-fit mb-2"><i data-lucide="stethoscope" class="w-5 h-5"></i></div>
+                <p class="text-[9px] font-black uppercase text-gray-800 tracking-tighter">${s.name}</p>
+            </div>
+        `).join('');
+
+        document.getElementById('docs-list-main').innerHTML = list.data.map(d => `
+            <div onclick="hkLoadDoctorProfile('${d._id}')" class="figma-card p-5 flex gap-5 items-center cursor-pointer hover:border-brand/40 transition">
+                <img src="${MASTER_API}/${d.profileImage}" class="w-18 h-18 rounded-[30px] object-cover bg-gray-50 border shadow-sm">
+                <div class="flex-1">
+                    <h4 class="font-black text-sm text-gray-800 tracking-tight leading-none uppercase">${d.name}</h4>
+                    <p class="text-[9px] text-gray-400 font-bold uppercase mt-1.5 tracking-widest">${d.city} • ${d.experienceYears}y exp</p>
+                    <div class="flex items-center gap-3 mt-4">
+                        <p class="text-brand font-black text-base currency-symbol">${d.fees.clinic}</p>
+                        <button class="bg-brand text-white px-5 py-1.5 rounded-xl text-[8px] font-black uppercase tracking-widest shadow-sm">Consult</button>
+                    </div>
+                </div>
+                <i data-lucide="arrow-right" class="w-4 h-4 text-gray-300"></i>
+            </div>
+        `).join('');
+        lucide.createIcons();
+    }
+
+    async function hkLoadDoctorProfile(id) {
+        MASTER_HK_STORE.docId = id;
+        navigateTo('profile');
+        const d = await apiRequest(`/user/doctors/details/${id}`);
+        const s = await apiRequest(`/user/doctors/slots/${id}?date=${moment().format('YYYY-MM-DD')}`);
+        
+        if(d.success) {
+            const doc = d.data;
+            MASTER_HK_STORE.fees = { clinic: doc.fees.clinic, video: doc.fees.online, home: doc.fees.home };
+            document.getElementById('p-hero-img').src = `${MASTER_API}/${doc.profileImage}`;
+            document.getElementById('p-doc-name').innerText = doc.name;
+            document.getElementById('p-doc-spec').innerText = doc.qualification || "GENERAL SPECIALIST";
+            document.getElementById('p-doc-rating').innerText = doc.averageRating;
+            switchType('Clinic Visit');
         }
 
-        function handleLogout() { localStorage.clear(); window.location.href = "login.html"; }
+        // FIXED SLOTS GRID MAPPING
+        const slotBox = document.getElementById('doctor-slots-grid-container');
+        if(s.success && s.slots) {
+            slotBox.innerHTML = s.slots.map(sl => `
+                <button onclick="captureSlotClick(this, '${sl.time}')" 
+                    class="slot-btn ${sl.available ? 'available' : 'unavailable'}" 
+                    ${!sl.available ? 'disabled' : ''}>${sl.time}</button>
+            `).join('');
+        } else {
+            slotBox.innerHTML = `<p class="col-span-3 text-center text-xs font-black text-gray-400 py-12 uppercase tracking-[3px]">No availability found</p>`;
+        }
+    }
 
-        // Close suggestions on outside click
-        document.addEventListener('click', (e) => {
-            if (!e.target.closest('#citySearch')) document.getElementById('citySuggestionList').classList.add('hidden');
-            if (!e.target.closest('#labNameSearch')) document.getElementById('labNameSuggestionList').classList.add('hidden');
+    function switchType(t) {
+        MASTER_HK_STORE.consType = t;
+        document.querySelectorAll('.cons-pill').forEach(btn => btn.classList.remove('active'));
+        if(t === 'Clinic Visit') document.getElementById('cs-clinic').classList.add('active');
+        if(t === 'Video Consult') document.getElementById('cs-video').classList.add('active');
+        if(t === 'Home Visit') document.getElementById('cs-home').classList.add('active');
+        
+        const price = (t === 'Clinic Visit') ? MASTER_HK_STORE.fees.clinic : (t === 'Video Consult' ? MASTER_HK_STORE.fees.video : MASTER_HK_STORE.fees.home);
+        document.getElementById('p-fee-display').innerText = price;
+    }
+
+    function captureSlotClick(el, val) {
+        document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
+        el.classList.add('selected');
+        MASTER_HK_STORE.slotVal = val;
+        document.getElementById('p-btn-action-next').disabled = false;
+        document.getElementById('p-btn-action-next').innerText = "PROCEED TO SUMMARY";
+    }
+
+    // --- 3. CHECKOUT & COUPON MASTER ---
+    function prepareBookingCheckout() {
+        navigateTo('checkout');
+        syncCouponsUI();
+        syncFinalRecalc();
+    }
+
+    async function syncCouponsUI() {
+        const res = await apiRequest(`/user/doctors/coupons/${MASTER_HK_STORE.docId}`);
+        const reel = document.getElementById('coupons-scroll-reel');
+        if(res.success && res.data.length > 0) {
+            reel.innerHTML = res.data.map(c => `
+                <div onclick="apiHandleValidateApply('${c.couponName}')" 
+                    class="coupon-pill min-w-[170px] ${MASTER_HK_STORE.coupon === c.couponName ? 'applied' : ''}">
+                    <p class="text-[11px] font-black text-brand uppercase tracking-[2px]">${c.couponName}</p>
+                    <p class="text-[9px] text-gray-500 font-bold mt-2 uppercase tracking-tighter">Get ${c.discountPercentage}% Discount</p>
+                </div>
+            `).join('');
+        } else {
+            reel.innerHTML = `<p class="text-[10px] text-gray-400 font-black px-1 italic">No promo offers available.</p>`;
+        }
+    }
+
+    async function apiHandleValidateApply(code) {
+        // --- FIXED SCHEMA: Passing subtotal to validate-coupon API ---
+        const res = await apiRequest('/user/doctors/validate-coupon', 'POST', {
+            couponCode: code,
+            subtotal: MASTER_HK_STORE.pricing.sub || 10, 
+            doctorId: MASTER_HK_STORE.docId
         });
 
-        window.onload = () => {
-            if(!TOKEN) window.location.href = "login.html";
-            loadLabs(); // Defaults to Delhi fallback via Backend
-        };
-    </script>
+        if(res.success) {
+            MASTER_HK_STORE.coupon = code;
+            alert(`🎉 Success: ${res.message}`);
+            syncFinalRecalc();
+            syncCouponsUI();
+        } else {
+            alert(`❌ Error: ${res.message}`);
+        }
+    }
+
+    async function syncFinalRecalc() {
+        const isEmg = document.getElementById('emergency-toggle-switch')?.checked || false;
+        const res = await apiRequest('/user/doctors/checkout-summary', 'POST', {
+            doctorId: MASTER_HK_STORE.docId,
+            consultationType: MASTER_HK_STORE.consType,
+            couponCode: MASTER_HK_STORE.coupon,
+            isEmergency: isEmg,
+            distance: 5
+        });
+
+        if(res.success) {
+            const d = res.data;
+            MASTER_HK_STORE.pricing = { 
+                base: d.baseFee, visit: d.visitCharge, extra: isEmg ? 200 : 0, 
+                disc: d.discount, sub: d.subtotal, total: d.totalPayable 
+            };
+            
+            document.getElementById('checkout-price-reel').innerHTML = `
+                <h3 class="font-black text-[10px] text-gray-400 uppercase tracking-[5px] mb-8 tracking-widest">Payment Breakdown</h3>
+                <div class="flex justify-between items-center text-sm font-bold text-gray-600"><span class="opacity-70">Consult Fee</span><span class="currency-symbol text-gray-900">${d.baseFee}</span></div>
+                <div class="flex justify-between items-center text-sm font-bold text-gray-600 py-3"><span class="opacity-70">Service/Visit Charges</span><span class="currency-symbol text-gray-900">${d.visitCharge}</span></div>
+                ${isEmg ? `<div class="flex justify-between items-center text-sm font-black text-orange-600 pb-3"><span>Emergency Extra</span><span class="currency-symbol">200</span></div>` : ''}
+                ${d.discount > 0 ? `<div class="flex justify-between items-center text-sm text-brand font-black pt-3 border-t border-dashed"><span>Applied: ${d.couponApplied}</span><span>-₹${d.discount}</span></div>` : ''}
+                <div class="flex justify-between items-center pt-8 border-t border-gray-100 mt-6 font-black">
+                    <span class="text-xl tracking-tighter text-gray-800 uppercase">Grand Total</span>
+                    <span class="text-3xl text-brand tracking-tighter currency-symbol">${d.totalPayable}</span>
+                </div>
+            `;
+            document.getElementById('txt-final-total').innerText = d.totalPayable;
+            document.getElementById('txt-saved-amt').innerText = d.discount;
+        }
+    }
+
+async function executeEnterpriseBooking() {
+    // Pricing object se totalAmount yahan extract ho raha hai
+    const res = await apiRequest('/user/doctors/book', 'POST', {
+        doctorId: MASTER_HK_STORE.docId,
+        appointmentDate: moment().format('YYYY-MM-DD'),
+        appointmentTime: MASTER_HK_STORE.slotVal,
+        consultationType: MASTER_HK_STORE.consType,
+        totalAmount: MASTER_HK_STORE.pricing.total, // ✅ Backend ko totalAmount mil gaya
+        pricing: {
+             baseFee: MASTER_HK_STORE.pricing.base,
+             visitCharges: MASTER_HK_STORE.pricing.visit,
+             extraCharges: MASTER_HK_STORE.pricing.extra,
+             subtotal: MASTER_HK_STORE.pricing.sub,
+             discountAmount: MASTER_HK_STORE.pricing.disc,
+             totalAmount: MASTER_HK_STORE.pricing.total
+        },
+        couponId: MASTER_HK_STORE.couponId, // Ensure this exists
+        patients:[{
+            patientName: "Rahul Verma", 
+            patientAge: 34,
+            gender: "Male",
+            relation: "Self",
+            isMainUser: true
+        }]
+    });
+
+    if(res.success) {
+        navigateTo('tracking');
+    } else {
+        alert(res.message);
+    }
+}
+    // --- OTHER SYNC LOADERS ---
+    async function syncTrackerBalance() {
+        const cal = await apiRequest('/user/health-records/calorie-breakdown');
+        const hist = await apiRequest('/user/health-records/history?page=1&limit=20');
+        
+        if(cal.success && cal.data) {
+            const d = cal.data; // percentage restored
+            document.getElementById('calorie-master-ui').innerHTML = `
+                <div class="flex justify-between items-center"><h4 class="font-black text-orange-900 text-xl tracking-tighter uppercase tracking-widest">Calories</h4><span class="bg-white text-orange-600 px-5 py-1.5 rounded-full text-[11px] font-black shadow-sm">${d.percentage || 0}% Of Goal</span></div>
+                <div class="space-y-4 mt-8">
+                    ${Object.entries(d.breakdown).map(([k,v]) => `<div class="flex justify-between text-sm text-orange-800 font-bold border-b border-orange-200 pb-3 uppercase tracking-widest"><span>${k}</span><span>${v} kcal</span></div>`).join('')}
+                </div>
+                <div class="pt-8 mt-2 flex justify-between font-black text-2xl text-orange-900 uppercase"><span>Total Daily Intake</span><span>${d.totalBurned}</span></div>
+            `;
+        }
+        document.getElementById('hist-list-ui').innerHTML = hist.data.map(i => `
+            <div class="figma-card p-5 flex justify-between items-center bg-white border-2 border-gray-50 shadow-md">
+                <div class="flex gap-5 items-center">
+                    <div class="bg-gray-100 p-3.5 rounded-2xl text-brand border border-gray-50 shadow-inner"><i data-lucide="activity" class="w-6 h-6"></i></div>
+                    <div><p class="font-black text-sm text-gray-800 tracking-tight leading-none">${i.type}</p><p class="text-[9px] text-gray-400 font-black uppercase tracking-widest mt-2">${moment(i.date).format('DD MMM, hh:mm A')}</p></div>
+                </div>
+                <p class="font-black text-brand text-xl tracking-tighter uppercase">${i.value}</p>
+            </div>
+        `).join('');
+        lucide.createIcons();
+    }
+
+    async function syncPills() {
+        const res = await apiRequest('/user/doctor/pills/my-pills');
+        if(res.success) {
+            document.getElementById('active-pills-list').innerHTML = res.data.map(p => `
+                <div class="figma-card p-7 border-l-[14px] ${p.status === 'Active' ? 'border-brand' : 'border-gray-200'} shadow-md">
+                    <div class="flex justify-between mb-6">
+                        <div><h4 class="font-black text-xl tracking-tighter text-gray-800 leading-none uppercase">${p.medicineName}</h4><p class="text-[11px] text-gray-400 font-black uppercase mt-2">${p.dosage} • ${p.frequency}</p></div>
+                        <span class="bg-brand-light text-brand text-[10px] font-black px-4 py-1.5 rounded-full uppercase shadow-sm border border-brand/10 tracking-widest">${p.status}</span>
+                    </div>
+                    <div class="space-y-4">
+                        ${p.times.map(t => `<div class="flex justify-between items-center p-5 bg-gray-50 rounded-[30px] border transition ${t.isTakenToday ? 'border-brand shadow-inner' : 'border-gray-100'}">
+                            <span class="text-sm font-black text-gray-600 uppercase tracking-widest">${t.time}</span>
+                            <button class="px-10 py-2.5 rounded-2xl text-[10px] font-black transition ${t.isTakenToday ? 'bg-brand text-white shadow-xl' : 'bg-white border-2 border-gray-200 text-gray-400'} uppercase tracking-widest">${t.isTakenToday ? '✓ Taken' : 'Mark'}</button>
+                        </div>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+
+    async function syncReports() {
+        const res = await apiRequest('/user/doctors/prescriptions');
+        if(res.success) {
+            document.getElementById('records-list-container').innerHTML = res.data.map(p => `
+                <div class="figma-card p-6 space-y-6 border-2 border-brand/5 shadow-inner">
+                    <div class="flex justify-between items-start">
+                        <div><p class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 uppercase">${moment(p.createdAt).format('DD MMM YYYY, hh:mm A')}</p><h4 class="font-black text-base text-gray-800 tracking-tight leading-none uppercase">Report Data Log</h4></div>
+                        <div class="bg-brand-light p-2.5 rounded-xl text-brand shadow-sm border border-brand/10"><i data-lucide="file-check" class="w-6 h-6"></i></div>
+                    </div>
+                    ${p.prescriptionImages.length > 0 ? `<div class="relative group cursor-pointer overflow-hidden rounded-[45px] border-4 border-white shadow-2xl"><img src="${MASTER_API}/${p.prescriptionImages[0]}" class="h-60 w-full object-cover group-hover:scale-105 transition duration-1000"></div>` : `<div class="h-28 bg-gray-100 rounded-[45px] border-2 border-dashed border-gray-100 flex items-center justify-center text-gray-300 text-[10px] font-black uppercase tracking-widest italic">Digital Record Unavailable</div>`}
+                    <div class="flex gap-4 pt-2">
+                        <button class="flex-1 bg-brand-light text-brand py-4 rounded-[30px] text-[11px] font-black uppercase tracking-widest shadow-sm">View Full</button>
+                        <button class="flex-1 bg-gray-50 text-gray-500 py-4 rounded-[30px] text-[11px] font-black uppercase tracking-widest">Share</button>
+                    </div>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+    }
+
+    // Startup
+    lucide.createIcons();
+</script>
 </body>
 </html>

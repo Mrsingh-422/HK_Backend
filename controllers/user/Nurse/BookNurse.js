@@ -6,6 +6,7 @@ const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const { isNurseAvailable, generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const NurseConsumable = require('../../../models/MasterConsumable');
+const Coupon = require('../../../models/Coupon');
 
 // const { generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const moment = require('moment');
@@ -213,16 +214,102 @@ const getNurseAvailability = async (req, res) => {
     } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
+// 1. GET COUPONS FOR A SPECIFIC NURSE
+const getAvailableCoupons = async (req, res) => {
+    try {
+        const { nurseId } = req.params;
+
+        const coupons = await Coupon.find({
+            isActive: true,
+            expiryDate: { $gte: new Date() },
+            $or: [
+                // 1. Admin ke global coupons (jo Nurse bureau ya sab ke liye hain)
+                { isAdminCreated: true, vendorType: { $in: ['Nurse', 'All'] } },
+                // 2. Is specific Nurse Bureau ke apne coupons
+                { vendorId: nurseId }
+            ]
+        }).select('couponName discountPercentage maxDiscount minOrderAmount expiryDate description');
+
+        res.json({ success: true, count: coupons.length, data: coupons });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+// 2. VALIDATE COUPON (Manual Check)
+const validateCoupon = async (req, res) => {
+    try {
+        const { couponCode, nurseId, totalAmount } = req.body;
+        const userId = req.user.id;
+
+        if (!couponCode || !nurseId) {
+            return res.status(400).json({ success: false, message: "Coupon code and Nurse ID are required" });
+        }
+
+        const coupon = await Coupon.findOne({
+            couponName: couponCode.toUpperCase(),
+            isActive: true,
+            expiryDate: { $gte: new Date() },
+            $or: [
+                { isAdminCreated: true, vendorType: { $in: ['Nurse', 'All'] } },
+                { vendorId: nurseId }
+            ]
+        });
+
+        if (!coupon) {
+            return res.status(404).json({ success: false, message: "Invalid or Expired Coupon Code" });
+        }
+
+        // Check 1: Minimum Order Amount
+        if (totalAmount < coupon.minOrderAmount) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Minimum order amount for this coupon is ₹${coupon.minOrderAmount}` 
+            });
+        }
+
+        // Check 2: Max Usage per User
+        const userUsage = coupon.usedBy.find(u => u.userId.toString() === userId.toString());
+        const usageCount = userUsage ? userUsage.usageCount : 0;
+
+        if (usageCount >= coupon.maxUsagePerUser) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "You have already reached the maximum usage limit for this coupon" 
+            });
+        }
+
+        // Calculate Discount
+        let discountAmount = (totalAmount * coupon.discountPercentage) / 100;
+        if (discountAmount > coupon.maxDiscount) {
+            discountAmount = coupon.maxDiscount;
+        }
+
+        res.json({
+            success: true,
+            message: "Coupon Applied Successfully!",
+            data: {
+                couponId: coupon._id,
+                couponName: coupon.couponName,
+                discountPercentage: coupon.discountPercentage,
+                discountAmount: Math.round(discountAmount),
+                finalPayable: Math.round(totalAmount - discountAmount)
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // 4. CHECKOUT (The Revamped Pricing Engine)
 const checkoutNurseBooking = async (req, res) => {
     try {
         const { 
             nurseId, serviceId, packageId, isPackage, selectedType, 
             startDate, endDate, startTime, endTime, isFasterService, 
-            patientCount, selectedConsumables 
+            patientCount, selectedConsumables, couponCode 
         } = req.body;
 
-        // 1. Fetch correct booking item (Service or Package)
         const [item, config, delivery] = await Promise.all([
             isPackage ? NursePackage.findById(packageId) : NurseService.findById(serviceId),
             Availability.findOne({ vendorId: nurseId }),
@@ -236,11 +323,10 @@ const checkoutNurseBooking = async (req, res) => {
         let slotSurcharge = 0;
         let units = 1;
 
-        // 2. Triple Pricing Logic (Universal for Service & Package)
+        // --- TRIPLE PRICING LOGIC ---
         if (selectedType === 'For Multiple Days') {
             units = moment(endDate).diff(moment(startDate), 'days') + 1;
             basePrice = item.pricing.multipleDays.final * units;
-            
             let curr = moment(startDate);
             while (curr <= moment(endDate)) {
                 const p = config.premiumDates?.find(pd => pd.date === curr.format('YYYY-MM-DD'));
@@ -252,26 +338,61 @@ const checkoutNurseBooking = async (req, res) => {
             basePrice = item.pricing.oneDay.final;
             const pDate = config.premiumDates?.find(pd => pd.date === moment(startDate).format('YYYY-MM-DD'));
             if (pDate) slotSurcharge += pDate.extraFee;
-            
             const pSlot = config.premiumSlots?.find(ps => ps.time === startTime);
             if (pSlot) slotSurcharge += pSlot.extraFee;
         } 
-        else if (selectedType === 'Acc. To Per/Hours') {
+        else {
             units = moment(endTime, "HH:mm").diff(moment(startTime, "HH:mm"), 'hours') || 1;
             basePrice = item.pricing.hourly.final * units;
             const pSlot = config.premiumSlots?.find(ps => ps.time === startTime);
             if (pSlot) slotSurcharge = pSlot.extraFee;
         }
 
-        // 3. Add-ons & Surcharges
         const consumableTotal = (selectedConsumables || []).reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
-        const subTotal = (basePrice + slotSurcharge + consumableTotal) * pCount;
-        const fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
-        const totalBeforeTax = subTotal + fasterCharge;
+        
+        // --- 🎫 COUPON LOGIC START ---
+        let couponDiscount = 0;
+        let couponInfo = null;
 
-        // 4. Dynamic Tax
+        // Subtotal jisme discount milega (Base + Surcharge + Consumables) * Patients
+        const subTotalForCoupon = (basePrice + slotSurcharge + consumableTotal) * pCount;
+
+        if (couponCode) {
+            const coupon = await Coupon.findOne({
+                couponName: couponCode.toUpperCase(),
+                isActive: true,
+                expiryDate: { $gte: new Date() },
+                $or: [
+                    { isAdminCreated: true, vendorType: { $in: ['Nurse', 'All'] } }, // Admin coupons
+                    { vendorId: nurseId } // Vendor's own coupons
+                ]
+            });
+
+            if (coupon) {
+                // Check Min Order Amount
+                if (subTotalForCoupon >= coupon.minOrderAmount) {
+                    // Check Max Usage for this specific user
+                    const userUsage = coupon.usedBy.find(u => u.userId.toString() === req.user.id.toString());
+                    const usageCount = userUsage ? userUsage.usageCount : 0;
+
+                    if (usageCount < coupon.maxUsagePerUser) {
+                        let discount = (subTotalForCoupon * coupon.discountPercentage) / 100;
+                        if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
+                        
+                        couponDiscount = Math.round(discount);
+                        couponInfo = { couponId: coupon._id, couponName: coupon.couponName };
+                    }
+                }
+            }
+        }
+        // --- 🎫 COUPON LOGIC END ---
+
+        const fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
+        const totalAfterDiscount = (subTotalForCoupon - couponDiscount) + fasterCharge;
+
+        // Dynamic Tax
         let tax = 0;
-        if (delivery?.taxPercentage) tax = (totalBeforeTax * delivery.taxPercentage) / 100;
+        if (delivery?.taxPercentage) tax = (totalAfterDiscount * delivery.taxPercentage) / 100;
         if (delivery?.taxInRupees) tax += delivery.taxInRupees;
 
         res.json({
@@ -280,70 +401,68 @@ const checkoutNurseBooking = async (req, res) => {
                 baseServicePrice: Math.round(basePrice * pCount),
                 slotSurcharge: Math.round(slotSurcharge * pCount),
                 consumableTotal: Math.round(consumableTotal * pCount),
+                couponDiscount: couponDiscount, // 👈 New Key
                 fasterServiceCharge: fasterCharge,
                 taxAmount: Math.round(tax),
-                totalPrice: Math.round(totalBeforeTax + tax),
+                totalPrice: Math.round(totalAfterDiscount + tax),
                 units,
-                pCount
+                pCount,
+                appliedCoupon: couponInfo
             }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- PLACE BOOKING ---
+// --- 5. PLACE BOOKING (With Coupon Usage Tracking) ---
 const placeNurseBooking = async (req, res) => {
     try {
-        const { 
-            nurseId, serviceId, packageId, isPackage, schedule, 
-            priceBreakdown, patients, healthDetails, address, 
-            selectedConsumables, assessmentLocation 
-        } = req.body;
-
-        // Fetch Individual Price Snapshot
-        const item = isPackage ? await NursePackage.findById(packageId) : await NurseService.findById(serviceId);
+        const { nurseId, serviceId, packageId, isPackage, schedule, priceBreakdown, patients, address, selectedConsumables, assessmentLocation, appliedCoupon } = req.body;
         
+        const item = isPackage ? await NursePackage.findById(packageId) : await NurseService.findById(serviceId);
         const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
         const booking = await NurseBooking.create({
             userId: req.user.id,
             nurseId,
-            serviceId: isPackage ? null : serviceId, // Link service if not package
-            packageId: isPackage ? packageId : null, // Link package if selected
+            serviceId: isPackage ? null : serviceId,
+            packageId: isPackage ? packageId : null,
             bookingId: bId,
             serviceDetails: {
                 title: isPackage ? item.packageName : item.title,
                 type: isPackage ? "Package Bundle" : item.type,
                 duration: schedule.duration,
-                basePrice: item.pricing.oneDay.final // Individual snapshot
+                basePrice: item.pricing.oneDay.final
             },
-            priceBreakdown: {
-                baseServicePrice: priceBreakdown.baseServicePrice,
-                slotSurcharge: priceBreakdown.slotSurcharge,
-                consumableTotal: priceBreakdown.consumableTotal,
-                fasterServiceCharge: priceBreakdown.fasterServiceCharge,
-                taxAmount: priceBreakdown.taxAmount,
-                totalPrice: priceBreakdown.totalPrice
-            },
+            priceBreakdown,
+            appliedCoupon: appliedCoupon ? {
+                couponId: appliedCoupon.couponId,
+                discountAmount: priceBreakdown.couponDiscount,
+                couponName: appliedCoupon.couponName
+            } : null,
             patients,
             schedule,
             address,
             assessmentLocation,
-            selectedConsumables: (selectedConsumables || []).map(c => ({
-                consumableId: c.consumableId,
-                itemName: c.itemName,
-                price: c.price,
-                unitType: c.unitType
-            })),
-            needConsumable: selectedConsumables && selectedConsumables.length > 0,
-            healthDetails,
+            selectedConsumables,
             status: 'Pending'
         });
 
-        res.status(201).json({ success: true, message: "Booking Success", data: booking });
-    } catch (error) { 
-        console.error("Booking Error:", error);
-        res.status(500).json({ message: error.message }); 
-    }
+        // 🚀 UPDATE COUPON USAGE HISTORY
+        if (appliedCoupon && appliedCoupon.couponId) {
+            const coupon = await Coupon.findById(appliedCoupon.couponId);
+            if (coupon) {
+                const userIndex = coupon.usedBy.findIndex(u => u.userId.toString() === req.user.id.toString());
+                if (userIndex > -1) {
+                    coupon.usedBy[userIndex].usageCount += 1;
+                } else {
+                    coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
+                }
+                await coupon.save();
+            }
+        }
+
+        res.status(201).json({ success: true, data: booking });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 
@@ -527,4 +646,4 @@ const getGlobalPackages = async (req, res) => {
 
 module.exports = { getNurses,getNurseDetails,searchNurses,checkoutNurseBooking, placeNurseBooking,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
-    uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages };
+    uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon };
