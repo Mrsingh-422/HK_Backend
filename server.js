@@ -67,6 +67,10 @@ app.use('/user/doctor/pills', require('./routes/user/Doctor/PillsRoute')); // Do
 app.use('/user/health-records', require('./routes/user/Doctor/HealthRoute')); // Health Records Management
 app.use('/user/doctors', require('./routes/user/Doctor/BookAppointment')); // Doctor Appointment Booking
 app.use('/user/review', require('./routes/user/Doctor/ReviewDoctorRoute')); // Doctor Review Route
+// --- user hospital ---
+app.use('/user/hospital', require('./routes/user/Hospital/BookHospitalRoute'));
+// --- user ambulance ---
+// app.use('/user/ambulance', require('./routes/user/Ambulance/BookAmbulanceRoute'));
 // --- user lab ---
 app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
 app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
@@ -90,9 +94,13 @@ app.use('/doctor/availability', require('./routes/doctor/DoctorSlotsRoute')); //
 
 //////////////// Hospital Routes /////////////////////
 app.use('/api/auth/hospital', require('./routes/hospital/authHospital'));
+app.use('/hospital/panel', require('./routes/hospital/HospitalPanelRoute'));
+app.use('/hospital/wallet', require('./routes/hospital/HospitalWalletRoute')); // Hospital Wallet Route
 app.use('/api/hospital/doctors', require('./routes/hospital/hospitalDoctor/hosDoctorRoute')); // Hospital Doctor Management
 app.use('/hospital/doctor/appointments', require('./routes/hospital/hospitalDoctor/hosAppointment')); // Hospital Doctor Appointments Route
 app.use('/api/hospital/ambulance', require('./routes/hospital/hospitalAmbulance/hosAmbulanceRoute')); // Hospital Ambulance Management
+//--------- Hospital Doctor Panel (Separate routes for doctor-specific actions within hospital) ---------
+app.use('/hospital-doctor/panel', require('./routes/hospital/Doctor/hosDocPanelRoute')); // Hospital Doctor Panel Route (Dashboard, Prescriptions, etc.)
 
 
 
@@ -131,10 +139,12 @@ app.use('/driver/lab/orders', require('./routes/driver/driverLab/driverLabOrders
 
 //////////////// Ambulance Routes /////////////////////
 app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulance'));
+app.use('/driver/ambulance', require('./routes/ambulance/AmbulanceJourneyRoute')); // Ambulance Booking Management
 
 //////////////// others Routes or public routes  /////////////////////
 app.use('/api/public', require('./routes/others/locationRoutes'));
 app.use('/api/password', require('./routes/others/forgotPassword'));
+
 
 ///////////////////////// fireHQ Routes /////////////////////////
 app.use('/fireHQ/auth', require('./routes/fireHQ/authFireHQRoute')); // FireHQ Authentication Route
@@ -146,6 +156,7 @@ app.use('/fireStation/management', require('./routes/fireHQ/fireStation/stationM
 // --- Fire Station Staff ---
 app.use('/fireStaff/auth', require('./routes/fireHQ/fireStationStaff/authStaff')); // Fire Station Staff Authentication Route
 app.use('/fireStaff/ops', require('./routes/fireHQ/fireStationStaff/staffOpsRoutes')); // Fire Station Staff Operations Route (Check-in, Leaves, Assigned Cases)
+
 
 ///////////////////////////// policeHQ Routes /////////////////////////
 app.use('/policeHQ/auth', require('./routes/policeHQ/authPoliceHQRoute'));

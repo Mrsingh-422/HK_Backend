@@ -1,27 +1,25 @@
 const Appointment = require('../../../models/Appointment');
-const Doctor = require('../../../models/Doctor');
+const Ward = require('../../../models/Ward');
 
-// 1. GET ALL APPOINTMENTS OF HOSPITAL (Admin View with Pagination)
-// endpoint: GET /hospital/doctor/appointments/all-bookings
+// 1. GET ALL BOOKINGS (Bifurcated for Appointments and Admissions)
+// endpoint: GET /hospital/doctor/appointments/all-bookings?bookingType=Appointment&status=Hospital-Pending
 const getHospitalAllBookings = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { status, doctorId, page = 1, limit = 10 } = req.query; 
+        const { status, bookingType, triageLevel, page = 1, limit = 10 } = req.query; 
 
-        // Step 1: Sirf is hospital ke doctors ki list nikalo
-        const hospitalDoctors = await Doctor.find({ hospitalId }).select('_id');
-        const doctorIds = hospitalDoctors.map(doc => doc._id);
-
-        // Step 2: Query sirf unhi doctorIds ke liye (Security check)
-        let query = { doctorId: { $in: doctorIds } };
+        // Direct hospitalId query for efficiency
+        let query = { hospitalId: hospitalId };
 
         if (status) query.status = status;
-        if (doctorId) query.doctorId = doctorId;
+        if (bookingType) query.bookingType = bookingType; // 'Appointment' or 'Admission'
+        if (triageLevel) query.triageLevel = triageLevel; // 'Emergency', 'Routine' etc.
 
         const appointments = await Appointment.find(query)
-            .populate('doctorId', 'name speciality profileImage fees')
-            .populate('userId', 'name phone email')
-            .sort({ appointmentDate: -1, appointmentTime: 1 })
+            .populate('doctorId', 'name speciality profileImage')
+            // .populate('bedId', 'bedType pricePerDay') // Populate Bed details
+            .populate('userId', 'name phone email profilePic')
+            .sort({ createdAt: -1 })
             .limit(limit * 1)
             .skip((page - 1) * limit);
 
@@ -29,9 +27,8 @@ const getHospitalAllBookings = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Hospital specific bookings fetched",
             total,
-            currentPage: page,
+            currentPage: Number(page),
             count: appointments.length, 
             data: appointments 
         });
@@ -40,78 +37,83 @@ const getHospitalAllBookings = async (req, res) => {
     }
 };
 
-// 2. APPROVE HOSPITAL APPOINTMENT (Moves to Doctor's Dashboard)
-// endpoint: PATCH /hospital/doctor/appointments/approve/:id
+// 2. APPROVE BOOKING (Moves to Confirmed)
 const approveHospitalBooking = async (req, res) => {
     try {
         const hospitalId = req.user.id;
 
-        // Check ownership
-        const appointment = await Appointment.findById(req.params.id).populate('doctorId');
-        if (!appointment || String(appointment.doctorId.hospitalId) !== hospitalId) {
-            return res.status(403).json({ message: "Unauthorized: Access Denied" });
+        const appointment = await Appointment.findOne({ _id: req.params.id, hospitalId });
+        if (!appointment) return res.status(404).json({ message: "Booking not found" });
+
+        appointment.status = 'Confirmed';
+        
+        // Agar Admission (Bed) hai, toh status Occupied kar dein
+        if (appointment.bookingType === 'Admission' && appointment.bedId) {
+             await Ward.updateOne(
+                { "beds._id": appointment.bedId }, 
+                { $set: { "beds.$.status": "Occupied" } }
+             );
         }
 
-        // Status 'Confirmed' hote hi ye Doctor App me dikhne lagega
-        appointment.status = 'Confirmed';
         await appointment.save();
-
-        res.json({ success: true, message: "Appointment approved and sent to doctor", data: appointment });
+        res.json({ success: true, message: "Booking approved successfully", data: appointment });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// 3. REJECT HOSPITAL APPOINTMENT (With Refund logic)
-// endpoint: PATCH /hospital/doctor/appointments/reject/:id
+// 3. REJECT BOOKING (With Bed Release Logic)
 const rejectHospitalBooking = async (req, res) => {
     try {
         const { reason } = req.body;
         const hospitalId = req.user.id;
 
-        const appointment = await Appointment.findById(req.params.id).populate('doctorId');
-        if (!appointment || String(appointment.doctorId.hospitalId) !== hospitalId) {
-            return res.status(403).json({ message: "Unauthorized" });
-        }
+        const appointment = await Appointment.findOne({ _id: req.params.id, hospitalId });
+        if (!appointment) return res.status(404).json({ message: "Booking not found" });
 
         appointment.status = 'Cancelled-By-Hospital';
         appointment.paymentStatus = 'Refund-Initiated'; 
         appointment.cancellationDetails = {
             cancelledBy: hospitalId,
-            reason: reason || "Rejected by hospital administration",
+            reason: reason || "Hospital rejected the request",
             cancelledAt: new Date()
         };
 
+        // Agar Bed reserved thi, toh wapas Available karein
+        if (appointment.bedId) {
+            await Ward.updateOne(
+                { "beds._id": appointment.bedId }, 
+                { $set: { "beds.$.status": "Available" } }
+            );
+        }
+
         await appointment.save();
-        res.json({ success: true, message: "Appointment rejected and refund initiated", data: appointment });
+        res.json({ success: true, message: "Booking rejected and bed released", data: appointment });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// 4. GET HOSPITAL APPOINTMENT STATS (For Dashboard Cards)
+// 4. DASHBOARD STATS (Screenshot 4 Mapping)
 // endpoint: GET /hospital/doctor/appointments/stats
-const getHospitalAppointmentStats = async (req, res) => {
+const getHospitalStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const hospitalDoctors = await Doctor.find({ hospitalId }).select('_id');
-        const doctorIds = hospitalDoctors.map(doc => doc._id);
 
         const stats = await Appointment.aggregate([
-            { $match: { doctorId: { $in: doctorIds } } },
+            { $match: { hospitalId: new mongoose.Types.ObjectId(hospitalId) } },
             { $group: {
                 _id: null,
-                totalBookings: { $sum: 1 },
-                pendingApprovals: { $sum: { $cond: [{ $eq: ["$status", "Hospital-Pending"] }, 1, 0] } },
-                totalRevenue: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$totalAmount", 0] } },
-                completedVisits: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } }
+                emergencyCases: { $sum: { $cond: [{ $eq: ["$triageLevel", "Emergency"] }, 1, 0] } },
+                newAdmissions: { $sum: { $cond: [{ $eq: ["$bookingType", "Admission"] }, 1, 0] } },
+                dischargesPending: { $sum: { $cond: [{ $eq: ["$status", "Confirmed"] }, 1, 0] } }, // Ready for discharge
+                totalRevenue: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$totalAmount", 0] } }
             }}
         ]);
 
-        res.json({ 
-            success: true, 
-            data: stats[0] || { totalBookings: 0, pendingApprovals: 0, totalRevenue: 0, completedVisits: 0 } 
-        });
+        const data = stats[0] || { emergencyCases: 0, newAdmissions: 0, dischargesPending: 0, totalRevenue: 0 };
+
+        res.json({ success: true, data });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -121,5 +123,5 @@ module.exports = {
     getHospitalAllBookings, 
     approveHospitalBooking, 
     rejectHospitalBooking,
-    getHospitalAppointmentStats 
+    getHospitalStats 
 };

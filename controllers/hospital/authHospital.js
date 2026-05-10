@@ -1,6 +1,7 @@
 const Hospital = require('../../models/Hospital');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const Ward = require('../../models/Ward');
 
 const generateToken = (id, role) => {
     // Agar development hai toh 100 saal (maano expire hi nahi hoga)
@@ -173,4 +174,28 @@ const updateHospitalProfile = async (req, res) => {
     }
 };
 
-module.exports = { registerHospital, loginHospital, updateHospitalProfile };
+const getMyHospitalProfile = async (req, res) => {
+    try {
+        const hospital = await Hospital.findById(req.user.id).select('-password');
+        const wards = await Ward.find({ hospitalId: req.user.id });
+        
+        // Dynamic capacity calculation
+        const totalBeds = wards.reduce((sum, w) => sum + w.totalBeds, 0);
+        const allocated = wards.reduce((sum, w) => sum + (w.totalBeds - w.availableBeds), 0);
+
+        res.json({
+            success: true,
+            data: {
+                hospital,
+                capacity: {
+                    total: totalBeds,
+                    allocated: allocated,
+                    remaining: totalBeds - allocated
+                },
+                wards // Lists ICU and Ward Units separately
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+module.exports = { registerHospital, loginHospital, updateHospitalProfile, getMyHospitalProfile };

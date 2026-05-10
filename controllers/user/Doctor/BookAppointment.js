@@ -9,6 +9,8 @@ const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const moment = require('moment');
 const crypto = require('crypto');
 
+const Bed = require('../../../models/Bed'); // For hospital admissions
+
 // 1. GET ALL SPECIALIZATIONS (For dropdown)
 // endpoint: GET /user/doctors/specializations
 const getSpecializations = async (req, res) => {
@@ -148,175 +150,133 @@ const validateCoupon = async (req, res) => {
 };
 // --- B. CHECKOUT SUMMARY (Calculate Price Breakdown) ---
 // endpoint: POST /user/doctors/checkout-summary
+// 1. UNIFIED CHECKOUT SUMMARY (Sabse Important)
+// Yeh API batayegi ki final paisa kitna lagega Admission ya Appointment ka
 const getCheckoutSummary = async (req, res) => {
     try {
-        const { doctorId, consultationType, couponCode, distance = 0 } = req.body;
+        const { doctorId, bedId, hospitalId, consultationType, couponCode, distance = 0, days = 1 } = req.body;
 
-        const doctor = await Doctor.findById(doctorId);
-        if (!doctor) return res.status(404).json({ message: "Doctor not found" });
-
-        // 1. Base Fee
         let baseFee = 0;
-        if (consultationType === 'Home Visit') baseFee = doctor.fees.home;
-        else if (consultationType === 'Video Consult') baseFee = doctor.fees.online;
-        else baseFee = doctor.fees.clinic;
-
-        // 2. Visit/Travel Charges (Only for Home Visit)
         let visitCharge = 0;
-        if (consultationType === 'Home Visit') {
-            const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId }) || {
-                fixedPrice: 100, fixedDistance: 3, pricePerKM: 10 // Default fallback
-            };
+        let subtotal = 0;
 
-            visitCharge = chargeConfig.fixedPrice;
-            if (distance > chargeConfig.fixedDistance) {
-                visitCharge += (distance - chargeConfig.fixedDistance) * chargeConfig.pricePerKM;
+        // CASE A: Agar Doctor Appointment hai
+        if (doctorId) {
+            const doctor = await Doctor.findById(doctorId);
+            if (!doctor) return res.status(404).json({ message: "Doctor not found" });
+
+            if (consultationType === 'Home Visit') {
+                baseFee = doctor.fees.home;
+                // Visit Charges Calculate karein DeliveryCharge model se
+                const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctor.hospitalId || doctor._id });
+                if (chargeConfig) {
+                    visitCharge = chargeConfig.fixedPrice;
+                    if (distance > chargeConfig.fixedDistance) {
+                        visitCharge += (distance - chargeConfig.fixedDistance) * chargeConfig.pricePerKM;
+                    }
+                }
+            } else if (consultationType === 'Video Consult') {
+                baseFee = doctor.fees.online;
+            } else {
+                baseFee = doctor.fees.clinic;
             }
+        } 
+        // CASE B: Agar Bed Booking (Admission) hai
+        else if (bedId) {
+            const bed = await Bed.findById(bedId);
+            if (!bed) return res.status(404).json({ message: "Bed type not found" });
+            baseFee = bed.pricePerDay * days;
         }
 
-        let subtotal = baseFee + visitCharge;
+        subtotal = baseFee + visitCharge;
 
-        // 3. Coupon Discount
+        // Coupon Logic (Professional Validation)
         let discount = 0;
-        let appliedCoupon = null;
-
+        let appliedCouponId = null;
         if (couponCode) {
             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-            if (coupon) {
-                // Validation: Expiry, Min Amount, Max Usage
-                const isExpired = new Date(coupon.expiryDate) < new Date();
-                const isMinMet = subtotal >= coupon.minOrderAmount;
-
-                if (!isExpired && isMinMet) {
-                    discount = (subtotal * coupon.discountPercentage) / 100;
-                    if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
-                    appliedCoupon = coupon.couponName;
-                }
+            if (coupon && subtotal >= coupon.minOrderAmount) {
+                discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                appliedCouponId = coupon._id;
             }
         }
-
-        const totalPayable = subtotal - discount;
 
         res.json({
             success: true,
             data: {
                 baseFee,
                 visitCharge,
-                subtotal,
                 discount,
-                couponApplied: appliedCoupon,
-                totalPayable,
-                currency: "$"
+                subtotal,
+                totalPayable: subtotal - discount,
+                appliedCouponId,
+                currency: "₹"
             }
         });
-
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ message: error.message });
     }
 };
+
 
 // --- C. UPDATED BOOK APPOINTMENT (With Discount & Charges) ---
 // Updated POST /user/doctors/book
 // POST /user/doctors/book
 // bookAppointment controller (Updated)
+// --- UNIFIED BOOKING CONTROLLER (Works for both Independent & Hospital Doctors) ---
 const bookAppointment = async (req, res) => {
     try {
-        const { doctorId, appointmentDate, appointmentTime, consultationType, patients, pricing, couponId, couponCode } = req.body;
+        const { 
+            doctorId, bedId, hospitalId, appointmentDate, appointmentTime, 
+            consultationType, patients, pricing, couponId, couponCode 
+        } = req.body;
 
-        if (!pricing) return res.status(400).json({ success: false, message: "Pricing data missing" });
+        const bookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const trackingOTP = Math.floor(1000 + Math.random() * 9000).toString();
 
-        // Slot Validation... (same as before)
+        // Agar Hospital Id missing hai toh Doctor se Admission tak ki link check karein
+        let finalHospitalId = hospitalId;
+        if (doctorId && !finalHospitalId) {
+            const doc = await Doctor.findById(doctorId);
+            finalHospitalId = doc.hospitalId;
+        }
 
-        let bookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        const totalAmount = Number(pricing.totalAmount) || 0;
-
-        const appointmentData = {
+        const appointment = await Appointment.create({
             userId: req.user.id,
-            doctorId,
+            doctorId: doctorId || null,
+            bedId: bedId || null,
+            hospitalId: finalHospitalId || null,
+            bookingType: bedId ? 'Admission' : 'Appointment',
             patients: typeof patients === 'string' ? JSON.parse(patients) : patients,
-            appointmentDate: new Date(appointmentDate),
-            appointmentTime,
-            consultationType,
+            appointmentDate,
+            appointmentTime: bedId ? 'Admission' : appointmentTime,
+            consultationType: bedId ? 'Clinic Visit' : consultationType,
+            
             pricingBreakdown: {
-                baseFee: Number(pricing.baseFee) || 0,
-                visitCharges: Number(pricing.visitCharges) || 0,
-                extraCharges: Number(pricing.extraCharges) || 0,
-                subtotal: Number(pricing.subtotal) || 0,
-                discountAmount: Number(pricing.discountAmount) || 0
+                baseFee: pricing.baseFee,
+                visitCharges: pricing.visitCharge || 0,
+                discountAmount: pricing.discount || 0,
+                subtotal: pricing.subtotal
             },
-            totalAmount: totalAmount,
+            couponDetails: couponId ? { couponId, couponCode, discountValue: pricing.discount } : undefined,
+            totalAmount: pricing.totalPayable,
             bookingId,
-            status: 'Pending',
-            paymentStatus: 'Paid'
-        };
+            status: finalHospitalId ? 'Hospital-Pending' : 'Pending',
+            paymentStatus: 'Paid',
+            'tracking.otp': trackingOTP
+        });
 
-        // Coupon Logic...
-        const appointment = await Appointment.create(appointmentData);
+        // Bed availability update logic
+        if (bedId) {
+            await Bed.findByIdAndUpdate(bedId, { $inc: { availableBeds: -1 } });
+        }
 
-        res.status(201).json({ success: true, bookingId, data: appointment });
+        res.status(201).json({ success: true, bookingId, trackingOTP, data: appointment });
     } catch (error) {
-        console.error("Booking Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ message: error.message });
     }
 };
 
-
-
-
-// 4. BOOK APPOINTMENT (Hospital-Aware Logic)
-// endpoint: POST /user/doctors/book
-// const bookAppointment = async (req, res) => {
-//     try {
-//         // Patients data usually comes as stringified JSON in form-data
-//         const patientsData = typeof req.body.patients === 'string' 
-//             ? JSON.parse(req.body.patients) 
-//             : req.body.patients;
-
-//         const {
-//             doctorId, appointmentDate, appointmentTime, 
-//             consultationType, totalAmount 
-//         } = req.body;
-
-//         if (!patientsData || !Array.isArray(patientsData) || patientsData.length === 0) {
-//             return res.status(400).json({ message: "Please select at least one patient" });
-//         }
-
-//         const doctor = await Doctor.findById(doctorId);
-//         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
-
-//         const initialStatus = doctor.role === 'hospital-doctor' ? 'Hospital-Pending' : 'Pending';
-//         const bookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        
-//         // 🚀 Figma Logic: Generate 4-digit OTP for Tracking
-//         const trackingOTP = Math.floor(1000 + Math.random() * 9000).toString();
-
-//         const newAppointment = await Appointment.create({
-//             userId: req.user.id,
-//             doctorId,
-//             hospitalId: doctor.hospitalId,
-//             patients: patientsData,
-//             appointmentDate,
-//             appointmentTime,
-//             consultationType,
-//             totalAmount,
-//             bookingId,
-//             status: initialStatus, 
-//             paymentStatus: 'Paid',
-//             'tracking.otp': trackingOTP, // Figma tracking screen ke liye
-//             medicalReport: req.file ? req.file.path : null // Figma: Upload Report
-//         });
-
-//         res.status(201).json({ 
-//             success: true, 
-//             message: "Booking Successful", 
-//             bookingId, 
-//             trackingOTP,
-//             data: newAppointment 
-//         });
-//     } catch (error) {
-//         res.status(500).json({ message: error.message });
-//     }
-// };
 
 const verifyTrackingOTP = async (req, res) => {
     try {

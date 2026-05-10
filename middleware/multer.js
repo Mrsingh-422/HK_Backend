@@ -595,6 +595,21 @@ const nursePackageUploads = multer({
 ]);
 
 
+// ==========================================
+// 33. HOSPITAL SERVICES (Icons/Photos)
+// ==========================================
+const hospitalServiceDir = 'public/uploads/hospital_services';
+ensureDir(hospitalServiceDir);
+
+const serviceUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, hospitalServiceDir),
+        filename: (req, file, cb) => cb(null, `service-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 3 * 1024 * 1024 } // 3MB
+});
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -630,6 +645,7 @@ module.exports = {
     fireStationUpdateUploads, // Screen 21: Update Station Profile
     fireEvidenceUploads, // Screen 101: Upload Evidence
     fireLeaveUploads, // Screen: New Request
-    nursePackageUploads // Screen: New Package
+    nursePackageUploads, // Screen: New Package
+    serviceUpload // Screen: Add Service
 
 };  

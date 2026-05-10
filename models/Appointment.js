@@ -3,8 +3,9 @@ const mongoose = require('mongoose');
 
 const appointmentSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', required: true },
+    doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor' },
     hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital', default: null },
+    bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null }, // For hospital admissions
 
     patients: [{
         patientName: { type: String, required: true },
@@ -19,8 +20,7 @@ const appointmentSchema = new mongoose.Schema({
     appointmentTime: { type: String, required: true }, 
     consultationType: { 
         type: String, 
-        enum: ['Video Consult', 'Clinic Visit', 'Home Visit'], 
-        required: true 
+        enum: ['Video Consult', 'Clinic Visit', 'Home Visit']
     },
     
     // --- Pricing & Coupon Logic ---
@@ -47,7 +47,17 @@ const appointmentSchema = new mongoose.Schema({
         enum: ['Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'], 
         default: 'Pending' 
     },
+    bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null },
+    stayDuration: { type: Number, default: 0 }, // For Bed Booking (Number of days)
+    bookingType: { type: String, enum: ['Appointment', 'Admission'], default: 'Appointment' },
        bookingId: { type: String, unique: true },
+       triageLevel: { type: String, enum: ['Emergency', 'Very Urgent', 'Urgent', 'Routine'] },
+    wardName: { type: String },
+    bedNumber: { type: String },
+    specialServices: [{ 
+        serviceName: String, 
+        price: Number 
+    }],
 
 }, { timestamps: true });
 

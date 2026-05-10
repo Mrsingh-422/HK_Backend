@@ -6,21 +6,14 @@ const {
     getHospitalAllBookings,
     approveHospitalBooking,
     rejectHospitalBooking,
-    getHospitalAppointmentStats  
+    getHospitalStats  
 } = require('../../../controllers/hospital/hospitalDoctor/hosAppoinment');
 
-// base route: /hospital/doctor/appointments
+// Base URL: /hospital/doctor/appointments
 
-// 1. Dashboard Stats (Total Bookings, Revenue etc.)
-router.get('/stats', protect('hospital'), getHospitalAppointmentStats);
-
-// 2. Hospital Admin Dashboard: View all bookings for their staff doctors
-router.get('/all-bookings', protect('hospital'), getHospitalAllBookings);
-
-// 3. Action: Approve appointment (Moves from Hospital-Pending to Confirmed)
+router.get('/stats', protect('hospital'), getHospitalStats); // Dashboard Numbers
+router.get('/all-bookings', protect('hospital'), getHospitalAllBookings); // Listing with filters
 router.patch('/approve/:id', protect('hospital'), approveHospitalBooking);
-
-// 4. Action: Reject appointment
 router.patch('/reject/:id', protect('hospital'), rejectHospitalBooking);
 
 module.exports = router;

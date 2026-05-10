@@ -15,6 +15,7 @@ const doctorSchema = new mongoose.Schema({
     city: { type: String, default: null },
     address: { type: String, default: null }, 
 
+    dutyStatus: { type: String, enum: ['On Duty', 'Off Duty', 'On Leave', 'Busy'], default: 'Off Duty' }, // For hospital doctors to toggle availability for appointments
     // Verification & Auth
     isPhoneVerified: { type: Boolean, default: false },
     resetOTP: { type: String, default: null },
