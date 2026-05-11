@@ -200,8 +200,87 @@ const searchMasterConsumables = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// ==========================================
+// 5. ORDER HISTORY (Figma: Completed/Cancelled Bookings)
+// ==========================================
+const getOrderHistory = async (req, res) => {
+    try {
+        const nurseId = req.user.id;
+        const { status, startDate, endDate } = req.query;
+
+        // Sirf wahi orders jo khatam ho chuke hain ya cancel hue hain
+        let query = { 
+            nurseId, 
+            status: { $in: ['Completed', 'Cancelled'] } 
+        };
+
+        // Optional status filter (e.g. ?status=Completed)
+        if (status) query.status = status;
+
+        // Optional Date Filter (History for specific range)
+        if (startDate && endDate) {
+            query.createdAt = { 
+                $gte: moment(startDate).startOf('day').toDate(), 
+                $lte: moment(endDate).endOf('day').toDate() 
+            };
+        }
+
+        const history = await NurseBooking.find(query)
+            .populate('userId', 'name phone profileImage')
+            .populate('assignedStaffId', 'name phone profilePic')
+            .sort({ updatedAt: -1 });
+
+        res.json({ success: true, count: history.length, data: history });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+// ==========================================
+// 6. TRACK NURSE (Figma: Active Job Progress)
+// ==========================================
+const trackNurse = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+        const nurseId = req.user.id;
+
+        // Aisa order dhoondo jo active ho (On-The-Way, Arrived, etc.)
+        const activeBooking = await NurseBooking.findOne({ 
+            _id: bookingId, 
+            nurseId 
+        })
+        .populate('userId', 'name phone address location')
+        .populate('assignedStaffId', 'name phone profilePic status'); // Assigned Driver info
+
+        if (!activeBooking) {
+            return res.status(404).json({ success: false, message: "Active booking not found" });
+        }
+
+        // Response format for Flutter (Map View)
+        res.json({ 
+            success: true, 
+            data: {
+                bookingStatus: activeBooking.status,
+                nurseDetails: activeBooking.assignedStaffId,
+                userDetails: activeBooking.userId,
+                address: activeBooking.address,
+                // Simulation for tracking (Flutter will use lat/lng from assignedStaffId)
+                progress: {
+                    isOnWay: activeBooking.status === 'On-The-Way',
+                    isArrived: activeBooking.status === 'Arrived',
+                    isStarted: activeBooking.status === 'Service-Started'
+                }
+            } 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+
 module.exports = { 
     getProviderDashboard, updateProviderProfile, manageNurseService, 
     getMyServices, deleteService, getBookingRequests, 
-    handleBookingAction, getAvailableStaff, assignStaffToBooking, searchMasterConsumables, getStaffByStatus
+    handleBookingAction, getAvailableStaff, assignStaffToBooking, searchMasterConsumables, getStaffByStatus,
+    getOrderHistory, trackNurse
 };

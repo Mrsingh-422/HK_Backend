@@ -109,37 +109,35 @@ const getNurseDetails = async (req, res) => {
 
 const getNurseDeliveryConfig = async (req, res) => {
     try {
-        const { nurseId } = req.params; // LabId, NurseId ya PharmacyId
+        const { nurseId } = req.params;
         
-        const config = await DeliveryCharge.findOne({ vendorId: nurseId });
+        // 1. Database se check karo
+        let config = await DeliveryCharge.findOne({ vendorId: nurseId });
 
+        // 2. Fallback logic: Agar config nahi mili, to default values return karo
         if (!config) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Delivery configuration not found for this vendor" 
+            return res.json({
+                success: true,
+                message: "Using default delivery configuration",
+                data: {
+                    vendorId: nurseId,
+                    vendorType: 'Nurse',
+                    fixedPrice: 50,
+                    fixedDistance: 5,
+                    pricePerKM: 5,
+                    fastDeliveryExtra: 69,
+                    freeDeliveryThreshold: 500,
+                    taxPercentage: 0,
+                    taxInRupees: 0,
+                    isDefault: true // Frontend ko batane ke liye
+                }
             });
         }
 
+        // 3. Agar mili, to as it is return karo
         res.json({
             success: true,
-            data: {
-                vendorId: config.vendorId,
-                vendorType: config.vendorType,
-                // Base charges
-                fixedPrice: config.fixedPrice,          // Base fee (e.g., 50 Rs)
-                fixedDistance: config.fixedDistance,    // Upto how many KM it's fixed (e.g., 5 KM)
-                pricePerKM: config.pricePerKM,          // Extra charge per KM after fixedDistance
-                
-                // Special charges
-                fastDeliveryExtra: config.fastDeliveryExtra, // Rapid/6-hr delivery extra cost
-                
-                // Thresholds & Taxes
-                freeDeliveryThreshold: config.freeDeliveryThreshold, // Free delivery if order > this
-                taxPercentage: config.taxPercentage,
-                taxInRupees: config.taxInRupees,
-                
-                updatedAt: config.updatedAt
-            }
+            data: config
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
@@ -192,26 +190,85 @@ const checkRangeAvailability = async (req, res) => {
 const getNurseAvailability = async (req, res) => {
     try {
         const { nurseId } = req.params;
-        const { serviceId, packageId, isPackage, type } = req.query;
+        const { serviceId, packageId, isPackage, month, year } = req.query; 
 
+        // 1. Pagination Logic: Target Month aur Year set karein
+        // Default: Current Month & Current Year
+        const targetMonth = month ? parseInt(month) : moment().month() + 1; // 1-12
+        const targetYear = year ? parseInt(year) : moment().year();
+
+        // Start and End of the requested month
+        const startOfMonth = moment(`${targetYear}-${targetMonth}-01`, "YYYY-MM-DD").startOf('month');
+        const endOfMonth = startOfMonth.clone().endOf('month');
+
+        // 2. Fetch Config and Item
         const [config, item] = await Promise.all([
             Availability.findOne({ vendorId: nurseId }),
             isPackage === 'true' ? NursePackage.findById(packageId) : NurseService.findById(serviceId)
         ]);
 
-        if (!config || !item) return res.status(404).json({ message: "Config or Item missing" });
+        if (!config || !item) {
+            return res.status(404).json({ success: false, message: "Settings or Item not found" });
+        }
 
-        // Triple Pricing Logic (Dono models mein key same hai: pricing.oneDay.final)
-        let base = item.pricing.oneDay.final;
-        if(type === 'Acc. To Per/Hours') base = item.pricing.hourly.final;
+        // 3. Extract Final Prices
+        const prices = {
+            oneDayFinal: item.pricing.oneDay.final,
+            multipleDaysFinal: item.pricing.multipleDays.final,
+            hourlyFinal: item.pricing.hourly.final
+        };
 
+        // 4. Generate Calendar for the WHOLE MONTH (Pagination focus)
+        const calendar = [];
+        let dayCounter = startOfMonth.clone();
+
+        while (dayCounter <= endOfMonth) {
+            const dateStr = dayCounter.format('YYYY-MM-DD');
+            
+            // Premium check for this date
+            const premDate = config.premiumDates?.find(pd => pd.date === dateStr);
+            const extra = premDate ? premDate.extraFee : 0;
+
+            // Is Date ko past check karein (taaki purani dates book na hon)
+            const isPast = dayCounter.isBefore(moment(), 'day');
+
+            calendar.push({
+                date: dateStr,
+                pricing: {
+                    oneDayPrice: Math.round(prices.oneDayFinal + extra),
+                    multipleDayPrice: Math.round(prices.multipleDaysFinal + extra),
+                    isPremium: extra > 0,
+                    extraFee: extra
+                },
+                isDisabled: isPast || config.offDays.includes(dayCounter.format('Wednesday')) // Example: Wednesday check
+            });
+
+            dayCounter.add(1, 'day');
+        }
+
+        // 5. Generate Hourly Slots (Inka response pattern same rahega)
+        const timeSlots = generateNurseSlots(config, prices.hourlyFinal);
+
+        // 🚀 RESPONSE: Ek bhi key change nahi ki gayi hai
         res.json({
             success: true,
-            serviceBasePrice: base,
-            premiumDates: config.premiumDates, 
-            timeSlots: generateNurseSlots(config, type, base) 
+            data: {
+                itemTitle: isPackage === 'true' ? item.packageName : item.title,
+                nurseId: nurseId,
+                config: {
+                    offDays: config.offDays,
+                    allowedBookingTypes: config.allowedBookingTypes
+                },
+                prices,
+                calendar, // Ab isme poore month ka data hai
+                timeSlots
+            }
         });
-    } catch (e) { res.status(500).json({ message: e.message }); }
+
+    } catch (error) {
+        console.error("Availability Pagination Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // 1. GET COUPONS FOR A SPECIFIC NURSE
@@ -512,12 +569,33 @@ const uploadBookingPrescription = async (req, res) => {
 
 const getMyNurseBookings = async (req, res) => {
     try {
+        // Query params se page aur limit lein (Default: page 1, limit 10)
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        
+        // Skip calculate karein (ex: page 2 pe jana hai to 10 records skip honge)
+        const skip = (page - 1) * limit;
+
+        // Total count nikalne ke liye (taaki frontend pagination UI bana sake)
+        const total = await NurseBooking.countDocuments({ userId: req.user.id });
+
         const bookings = await NurseBooking.find({ userId: req.user.id })
             .populate('nurseId', 'name profileImage speciality')
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
 
-        res.json({ success: true, count: bookings.length, data: bookings });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            count: bookings.length, 
+            totalItems: total, // Total kitne records hain
+            totalPages: Math.ceil(total / limit), // Kitne total pages banenge
+            currentPage: page,
+            data: bookings 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 

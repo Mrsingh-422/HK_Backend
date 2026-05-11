@@ -3,315 +3,266 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo - Enterprise Master Flow v2.4</title>
+    <title>Health Kangaroo - Ultimate Enterprise v2.6</title>
     
-    <!-- Enterprise Frameworks -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     
     <style>
-        /* CORE DESIGN SYSTEM */
         :root { 
             --brand: #00B377; 
             --brand-light: #E6F7F1; 
-            --orange: #FF8A00; 
-            --red: #FF4D4D; 
+            --pink: #FF4D8D;
+            --pink-light: #FFF0F5;
             --slate: #64748B; 
         }
 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F8FAFB; color: #1E293B; overflow-x: hidden; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F3F4F6; color: #1E293B; }
         
-        .app-container { max-width: 450px; margin: 0 auto; background: white; min-height: 100vh; position: relative; box-shadow: 0 0 100px rgba(0,0,0,0.1); border-left: 1px solid #F1F5F9; border-right: 1px solid #F1F5F9; }
+        .app-container { max-width: 450px; margin: 0 auto; background: #FFFFFF; min-height: 100vh; position: relative; box-shadow: 0 0 50px rgba(0,0,0,0.1); }
         
-        .screen { display: none; min-height: 100vh; padding-bottom: 160px; background: white; animation: figmaIn 0.4s ease-out; }
+        .screen { display: none; min-height: 100vh; padding-bottom: 120px; animation: slideUp 0.4s ease-out; }
         .screen.active { display: block; }
-        @keyframes figmaIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* CARDS & UI */
-        .figma-card { background: #FFFFFF; border-radius: 32px; border: 1px solid #F1F5F9; box-shadow: 0 15px 35px -12px rgba(0,0,0,0.05); }
-        .btn-brand { background: var(--brand); color: white; border-radius: 24px; font-weight: 800; transition: 0.3s; display: flex; align-items: center; justify-content: center; gap: 12px; box-shadow: 0 12px 25px rgba(0, 179, 119, 0.2); }
-        .btn-brand:active { transform: scale(0.96); }
+        .figma-card { background: white; border-radius: 28px; border: 1px solid #F1F5F9; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.04); transition: 0.3s; }
+        .figma-card:active { transform: scale(0.98); }
 
-        /* SLOTS GRID (THE FIX) */
-        .slot-master-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 4px; }
-        .slot-btn { border: 2px solid #F1F5F9; border-radius: 20px; padding: 18px 4px; font-size: 11px; font-weight: 900; text-align: center; background: white; color: var(--slate); transition: 0.2s; cursor: pointer; }
-        .slot-btn.available { color: var(--brand); border-color: var(--brand-light); background: var(--brand-light); }
-        .slot-btn.selected { background: var(--brand) !important; color: white !important; border-color: var(--brand) !important; box-shadow: 0 8px 20px rgba(0, 179, 119, 0.3); transform: translateY(-2px); }
-        .slot-btn.unavailable { background: #F8FAFC; color: #CBD5E1; border-color: #F8FAFC; cursor: not-allowed; opacity: 0.6; }
-
-        /* CONSULTATION UI */
-        .type-pill { flex: 1; padding: 14px; font-size: 10px; font-weight: 900; border-radius: 18px; color: var(--slate); text-align: center; transition: 0.3s; }
-        .type-pill.active { background: white; color: var(--brand); box-shadow: 0 6px 15px rgba(0,0,0,0.06); }
-
-        .coupon-box { min-width: 175px; border: 2.5px dashed #E2E8F0; padding: 18px; border-radius: 28px; background: white; cursor: pointer; position: relative; transition: 0.3s; }
-        .coupon-box.active { border-color: var(--brand); background: var(--brand-light); border-style: solid; }
-        .coupon-box.active::after { content: '✓'; position: absolute; -top: 10px; -right: 10px; background: var(--brand); color: white; width: 22px; height: 22px; border-radius: 50%; font-size: 11px; display: flex; items-center; justify-content: center; font-weight: 900; }
-
-        /* NAV & FOOTER */
-        .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 450px; background: white; border-top: 1px solid #F1F5F9; display: flex; justify-content: space-around; padding: 15px 10px 40px; z-index: 500; }
-        .tab-btn.active { color: var(--brand); font-weight: 900; }
+        .btn-master { border-radius: 20px; font-weight: 800; transition: 0.3s; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .btn-brand { background: var(--brand); color: white; box-shadow: 0 10px 20px rgba(0, 179, 119, 0.2); }
         
-        .checkout-footer { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 450px; background: white; padding: 25px 24px 45px; border-top: 1px solid #F1F5F9; z-index: 550; display: none; box-shadow: 0 -20px 50px rgba(0,0,0,0.06); }
+        .slot-btn { border: 2px solid #F1F5F9; border-radius: 18px; padding: 15px 5px; font-size: 11px; font-weight: 800; text-align: center; background: white; transition: 0.2s; }
+        .slot-btn.selected { background: var(--brand) !important; color: white !important; border-color: var(--brand); transform: translateY(-3px); }
+        .slot-btn.unavailable { opacity: 0.3; cursor: not-allowed; }
 
-        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .nav-pill { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; max-width: 400px; background: rgba(255,255,255,0.9); backdrop-filter: blur(20px); border-radius: 30px; display: flex; justify-content: space-around; padding: 12px; border: 1px solid rgba(0,0,0,0.05); z-index: 1000; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+        .tab-btn { color: #94A3B8; transition: 0.3s; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .tab-btn.active { color: var(--brand); }
+        .tab-btn.active i { transform: scale(1.1); }
+
         .currency-symbol::before { content: '₹'; margin-right: 2px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        
+        input:focus { border-color: var(--brand) !important; outline: none; }
     </style>
 </head>
-<body class="bg-gray-100">
+<body>
 
 <div class="app-container">
 
-    <!-- MASTER SYNC CONTROL -->
-    <header class="sticky top-0 bg-white z-[1000] p-4 border-b border-gray-100 shadow-sm">
-        <div class="flex justify-between items-center mb-4 px-1">
+    <!-- UNIVERSAL SYNC HEADER -->
+    <header class="p-6 bg-white border-b sticky top-0 z-[1100]">
+        <div class="flex justify-between items-center mb-4">
             <div class="flex items-center gap-3">
-                <div class="w-10 h-10 bg-brand rounded-2xl flex items-center justify-center text-white shadow-xl shadow-brand/20">
-                    <i data-lucide="shield-check" class="w-6 h-6"></i>
-                </div>
-                <div>
-                    <h1 class="font-black text-[13px] uppercase tracking-widest leading-none">Health Master</h1>
-                    <p class="text-[8px] text-gray-400 font-black mt-1 uppercase">Cloud Gateway : 5002</p>
-                </div>
+                <div class="w-10 h-10 bg-brand rounded-xl flex items-center justify-center text-white shadow-lg"><i data-lucide="activity"></i></div>
+                <h1 class="font-black text-sm uppercase tracking-tighter">Health Kangaroo <span class="text-brand">Pro</span></h1>
             </div>
-            <div class="bg-green-50 px-3 py-1.5 rounded-full border border-green-100 flex items-center gap-2">
+            <div class="flex gap-2">
                 <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span class="text-[9px] font-black text-brand uppercase">Sync v2.4 Active</span>
+                <span class="text-[9px] font-black uppercase text-gray-400">Live Sync</span>
             </div>
         </div>
         <div class="flex gap-2">
-            <input id="sync-token-input" type="text" placeholder="JWT Token from LocalStorage" class="flex-1 bg-gray-50 border rounded-2xl p-4 text-[10px] font-bold outline-none focus:ring-2 focus:ring-brand/20 transition">
-            <button onclick="igniteSync()" class="bg-black text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest">Connect</button>
+            <input id="sync-token-input" type="password" placeholder="Paste JWT Token..." class="flex-1 bg-gray-50 border rounded-xl px-4 py-3 text-[10px] font-bold">
+            <button onclick="igniteSync()" class="bg-black text-white px-5 py-3 rounded-xl text-[10px] font-black uppercase">Connect</button>
         </div>
     </header>
 
-    <!-- 1. DASHBOARD SCREEN -->
-    <div id="home-screen" class="screen active p-6 space-y-8">
+    <!-- 1. DASHBOARD -->
+    <div id="home-screen" class="screen active p-6 space-y-6">
         <div class="flex justify-between items-center">
+            <div>
+                <p id="u-greet-txt" class="text-[10px] font-black text-gray-400 uppercase tracking-widest">Good Morning</p>
+                <h2 class="text-2xl font-black tracking-tighter" id="u-name-display">Welcome Back</h2>
+            </div>
+            <div class="relative w-16 h-16">
+                <svg class="w-full h-full" viewBox="0 0 36 36">
+                    <path class="text-gray-100" stroke-width="3" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                    <path class="text-brand" stroke-width="3" stroke-dasharray="75, 100" stroke-linecap="round" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                </svg>
+                <div class="absolute inset-0 flex items-center justify-center font-black text-xs" id="u-score-val">75%</div>
+            </div>
+        </div>
+
+        <!-- QUICK ACTION CARDS -->
+        <div class="grid grid-cols-2 gap-4" id="home-summary-grid"></div>
+
+        <!-- PERIOD TRACKER SHORTCUT -->
+        <div class="figma-card p-5 bg-pink-50 border-pink-100 flex justify-between items-center cursor-pointer overflow-hidden relative" onclick="navigateTo('menstrual')">
+            <div class="flex items-center gap-4 z-10">
+                <div class="bg-white p-3 rounded-2xl text-pink-500 shadow-sm"><i data-lucide="droplets"></i></div>
+                <div>
+                    <h4 class="font-black text-sm text-pink-900">Period Cycle</h4>
+                    <p id="period-summary-txt" class="text-[10px] font-bold text-pink-500 uppercase">Updating insights...</p>
+                </div>
+            </div>
+            <i data-lucide="chevron-right" class="text-pink-300 z-10"></i>
+            <div class="absolute -right-4 -bottom-4 opacity-5 text-pink-500"><i data-lucide="heart" class="w-24 h-24"></i></div>
+        </div>
+
+        <!-- PILL REMINDER CARD -->
+        <div class="figma-card p-5 bg-emerald-50 border-emerald-100 flex justify-between items-center cursor-pointer" onclick="navigateTo('pills')">
             <div class="flex items-center gap-4">
-                <img id="u-pfp-master" src="https://i.pravatar.cc/100?u=hk" class="w-16 h-16 rounded-[28px] border-4 border-brand-light object-cover shadow-lg bg-gray-100">
+                <div class="bg-white p-3 rounded-2xl text-emerald-500 shadow-sm"><i data-lucide="pill"></i></div>
                 <div>
-                    <p id="u-greet-txt" class="text-gray-400 text-[10px] font-black uppercase tracking-[2.5px]">नमस्ते, User</p>
-                    <div class="flex items-center gap-1 font-black text-xl tracking-tighter">
-                        <i data-lucide="map-pin" class="w-4 h-4 text-red-500"></i> <span id="u-loc-txt">Detecting...</span>
-                    </div>
+                    <h4 class="font-black text-sm text-emerald-900">Daily Medications</h4>
+                    <p id="pill-summary-count" class="text-[10px] font-bold text-emerald-500 uppercase">Syncing schedule...</p>
                 </div>
             </div>
-            <div class="w-14 h-14 rounded-full border-[6px] border-brand-light flex items-center justify-center bg-white shadow-inner">
-                <span id="u-score-val" class="font-black text-[13px] text-brand">--</span>
-            </div>
-        </div>
-
-        <div id="home-summary-grid" class="grid grid-cols-2 gap-5"></div>
-
-        <div class="figma-card p-6 border-brand/5 bg-brand-light/20 flex justify-between items-center group cursor-pointer" onclick="navigateTo('pills')">
-            <div class="flex items-center gap-5">
-                <div class="bg-brand text-white p-4 rounded-2xl shadow-2xl transition group-hover:rotate-12"><i data-lucide="pill" class="w-7 h-7"></i></div>
-                <div>
-                    <h4 class="font-black text-sm text-gray-800 uppercase tracking-tighter">Pill Reminder</h4>
-                    <p id="pill-summary-count" class="text-[10px] text-brand font-black uppercase tracking-widest mt-1">Checking Schedule...</p>
-                </div>
-            </div>
-            <i data-lucide="chevron-right" class="w-5 h-5 text-brand"></i>
-        </div>
-
-        <div class="space-y-4">
-            <div class="flex justify-between items-center px-1">
-                <h3 class="font-black text-xl text-gray-800 tracking-tighter">Health Insights</h3>
-                <button class="text-[10px] font-black text-brand uppercase border-b-2 border-brand/20">See All</button>
-            </div>
-            <div id="dashboard-articles-reel" class="flex gap-5 overflow-x-auto no-scrollbar pb-4"></div>
+            <i data-lucide="chevron-right" class="text-emerald-300"></i>
         </div>
     </div>
 
     <!-- 2. DOCTOR LISTING -->
-    <div id="doctors-screen" class="screen p-6 space-y-7">
-        <div class="flex items-center gap-5">
-            <button onclick="navigateTo('home')" class="p-4 bg-gray-100 rounded-3xl"><i data-lucide="arrow-left" class="w-6 h-6 text-gray-700"></i></button>
-            <h2 class="text-3xl font-black tracking-tighter text-gray-800">Specialists</h2>
-        </div>
-        <div id="specs-list" class="flex gap-4 overflow-x-auto no-scrollbar pb-2"></div>
-        <div id="docs-list-main" class="space-y-6 mt-4"></div>
+    <div id="doctors-screen" class="screen p-6 space-y-6">
+        <h2 class="text-3xl font-black tracking-tighter">Find Specialist</h2>
+        <div id="specs-list" class="flex gap-3 overflow-x-auto no-scrollbar pb-2"></div>
+        <div id="docs-list-main" class="space-y-4"></div>
     </div>
 
     <!-- 3. DOCTOR PROFILE & SLOTS -->
     <div id="profile-screen" class="screen">
-        <div class="relative h-80">
-            <img id="p-hero-img" class="w-full h-full object-cover bg-gray-50">
-            <button onclick="navigateTo('doctors')" class="absolute top-8 left-6 bg-white/20 backdrop-blur-3xl p-4 rounded-[22px] text-white shadow-xl">
-                <i data-lucide="arrow-left" class="w-6 h-6"></i>
-            </button>
+        <div class="relative h-72">
+            <img id="p-hero-img" class="w-full h-full object-cover">
+            <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+            <button onclick="navigateTo('doctors')" class="absolute top-6 left-6 bg-white/20 backdrop-blur-md p-3 rounded-2xl text-white"><i data-lucide="arrow-left"></i></button>
         </div>
-
-        <div class="relative z-10 -mt-16 bg-white rounded-t-[60px] p-8 space-y-10 min-h-screen border-t border-gray-100">
-            <div class="text-center space-y-3">
-                <h2 id="p-doc-name" class="text-3xl font-black tracking-tighter text-gray-900 leading-none">--</h2>
-                <div class="flex justify-center items-center gap-3">
-                    <span id="p-doc-spec" class="bg-brand text-white font-black text-[10px] px-4 py-1.5 rounded-full uppercase tracking-[2px]">--</span>
-                    <div class="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-50 rounded-xl border border-yellow-100">
-                        <i data-lucide="star" class="w-3.5 h-3.5 fill-yellow-400 text-yellow-400"></i>
-                        <span id="p-doc-rating" class="text-sm font-black text-yellow-800">--</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="cons-type-reel">
-                <button onclick="switchType('Clinic Visit')" id="cs-clinic" class="type-pill active">CLINIC</button>
-                <button onclick="switchType('Video Consult')" id="cs-video" class="type-pill">VIDEO</button>
-                <button onclick="switchType('Home Visit')" id="cs-home" class="type-pill">HOME</button>
-            </div>
-
-            <div class="figma-card p-6 bg-gray-50 flex justify-between items-center border-dashed border-2">
+        <div class="relative -mt-12 bg-white rounded-t-[40px] p-8 space-y-8 min-h-screen">
+            <div class="flex justify-between items-start">
                 <div>
-                    <p class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Standard Fee</p>
-                    <p id="p-fee-display" class="font-black text-brand text-3xl currency-symbol">0</p>
+                    <h2 id="p-doc-name" class="text-2xl font-black tracking-tighter">Doctor Name</h2>
+                    <span id="p-doc-spec" class="bg-brand-light text-brand px-3 py-1 rounded-full text-[10px] font-black uppercase">Cardiologist</span>
                 </div>
-                <div class="bg-brand text-white p-3 rounded-2xl shadow-lg shadow-brand/20"><i data-lucide="credit-card" class="w-7 h-7"></i></div>
-            </div>
-
-            <div class="space-y-6 pb-40">
-                <div class="flex justify-between items-center px-1">
-                    <h4 class="font-black text-gray-800 text-lg uppercase tracking-widest">Select Slot</h4>
-                    <span class="text-[10px] bg-black text-white px-3 py-1 rounded-full font-black uppercase">MAY 2026</span>
-                </div>
-                <div id="doctor-slots-grid-container" class="slot-master-grid">
-                    <!-- Dynamic Slots Restoration Fix -->
+                <div class="flex items-center gap-1 bg-yellow-50 px-3 py-1 rounded-xl text-yellow-600 font-bold text-sm">
+                    <i data-lucide="star" class="w-4 h-4 fill-current"></i> <span id="p-doc-rating">4.8</span>
                 </div>
             </div>
 
-            <div class="fixed bottom-0 left-0 w-full p-6 bg-white border-t z-[300] flex gap-4">
-                 <button id="p-btn-action-next" onclick="prepareBookingCheckout()" class="btn-brand w-full py-5 text-base shadow-2xl shadow-brand/40 disabled:opacity-30" disabled>Select a Slot First</button>
+            <div class="flex gap-2 p-1.5 bg-gray-50 rounded-2xl">
+                <button onclick="switchType('Clinic Visit')" id="cs-clinic" class="flex-1 py-3 text-[10px] font-black rounded-xl active-type">CLINIC</button>
+                <button onclick="switchType('Video Consult')" id="cs-video" class="flex-1 py-3 text-[10px] font-black rounded-xl">VIDEO</button>
+                <button onclick="switchType('Home Visit')" id="cs-home" class="flex-1 py-3 text-[10px] font-black rounded-xl">HOME</button>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3" id="doctor-slots-grid-container"></div>
+
+            <div class="fixed bottom-24 left-0 w-full p-6 bg-white/80 backdrop-blur-md">
+                <button id="p-btn-action-next" onclick="prepareBookingCheckout()" class="btn-master btn-brand w-full py-5 shadow-xl disabled:opacity-30" disabled>Select A Slot</button>
             </div>
         </div>
     </div>
 
-    <!-- 4. CHECKOUT SCREEN -->
-    <div id="checkout-screen" class="screen p-6 space-y-7">
-        <div class="flex items-center gap-5">
-            <button onclick="navigateTo('profile')" class="p-4 bg-gray-100 rounded-3xl"><i data-lucide="arrow-left" class="w-6 h-6"></i></button>
-            <h2 class="text-3xl font-black tracking-tighter text-gray-800 leading-none">Checkout Summary</h2>
+    <!-- 4. MENSTRUAL TRACKER -->
+    <div id="menstrual-screen" class="screen p-6 space-y-6">
+        <div class="flex items-center gap-4">
+            <button onclick="navigateTo('home')" class="p-3 bg-gray-100 rounded-2xl"><i data-lucide="chevron-left"></i></button>
+            <h2 class="text-2xl font-black tracking-tighter">Period Tracker</h2>
         </div>
 
-        <div class="figma-card p-6 border-orange-100 bg-orange-50/10 flex justify-between items-center">
-            <div class="flex items-center gap-5">
-                <div class="bg-orange-100 p-4 rounded-2xl text-orange-600 shadow-inner"><i data-lucide="zap" class="w-6 h-6"></i></div>
+        <div id="menstrual-insights-ui" class="figma-card p-6 bg-gradient-to-br from-pink-500 to-rose-400 text-white border-none shadow-pink-200">
+            <p class="text-[10px] font-black uppercase tracking-widest opacity-80 mb-2">Cycle Status</p>
+            <div id="menstrual-text-content" class="text-xl font-bold leading-tight">Syncing your health data...</div>
+            <div class="mt-6 h-2 bg-white/20 rounded-full overflow-hidden">
+                <div class="h-full bg-white w-2/3 shadow-lg shadow-white/50"></div>
+            </div>
+        </div>
+
+        <div class="figma-card p-6 space-y-5">
+            <div>
+                <label class="text-[10px] font-black uppercase text-gray-400 mb-2 block">Last Period Start Date</label>
+                <input type="date" id="last-period-date" class="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold text-sm">
+            </div>
+            <div>
+                <label class="text-[10px] font-black uppercase text-gray-400 mb-2 block">Typical Cycle Length</label>
+                <input type="number" id="cycle-len" placeholder="e.g. 28" class="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold text-sm">
+            </div>
+            <button onclick="savePeriodData()" class="btn-master w-full py-4 bg-pink-500 text-white shadow-lg shadow-pink-100">Update My Cycle</button>
+        </div>
+    </div>
+
+    <!-- 5. CHECKOUT -->
+    <div id="checkout-screen" class="screen p-6 space-y-6">
+        <h2 class="text-2xl font-black tracking-tighter">Booking Summary</h2>
+        
+        <div class="figma-card p-5 border-orange-100 bg-orange-50/30 flex justify-between items-center">
+            <div class="flex items-center gap-4">
+                <div class="bg-white p-3 rounded-2xl text-orange-500 shadow-sm"><i data-lucide="zap"></i></div>
                 <div>
-                    <h4 class="font-black text-sm text-orange-900 tracking-tight leading-none">Emergency Visit?</h4>
-                    <p class="text-[10px] text-orange-600 font-black uppercase mt-2 tracking-tighter">₹200 Extra Surcharge</p>
+                    <h4 class="font-black text-sm">Emergency Booking</h4>
+                    <p class="text-[9px] font-bold text-orange-400 uppercase">+ ₹200 Fast-track fee</p>
                 </div>
             </div>
-            <!-- FIXED ID: Matches syncRecalcTotal -->
-            <input type="checkbox" id="emergency-toggle-switch" onchange="syncRecalcTotal()" class="w-7 h-7 accent-orange-500 rounded-lg">
+            <input type="checkbox" id="emergency-toggle-switch" onchange="syncFinalRecalc()" class="w-6 h-6 accent-orange-500">
         </div>
 
-        <div class="figma-card p-8 space-y-4 border-2 border-gray-50 bg-white" id="checkout-price-reel"></div>
+        <div id="checkout-price-reel" class="figma-card p-6 space-y-4"></div>
 
-        <div class="space-y-4">
-            <h3 class="font-black text-gray-800 uppercase text-xs tracking-widest px-1">Apply Promo Offers</h3>
-            <div id="coupons-scroll-reel" class="flex gap-5 overflow-x-auto no-scrollbar pb-6"></div>
-        </div>
-
-        <div class="checkout-footer" id="checkout-footer-panel">
-            <div class="flex justify-between items-end mb-6 px-1">
+        <div class="fixed bottom-24 left-0 w-full p-6 bg-white border-t">
+            <div class="flex justify-between items-end mb-4">
                 <div>
-                    <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">Grand Total</p>
-                    <p id="txt-final-total" class="text-4xl font-black text-brand tracking-tighter currency-symbol">0</p>
+                    <p class="text-[10px] font-black text-gray-400 uppercase">Grand Total</p>
+                    <p id="txt-final-total" class="text-3xl font-black text-brand currency-symbol">0</p>
                 </div>
-                <div class="text-right">
-                    <p class="text-[9px] text-brand font-black uppercase border-b-2 border-brand/20 pb-0.5 tracking-tighter">₹ Saved today</p>
-                    <p id="txt-saved-amt" class="text-lg font-black text-gray-800 mt-1 currency-symbol">0</p>
-                </div>
+                <button onclick="executeEnterpriseBooking()" class="btn-master btn-brand px-8 py-4 shadow-xl">Confirm & Pay</button>
             </div>
-            <button onclick="executeEnterpriseBooking()" class="btn-brand w-full py-5 text-base shadow-2xl shadow-brand/40 uppercase tracking-widest active:scale-95 transition">Pay & Finalize Appointment</button>
         </div>
     </div>
 
-    <!-- 5. TRACKING -->
-    <div id="tracking-screen" class="screen p-10 text-center bg-white">
-        <div class="flex justify-between items-center mb-10">
-            <button onclick="navigateTo('home')" class="p-4 bg-gray-50 rounded-3xl shadow-sm"><i data-lucide="chevron-left" class="w-6 h-6 text-gray-800"></i></button>
-            <h3 class="font-black text-xl tracking-tight text-gray-800 uppercase">Confirmed</h3>
-            <div class="w-10"></div>
+    <!-- 6. TRACKING / OTP -->
+    <div id="tracking-screen" class="screen p-10 text-center">
+        <div class="bg-brand-light p-10 rounded-[50px] border-4 border-dashed border-brand/20 my-10 relative overflow-hidden">
+            <i data-lucide="check-circle" class="absolute -right-5 -bottom-5 w-32 h-32 text-brand opacity-10"></i>
+            <p class="font-black text-brand uppercase tracking-widest text-xs mb-4">Success! Your OTP is</p>
+            <h1 id="track-otp-ui-display" class="text-6xl font-black text-brand tracking-[8px]">----</h1>
         </div>
-        <div class="bg-brand-light p-14 rounded-[75px] border-4 border-dashed border-brand/20 relative shadow-inner overflow-hidden mb-12">
-            <p class="text-[14px] font-black text-brand uppercase tracking-[6.5px] mb-2 tracking-widest">SECURITY OTP</p>
-            <h1 id="track-otp-ui-display" class="text-7xl font-black text-brand my-12 tracking-[20px]">----</h1>
-            <p class="text-[10px] text-gray-400 font-black px-8 uppercase tracking-widest opacity-80 leading-relaxed tracking-tighter">Code valid for visit only</p>
-            <i data-lucide="check-circle" class="absolute -bottom-16 -right-16 w-48 h-44 text-brand opacity-10"></i>
-        </div>
-        <div id="track-info-card-box" class="figma-card p-6 flex items-center gap-6 text-left border-2 border-brand/10 mb-8 shadow-lg"></div>
-        <button onclick="navigateTo('home')" class="bg-black text-white py-5 rounded-[32px] font-black text-xs uppercase tracking-widest shadow-2xl w-full">Go to Dashboard</button>
+        <button onclick="navigateTo('home')" class="btn-master w-full py-5 bg-black text-white">Return to Dashboard</button>
     </div>
 
-    <!-- DATA VIEWS -->
-    <div id="tracker-screen" class="screen p-6 space-y-8">
-        <h2 class="text-3xl font-black tracking-tighter text-gray-800 uppercase tracking-widest">My Stats</h2>
-        <div id="calorie-master-ui" class="bg-orange-50 border border-orange-100 p-8 rounded-[55px] space-y-7 shadow-sm"></div>
-        <div id="hist-list-ui" class="space-y-4"></div>
-    </div>
+    <!-- SUB-SCREENS (STATS, PILLS, RECORDS) -->
+    <div id="tracker-screen" class="screen p-6 space-y-6"><h2 class="text-2xl font-black">Health Statistics</h2><div id="calorie-master-ui"></div><div id="hist-list-ui" class="space-y-3"></div></div>
+    <div id="pills-screen" class="screen p-6 space-y-6"><h2 class="text-2xl font-black">My Pills</h2><div id="active-pills-list" class="space-y-4"></div></div>
+    <div id="prescription-screen" class="screen p-6 space-y-6"><h2 class="text-2xl font-black">Prescriptions</h2><div id="records-list-container" class="space-y-4"></div></div>
 
-    <div id="pills-screen" class="screen p-6 space-y-8">
-        <h2 class="text-3xl font-black tracking-tighter text-center text-gray-800 uppercase tracking-widest">Pills</h2>
-        <div id="active-pills-list" class="space-y-6"></div>
-    </div>
-
-    <div id="prescription-screen" class="screen p-6 space-y-8">
-        <h2 class="text-3xl font-black tracking-tighter text-gray-800 uppercase tracking-widest">Reports</h2>
-        <div id="records-list-container" class="grid grid-cols-1 gap-6"></div>
-    </div>
-
-    <!-- BOTTOM TAB NAVIGATION -->
-    <nav class="bottom-nav">
-        <button onclick="navigateTo('home', this)" class="tab-btn active flex flex-col items-center gap-2" data-id="home"><i data-lucide="home"></i><span class="text-[8px] font-black uppercase tracking-widest">Home</span></button>
-        <button onclick="navigateTo('tracker', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="tracker"><i data-lucide="activity"></i><span class="text-[8px] font-black uppercase tracking-widest">Stats</span></button>
-        <button onclick="navigateTo('pills', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="pills"><i data-lucide="clock"></i><span class="text-[8px] font-black uppercase tracking-widest">Pills</span></button>
-        <button onclick="navigateTo('doctors', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="doctors"><i data-lucide="plus-circle"></i><span class="text-[8px] font-black uppercase tracking-widest">Book</span></button>
-        <button onclick="navigateTo('prescription', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="prescription"><i data-lucide="file-text"></i><span class="text-[8px] font-black uppercase tracking-widest">Records</span></button>
+    <!-- BOTTOM NAV -->
+    <nav class="nav-pill">
+        <button onclick="navigateTo('home', this)" class="tab-btn active"><i data-lucide="home" class="w-5 h-5"></i><span class="text-[8px] font-black uppercase">Home</span></button>
+        <button onclick="navigateTo('tracker', this)" class="tab-btn"><i data-lucide="bar-chart-2" class="w-5 h-5"></i><span class="text-[8px] font-black uppercase">Stats</span></button>
+        <button onclick="navigateTo('menstrual', this)" class="tab-btn"><i data-lucide="calendar" class="w-5 h-5"></i><span class="text-[8px] font-black uppercase">Cycle</span></button>
+        <button onclick="navigateTo('doctors', this)" class="tab-btn"><i data-lucide="plus-circle" class="w-5 h-5"></i><span class="text-[8px] font-black uppercase">Book</span></button>
+        <button onclick="navigateTo('pills', this)" class="tab-btn"><i data-lucide="clock" class="w-5 h-5"></i><span class="text-[8px] font-black uppercase">Pills</span></button>
     </nav>
 
 </div>
 
 <script>
     const MASTER_API = "http://localhost:5002";
-    
-    // Global Enterprise State
     let MASTER_HK_STORE = {
         token: localStorage.getItem('token') || "",
         docId: "",
         slotVal: null,
         consType: "Clinic Visit",
-        coupon: null,
-        pricing: { base: 0, visit: 0, extra: 0, disc: 0, sub: 0, total: 0 },
-        fees: { clinic: 0, video: 0, home: 0 }
+        pricing: { totalPayable: 0 },
+        fees: {}
     };
-function syncRecalcTotal() {
-    // Isse calculation trigger hogi jab emergency toggle change hoga
-    console.log("Recalculating totals...");
-    syncFinalRecalc(); 
-}
-    // --- Master API Sync Engine (Fixed HTML Response Protection) ---
+
+    // --- CORE ENGINE ---
     async function apiRequest(path, method = 'GET', data = null) {
-        const h = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MASTER_HK_STORE.token}` };
-        const conf = { method, headers: h };
+        const conf = { 
+            method, 
+            headers: { 
+                'Content-Type': 'application/json', 
+                'Authorization': `Bearer ${MASTER_HK_STORE.token}` 
+            } 
+        };
         if(data) conf.body = JSON.stringify(data);
-        
         try {
             const res = await fetch(`${MASTER_API}${path}`, conf);
-            
-            // Critical HTML error shield
-            const cType = res.headers.get("content-type");
-            if (!cType || !cType.includes("application/json")) {
-                console.error(`404/500 Error @ ${path}: Received non-JSON response.`);
-                return { success: false, message: "Endpoint Mismatch (HTML Error)" };
-            }
-
-            const json = await res.json();
-            if(!json.success) console.warn(`Sync Issue [${path}]: ${json.message}`);
-            return json;
-        } catch (e) {
-            console.error("Critical Failure:", e);
-            return { success: false, message: "Sync Engine Crashed" };
+            return await res.json();
+        } catch (e) { 
+            console.error("API Error:", e);
+            return { success: false, message: "Sync Failure" }; 
         }
     }
 
@@ -319,109 +270,80 @@ function syncRecalcTotal() {
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         document.getElementById(`${id}-screen`).classList.add('active');
         if(trigger) {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active', 'text-brand'));
-            trigger.classList.add('active', 'text-brand');
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            trigger.classList.add('active');
         }
-        document.getElementById('checkout-footer-panel').style.display = (id === 'checkout') ? 'block' : 'none';
-
-        // Controller Routing
+        
+        // Router
         if(id === 'home') syncHome();
-        if(id === 'doctors') syncDoctorEnviroment();
-        if(id === 'tracker') syncTrackerBalance();
+        if(id === 'doctors') syncDoctors();
+        if(id === 'menstrual') syncMenstrual();
+        if(id === 'tracker') syncTracker();
         if(id === 'pills') syncPills();
         if(id === 'prescription') syncReports();
         
         lucide.createIcons();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.scrollTo(0,0);
     }
 
     function igniteSync() {
-        const inp = document.getElementById('sync-token-input').value;
-        if(inp) {
-            MASTER_HK_STORE.token = inp;
-            localStorage.setItem('token', inp); 
-        } else if(!localStorage.getItem('token')) {
-            return alert("JWT Token required for sync.");
-        }
+        const val = document.getElementById('sync-token-input').value;
+        if(val) { MASTER_HK_STORE.token = val; localStorage.setItem('token', val); }
         navigateTo('home');
     }
 
-    // --- 1. DASHBOARD CONTROLLER ---
-    async function syncHome() {
-        const d = await apiRequest('/api/auth/user/dashboard');
-        const s = await apiRequest('/user/health-records/summary');
+    // --- MENSTRUAL TRACKER LOGIC ---
+    async function syncMenstrual() {
+        const res = await apiRequest('/user/doctor/menstrual/insights');
+        if(res.success && res.data) {
+            document.getElementById('menstrual-text-content').innerHTML = `
+                Next period starts in <span class="text-3xl block mt-1">${res.data.daysUntilNext} Days</span>
+            `;
+            document.getElementById('period-summary-txt').innerText = `Next in ${res.data.daysUntilNext} days`;
+        }
+    }
 
-        if(d.success) {
-            const h = d.data.header;
-            document.getElementById('u-greet-txt').innerText = `नमस्ते, ${h.userName}`;
-            document.getElementById('u-loc-txt').innerText = h.location || "Mohali, Punjab";
-            document.getElementById('u-pfp-master').src = h.profilePic || "https://i.pravatar.cc/100?u=hk";
-            
-            document.getElementById('dashboard-articles-reel').innerHTML = d.data.articles.map(art => `
-                <div class="min-w-[210px] figma-card overflow-hidden border shadow-sm">
-                    <img src="${art.image}" class="h-32 w-full object-cover">
-                    <div class="p-4"><p class="text-[8px] font-black text-brand uppercase mb-1">${art.category}</p>
-                    <p class="text-xs font-black truncate text-gray-800">${art.title}</p></div>
+    async function savePeriodData() {
+        const data = {
+            lastPeriodDate: document.getElementById('last-period-date').value,
+            cycleLength: parseInt(document.getElementById('cycle-len').value),
+            periodDuration: 5
+        };
+        const res = await apiRequest('/user/doctor/menstrual/update', 'POST', data);
+        if(res.success) {
+            alert("Cycle data updated successfully!");
+            syncMenstrual();
+        }
+    }
+
+    // --- DOCTOR BOOKING LOGIC ---
+    async function syncDoctors() {
+        const specs = await apiRequest('/user/doctors/specializations');
+        const list = await apiRequest('/user/doctors/list');
+
+        if(specs.success) {
+            document.getElementById('specs-list').innerHTML = specs.data.map(s => `
+                <div class="bg-white px-6 py-3 rounded-2xl border-2 border-gray-50 min-w-fit font-black text-[10px] uppercase text-gray-400">
+                    ${s.name}
                 </div>
             `).join('');
         }
 
-        if(s.success) {
-            document.getElementById('u-score-val').innerText = `${s.healthScore}%`;
-            const keys = [
-                { k: 'Heart rate', icon: 'heart', color: 'red' },
-                { k: 'Blood Pressure', icon: 'droplet', color: 'purple' },
-                { k: 'Calories', icon: 'flame', color: 'orange' },
-                { k: 'Steps', icon: 'footprints', color: 'blue' }
-            ];
-            document.getElementById('home-summary-grid').innerHTML = keys.map(m => {
-                const i = s.data[m.k];
-                return `<div class="figma-card p-5 border-l-4 border-l-${m.color}-500 shadow-sm bg-white">
-                    <div class="flex justify-between mb-2">
-                        <span class="text-[9px] text-gray-400 font-black uppercase tracking-tighter">${m.k}</span>
-                        <i data-lucide="${m.icon}" class="w-4 h-4 text-${m.color}-500"></i>
-                    </div>
-                    <p class="font-black text-base tracking-tighter text-gray-800">${i ? i.value : '--'}</p>
-                    <p class="text-[7px] text-brand font-black mt-1 uppercase">● Synced</p>
-                </div>`;
-            }).join('');
-        }
-        
-        const sch = await apiRequest('/user/doctor/pills/today');
-        document.getElementById('pill-summary-count').innerText = `${sch.data.length || 0} medications today`;
-        lucide.createIcons();
-    }
-
-    // --- 2. DOCTOR & SLOTS (RESTORED GRID) ---
-    async function syncDoctorEnviroment() {
-        const specs = await apiRequest('/user/doctors/specializations');
-        const list = await apiRequest('/user/doctors/list');
-
-        document.getElementById('specs-list').innerHTML = specs.data.map(s => `
-            <div class="bg-white p-3.5 border-2 border-gray-50 rounded-3xl text-center min-w-[115px] figma-card">
-                <div class="bg-brand-light p-2 rounded-2xl text-brand mx-auto w-fit mb-2"><i data-lucide="stethoscope" class="w-5 h-5"></i></div>
-                <p class="text-[9px] font-black uppercase text-gray-800 tracking-tighter">${s.name}</p>
-            </div>
-        `).join('');
-
-        document.getElementById('docs-list-main').innerHTML = list.data.map(d => `
-            <div onclick="hkLoadDoctorProfile('${d._id}')" class="figma-card p-5 flex gap-5 items-center cursor-pointer hover:border-brand/40 transition">
-                <img src="${MASTER_API}/${d.profileImage}" class="w-18 h-18 rounded-[30px] object-cover bg-gray-50 border shadow-sm">
-                <div class="flex-1">
-                    <h4 class="font-black text-sm text-gray-800 tracking-tight leading-none uppercase">${d.name}</h4>
-                    <p class="text-[9px] text-gray-400 font-bold uppercase mt-1.5 tracking-widest">${d.city} • ${d.experienceYears}y exp</p>
-                    <div class="flex items-center gap-3 mt-4">
-                        <p class="text-brand font-black text-base currency-symbol">${d.fees.clinic}</p>
-                        <button class="bg-brand text-white px-5 py-1.5 rounded-xl text-[8px] font-black uppercase tracking-widest shadow-sm">Consult</button>
+        if(list.success) {
+            document.getElementById('docs-list-main').innerHTML = list.data.map(d => `
+                <div onclick="loadDocProfile('${d._id}')" class="figma-card p-4 flex gap-4 items-center">
+                    <img src="${MASTER_API}/${d.profileImage}" class="w-16 h-16 rounded-2xl object-cover">
+                    <div class="flex-1">
+                        <h4 class="font-black text-sm uppercase">${d.name}</h4>
+                        <p class="text-[9px] font-bold text-gray-400 uppercase">${d.city} • ${d.experienceYears}y Exp</p>
+                        <p class="text-brand font-black text-sm mt-1 currency-symbol">${d.fees.clinic}</p>
                     </div>
                 </div>
-                <i data-lucide="arrow-right" class="w-4 h-4 text-gray-300"></i>
-            </div>
-        `).join('');
-        lucide.createIcons();
+            `).join('');
+        }
     }
 
-    async function hkLoadDoctorProfile(id) {
+    async function loadDocProfile(id) {
         MASTER_HK_STORE.docId = id;
         navigateTo('profile');
         const d = await apiRequest(`/user/doctors/details/${id}`);
@@ -429,194 +351,112 @@ function syncRecalcTotal() {
         
         if(d.success) {
             const doc = d.data;
-            MASTER_HK_STORE.fees = { clinic: doc.fees.clinic, video: doc.fees.online, home: doc.fees.home };
             document.getElementById('p-hero-img').src = `${MASTER_API}/${doc.profileImage}`;
             document.getElementById('p-doc-name').innerText = doc.name;
-            document.getElementById('p-doc-spec').innerText = doc.qualification || "GENERAL SPECIALIST";
+            document.getElementById('p-doc-spec').innerText = doc.qualification || "Specialist";
             document.getElementById('p-doc-rating').innerText = doc.averageRating;
+            MASTER_HK_STORE.fees = doc.fees;
             switchType('Clinic Visit');
         }
 
-        // FIXED SLOTS GRID MAPPING
-        const slotBox = document.getElementById('doctor-slots-grid-container');
-        if(s.success && s.slots) {
-            slotBox.innerHTML = s.slots.map(sl => `
-                <button onclick="captureSlotClick(this, '${sl.time}')" 
-                    class="slot-btn ${sl.available ? 'available' : 'unavailable'}" 
+        if(s.success) {
+            document.getElementById('doctor-slots-grid-container').innerHTML = s.slots.map(sl => `
+                <button onclick="selectSlot(this, '${sl.time}')" 
+                    class="slot-btn ${sl.available ? 'text-gray-800' : 'unavailable'}" 
                     ${!sl.available ? 'disabled' : ''}>${sl.time}</button>
             `).join('');
-        } else {
-            slotBox.innerHTML = `<p class="col-span-3 text-center text-xs font-black text-gray-400 py-12 uppercase tracking-[3px]">No availability found</p>`;
         }
     }
 
     function switchType(t) {
         MASTER_HK_STORE.consType = t;
-        document.querySelectorAll('.cons-pill').forEach(btn => btn.classList.remove('active'));
-        if(t === 'Clinic Visit') document.getElementById('cs-clinic').classList.add('active');
-        if(t === 'Video Consult') document.getElementById('cs-video').classList.add('active');
-        if(t === 'Home Visit') document.getElementById('cs-home').classList.add('active');
-        
-        const price = (t === 'Clinic Visit') ? MASTER_HK_STORE.fees.clinic : (t === 'Video Consult' ? MASTER_HK_STORE.fees.video : MASTER_HK_STORE.fees.home);
-        document.getElementById('p-fee-display').innerText = price;
+        const price = (t === 'Clinic Visit') ? MASTER_HK_STORE.fees.clinic : (t === 'Video Consult' ? MASTER_HK_STORE.fees.online : MASTER_HK_STORE.fees.home);
+        // UI color updates
     }
 
-    function captureSlotClick(el, val) {
+    function selectSlot(el, time) {
         document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
         el.classList.add('selected');
-        MASTER_HK_STORE.slotVal = val;
+        MASTER_HK_STORE.slotVal = time;
         document.getElementById('p-btn-action-next').disabled = false;
-        document.getElementById('p-btn-action-next').innerText = "PROCEED TO SUMMARY";
-    }
-
-    // --- 3. CHECKOUT & COUPON MASTER ---
-    function prepareBookingCheckout() {
-        navigateTo('checkout');
-        syncCouponsUI();
-        syncFinalRecalc();
-    }
-
-    async function syncCouponsUI() {
-        const res = await apiRequest(`/user/doctors/coupons/${MASTER_HK_STORE.docId}`);
-        const reel = document.getElementById('coupons-scroll-reel');
-        if(res.success && res.data.length > 0) {
-            reel.innerHTML = res.data.map(c => `
-                <div onclick="apiHandleValidateApply('${c.couponName}')" 
-                    class="coupon-pill min-w-[170px] ${MASTER_HK_STORE.coupon === c.couponName ? 'applied' : ''}">
-                    <p class="text-[11px] font-black text-brand uppercase tracking-[2px]">${c.couponName}</p>
-                    <p class="text-[9px] text-gray-500 font-bold mt-2 uppercase tracking-tighter">Get ${c.discountPercentage}% Discount</p>
-                </div>
-            `).join('');
-        } else {
-            reel.innerHTML = `<p class="text-[10px] text-gray-400 font-black px-1 italic">No promo offers available.</p>`;
-        }
-    }
-
-    async function apiHandleValidateApply(code) {
-        // --- FIXED SCHEMA: Passing subtotal to validate-coupon API ---
-        const res = await apiRequest('/user/doctors/validate-coupon', 'POST', {
-            couponCode: code,
-            subtotal: MASTER_HK_STORE.pricing.sub || 10, 
-            doctorId: MASTER_HK_STORE.docId
-        });
-
-        if(res.success) {
-            MASTER_HK_STORE.coupon = code;
-            alert(`🎉 Success: ${res.message}`);
-            syncFinalRecalc();
-            syncCouponsUI();
-        } else {
-            alert(`❌ Error: ${res.message}`);
-        }
     }
 
     async function syncFinalRecalc() {
-        const isEmg = document.getElementById('emergency-toggle-switch')?.checked || false;
+        const emg = document.getElementById('emergency-toggle-switch').checked;
         const res = await apiRequest('/user/doctors/checkout-summary', 'POST', {
             doctorId: MASTER_HK_STORE.docId,
             consultationType: MASTER_HK_STORE.consType,
-            couponCode: MASTER_HK_STORE.coupon,
-            isEmergency: isEmg,
-            distance: 5
+            isEmergency: emg
         });
 
         if(res.success) {
             const d = res.data;
-            MASTER_HK_STORE.pricing = { 
-                base: d.baseFee, visit: d.visitCharge, extra: isEmg ? 200 : 0, 
-                disc: d.discount, sub: d.subtotal, total: d.totalPayable 
-            };
-            
+            MASTER_HK_STORE.pricing = d;
             document.getElementById('checkout-price-reel').innerHTML = `
-                <h3 class="font-black text-[10px] text-gray-400 uppercase tracking-[5px] mb-8 tracking-widest">Payment Breakdown</h3>
-                <div class="flex justify-between items-center text-sm font-bold text-gray-600"><span class="opacity-70">Consult Fee</span><span class="currency-symbol text-gray-900">${d.baseFee}</span></div>
-                <div class="flex justify-between items-center text-sm font-bold text-gray-600 py-3"><span class="opacity-70">Service/Visit Charges</span><span class="currency-symbol text-gray-900">${d.visitCharge}</span></div>
-                ${isEmg ? `<div class="flex justify-between items-center text-sm font-black text-orange-600 pb-3"><span>Emergency Extra</span><span class="currency-symbol">200</span></div>` : ''}
-                ${d.discount > 0 ? `<div class="flex justify-between items-center text-sm text-brand font-black pt-3 border-t border-dashed"><span>Applied: ${d.couponApplied}</span><span>-₹${d.discount}</span></div>` : ''}
-                <div class="flex justify-between items-center pt-8 border-t border-gray-100 mt-6 font-black">
-                    <span class="text-xl tracking-tighter text-gray-800 uppercase">Grand Total</span>
-                    <span class="text-3xl text-brand tracking-tighter currency-symbol">${d.totalPayable}</span>
-                </div>
+                <div class="flex justify-between text-xs font-bold text-gray-400 uppercase"><span>Consultation</span><span class="currency-symbol text-gray-800">${d.baseFee}</span></div>
+                <div class="flex justify-between text-xs font-bold text-gray-400 uppercase"><span>Visit Charges</span><span class="currency-symbol text-gray-800">${d.visitCharge}</span></div>
+                ${emg ? '<div class="flex justify-between text-xs font-black text-orange-500 uppercase"><span>Emergency Fee</span><span>+ ₹200</span></div>' : ''}
+                <div class="pt-4 border-t flex justify-between font-black text-xl"><span>To Pay</span><span class="text-brand currency-symbol">${d.totalPayable}</span></div>
             `;
             document.getElementById('txt-final-total').innerText = d.totalPayable;
-            document.getElementById('txt-saved-amt').innerText = d.discount;
         }
     }
 
-async function executeEnterpriseBooking() {
-    // Pricing object se totalAmount yahan extract ho raha hai
-    const res = await apiRequest('/user/doctors/book', 'POST', {
-        doctorId: MASTER_HK_STORE.docId,
-        appointmentDate: moment().format('YYYY-MM-DD'),
-        appointmentTime: MASTER_HK_STORE.slotVal,
-        consultationType: MASTER_HK_STORE.consType,
-        totalAmount: MASTER_HK_STORE.pricing.total, // ✅ Backend ko totalAmount mil gaya
-        pricing: {
-             baseFee: MASTER_HK_STORE.pricing.base,
-             visitCharges: MASTER_HK_STORE.pricing.visit,
-             extraCharges: MASTER_HK_STORE.pricing.extra,
-             subtotal: MASTER_HK_STORE.pricing.sub,
-             discountAmount: MASTER_HK_STORE.pricing.disc,
-             totalAmount: MASTER_HK_STORE.pricing.total
-        },
-        couponId: MASTER_HK_STORE.couponId, // Ensure this exists
-        patients:[{
-            patientName: "Rahul Verma", 
-            patientAge: 34,
-            gender: "Male",
-            relation: "Self",
-            isMainUser: true
-        }]
-    });
+    function prepareBookingCheckout() { navigateTo('checkout'); syncFinalRecalc(); }
 
-    if(res.success) {
-        navigateTo('tracking');
-    } else {
-        alert(res.message);
-    }
-}
-    // --- OTHER SYNC LOADERS ---
-    async function syncTrackerBalance() {
-        const cal = await apiRequest('/user/health-records/calorie-breakdown');
-        const hist = await apiRequest('/user/health-records/history?page=1&limit=20');
-        
-        if(cal.success && cal.data) {
-            const d = cal.data; // percentage restored
-            document.getElementById('calorie-master-ui').innerHTML = `
-                <div class="flex justify-between items-center"><h4 class="font-black text-orange-900 text-xl tracking-tighter uppercase tracking-widest">Calories</h4><span class="bg-white text-orange-600 px-5 py-1.5 rounded-full text-[11px] font-black shadow-sm">${d.percentage || 0}% Of Goal</span></div>
-                <div class="space-y-4 mt-8">
-                    ${Object.entries(d.breakdown).map(([k,v]) => `<div class="flex justify-between text-sm text-orange-800 font-bold border-b border-orange-200 pb-3 uppercase tracking-widest"><span>${k}</span><span>${v} kcal</span></div>`).join('')}
-                </div>
-                <div class="pt-8 mt-2 flex justify-between font-black text-2xl text-orange-900 uppercase"><span>Total Daily Intake</span><span>${d.totalBurned}</span></div>
-            `;
+    async function executeEnterpriseBooking() {
+        const res = await apiRequest('/user/doctors/book', 'POST', {
+            doctorId: MASTER_HK_STORE.docId,
+            appointmentDate: moment().format('YYYY-MM-DD'),
+            appointmentTime: MASTER_HK_STORE.slotVal,
+            consultationType: MASTER_HK_STORE.consType,
+            totalAmount: MASTER_HK_STORE.pricing.totalPayable,
+            pricing: {
+                baseFee: MASTER_HK_STORE.pricing.baseFee,
+                visitCharges: MASTER_HK_STORE.pricing.visitCharge,
+                totalAmount: MASTER_HK_STORE.pricing.totalPayable
+            },
+            patients: [{ patientName: "Rahul Verma", patientAge: 30, gender: "Male", relation: "Self", isMainUser: true }]
+        });
+
+        if(res.success) {
+            document.getElementById('track-otp-ui-display').innerText = res.appointment.otp;
+            navigateTo('tracking');
+        } else {
+            alert(res.message);
         }
-        document.getElementById('hist-list-ui').innerHTML = hist.data.map(i => `
-            <div class="figma-card p-5 flex justify-between items-center bg-white border-2 border-gray-50 shadow-md">
-                <div class="flex gap-5 items-center">
-                    <div class="bg-gray-100 p-3.5 rounded-2xl text-brand border border-gray-50 shadow-inner"><i data-lucide="activity" class="w-6 h-6"></i></div>
-                    <div><p class="font-black text-sm text-gray-800 tracking-tight leading-none">${i.type}</p><p class="text-[9px] text-gray-400 font-black uppercase tracking-widest mt-2">${moment(i.date).format('DD MMM, hh:mm A')}</p></div>
-                </div>
-                <p class="font-black text-brand text-xl tracking-tighter uppercase">${i.value}</p>
-            </div>
-        `).join('');
-        lucide.createIcons();
+    }
+
+    // --- OTHER UI SYNC ---
+    async function syncHome() {
+        const d = await apiRequest('/api/auth/user/dashboard');
+        if(d.success) {
+            document.getElementById('u-name-display').innerText = d.data.header.userName;
+            document.getElementById('u-score-val').innerText = `${d.data.header.healthScore || 75}%`;
+        }
+        syncMenstrual();
     }
 
     async function syncPills() {
         const res = await apiRequest('/user/doctor/pills/my-pills');
         if(res.success) {
             document.getElementById('active-pills-list').innerHTML = res.data.map(p => `
-                <div class="figma-card p-7 border-l-[14px] ${p.status === 'Active' ? 'border-brand' : 'border-gray-200'} shadow-md">
-                    <div class="flex justify-between mb-6">
-                        <div><h4 class="font-black text-xl tracking-tighter text-gray-800 leading-none uppercase">${p.medicineName}</h4><p class="text-[11px] text-gray-400 font-black uppercase mt-2">${p.dosage} • ${p.frequency}</p></div>
-                        <span class="bg-brand-light text-brand text-[10px] font-black px-4 py-1.5 rounded-full uppercase shadow-sm border border-brand/10 tracking-widest">${p.status}</span>
-                    </div>
-                    <div class="space-y-4">
-                        ${p.times.map(t => `<div class="flex justify-between items-center p-5 bg-gray-50 rounded-[30px] border transition ${t.isTakenToday ? 'border-brand shadow-inner' : 'border-gray-100'}">
-                            <span class="text-sm font-black text-gray-600 uppercase tracking-widest">${t.time}</span>
-                            <button class="px-10 py-2.5 rounded-2xl text-[10px] font-black transition ${t.isTakenToday ? 'bg-brand text-white shadow-xl' : 'bg-white border-2 border-gray-200 text-gray-400'} uppercase tracking-widest">${t.isTakenToday ? '✓ Taken' : 'Mark'}</button>
-                        </div>`).join('')}
-                    </div>
+                <div class="figma-card p-5 border-l-8 border-brand">
+                    <h4 class="font-black uppercase text-sm">${p.medicineName}</h4>
+                    <p class="text-[10px] font-bold text-gray-400 mt-1">${p.dosage} • ${p.frequency}</p>
+                </div>
+            `).join('');
+            document.getElementById('pill-summary-count').innerText = `${res.data.length} pills scheduled`;
+        }
+    }
+
+    async function syncTracker() {
+        const hist = await apiRequest('/user/health-records/history?page=1&limit=10');
+        if(hist.success) {
+            document.getElementById('hist-list-ui').innerHTML = hist.data.map(h => `
+                <div class="figma-card p-4 flex justify-between items-center">
+                    <div><p class="font-black text-xs uppercase">${h.type}</p><p class="text-[9px] text-gray-400">${moment(h.date).format('lll')}</p></div>
+                    <span class="font-black text-brand">${h.value}</span>
                 </div>
             `).join('');
         }
@@ -626,15 +466,11 @@ async function executeEnterpriseBooking() {
         const res = await apiRequest('/user/doctors/prescriptions');
         if(res.success) {
             document.getElementById('records-list-container').innerHTML = res.data.map(p => `
-                <div class="figma-card p-6 space-y-6 border-2 border-brand/5 shadow-inner">
-                    <div class="flex justify-between items-start">
-                        <div><p class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 uppercase">${moment(p.createdAt).format('DD MMM YYYY, hh:mm A')}</p><h4 class="font-black text-base text-gray-800 tracking-tight leading-none uppercase">Report Data Log</h4></div>
-                        <div class="bg-brand-light p-2.5 rounded-xl text-brand shadow-sm border border-brand/10"><i data-lucide="file-check" class="w-6 h-6"></i></div>
-                    </div>
-                    ${p.prescriptionImages.length > 0 ? `<div class="relative group cursor-pointer overflow-hidden rounded-[45px] border-4 border-white shadow-2xl"><img src="${MASTER_API}/${p.prescriptionImages[0]}" class="h-60 w-full object-cover group-hover:scale-105 transition duration-1000"></div>` : `<div class="h-28 bg-gray-100 rounded-[45px] border-2 border-dashed border-gray-100 flex items-center justify-center text-gray-300 text-[10px] font-black uppercase tracking-widest italic">Digital Record Unavailable</div>`}
-                    <div class="flex gap-4 pt-2">
-                        <button class="flex-1 bg-brand-light text-brand py-4 rounded-[30px] text-[11px] font-black uppercase tracking-widest shadow-sm">View Full</button>
-                        <button class="flex-1 bg-gray-50 text-gray-500 py-4 rounded-[30px] text-[11px] font-black uppercase tracking-widest">Share</button>
+                <div class="figma-card p-4 flex gap-4 items-center">
+                    <div class="bg-gray-100 p-3 rounded-xl"><i data-lucide="file-text" class="text-gray-400"></i></div>
+                    <div class="flex-1">
+                        <h4 class="font-black text-xs uppercase">Report #${p._id.slice(-6)}</h4>
+                        <p class="text-[9px] text-gray-400">${moment(p.createdAt).format('LL')}</p>
                     </div>
                 </div>
             `).join('');
@@ -642,7 +478,6 @@ async function executeEnterpriseBooking() {
         }
     }
 
-    // Startup
     lucide.createIcons();
 </script>
 </body>

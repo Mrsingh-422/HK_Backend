@@ -5,7 +5,8 @@ const {
     getHospitalMasterData,
     createWardUnit,getBedsInWard,admitPatientToBed,updateWardBeds, addHospitalService, updateHospitalService, 
     generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons ,
-    getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission,getAvailableDrivers, assignDriverToCase
+    getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission,getAvailableDrivers, assignDriverToCase,
+    getIncomingReferrals
 } = require('../../controllers/hospital/HospitalPanel');
 
 // Base: /hospital/panel
@@ -33,6 +34,7 @@ router.post('/assign-driver', protect('hospital'), assignDriverToCase);
 
 
 router.post('/discharge/finalize', protect('hospital'), generateFinalBillAndDischarge);
+router.get('/referrals/incoming', protect('hospital'), getIncomingReferrals);
 
 
 module.exports = router;

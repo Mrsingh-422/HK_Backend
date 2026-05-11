@@ -6,7 +6,8 @@ const { nurseServiceUploads, nurseDocUploads,userProfileUpload } = require('../.
 const {
     getProviderDashboard, updateProviderProfile, manageNurseService,
     getMyServices, deleteService, getBookingRequests,
-    handleBookingAction, getAvailableStaff, assignStaffToBooking,getStaffByStatus, searchMasterConsumables
+    handleBookingAction, getAvailableStaff, assignStaffToBooking,getStaffByStatus, searchMasterConsumables,
+    getOrderHistory, trackNurse
 } = require('../../../controllers/provider/Nurse/NurseDashboard');
 
 // base URL: /provider/nurse/dash
@@ -29,5 +30,9 @@ router.post('/staff/assign', protect('nurse'), assignStaffToBooking);
 router.get('/staff/status', protect('nurse'), getStaffByStatus); // Filter: ?status=Available/Busy/Off-Duty
 // CONSUMABLES (Master Search)
 router.get('/consumables/search', protect('nurse'), searchMasterConsumables);
+
+// ORDER HISTORY & Tracking
+router.get('/orders/history', protect('nurse'), getOrderHistory);
+router.get('/track/:bookingId', protect('nurse'), trackNurse);
 
 module.exports = router;

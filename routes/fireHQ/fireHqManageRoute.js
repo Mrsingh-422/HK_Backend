@@ -7,7 +7,7 @@ const { getDashboardStats,createFireCase,getIncidentDetails,
       getAdminContact,updateFireStation, deleteFireStation, updateJurisdiction,getJurisdictionData,
       requestBoundaryUpdate, getFullIncidentReport,getStationDetails,
 getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, markAllNotificationsRead,getBackupRequests, assignBackupStation,
-      getNearbyStationsForIncident,assignResources,getAllStationsForHQ, approveAndUpdateJurisdiction } = require('../../controllers/fireHQ/fireHqManage');
+      getNearbyStationsForIncident,assignResources,getAllStationsForHQ, approveAndUpdateJurisdiction,getSpecificCaseDetails } = require('../../controllers/fireHQ/fireHqManage');
 
 // base url : /fireHQ/management
 
@@ -50,4 +50,6 @@ router.get('/request-jurisdiction-update', protect('fire-hq'), getAllStationsFor
  
 // Endpoint: /fireHQ/management/station-area-update/:stationId
 router.put('/station-area-update/:stationId', protect('fire-hq'), approveAndUpdateJurisdiction);
+
+router.get('/case-details/:id', protect('fire-hq'), getSpecificCaseDetails);
 module.exports = router;

@@ -8,7 +8,7 @@ const {
     getHospitalColleagues, 
     transferPatient, 
     submitDischargeSummary, 
-    updateDutyStatus
+    updateDutyStatus,getMedicineList, updateClinicalSummary
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 
 // Base: /hospital-doctor/panel
@@ -25,5 +25,9 @@ router.post('/case/transfer', protect('hospital-doctor'), transferPatient);
 router.post('/case/discharge-summary', protect('hospital-doctor'), submitDischargeSummary);
 
 router.patch('/status/duty-toggle', protect('hospital-doctor'), updateDutyStatus); // NO 403 ERROR NOW
+
+router.get('/medicines', protect('hospital-doctor'), getMedicineList);
+router.put('/case/clinical-summary/:id', protect('hospital-doctor'), updateClinicalSummary);
+
 
 module.exports = router;

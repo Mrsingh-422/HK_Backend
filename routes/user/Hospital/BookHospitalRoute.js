@@ -6,7 +6,8 @@ const {
     getBedAvailability, getBedGrid,
     getHospitalCheckoutSummary, 
     finalHospitalBooking,
-    getMyHospitalBookings 
+    getMyHospitalBookings ,
+    getBookingProfiles
 } = require('../../../controllers/user/Hospital/BookHospital');
 
 // URL: /user/hospital
@@ -22,5 +23,5 @@ router.post('/book', protect('user'), finalHospitalBooking);
 
 // Management
 router.get('/my-bookings', protect('user'), getMyHospitalBookings);
-
+router.get('/booking-profiles', protect('user'), getBookingProfiles);
 module.exports = router;

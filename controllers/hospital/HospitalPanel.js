@@ -298,8 +298,21 @@ const generateFinalBillAndDischarge = async (req, res) => {
 // --- 4. COUPON MANAGEMENT (Screenshot 18, 19) ---
 const generateHospitalCoupon = async (req, res) => {
     try {
-        const { couponName, discountPercentage, maxDiscount, expiryDate } = req.body;
-        
+        const { 
+            couponName, 
+            discountPercentage, 
+            maxDiscount, 
+            minOrderAmount, 
+            maxUsagePerUser, 
+            startDate, 
+            expiryDate 
+        } = req.body;
+
+        // Validation: Ensure required fields are present
+        if (!couponName || !discountPercentage || !maxDiscount || !expiryDate) {
+            return res.status(400).json({ message: "Please provide all required coupon fields" });
+        }
+
         const coupon = await Coupon.create({
             creatorId: req.user.id,
             vendorId: req.user.id,
@@ -307,19 +320,50 @@ const generateHospitalCoupon = async (req, res) => {
             couponName,
             discountPercentage,
             maxDiscount,
+            minOrderAmount: minOrderAmount || 0,
+            maxUsagePerUser: maxUsagePerUser || 1,
+            startDate: startDate || Date.now(),
             expiryDate,
-            isAdminCreated: false
+            isAdminCreated: false,
+            isActive: true
         });
 
-        res.status(201).json({ success: true, message: "Coupon Generated", data: coupon });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(201).json({ 
+            success: true, 
+            message: "Coupon Generated Successfully", 
+            data: coupon 
+        });
+    } catch (error) { 
+        // Handle unique constraint error (e.g., duplicate coupon code)
+        if (error.code === 11000) {
+            return res.status(400).json({ message: "Coupon code already exists" });
+        }
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 const getHospitalCoupons = async (req, res) => {
     try {
-        const coupons = await Coupon.find({ vendorId: req.user.id });
-        res.json({ success: true, data: coupons });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const hospitalId = req.user.id;
+
+        // Query: 
+        // 1. Jo is hospital ne banaye hain (vendorId === hospitalId)
+        // 2. YA jo Admin ne banaye hain aur 'All' vendorType ke liye hain
+        const coupons = await Coupon.find({
+            $or: [
+                { vendorId: hospitalId }, // Hospital ke khud ke coupons
+                { isAdminCreated: true, vendorType: { $in: ['Hospital', 'All'] } } // Admin ke coupons
+            ]
+        }).sort({ createdAt: -1 });
+
+        res.json({ 
+            success: true, 
+            count: coupons.length,
+            data: coupons 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 
@@ -358,9 +402,26 @@ const assignDriverToCase = async (req, res) => {
 };
 
 
+// 1. GET INCOMING REFERRALS (Screenshot 28)
+const getIncomingReferrals = async (req, res) => {
+    try {
+        const referrals = await Appointment.find({ 
+            hospitalId: req.user.id, 
+            bookingType: 'Admission', 
+            status: 'Hospital-Pending' 
+        })
+        .populate('userId', 'name phone profilePic')
+        .populate('tracking.ambulanceId', 'name vehicleNumber');
+
+        res.json({ success: true, data: referrals });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
 module.exports = { 
     getHospitalMasterData,
     createWardUnit,getBedsInWard,admitPatientToBed, updateWardBeds, addHospitalService, updateHospitalService, 
     generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons,
-    getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission, getAvailableDrivers, assignDriverToCase
+    getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission, getAvailableDrivers, assignDriverToCase,
+    getIncomingReferrals
 };

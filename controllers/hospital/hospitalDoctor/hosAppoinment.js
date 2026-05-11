@@ -1,68 +1,63 @@
 const Appointment = require('../../../models/Appointment');
 const Ward = require('../../../models/Ward');
+const Bed = require('../../../models/Bed');
+const mongoose = require('mongoose');
 
-// 1. GET ALL BOOKINGS (Bifurcated for Appointments and Admissions)
-// endpoint: GET /hospital/doctor/appointments/all-bookings?bookingType=Appointment&status=Hospital-Pending
+// 1. GET ALL BOOKINGS (Bifurcated & Searchable)
 const getHospitalAllBookings = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const { status, bookingType, triageLevel, page = 1, limit = 10 } = req.query; 
 
-        // Direct hospitalId query for efficiency
         let query = { hospitalId: hospitalId };
 
         if (status) query.status = status;
-        if (bookingType) query.bookingType = bookingType; // 'Appointment' or 'Admission'
-        if (triageLevel) query.triageLevel = triageLevel; // 'Emergency', 'Routine' etc.
+        if (bookingType) query.bookingType = bookingType;
+        if (triageLevel) query.triageLevel = triageLevel;
 
         const appointments = await Appointment.find(query)
             .populate('doctorId', 'name speciality profileImage')
-            // .populate('bedId', 'bedType pricePerDay') // Populate Bed details
-            .populate('userId', 'name phone email profilePic')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay',
+                populate: { path: 'wardId', select: 'name type' } // Detailed ward info
+            })
+            .populate('userId', 'name phone email profilePic age gender')
             .sort({ createdAt: -1 })
             .limit(limit * 1)
             .skip((page - 1) * limit);
 
         const total = await Appointment.countDocuments(query);
 
-        res.json({ 
-            success: true, 
-            total,
-            currentPage: Number(page),
-            count: appointments.length, 
-            data: appointments 
-        });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.json({ success: true, total, count: appointments.length, data: appointments });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. APPROVE BOOKING (Moves to Confirmed)
+// 2. APPROVE & ASSIGN (Professional Flow - Screenshot 35)
+// Hospital admin patient ke liye doctor assign karke approve karega
 const approveHospitalBooking = async (req, res) => {
     try {
+        const { doctorId } = req.body; // Figma: Assign Doctor during approval
         const hospitalId = req.user.id;
 
         const appointment = await Appointment.findOne({ _id: req.params.id, hospitalId });
         if (!appointment) return res.status(404).json({ message: "Booking not found" });
 
+        // Update Appointment
         appointment.status = 'Confirmed';
+        if (doctorId) appointment.doctorId = doctorId;
         
-        // Agar Admission (Bed) hai, toh status Occupied kar dein
+        // Bed logic: Reserved -> Occupied
         if (appointment.bookingType === 'Admission' && appointment.bedId) {
-             await Ward.updateOne(
-                { "beds._id": appointment.bedId }, 
-                { $set: { "beds.$.status": "Occupied" } }
-             );
+             await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Occupied' } });
         }
 
         await appointment.save();
-        res.json({ success: true, message: "Booking approved successfully", data: appointment });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.json({ success: true, message: "Admission Confirmed & Doctor Assigned", data: appointment });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. REJECT BOOKING (With Bed Release Logic)
+// 3. REJECT & RELEASE (Screenshot 34)
 const rejectHospitalBooking = async (req, res) => {
     try {
         const { reason } = req.body;
@@ -75,27 +70,24 @@ const rejectHospitalBooking = async (req, res) => {
         appointment.paymentStatus = 'Refund-Initiated'; 
         appointment.cancellationDetails = {
             cancelledBy: hospitalId,
-            reason: reason || "Hospital rejected the request",
+            reason: reason || "Hospital capacity full or medical mismatch",
             cancelledAt: new Date()
         };
 
-        // Agar Bed reserved thi, toh wapas Available karein
+        // Bed logic: Reserved -> Available (Release bed if rejected)
         if (appointment.bedId) {
-            await Ward.updateOne(
-                { "beds._id": appointment.bedId }, 
-                { $set: { "beds.$.status": "Available" } }
-            );
+            const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
+            if (bed) {
+                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
+            }
         }
 
         await appointment.save();
-        res.json({ success: true, message: "Booking rejected and bed released", data: appointment });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.json({ success: true, message: "Booking Rejected & Bed Released for others" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 4. DASHBOARD STATS (Screenshot 4 Mapping)
-// endpoint: GET /hospital/doctor/appointments/stats
+// 4. STATS (Screenshot 4)
 const getHospitalStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -104,24 +96,16 @@ const getHospitalStats = async (req, res) => {
             { $match: { hospitalId: new mongoose.Types.ObjectId(hospitalId) } },
             { $group: {
                 _id: null,
-                emergencyCases: { $sum: { $cond: [{ $eq: ["$triageLevel", "Emergency"] }, 1, 0] } },
-                newAdmissions: { $sum: { $cond: [{ $eq: ["$bookingType", "Admission"] }, 1, 0] } },
-                dischargesPending: { $sum: { $cond: [{ $eq: ["$status", "Confirmed"] }, 1, 0] } }, // Ready for discharge
-                totalRevenue: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$totalAmount", 0] } }
+                emergency: { $sum: { $cond: [{ $eq: ["$triageLevel", "Emergency"] }, 1, 0] } },
+                admission: { $sum: { $cond: [{ $eq: ["$bookingType", "Admission"] }, 1, 0] } },
+                discharge: { $sum: { $cond: [{ $eq: ["$status", "Confirmed"] }, 1, 0] } } // Discharges Pending
             }}
         ]);
 
-        const data = stats[0] || { emergencyCases: 0, newAdmissions: 0, dischargesPending: 0, totalRevenue: 0 };
-
-        res.json({ success: true, data });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        res.json({ success: true, data: stats[0] || { emergency: 0, admission: 0, discharge: 0 } });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 module.exports = { 
-    getHospitalAllBookings, 
-    approveHospitalBooking, 
-    rejectHospitalBooking,
-    getHospitalStats 
+    getHospitalAllBookings, approveHospitalBooking, rejectHospitalBooking, getHospitalStats 
 };

@@ -609,10 +609,61 @@ const approveAndUpdateJurisdiction = async (req, res) => {
         });
     }
 };
+ const getSpecificCaseDetails = async (req, res) => {
+    try {
+        const { id } = req.params; // Route se ID uthayi
  
+        // 1. Validation check
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid Case ID format" });
+        }
+ 
+        // 2. Fetch case with all populates
+        const incident = await FireCase.findById(id)
+            .populate('stationId', 'stationName')
+            .populate('assignedStaff', 'fullName rank phone')
+            .populate('assignedVehicles', 'vehicleName vehicleNumber assetId')
+            .populate('supportingStations', 'stationName phone');
+ 
+        if (!incident) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+ 
+        // 3. Logic for 'displayStatus' (Matching your JSON example)
+        let displayStatus = incident.status;
+        if (incident.status === 'Closed') displayStatus = "Investigation Completed";
+        else if (incident.status === 'Archived') displayStatus = "Case Archived";
+        else if (incident.status === 'Pending') displayStatus = "In Progress";
+        else if (incident.status === 'Fresh') displayStatus = "New Incident Reported";
+        else if (incident.status === 'Under Control') displayStatus = "Fire Contained";
+        else if (incident.status === 'Critical') displayStatus = "Emergency Critical";
+ 
+        // 4. Logic for 'timeAgo'
+        const diffInMs = new Date() - new Date(incident.reportedAt);
+        const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+        const timeAgo = diffInDays === 0 ? "Today" : `${diffInDays} Days Ago`;
+ 
+        // 5. Final Response Structure
+        res.json({
+            success: true,
+            data: {
+                ...incident._doc,
+                id: incident._id,
+                timeAgo: timeAgo,
+                displayStatus: displayStatus,
+                // Default values agar data missing ho
+                resourcesUsed: incident.resourcesUsed || { trucksAssigned: 0, personnelCount: 0, equipmentList: [] },
+                damageImpact: incident.damageImpact || { injuries: 0, casualties: 0, damageLevel: 'Minor' }
+            }
+        });
+ 
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = { getDashboardStats,createFireCase,getIncidentDetails,createFireStation,
      getMyStations, getCaseHistory, getAdminContact, updateFireStation, deleteFireStation,
      updateJurisdiction, getJurisdictionData,requestBoundaryUpdate, getFullIncidentReport, getStationDetails,
      getHQNotifications, deleteHQNotification, reassignFireCase, getDashboardChartData, 
      markAllNotificationsRead, getBackupRequests, assignBackupStation,
-      getNearbyStationsForIncident, assignResources,getAllStationsForHQ, approveAndUpdateJurisdiction };
+      getNearbyStationsForIncident, assignResources,getAllStationsForHQ, approveAndUpdateJurisdiction,getSpecificCaseDetails };

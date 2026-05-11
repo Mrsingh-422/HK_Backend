@@ -203,7 +203,20 @@ const getMyHospitalBookings = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// GET FAMILY MEMBERS FOR BUBBLES (Screenshot 24)
+const getBookingProfiles = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('name profilePic familyMember');
+        // Main User + Family members ka array merge karke bhejein
+        const profiles = [
+            { id: user._id, name: "My Self", profilePic: user.profilePic, relation: 'Self' },
+            ...user.familyMember.map(fm => ({ id: fm._id, name: fm.memberName, profilePic: fm.profilePic, relation: fm.relation }))
+        ];
+        res.json({ success: true, data: profiles });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { 
     getHospitals, getBedAvailability, getBedGrid,
-    getHospitalCheckoutSummary, finalHospitalBooking, getMyHospitalBookings 
+    getHospitalCheckoutSummary, finalHospitalBooking, getMyHospitalBookings, getBookingProfiles
 };

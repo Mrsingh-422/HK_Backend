@@ -82,13 +82,13 @@ const isNurseAvailable = async (nurseId, payload, NurseBooking, Availability) =>
 };
 
 
-const generateNurseSlots = (config, bookingType, servicePrice) => {
+const generateNurseSlots = (config, baseHourlyFinal) => {
     const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots, premiumSlots } = config;
     if (!startTime || !endTime) return [];
 
     let slots = [];
-    // Hourly booking mein hamesha 60 min ka interval, warna slotDuration (default 30)
-    let interval = (bookingType === 'Acc. To Per/Hours') ? 60 : (slotDuration || 30);
+    // Hourly booking pattern: 60 mins interval
+    let interval = 60; 
     
     let start = moment(startTime, "HH:mm");
     let end = moment(endTime, "HH:mm");
@@ -112,11 +112,10 @@ const generateNurseSlots = (config, bookingType, servicePrice) => {
                     time: timeString,
                     displayTime: start.format("hh:mm A"),
                     category,
-                    // 💰 FINAL PRICE CALCULATION:
-                    // Service ka discounted price + Slot ki premium fee
-                    baseServicePrice: servicePrice,
-                    premiumSurcharge: extra,
-                    totalSlotPrice: servicePrice + extra 
+                    // 💰 HOURLY PRICE LOGIC
+                    hourlyBasePrice: baseHourlyFinal,
+                    slotPremiumFee: extra,
+                    totalHourlyPrice: Math.round(baseHourlyFinal + extra) 
                 });
             }
         }

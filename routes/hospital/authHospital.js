@@ -15,7 +15,7 @@ router.post('/register', registerHospital);
 router.post('/login', loginHospital);
 
 // --- 3. Protected Routes ---
-router.put('/update',  
+router.put('/profile/update',  
     protect('hospital'),
     hospitalUploads, 
     updateHospitalProfile,

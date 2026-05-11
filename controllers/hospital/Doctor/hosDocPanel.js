@@ -157,8 +157,35 @@ const updateDutyStatus = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+// 1. GET MEDICINE TEMPLATES (Screenshot 18 Dropdown)
+const getMedicineList = async (req, res) => {
+    try {
+        // Isme aap Pharmacy model ya global Medicine model use karenge
+        const medicines = ["Insulin 40IU/ml", "Paracetamol 500mg", "Telmisartan 40mg"];
+        res.json({ success: true, data: medicines });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 2. UPDATE ADMISSION CLINICAL SUMMARY (Screenshot 22)
+const updateClinicalSummary = async (req, res) => {
+    try {
+        const { appointmentId, chiefComplaint, triagePriority, admissionNote, bloodGroup } = req.body;
+
+        const update = {
+            'clinicalSummary.chiefComplaint': chiefComplaint,
+            'clinicalSummary.triagePriority': triagePriority,
+            'clinicalSummary.admissionNote': admissionNote,
+            'clinicalSummary.bloodGroup': bloodGroup
+        };
+
+        const appointment = await Appointment.findByIdAndUpdate(appointmentId, { $set: update }, { new: true });
+        res.json({ success: true, message: "Clinical Summary Updated", data: appointment });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { 
     getDocDashboard, getAssignedCases, getPatientDetails, 
     processPrescription, transferPatient, getHospitalColleagues,
-    submitDischargeSummary, updateDutyStatus 
+    submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary
 };
