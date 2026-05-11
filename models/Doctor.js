@@ -38,6 +38,11 @@ const doctorSchema = new mongoose.Schema({
         clinic: { type: Number, default: 0 }, // Clinic Visit
         home: { type: Number, default: 0 }    // Home Visit
     },
+    consultationStatus: {
+        online: { type: Boolean, default: true },
+        clinic: { type: Boolean, default: true },
+        home: { type: Boolean, default: true }
+    },
 
     // --- Figma: Dynamic Slot Management ---
     slotDuration: { type: Number, default: 30 }, // 30 mins per patient

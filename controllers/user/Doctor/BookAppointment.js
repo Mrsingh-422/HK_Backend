@@ -27,7 +27,7 @@ const getSpecializations = async (req, res) => {
 const searchDoctors = async (req, res) => {
     try {
         const { speciality, city, search, role, videoCall, availableNow } = req.query;
-        let query = { profileStatus: 'Approved', isActive: true };
+        let query = {  role: 'doctor',profileStatus: 'Approved', isActive: true };
 
         if (speciality) query.speciality = speciality;
         if (city) query.city = { $regex: city, $options: 'i' };
@@ -53,11 +53,41 @@ const searchDoctors = async (req, res) => {
 // endpoint: GET /user/doctors/details/:id
 const getDoctorDetails = async (req, res) => {
     try {
-        const doctor = await Doctor.findById(req.params.id).populate('hospitalId', 'name address');
-        if (!doctor) return res.status(404).json({ message: "Doctor not found" });
-        res.json({ success: true, data: doctor });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
+        const doctorDoc = await Doctor.findById(req.params.id)
+            .populate('hospitalId', 'name address city')
+            .select('-password -token');
+
+        if (!doctorDoc) return res.status(404).json({ message: "Doctor not found" });
+
+        // Doctor object ko plain JavaScript object mein convert karein
+        const doctor = doctorDoc.toObject();
+
+        // 1. Available services list banayein (Yeh aapne pehle hi sahi kiya hai)
+        const activeServices = [];
+        if (doctor.consultationStatus.clinic) activeServices.push({ type: 'Clinic Visit', fee: doctor.fees.clinic });
+        if (doctor.consultationStatus.online) activeServices.push({ type: 'Video Consult', fee: doctor.fees.online });
+        if (doctor.consultationStatus.home) activeServices.push({ type: 'Home Visit', fee: doctor.fees.home });
+
+        // 2. Doctor object se disabled fields ko remove karein
+        if (!doctor.consultationStatus.clinic) {
+            delete doctor.fees.clinic;
+        }
+        if (!doctor.consultationStatus.online) {
+            delete doctor.fees.online;
+        }
+        if (!doctor.consultationStatus.home) {
+            delete doctor.fees.home;
+        }
+
+        res.json({ 
+            success: true, 
+            data: {
+                profile: doctor, // Ab isme sirf wahi fees keys hongi jo active hain
+                activeServices: activeServices 
+            } 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
     }
 };
 

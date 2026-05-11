@@ -200,9 +200,58 @@ const getDoctorStats = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+
+
+// endpoint: GET /api/doctor/profile/fees
+const getMyConsultationFees = async (req, res) => {
+    try {
+        const doctor = await Doctor.findById(req.user.id).select('fees');
+        if (!doctor) return res.status(404).json({ message: "Doctor not found" });
+
+        res.json({ success: true, fees: doctor.fees });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// 2. UPDATE FEES (Screenshot 23/28 Mapping)
+// endpoint: PUT /api/doctor/profile/update-fees
+const updateConsultationFees = async (req, res) => {
+    try {
+        const { online, clinic, home } = req.body;
+
+        // Validation: Check if values are numbers and not negative
+        if ((online && online < 0) || (clinic && clinic < 0) || (home && home < 0)) {
+            return res.status(400).json({ message: "Fees cannot be negative" });
+        }
+
+        // Professional Update Logic: Sirf wahi fields update hongi jo body mein aayengi
+        const updateData = {};
+        if (online !== undefined) updateData['fees.online'] = Number(online);
+        if (clinic !== undefined) updateData['fees.clinic'] = Number(clinic);
+        if (home !== undefined) updateData['fees.home'] = Number(home);
+
+        const updatedDoctor = await Doctor.findByIdAndUpdate(
+            req.user.id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).select('fees');
+
+        res.json({ 
+            success: true, 
+            message: "Consultation fees updated successfully", 
+            data: updatedDoctor.fees 
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
 module.exports = { 
     getDoctorBookings, getTodayBookings, confirmAppointment,
     doctorCancelAppointment, startVisit, completeWithPrescription,
     updateLiveLocation, startVideoCall, updateDoctorSettings,
-    setAvailability, getDoctorStats
+    setAvailability, getDoctorStats, getMyConsultationFees, updateConsultationFees
 };

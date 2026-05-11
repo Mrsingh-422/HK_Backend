@@ -84,6 +84,7 @@ app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserR
 
 //////////////// Doctor Routes ///////////////////////
 app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
+app.use('/doctor/settings', require('./routes/doctor/DoctorSettingsRoute')); // Doctor Panel Route (Dashboard, Profile, etc.)
 app.use('/doctor/appointments', require('./routes/doctor/AppointmentRoute')); // Doctor Appointments Route
 app.use('/doctor/coupon', require('./routes/doctor/DoctorCouponRoute')); // Doctor Coupons Route
 app.use('/doctor/wallet', require('./routes/doctor/DoctorWalletRoute')); // Doctor Wallet Route

@@ -13,13 +13,19 @@ const {
     startVideoCall,
     updateDoctorSettings,
     setAvailability,
-    getDoctorStats
+    getDoctorStats,getMyConsultationFees, updateConsultationFees
 } = require('../../controllers/doctor/Appointment');
+
+
 
 // Listings
 router.get('/patient-bookings', protect('doctor'), getDoctorBookings);
 router.get('/today-appointments', protect('doctor'), getTodayBookings);
 router.get('/stats', protect('doctor'), getDoctorStats);
+// fees
+router.get('/profile/fees', protect('doctor'), getMyConsultationFees);
+router.put('/profile/update-fees', protect('doctor'), updateConsultationFees);
+
 
 // Actions
 router.patch('/confirm/:id', protect('doctor'), confirmAppointment);

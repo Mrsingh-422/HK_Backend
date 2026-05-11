@@ -21,53 +21,104 @@ const getHospitals = async (req, res) => {
 };
 
 // 2. WARD & BED AVAILABILITY (Screenshot 22, 27)
+// 2. WARD AVAILABILITY
 const getBedAvailability = async (req, res) => {
     try {
-        const { hospitalId, type } = req.query; // type: 'ICU', 'General Ward', etc.
-        const wards = await Ward.find({ hospitalId, type, isActive: true });
-        res.json({ success: true, data: wards });
+        const { hospitalId, type } = req.query;
+        console.log("Fetching Wards for Hospital:", hospitalId, "Type:", type);
+        
+        // Agar hospitalId nahi mili to error do
+        if (!hospitalId) return res.status(400).json({ message: "hospitalId is required" });
+
+        const query = { hospitalId, isActive: true };
+        if (type) query.type = type;
+
+        const wards = await Ward.find(query);
+        res.json({ success: true, count: wards.length, data: wards });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 1. GET BED GRID FOR UI (Screenshot 27) ---
-// Frontend ko color coding (Green/Red/Orange) ke liye status chahiye
+// 3. BED GRID
 const getBedGrid = async (req, res) => {
     try {
         const { hospitalId, wardId } = req.query;
-        // Wards ke andar beds fetch karein
+        console.log("Fetching Beds for Ward:", wardId);
+
+        if (!wardId) return res.status(400).json({ message: "wardId is required" });
+
         const beds = await Bed.find({ hospitalId, wardId });
-        res.json({ success: true, data: beds });
+        res.json({ success: true, count: beds.length, data: beds });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // --- 2. CHECKOUT SUMMARY (Beds + Doctors) ---
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
-        const { hospitalId, doctorId, bedId, consultationType, couponCode, specialServices } = req.body;
+        const { 
+            doctorId, bedId, consultationType, couponCode, 
+            specialServices, distance = 0, days = 1 
+        } = req.body;
 
         let baseFee = 0;
+        let visitCharge = 0;
         let subtotal = 0;
 
-        if (bedId) {
+        // CASE A: Doctor Appointment Logic
+        if (doctorId) {
+            const doctor = await Doctor.findById(doctorId);
+            if (!doctor) return res.status(404).json({ message: "Doctor not found" });
+
+            // Type Mapping (UI to Model Keys)
+            const typeMap = {
+                'Video Consult': 'online',
+                'Clinic Visit': 'clinic',
+                'Home Visit': 'home'
+            };
+            const statusKey = typeMap[consultationType];
+
+            // 1. Check if the selected service is enabled by doctor
+            if (!doctor.consultationStatus || !doctor.consultationStatus[statusKey]) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Dr. ${doctor.name} is currently not accepting ${consultationType} requests.` 
+                });
+            }
+
+            // 2. Assign Fee based on active status
+            baseFee = doctor.fees[statusKey];
+
+            // 3. Distance charges for Home Visit
+            if (consultationType === 'Home Visit') {
+                const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctor.hospitalId || doctor._id });
+                if (chargeConfig) {
+                    visitCharge = chargeConfig.fixedPrice;
+                    if (distance > chargeConfig.fixedDistance) {
+                        visitCharge += (distance - chargeConfig.fixedDistance) * chargeConfig.pricePerKM;
+                    }
+                }
+            }
+        } 
+        
+        // CASE B: Bed Booking Logic
+        else if (bedId) {
             const bed = await Bed.findById(bedId);
             if (!bed) return res.status(404).json({ message: "Bed not found" });
-            if (bed.status !== 'Available') return res.status(400).json({ message: "This bed is no longer available" });
-            baseFee = bed.pricePerDay;
-        } else if (doctorId) {
-            const doc = await Doctor.findById(doctorId);
-            baseFee = consultationType === 'Home Visit' ? doc.fees.home : (consultationType === 'Video Consult' ? doc.fees.online : doc.fees.clinic);
+            if (bed.status !== 'Available') return res.status(400).json({ message: "Bed is no longer available" });
+            baseFee = bed.pricePerDay * days;
         }
 
         // Special Services ₹100/- each (Screenshot 29)
         const serviceCharge = (specialServices?.length || 0) * 100;
-        subtotal = baseFee + serviceCharge;
+        subtotal = baseFee + visitCharge + serviceCharge;
 
         // Coupon Logic
         let discount = 0;
+        let appliedCouponId = null;
         if (couponCode) {
             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
             if (coupon && subtotal >= coupon.minOrderAmount) {
                 discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                appliedCouponId = coupon._id;
             }
         }
 
@@ -75,47 +126,52 @@ const getHospitalCheckoutSummary = async (req, res) => {
             success: true,
             data: {
                 baseFee,
+                visitCharge,
                 serviceCharge,
                 discount,
                 subtotal,
-                totalPayable: subtotal - discount
+                totalPayable: subtotal - discount,
+                appliedCouponId,
+                currency: "₹"
             }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 3. FINAL UNIFIED BOOKING (Admission & Appointment) ---
+// --- 2. FINAL UNIFIED BOOKING (Admission & Appointment) ---
 const finalHospitalBooking = async (req, res) => {
     try {
         const { 
             hospitalId, doctorId, bedId, bookingType, triageLevel, 
             appointmentDate, appointmentTime, patients, pricing, 
-            specialServices, couponId, couponCode 
+            consultationType, specialServices, couponId, couponCode 
         } = req.body;
 
-        // 1. BED AVAILABILITY VALIDATION (Strict Production Check)
+        // 1. RE-VERIFY AVAILABILITY (Security Guard)
         if (bedId) {
             const bed = await Bed.findById(bedId);
-            if (!bed || bed.status !== 'Available') {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: "Selected bed is already booked or under maintenance." 
-                });
+            if (!bed || bed.status !== 'Available') return res.status(400).json({ message: "Bed is already booked" });
+        }
+        
+        if (doctorId) {
+            const doctor = await Doctor.findById(doctorId);
+            const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
+            if (!doctor.consultationStatus[typeMap[consultationType]]) {
+                return res.status(400).json({ message: "Doctor just disabled this service." });
             }
         }
 
-        // 2. AUTO-RESOLVE HOSPITAL ID (Agar sirf doctor book kiya ho)
+        // 2. AUTO-RESOLVE HOSPITAL ID & IDS
         let finalHospitalId = hospitalId;
         if (doctorId && !finalHospitalId) {
             const doc = await Doctor.findById(doctorId);
             finalHospitalId = doc?.hospitalId || null;
         }
 
-        // 3. GENERATE UNIQUE IDs
-        const bookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const bookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         const trackingOTP = Math.floor(1000 + Math.random() * 9000).toString();
 
-        // 4. MAP PATIENTS (Ensuring Schema patientName, patientAge)
+        // 3. MAP PATIENTS (Mongoose Schema Strict Keys)
         const formattedPatients = patients.map(p => ({
             patientName: p.patientName || p.name,
             patientAge: Number(p.patientAge || p.age),
@@ -125,7 +181,7 @@ const finalHospitalBooking = async (req, res) => {
             reasonForVisit: p.reasonForVisit || ""
         }));
 
-        // 5. CREATE APPOINTMENT (All Price Keys & Root Level Total)
+        // 4. CREATE APPOINTMENT (All-in-one logic)
         const appointment = await Appointment.create({
             userId: req.user.id,
             hospitalId: finalHospitalId,
@@ -136,13 +192,13 @@ const finalHospitalBooking = async (req, res) => {
             patients: formattedPatients,
             appointmentDate: new Date(appointmentDate),
             appointmentTime: bedId ? 'Admission' : appointmentTime,
-            consultationType: bedId ? 'Clinic Visit' : 'Clinic Visit', // Default for Admission
+            consultationType: bedId ? 'Clinic Visit' : consultationType,
             specialServices: specialServices || [],
             
             pricingBreakdown: {
                 baseFee: Number(pricing.baseFee),
                 visitCharges: Number(pricing.visitCharge || 0),
-                extraCharges: Number(pricing.extraServiceCharge || 0),
+                extraCharges: Number(pricing.serviceCharge || 0),
                 discountAmount: Number(pricing.discount || 0),
                 subtotal: Number(pricing.subtotal)
             },
@@ -153,35 +209,27 @@ const finalHospitalBooking = async (req, res) => {
                 discountValue: Number(pricing.discount)
             } : undefined,
 
-            totalAmount: Number(pricing.totalPayable), // 👈 Root Level Key (Fixed)
+            totalAmount: Number(pricing.totalPayable), // 👈 Mongoose Validation Success
             bookingId,
             status: finalHospitalId ? 'Hospital-Pending' : 'Pending',
             paymentStatus: 'Paid',
             'tracking.otp': trackingOTP
         });
 
-        // 6. BED STATE LOCKING (Screenshot 27 Orange Status)
+        // 5. LOCK BED IF ADMISSION
         if (bedId) {
-            const bedRecord = await Bed.findById(bedId);
-            // Mark bed as Reserved
             await Bed.findByIdAndUpdate(bedId, { $set: { status: 'Reserved' } });
-            // Ward count decrease
-            await Ward.findByIdAndUpdate(bedRecord.wardId, { $inc: { availableBeds: -1 } });
+            await Ward.findOneAndUpdate({ hospitalId: finalHospitalId }, { $inc: { availableBeds: -1 } });
         }
 
-        res.status(201).json({ 
-            success: true, 
-            message: "Booking successful", 
-            bookingId, 
-            trackingOTP, 
-            data: appointment 
-        });
+        res.status(201).json({ success: true, bookingId, trackingOTP, data: appointment });
 
     } catch (error) {
-        console.error("Critical Booking Error:", error);
+        console.error("Master Booking Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 // 5. GET MY BOOKINGS (Screenshot 20, 21 - Upcoming, Pending, History)
