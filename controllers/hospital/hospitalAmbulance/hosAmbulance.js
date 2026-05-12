@@ -10,45 +10,74 @@ const generateToken = (id, role) => {
 
 // --- 1. ADD AMBULANCE (By Hospital Admin with Full Documents) ---
 // Endpoint: POST /api/hospital/ambulance/add
+// --- 1. ADD AMBULANCE (Figma Aligned) ---
 const addHospitalAmbulance = async (req, res) => {
     try {
         const { 
-            name, email, phone, password, address, vehicleType, ambulanceNumber,
+            name, email, phone, password, address, ambulanceType, ambulanceNumber,
             fixedPrice, distance, perKMPrice, // Pricing
             accidentalService, emergencyService, referralService, // Toggles
             defaultService, optionalService, // Dropdowns
-            fullName, department, dob 
+            fullName, department, dob // Driver Info
         } = req.body;
 
-        const ambulance = await Ambulance.create({
+        // 1. Password Safety Check
+        if (!password) return res.status(400).json({ message: "Password is required" });
+        const hashedPassword = await bcrypt.hash(String(password), 10);
+
+        // 2. File Path Handling
+        const files = req.files || {};
+        const getPath = (key) => (files[key] ? `/uploads/ambulances/${files[key][0].filename}` : null);
+
+        // 3. Mapping all keys explicitly to match Schema
+        const newAmbulance = await Ambulance.create({
             hospitalId: req.user.id,
-            name: fullName, // Screen pe Full Name hai
-            email, phone, address,
-            password: await bcrypt.hash(password, 10),
-            vehicleType,
-            ambulanceNumber, // API mein ye key use karein
+            name: fullName, 
+            email: email, 
+            phone: phone,
+            password: hashedPassword,
+            address: address,
+            vehicleType: ambulanceType,
+            ambulanceNumber: ambulanceNumber,
+            
             pricing: {
-                fixedPrice: Number(fixedPrice),
-                baseDistance: Number(distance),
-                pricePerKM: Number(perKMPrice)
+                fixedPrice: Number(fixedPrice || 0),
+                baseDistance: Number(distance || 0),
+                pricePerKM: Number(perKMPrice || 0)
             },
+            
             freeServices: {
-                accidental: accidentalService === 'true',
-                emergency: emergencyService === 'true',
-                referral: referralService === 'true'
+                accidental: accidentalService === 'true' || accidentalService === true,
+                emergency: emergencyService === 'true' || emergencyService === true,
+                referral: referralService === 'true' || referralService === true
             },
-            defaultService,
-            optionalServices: JSON.parse(optionalService || '[]'), // Array format
-            driverInfo: { fullName, department, dob }
+            
+            defaultService: defaultService,
+            optionalServices: optionalService ? JSON.parse(optionalService) : [],
+            
+            driverInfo: {
+                fullName: fullName,
+                department: department,
+                dob: dob
+            },
+            
+            documents: {
+                rcFile: getPath('rcFile'),
+                drivingLicenseFile: getPath('drivingLicenseFile'),
+                insuranceFile: getPath('insuranceFile'),
+                fitnessCertificate: getPath('fitnessCertificate'),
+                ambulancePermit: getPath('ambulancePermit')
+            }
         });
 
-        res.status(201).json({ success: true, data: ambulance });
+        res.status(201).json({ success: true, data: newAmbulance });
     } catch (error) {
+        console.error("Ambulance Creation Error:", error);
         res.status(500).json({ message: error.message });
     }
 };
 
-// --- 2. GET ALL AMBULANCES OF A HOSPITAL ---
+// --- 2. GET ALL AMBULANCES ---
 const getMyHospitalAmbulances = async (req, res) => {
     try {
         const ambulances = await Ambulance.find({ hospitalId: req.user.id });
@@ -58,28 +87,26 @@ const getMyHospitalAmbulances = async (req, res) => {
     }
 };
 
-// --- 3. UPDATE AMBULANCE DETAILS ---
+// --- 3. UPDATE AMBULANCE (Figma Aligned) ---
 const updateHospitalAmbulance = async (req, res) => {
     try {
         const { id } = req.params;
-        const files = req.files;
-        let updateData = { ...req.body };
+        const { optionalService, accidentalService, emergencyService, referralService, ...otherData } = req.body;
+        
+        const files = req.files || {};
+        let updateData = { ...otherData };
 
-        if (files) {
-            // Mapping new files to the documents object
-            const docs = {};
-            if (files.drivingLicenseFile) docs.drivingLicenseFile = files.drivingLicenseFile[0].path;
-            if (files.rcFile) docs.rcFile = files.rcFile[0].path;
-            if (files.insuranceFile) docs.insuranceFile = files.insuranceFile[0].path;
-            if (files.fitnessCertificate) docs.fitnessCertificate = files.fitnessCertificate[0].path;
-            if (files.ambulancePermit) docs.ambulancePermit = files.ambulancePermit[0].path;
-            
-            updateData.documents = docs;
-        }
+        // Handle Toggles
+        if (accidentalService !== undefined) updateData['freeServices.accidental'] = accidentalService === 'true';
+        if (emergencyService !== undefined) updateData['freeServices.emergency'] = emergencyService === 'true';
+        if (referralService !== undefined) updateData['freeServices.referral'] = referralService === 'true';
 
-        if (req.body.password) {
-            updateData.password = await bcrypt.hash(String(req.body.password), 10);
-        }
+        // Handle Optional Services Array
+        if (optionalService) updateData.optionalServices = JSON.parse(optionalService);
+
+        // Handle File Updates
+        if (files.rcFile) updateData['documents.rcFile'] = `/uploads/ambulances/${files.rcFile[0].filename}`;
+        if (files.drivingLicenseFile) updateData['documents.drivingLicenseFile'] = `/uploads/ambulances/${files.drivingLicenseFile[0].filename}`;
 
         const ambulance = await Ambulance.findOneAndUpdate(
             { _id: id, hospitalId: req.user.id },
@@ -87,8 +114,7 @@ const updateHospitalAmbulance = async (req, res) => {
             { new: true }
         );
 
-        if (!ambulance) return res.status(404).json({ message: "Ambulance not found or unauthorized" });
-
+        if (!ambulance) return res.status(404).json({ message: "Ambulance not found" });
         res.json({ success: true, message: "Updated successfully", data: ambulance });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -99,11 +125,9 @@ const updateHospitalAmbulance = async (req, res) => {
 const deleteHospitalAmbulance = async (req, res) => {
     try {
         const ambulance = await Ambulance.findOneAndDelete({ _id: req.params.id, hospitalId: req.user.id });
-        if (!ambulance) return res.status(404).json({ message: "Ambulance not found or unauthorized" });
-        res.json({ success: true, message: "Ambulance removed from hospital" });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        if (!ambulance) return res.status(404).json({ message: "Not found" });
+        res.json({ success: true, message: "Ambulance removed" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // --- 5. LOGIN HOSPITAL AMBULANCE ---

@@ -8,6 +8,10 @@ const Specialization = require('../../models/Specialization');
 const Ambulance = require('../../models/Ambulance');
 const { deleteFile } = require('../../utils/fileHandler');
 
+const getShortName = (name) => {
+    return name.split(' ').map(word => word[0]).join('').toUpperCase();
+};
+
 // --- MASTER DATA/Enums FOR HOSPITAL PANEL (Screenshot 6) ---
 const getHospitalMasterData = async (req, res) => {
     try {
@@ -36,117 +40,196 @@ const getHospitalMasterData = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 1. CREATE WARD & AUTO-GENERATE BEDS (Production Standard) ---
+const getHospitalDashboardStats = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        
+        // Real-time counts from Appointment Model
+        const emergency = await Appointment.countDocuments({ hospitalId, triageLevel: 'Emergency', status: 'In-Progress' });
+        const admission = await Appointment.countDocuments({ hospitalId, bookingType: 'Admission', status: 'In-Progress' });
+        const dischargeReady = await Appointment.countDocuments({ hospitalId, status: 'Confirmed' }); // Summary ready
+
+        res.json({
+            success: true,
+            data: {
+                emergencyCount: emergency,
+                admissionCount: admission,
+                dischargePending: dischargeReady
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 2. WARD & BED MANAGEMENT (Strict Sync) ---
 const createWardUnit = async (req, res) => {
     try {
         const { name, type, totalBeds, pricePerDay } = req.body;
+        const ward = await Ward.create({ hospitalId: req.user.id, name, type, totalBeds, availableBeds: totalBeds });
 
-        // 1. Create Ward Record
-        const ward = await Ward.create({
-            hospitalId: req.user.id,
-            name, type, totalBeds,
-            availableBeds: totalBeds
-        });
-
-        // 2. Auto-Generate Bed Numbers (Naming: WardName-Count)
-        // Clean Ward Name for numbering (e.g. "Surgical ICU" -> "SICU")
-        const shortName = name.split(' ').map(word => word[0]).join('').toUpperCase();
-        
+        const shortName = getShortName(name);
         const bedData = [];
         for (let i = 1; i <= totalBeds; i++) {
             bedData.push({
                 hospitalId: req.user.id,
                 wardId: ward._id,
-                bedNumber: `${shortName}-${i.toString().padStart(2, '0')}`, // e.g. SICU-01
+                bedNumber: `${shortName}-${i.toString().padStart(2, '0')}`,
                 status: 'Available',
-                pricePerDay: pricePerDay || (type === 'ICU' ? 2500 : 500)
+                pricePerDay: Number(pricePerDay)
             });
         }
-
-        // 3. Bulk Insert Beds
         await Bed.insertMany(bedData);
-
-        res.status(201).json({ 
-            success: true, 
-            message: `${totalBeds} beds generated for ${name}`, 
-            ward 
-        });
+        res.status(201).json({ success: true, message: "Ward & Beds Generated", ward });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 // --- 2. GET BEDS BY WARD (For Grid View in Figma Screenshot 27) ---
 const getBedsInWard = async (req, res) => {
     try {
-        const { wardId } = req.params;
-        const beds = await Bed.find({ wardId });
+        const beds = await Bed.find({ wardId: req.params.wardId });
         res.json({ success: true, data: beds });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+const updateBedDetails = async (req, res) => {
+    try {
+        const { bedId } = req.params;
+        const { pricePerDay, status } = req.body;
+
+        const bed = await Bed.findByIdAndUpdate(
+            bedId,
+            { pricePerDay: Number(pricePerDay), status },
+            { new: true }
+        );
+
+        res.json({ success: true, message: "Bed details updated", data: bed });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+const deleteSpecificBed = async (req, res) => {
+    try {
+        const { bedId } = req.params;
+
+        const bed = await Bed.findById(bedId);
+        if (!bed) return res.status(404).json({ message: "Bed not found" });
+
+        // Production Check: Occupied bed delete nahi hona chahiye
+        if (bed.status !== 'Available') {
+            return res.status(400).json({ message: "Cannot delete an occupied or reserved bed" });
+        }
+
+        const wardId = bed.wardId;
+
+        // 1. Delete the bed document
+        await Bed.findByIdAndDelete(bedId);
+
+        // 2. Sync Ward model counts
+        await Ward.findByIdAndUpdate(wardId, {
+            $inc: { totalBeds: -1, availableBeds: -1 }
+        });
+
+        res.json({ success: true, message: "Specific bed removed and ward capacity updated" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 
 // --- 3. ADMIT PATIENT (Admin Panel Flow) ---
 const admitPatientToBed = async (req, res) => {
     try {
         const { appointmentId, bedId } = req.body;
 
+        // 1. VALIDATE BED
         const bed = await Bed.findById(bedId);
-        // Bed Availability Validation
         if (!bed || bed.status !== 'Available') {
-            return res.status(400).json({ message: "Selected bed is already occupied or reserved" });
+            return res.status(400).json({ 
+                success: false, 
+                message: "This bed is already occupied or under maintenance." 
+            });
         }
 
-        const appointment = await Appointment.findById(appointmentId);
-        if(!appointment) return res.status(404).json({ message: "Admission request not found" });
+        // 2. VALIDATE APPOINTMENT
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId: req.user.id });
+        if (!appointment) return res.status(404).json({ message: "Admission request not found" });
 
-        // Update Bed
+        // 3. UPDATE BED STATUS TO OCCUPIED
         bed.status = 'Occupied';
         await bed.save();
 
-        // Update Appointment
+        // 4. SYNC APPOINTMENT RECORD
         appointment.bedId = bedId;
-        appointment.wardName = (await Ward.findById(bed.wardId)).name;
         appointment.bedNumber = bed.bedNumber;
-        appointment.status = 'In-Progress'; // Patient is now admitted
+        // Ward details fetch karein naming ke liye
+        const ward = await Ward.findById(bed.wardId);
+        appointment.wardName = ward.name;
+        
+        appointment.status = 'In-Progress'; // Admission process active
         await appointment.save();
 
-        // Update Ward Capacity
+        // 5. DECREASE WARD CAPACITY
         await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
 
-        res.json({ success: true, message: `Patient admitted to ${bed.bedNumber}` });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            message: `Patient admitted to ${ward.name} - ${bed.bedNumber}`, 
+            data: appointment 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 const updateWardBeds = async (req, res) => {
     try {
-        const { wardId, action, bedCount } = req.body; // action: 'add' or 'remove'
+        const { wardId, action, bedCount, pricePerDay } = req.body;
         const ward = await Ward.findById(wardId);
-        
+        if (!ward) return res.status(404).json({ message: "Ward not found" });
+
+        const count = Number(bedCount);
+
         if (action === 'add') {
-            ward.totalBeds += Number(bedCount);
-            ward.availableBeds += Number(bedCount);
-        } else {
-            if(ward.availableBeds < bedCount) return res.status(400).json({ message: "Cannot remove occupied beds" });
-            ward.totalBeds -= Number(bedCount);
-            ward.availableBeds -= Number(bedCount);
+            const currentTotal = ward.totalBeds;
+            const shortName = getShortName(ward.name);
+            const bedData = [];
+            
+            // Use provided price or ward's default price
+            const price = pricePerDay ? Number(pricePerDay) : 500; 
+
+            for (let i = 1; i <= count; i++) {
+                bedData.push({
+                    hospitalId: req.user.id,
+                    wardId: ward._id,
+                    bedNumber: `${shortName}-${(currentTotal + i).toString().padStart(2, '0')}`,
+                    status: 'Available',
+                    pricePerDay: price // 👈 Price saved here
+                });
+            }
+            await Bed.insertMany(bedData);
+            ward.totalBeds += count;
+            ward.availableBeds += count;
+
+        } else if (action === 'remove') {
+            // Bulk remove from the end (Last in, first out)
+            const removableBeds = await Bed.find({ wardId, status: 'Available' })
+                .sort({ createdAt: -1 })
+                .limit(count);
+
+            if (removableBeds.length < count) {
+                return res.status(400).json({ message: `Only ${removableBeds.length} available beds can be removed.` });
+            }
+
+            const idsToRemove = removableBeds.map(b => b._id);
+            await Bed.deleteMany({ _id: { $in: idsToRemove } });
+            
+            ward.totalBeds -= count;
+            ward.availableBeds -= count;
         }
-        
+
         await ward.save();
-        res.json({ success: true, message: "Capacity Updated", data: ward });
+        res.json({ success: true, message: "Bulk update successful", data: ward });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 // 2. GET WARD CAPACITY & UNITS (Screenshot 7)
 const getWardStatus = async (req, res) => {
     try {
         const wards = await Ward.find({ hospitalId: req.user.id });
-        const total = wards.reduce((sum, w) => sum + w.totalBeds, 0);
-        const allocated = wards.reduce((sum, w) => sum + (w.totalBeds - w.availableBeds), 0);
-        
-        res.json({
-            success: true,
-            capacity: {
-                totalBeds: total,
-                allocatedBeds: allocated,
-                remainingBeds: total - allocated
-            },
-            units: wards
-        });
+        res.json({ success: true, data: wards });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -154,24 +237,18 @@ const getWardStatus = async (req, res) => {
 // Used when Admin manually marks a bed for Maintenance or releases it
 const updateBedStatus = async (req, res) => {
     try {
-        const { bedId, status } = req.body; // status: 'Available', 'Occupied', 'Maintenance'
-        
+        const { bedId, status } = req.body;
         const bed = await Bed.findById(bedId);
-        if(!bed) return res.status(404).json({ message: "Bed record not found" });
-
         const oldStatus = bed.status;
         bed.status = status;
         await bed.save();
 
-        // Ward Capacity Sync Logic
-        // Agar bed 'Available' ho gaya hai toh count badhao, agar 'Available' se hat gaya toh kam karo
         if(oldStatus !== 'Available' && status === 'Available') {
             await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
         } else if(oldStatus === 'Available' && status !== 'Available') {
             await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
         }
-
-        res.json({ success: true, message: `Bed ${bed.bedNumber} is now ${status}` });
+        res.json({ success: true, data: bed });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -242,28 +319,42 @@ const getHospitalServices = async (req, res) => {
 const generateFinalBillAndDischarge = async (req, res) => {
     try {
         const { appointmentId, billingItems } = req.body; 
-        // billingItems: [{ name: 'Oxygen', price: 500 }, { name: 'Consultation', price: 1000 }]
+        const hospitalId = req.user.id;
 
-        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId: req.user.id });
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
         if (!appointment) return res.status(404).json({ message: "Admission Record Not Found" });
 
         const extraTotal = billingItems.reduce((sum, item) => sum + Number(item.price), 0);
         
-        // Update Appointment for Discharge
+        // 1. Update Appointment
         appointment.status = 'Completed';
         appointment.totalAmount += extraTotal;
-        // Pricing breakdown mein extra services append karein
         appointment.pricingBreakdown.extraCharges = extraTotal;
-        appointment.billingDetails = billingItems; // Array of items for PDF receipt
-
+        appointment.billingDetails = billingItems; 
         await appointment.save();
 
-        // Release the bed
-        if (appointment.bedId) {
-            await Ward.findOneAndUpdate({ "beds._id": appointment.bedId }, { $set: { "beds.$.isAvailable": true } });
+        // 2. Wallet Sync: Add money to hospital wallet
+        let wallet = await Wallet.findOne({ vendorId: hospitalId });
+        if (wallet) {
+            wallet.balance += appointment.totalAmount;
+            wallet.transactions.push({
+                type: 'Credit',
+                amount: appointment.totalAmount,
+                remark: `Discharge Bill - ${appointment.bookingId}`,
+                orderId: appointment.bookingId
+            });
+            await wallet.save();
         }
 
-        res.json({ success: true, message: "Patient Discharged Successfully", billAmount: appointment.totalAmount });
+        // 3. Release Bed & Update Ward
+        if (appointment.bedId) {
+            const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
+            if (bed) {
+                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
+            }
+        }
+
+        res.json({ success: true, message: "Discharged. Bed Released. Wallet Updated.", billAmount: appointment.totalAmount });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -418,10 +509,84 @@ const getIncomingReferrals = async (req, res) => {
 };
 
 
+
+const getHospitalWards = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const wards = await Ward.find({ hospitalId });
+        
+        // Har ward ke liye occupancy calculate karke bhej rahe hain
+        const data = wards.map(ward => ({
+            _id: ward._id,
+            name: ward.name,
+            type: ward.type,
+            totalBeds: ward.totalBeds,
+            availableBeds: ward.availableBeds,
+            occupiedBeds: ward.totalBeds - ward.availableBeds,
+            isActive: ward.isActive
+        }));
+
+        res.json({ success: true, data });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 2. UPDATE WARD INFO
+const updateWardInfo = async (req, res) => {
+    try {
+        const { wardId } = req.params;
+        const { name, type, isActive } = req.body;
+        
+        const ward = await Ward.findOneAndUpdate(
+            { _id: wardId, hospitalId: req.user.id },
+            { $set: { name, type, isActive } },
+            { new: true }
+        );
+
+        if (!ward) return res.status(404).json({ message: "Ward not found" });
+        res.json({ success: true, message: "Ward updated", data: ward });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 3. DELETE WARD (Only if empty)
+const deleteWard = async (req, res) => {
+    try {
+        const { wardId } = req.params;
+        const hospitalId = req.user.id;
+
+        // Check if any bed is occupied
+        const occupiedBeds = await Bed.findOne({ wardId, status: { $ne: 'Available' } });
+        if (occupiedBeds) {
+            return res.status(400).json({ message: "Cannot delete ward while beds are occupied or reserved." });
+        }
+
+        await Bed.deleteMany({ wardId }); // Pehle beds delete karein
+        await Ward.findOneAndDelete({ _id: wardId, hospitalId });
+
+        res.json({ success: true, message: "Ward and its beds removed successfully." });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 4. GET ALL ADMISSIONS/PATIENTS (Figma: Patient List)
+const getAllHospitalAdmissions = async (req, res) => {
+    try {
+        const { status, search } = req.query; // status: 'In-Progress', 'Completed'
+        let query = { hospitalId: req.user.id, bookingType: 'Admission' };
+
+        if (status) query.status = status;
+        
+        const admissions = await Appointment.find(query)
+            .populate('userId', 'name phone')
+            .populate('doctorId', 'name speciality')
+            .sort({ createdAt: -1 });
+
+        res.json({ success: true, data: admissions });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { 
-    getHospitalMasterData,
-    createWardUnit,getBedsInWard,admitPatientToBed, updateWardBeds, addHospitalService, updateHospitalService, 
-    generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons,
+    getHospitalMasterData,getHospitalDashboardStats,
+    createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed, updateWardBeds,deleteSpecificBed, addHospitalService, updateHospitalService, 
+    generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission, getAvailableDrivers, assignDriverToCase,
     getIncomingReferrals
 };

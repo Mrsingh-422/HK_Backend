@@ -134,7 +134,12 @@ const ambulanceDocUploads = multer({
     { name: 'rcFile', maxCount: 1 },
     { name: 'insuranceFile', maxCount: 1 },
     { name: 'fitnessCertificate', maxCount: 1 },
-    { name: 'ambulancePermit', maxCount: 1 }
+    { name: 'ambulancePermit', maxCount: 1 },
+
+     { name: 'vehicleImages', maxCount: 5 },
+    { name: 'rcFile', maxCount: 2 },
+    { name: 'drivingLicenseFile', maxCount: 2 },
+    { name: 'insuranceFile', maxCount: 1 }
 ]);
 
 // ==========================================

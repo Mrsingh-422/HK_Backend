@@ -3,19 +3,21 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { 
     getHospitals, 
-    getBedAvailability, getBedGrid,
+    getWards, getBedGrid,
     getHospitalCheckoutSummary, 
     finalHospitalBooking,
     getMyHospitalBookings ,
-    getBookingProfiles
+    getBookingProfiles,
+    getHospitalDetails
 } = require('../../../controllers/user/Hospital/BookHospital');
 
 // URL: /user/hospital
 
-router.get('/list', getHospitals);
-router.get('/beds', getBedAvailability);
+router.post('/list', getHospitals);
+router.get('/details/:id', getHospitalDetails);
 
-router.get('/bed-grid', getBedGrid)
+router.get('/wards', getWards);
+router.get('/bed-grid/:wardId', getBedGrid);
 
 // Payment & Logic
 router.post('/checkout-summary', protect('user'), getHospitalCheckoutSummary);
