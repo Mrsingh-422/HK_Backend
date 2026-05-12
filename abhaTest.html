@@ -3,49 +3,56 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo - Ultimate Enterprise v2.7</title>
+    <title>Health Kangaroo - Enterprise Master Flow v2.8</title>
     
+    <!-- Enterprise Frameworks -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     
     <style>
+        /* CORE DESIGN SYSTEM - NO CHANGES TO PREVIOUS STYLES */
         :root { 
             --brand: #00B377; 
             --brand-light: #E6F7F1; 
-            --pink: #FF4D8D;
-            --orange: #FF8A00;
+            --orange: #FF8A00; 
+            --red: #FF4D4D; 
             --slate: #64748B; 
+            --pink: #FF4D8D;
         }
 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F8FAFC; color: #1E293B; overflow-x: hidden; }
-        .app-container { max-width: 450px; margin: 0 auto; background: white; min-height: 100vh; position: relative; box-shadow: 0 0 50px rgba(0,0,0,0.1); }
-        .screen { display: none; min-height: 100vh; padding-bottom: 140px; animation: slideUp 0.4s ease-out; background: white; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F8FAFB; color: #1E293B; overflow-x: hidden; }
+        .app-container { max-width: 450px; margin: 0 auto; background: white; min-height: 100vh; position: relative; box-shadow: 0 0 100px rgba(0,0,0,0.1); border-left: 1px solid #F1F5F9; border-right: 1px solid #F1F5F9; }
+        
+        .screen { display: none; min-height: 100vh; padding-bottom: 160px; background: white; animation: figmaIn 0.4s ease-out; }
         .screen.active { display: block; }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes figmaIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
-        .figma-card { background: white; border-radius: 28px; border: 1px solid #F1F5F9; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.04); }
-        .btn-brand { background: var(--brand); color: white; border-radius: 20px; font-weight: 800; display: flex; align-items: center; justify-content: center; gap: 10px; box-shadow: 0 10px 20px rgba(0, 179, 119, 0.2); transition: 0.3s; }
-        
-        /* Slot & Bed Grid Styles */
-        .slot-btn { border: 2px solid #F1F5F9; border-radius: 18px; padding: 15px 5px; font-size: 11px; font-weight: 800; text-align: center; background: white; transition: 0.2s; cursor: pointer; }
-        .slot-btn.selected { background: var(--brand) !important; color: white !important; border-color: var(--brand); transform: translateY(-3px); }
-        .bed-unit { aspect-ratio: 1; border-radius: 16px; border: 2px solid #F1F5F9; display: flex; flex-direction: column; items: center; justify-content: center; gap: 4px; font-weight: 900; font-size: 10px; }
+        .figma-card { background: #FFFFFF; border-radius: 32px; border: 1px solid #F1F5F9; box-shadow: 0 15px 35px -12px rgba(0,0,0,0.05); transition: 0.3s; }
+        .btn-brand { background: var(--brand); color: white; border-radius: 24px; font-weight: 800; transition: 0.3s; display: flex; align-items: center; justify-content: center; gap: 12px; box-shadow: 0 12px 25px rgba(0, 179, 119, 0.2); }
+        .btn-brand:active { transform: scale(0.96); }
+
+        /* SLOTS & BED GRID */
+        .slot-master-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 4px; }
+        .slot-btn { border: 2px solid #F1F5F9; border-radius: 20px; padding: 18px 4px; font-size: 11px; font-weight: 900; text-align: center; background: white; color: var(--slate); transition: 0.2s; cursor: pointer; }
+        .slot-btn.selected { background: var(--brand) !important; color: white !important; border-color: var(--brand) !important; box-shadow: 0 8px 20px rgba(0, 179, 119, 0.3); transform: translateY(-2px); }
+        .slot-btn.unavailable { background: #F8FAFC; color: #CBD5E1; border-color: #F8FAFC; cursor: not-allowed; opacity: 0.6; }
+
+        /* BEDS DESIGN */
+        .bed-unit { aspect-ratio: 1; border-radius: 22px; border: 2.5px solid #F1F5F9; display: flex; flex-direction: column; items: center; justify-content: center; gap: 6px; font-weight: 900; font-size: 10px; cursor: pointer; transition: 0.3s; }
         .bed-Available { border-color: var(--brand-light); color: var(--brand); background: var(--brand-light); }
         .bed-Occupied { border-color: #FEE2E2; color: #EF4444; background: #FEF2F2; opacity: 0.6; pointer-events: none; }
         .bed-Maintenance { border-color: #FEF3C7; color: #D97706; background: #FFFBEB; pointer-events: none; }
-        .bed-Selected { background: var(--brand) !important; color: white !important; border-color: var(--brand); }
+        .bed-Selected { background: var(--brand) !important; color: white !important; border-color: var(--brand) !important; transform: scale(1.05); box-shadow: 0 10px 20px rgba(0, 179, 119, 0.2); }
 
-        /* Navigation */
-        .nav-pill { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 92%; max-width: 410px; background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); border-radius: 32px; display: flex; justify-content: space-around; padding: 14px; border: 1px solid rgba(0,0,0,0.05); z-index: 1000; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
-        .tab-btn { color: #94A3B8; display: flex; flex-direction: column; align-items: center; gap: 4px; font-weight: 800; }
-        .tab-btn.active { color: var(--brand); }
-
-        .type-pill { flex: 1; padding: 12px 4px; text-align: center; font-size: 10px; font-weight: 900; border-radius: 14px; color: #94A3B8; background: transparent; }
-        .type-pill.active-type { background: white; color: var(--brand); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .type-pill { flex: 1; padding: 14px; font-size: 10px; font-weight: 900; border-radius: 18px; color: var(--slate); text-align: center; transition: 0.3s; }
+        .type-pill.active-type { background: white; color: var(--brand); box-shadow: 0 6px 15px rgba(0,0,0,0.06); }
         .type-pill.disabled-type { opacity: 0.2; pointer-events: none; text-decoration: line-through; }
 
+        .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 450px; background: white; border-top: 1px solid #F1F5F9; display: flex; justify-content: space-around; padding: 15px 10px 40px; z-index: 500; }
+        .tab-btn.active { color: var(--brand); font-weight: 900; }
+        
         .currency-symbol::before { content: '₹'; margin-right: 2px; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
     </style>
@@ -54,217 +61,253 @@
 
 <div class="app-container">
 
-    <!-- MASTER HEADER -->
-    <header class="p-6 bg-white border-b sticky top-0 z-[1100]">
-        <div class="flex justify-between items-center mb-4">
+    <!-- MASTER SYNC CONTROL -->
+    <header class="sticky top-0 bg-white z-[1000] p-4 border-b border-gray-100 shadow-sm">
+        <div class="flex justify-between items-center mb-4 px-1">
             <div class="flex items-center gap-3">
-                <div class="w-10 h-10 bg-brand rounded-xl flex items-center justify-center text-white shadow-lg"><i data-lucide="activity"></i></div>
+                <div class="w-10 h-10 bg-brand rounded-2xl flex items-center justify-center text-white shadow-xl shadow-brand/20">
+                    <i data-lucide="shield-check" class="w-6 h-6"></i>
+                </div>
                 <div>
-                    <h1 class="font-black text-xs uppercase tracking-tighter leading-none">Health Kangaroo</h1>
-                    <span class="text-[8px] font-black text-brand uppercase tracking-widest">Enterprise v2.7</span>
+                    <h1 class="font-black text-[13px] uppercase tracking-widest leading-none">Health Master</h1>
+                    <p class="text-[8px] text-gray-400 font-black mt-1 uppercase">Cloud Gateway : 5002</p>
                 </div>
             </div>
-            <div class="bg-gray-100 px-3 py-1.5 rounded-full flex items-center gap-2">
+            <div class="bg-green-50 px-3 py-1.5 rounded-full border border-green-100 flex items-center gap-2">
                 <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span class="text-[9px] font-black uppercase text-gray-500">Live</span>
+                <span class="text-[9px] font-black text-brand uppercase">Sync Active</span>
             </div>
         </div>
         <div class="flex gap-2">
-            <input id="sync-token-input" type="password" placeholder="JWT Authentication Token" class="flex-1 bg-gray-50 border rounded-xl px-4 py-3 text-[10px] font-bold">
-            <button onclick="igniteSync()" class="bg-black text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest">Sync</button>
+            <input id="sync-token-input" type="text" placeholder="JWT Token from LocalStorage" class="flex-1 bg-gray-50 border rounded-2xl p-4 text-[10px] font-bold outline-none focus:ring-2 focus:ring-brand/20 transition">
+            <button onclick="igniteSync()" class="bg-black text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest">Connect</button>
         </div>
     </header>
 
-    <!-- 1. DASHBOARD -->
-    <div id="home-screen" class="screen active p-6 space-y-6">
+    <!-- 1. DASHBOARD SCREEN -->
+    <div id="home-screen" class="screen active p-6 space-y-8">
         <div class="flex justify-between items-center">
-            <div>
-                <p id="u-greet-txt" class="text-[10px] font-black text-gray-400 uppercase tracking-widest">Namaste</p>
-                <h2 class="text-2xl font-black tracking-tighter" id="u-name-display">Health Dashboard</h2>
+            <div class="flex items-center gap-4">
+                <img id="u-pfp-master" src="https://i.pravatar.cc/100?u=hk" class="w-16 h-16 rounded-[28px] border-4 border-brand-light object-cover shadow-lg bg-gray-100">
+                <div>
+                    <p id="u-greet-txt" class="text-gray-400 text-[10px] font-black uppercase tracking-[2.5px]">नमस्ते, User</p>
+                    <div class="flex items-center gap-1 font-black text-xl tracking-tighter">
+                        <i data-lucide="map-pin" class="w-4 h-4 text-red-500"></i> <span id="u-loc-txt">Detecting...</span>
+                    </div>
+                </div>
             </div>
-            <div class="w-14 h-14 bg-brand-light rounded-2xl flex flex-col items-center justify-center border-2 border-brand/10">
-                <span class="text-[8px] font-black text-brand uppercase">Score</span>
-                <span class="text-lg font-black text-brand leading-none" id="u-score-val">--</span>
+            <div class="w-14 h-14 rounded-full border-[6px] border-brand-light flex items-center justify-center bg-white shadow-inner">
+                <span id="u-score-val" class="font-black text-[13px] text-brand">--</span>
             </div>
         </div>
 
-        <!-- SPECIALIZATION BUBBLES -->
+        <!-- Dynamic Spec Bubbles -->
         <div id="home-spec-bubbles" class="flex gap-4 overflow-x-auto no-scrollbar py-2"></div>
 
-        <div class="grid grid-cols-2 gap-4" id="home-summary-grid"></div>
+        <div id="home-summary-grid" class="grid grid-cols-2 gap-5"></div>
 
-        <!-- QUICK ACCESS -->
+        <div class="figma-card p-6 border-pink-100 bg-pink-50/30 flex justify-between items-center group cursor-pointer" onclick="navigateTo('menstrual')">
+            <div class="flex items-center gap-5">
+                <div class="bg-pink-500 text-white p-4 rounded-2xl shadow-2xl transition group-hover:rotate-12"><i data-lucide="calendar" class="w-7 h-7"></i></div>
+                <div>
+                    <h4 class="font-black text-sm text-pink-900 uppercase tracking-tighter">Period Cycle</h4>
+                    <p id="period-summary-txt" class="text-[10px] text-pink-600 font-black uppercase tracking-widest mt-1">Loading Insights...</p>
+                </div>
+            </div>
+            <i data-lucide="chevron-right" class="w-5 h-5 text-pink-400"></i>
+        </div>
+
+        <div class="figma-card p-6 border-brand/5 bg-brand-light/20 flex justify-between items-center group cursor-pointer" onclick="navigateTo('pills')">
+            <div class="flex items-center gap-5">
+                <div class="bg-brand text-white p-4 rounded-2xl shadow-2xl transition group-hover:rotate-12"><i data-lucide="pill" class="w-7 h-7"></i></div>
+                <div>
+                    <h4 class="font-black text-sm text-gray-800 uppercase tracking-tighter">Pill Reminder</h4>
+                    <p id="pill-summary-count" class="text-[10px] text-brand font-black uppercase tracking-widest mt-1">Checking Schedule...</p>
+                </div>
+            </div>
+            <i data-lucide="chevron-right" class="w-5 h-5 text-brand"></i>
+        </div>
+
         <div class="space-y-4">
-            <div class="figma-card p-5 bg-gradient-to-r from-pink-500 to-rose-400 text-white border-none relative overflow-hidden cursor-pointer" onclick="navigateTo('menstrual')">
-                <div class="relative z-10 flex justify-between items-center">
-                    <div>
-                        <h4 class="font-black text-sm uppercase">Menstrual Cycle</h4>
-                        <p id="period-summary-txt" class="text-[10px] font-bold opacity-90">Loading insights...</p>
-                    </div>
-                    <i data-lucide="calendar-days" class="w-8 h-8 opacity-40"></i>
-                </div>
+            <div class="flex justify-between items-center px-1">
+                <h3 class="font-black text-xl text-gray-800 tracking-tighter">Health Insights</h3>
+                <button class="text-[10px] font-black text-brand uppercase border-b-2 border-brand/20">See All</button>
             </div>
-
-            <div class="figma-card p-5 border-emerald-100 bg-emerald-50/50 flex justify-between items-center cursor-pointer" onclick="navigateTo('pills')">
-                <div class="flex items-center gap-4">
-                    <div class="bg-white p-3 rounded-2xl text-emerald-500 shadow-sm"><i data-lucide="pill"></i></div>
-                    <div>
-                        <h4 class="font-black text-sm text-emerald-900 uppercase">Medications</h4>
-                        <p id="pill-summary-count" class="text-[10px] font-bold text-emerald-500 uppercase">Checking schedule...</p>
-                    </div>
-                </div>
-                <i data-lucide="chevron-right" class="text-emerald-300"></i>
-            </div>
+            <div id="dashboard-articles-reel" class="flex gap-5 overflow-x-auto no-scrollbar pb-4"></div>
         </div>
     </div>
 
-    <!-- 2. DOCTOR & HOSPITAL LISTING -->
-    <div id="doctors-screen" class="screen p-6 space-y-6">
-        <div class="flex gap-2">
+    <!-- 2. DOCTORS & HOSPITALS LISTING -->
+    <div id="doctors-screen" class="screen p-6 space-y-7">
+        <div class="flex gap-2 p-1 bg-gray-100 rounded-2xl">
             <button onclick="toggleListMode('Doctor')" id="btn-mode-doc" class="flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-black text-white">Doctors</button>
             <button onclick="toggleListMode('Hospital')" id="btn-mode-hosp" class="flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-gray-100 text-gray-400">Hospitals</button>
         </div>
-        <div id="listing-main-container" class="space-y-4"></div>
+        <div id="specs-list" class="flex gap-4 overflow-x-auto no-scrollbar pb-2"></div>
+        <div id="listing-main-container" class="space-y-6 mt-4"></div>
     </div>
 
-    <!-- 3. HOSPITAL WARD & BED SELECTION -->
-    <div id="hospital-beds-screen" class="screen p-6 space-y-6">
-        <div class="flex items-center gap-4">
-            <button onclick="navigateTo('doctors')" class="p-3 bg-gray-100 rounded-2xl"><i data-lucide="arrow-left"></i></button>
-            <h2 class="text-xl font-black tracking-tighter">Admission & Beds</h2>
+    <!-- 3. HOSPITAL WARD & BED GRID -->
+    <div id="hospital-beds-screen" class="screen p-6 space-y-7">
+        <div class="flex items-center gap-5">
+            <button onclick="navigateTo('doctors')" class="p-4 bg-gray-100 rounded-3xl"><i data-lucide="arrow-left" class="w-6 h-6 text-gray-700"></i></button>
+            <h2 class="text-3xl font-black tracking-tighter text-gray-800">Choose Bed</h2>
         </div>
-        
         <div id="ward-list-container" class="flex gap-3 overflow-x-auto no-scrollbar"></div>
-        
         <div class="figma-card p-6">
             <div class="flex justify-between items-center mb-6">
                 <h4 class="text-[10px] font-black text-gray-400 uppercase tracking-widest">Select Room/Bed</h4>
                 <div class="flex gap-3">
-                    <span class="flex items-center gap-1 text-[8px] font-black uppercase text-brand"><div class="w-2 h-2 bg-brand rounded-full"></div> Available</span>
-                    <span class="flex items-center gap-1 text-[8px] font-black uppercase text-red-500"><div class="w-2 h-2 bg-red-400 rounded-full"></div> Occupied</span>
+                    <span class="flex items-center gap-1 text-[8px] font-black uppercase text-brand"><div class="w-2 h-2 bg-brand rounded-full"></div> Free</span>
+                    <span class="flex items-center gap-1 text-[8px] font-black uppercase text-red-500"><div class="w-2 h-2 bg-red-400 rounded-full"></div> Booked</span>
                 </div>
             </div>
             <div id="bed-grid-main" class="grid grid-cols-4 gap-4"></div>
         </div>
-
-        <div class="fixed bottom-24 left-0 w-full p-6 bg-white border-t">
+        <div class="fixed bottom-24 left-0 w-full p-6 bg-white/80 backdrop-blur-md z-[400]">
             <button id="btn-bed-next" onclick="prepareAdmissionCheckout()" class="btn-brand w-full py-5 opacity-30 pointer-events-none" disabled>Select A Bed</button>
         </div>
     </div>
 
     <!-- 4. DOCTOR PROFILE & SLOTS -->
     <div id="profile-screen" class="screen">
-        <div class="relative h-72">
-            <img id="p-hero-img" class="w-full h-full object-cover">
-            <div class="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent"></div>
-            <button onclick="navigateTo('doctors')" class="absolute top-6 left-6 bg-white/20 backdrop-blur-md p-3 rounded-2xl text-white"><i data-lucide="arrow-left"></i></button>
+        <div class="relative h-80">
+            <img id="p-hero-img" class="w-full h-full object-cover bg-gray-50">
+            <button onclick="navigateTo('doctors')" class="absolute top-8 left-6 bg-white/20 backdrop-blur-3xl p-4 rounded-[22px] text-white shadow-xl">
+                <i data-lucide="arrow-left" class="w-6 h-6"></i>
+            </button>
         </div>
-        <div class="relative -mt-12 bg-white rounded-t-[40px] p-8 space-y-8 min-h-screen">
-            <div class="flex justify-between items-start">
-                <div>
-                    <h2 id="p-doc-name" class="text-2xl font-black tracking-tighter">--</h2>
-                    <span id="p-doc-spec" class="bg-brand-light text-brand px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">--</span>
-                </div>
-                <div class="flex items-center gap-1 bg-yellow-50 px-3 py-1 rounded-xl text-yellow-600 font-bold text-sm">
-                    <i data-lucide="star" class="w-4 h-4 fill-current"></i> <span id="p-doc-rating">--</span>
+
+        <div class="relative z-10 -mt-16 bg-white rounded-t-[60px] p-8 space-y-10 min-h-screen border-t border-gray-100">
+            <div class="text-center space-y-3">
+                <h2 id="p-doc-name" class="text-3xl font-black tracking-tighter text-gray-900 leading-none">--</h2>
+                <div class="flex justify-center items-center gap-3">
+                    <span id="p-doc-spec" class="bg-brand text-white font-black text-[10px] px-4 py-1.5 rounded-full uppercase tracking-[2px]">--</span>
+                    <div class="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-50 rounded-xl border border-yellow-100">
+                        <i data-lucide="star" class="w-3.5 h-3.5 fill-yellow-400 text-yellow-400"></i>
+                        <span id="p-doc-rating" class="text-sm font-black text-yellow-800">--</span>
+                    </div>
                 </div>
             </div>
 
-            <div class="flex gap-2 p-1.5 bg-gray-50 rounded-2xl" id="cons-type-box">
+            <div class="flex gap-2 p-1.5 bg-gray-50 rounded-[25px]" id="cons-type-box">
                 <button onclick="switchType('Clinic Visit')" id="cs-clinic" class="type-pill">CLINIC</button>
                 <button onclick="switchType('Video Consult')" id="cs-video" class="type-pill">VIDEO</button>
                 <button onclick="switchType('Home Visit')" id="cs-home" class="type-pill">HOME</button>
             </div>
 
-            <div class="figma-card p-5 bg-gray-50 flex justify-between items-center border-dashed border-2">
-                <div><p class="text-[9px] font-black text-gray-400 uppercase">Price</p><p id="p-fee-display" class="font-black text-2xl text-brand currency-symbol">0</p></div>
-                <div class="bg-brand text-white p-3 rounded-xl"><i data-lucide="wallet-2" class="w-5 h-5"></i></div>
+            <div class="figma-card p-6 bg-gray-50 flex justify-between items-center border-dashed border-2">
+                <div>
+                    <p class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Standard Fee</p>
+                    <p id="p-fee-display" class="font-black text-brand text-3xl currency-symbol">0</p>
+                </div>
+                <div class="bg-brand text-white p-3 rounded-2xl shadow-lg shadow-brand/20"><i data-lucide="credit-card" class="w-7 h-7"></i></div>
             </div>
 
-            <div class="grid grid-cols-3 gap-3" id="doctor-slots-grid-container"></div>
+            <div class="space-y-6 pb-40">
+                <h4 class="font-black text-gray-800 text-lg uppercase tracking-widest">Select Slot</h4>
+                <div id="doctor-slots-grid-container" class="slot-master-grid"></div>
+            </div>
 
-            <div class="fixed bottom-24 left-0 w-full p-6 bg-white/80 backdrop-blur-md">
-                <button id="p-btn-action-next" onclick="prepareBookingCheckout()" class="btn-brand w-full py-5 shadow-xl disabled:opacity-30" disabled>Select A Slot</button>
+            <div class="fixed bottom-0 left-0 w-full p-6 bg-white border-t z-[300] flex gap-4">
+                 <button id="p-btn-action-next" onclick="prepareBookingCheckout()" class="btn-brand w-full py-5 text-base shadow-2xl shadow-brand/40 disabled:opacity-30" disabled>Select a Slot First</button>
             </div>
         </div>
     </div>
 
-    <!-- 5. CHECKOUT & COUPONS -->
-    <div id="checkout-screen" class="screen p-6 space-y-6">
-        <h2 class="text-2xl font-black tracking-tighter">Checkout</h2>
+    <!-- 5. CHECKOUT SCREEN -->
+    <div id="checkout-screen" class="screen p-6 space-y-7">
+        <h2 class="text-3xl font-black tracking-tighter text-gray-800 leading-none">Checkout Summary</h2>
         
         <div class="space-y-4">
             <h4 class="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Patient Profile</h4>
             <div id="patient-bubbles" class="flex gap-4 overflow-x-auto no-scrollbar"></div>
         </div>
 
-        <div class="figma-card p-5 border-orange-100 bg-orange-50/20 flex justify-between items-center">
-            <div class="flex items-center gap-4">
-                <div class="bg-white p-3 rounded-2xl text-orange-500 shadow-sm"><i data-lucide="zap"></i></div>
-                <div><h4 class="font-black text-sm uppercase">Emergency</h4><p class="text-[9px] font-bold text-orange-400 uppercase">+ ₹200 Fee</p></div>
+        <div class="figma-card p-6 border-orange-100 bg-orange-50/10 flex justify-between items-center">
+            <div class="flex items-center gap-5">
+                <div class="bg-orange-100 p-4 rounded-2xl text-orange-600 shadow-inner"><i data-lucide="zap" class="w-6 h-6"></i></div>
+                <div>
+                    <h4 class="font-black text-sm text-orange-900 tracking-tight">Emergency?</h4>
+                    <p class="text-[10px] text-orange-600 font-black uppercase mt-1 tracking-tighter">₹200 Surcharge</p>
+                </div>
             </div>
-            <input type="checkbox" id="emergency-toggle" onchange="syncFinalRecalc()" class="w-6 h-6 accent-orange-500">
+            <input type="checkbox" id="emergency-toggle" onchange="syncFinalRecalc()" class="w-7 h-7 accent-orange-500 rounded-lg">
         </div>
 
-        <div id="checkout-price-reel" class="figma-card p-6 space-y-4"></div>
-        
+        <div class="figma-card p-8 space-y-4 border-2 border-gray-50 bg-white" id="checkout-price-reel"></div>
+
         <div class="space-y-4">
-            <h4 class="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Available Coupons</h4>
-            <div id="checkout-coupons-reel" class="flex gap-4 overflow-x-auto no-scrollbar"></div>
+            <h3 class="font-black text-gray-800 uppercase text-xs tracking-widest px-1">Apply Coupon</h3>
+            <div id="checkout-coupons-reel" class="flex gap-5 overflow-x-auto no-scrollbar pb-4"></div>
         </div>
 
-        <div class="fixed bottom-24 left-0 w-full p-6 bg-white border-t">
-            <div class="flex justify-between items-end mb-4 px-1">
-                <div><p class="text-[10px] font-black text-gray-400 uppercase">Grand Total</p><p id="txt-final-total" class="text-3xl font-black text-brand currency-symbol">0</p></div>
-                <button onclick="executeFinalBooking()" class="btn-brand px-10 py-5">Confirm</button>
+        <div class="fixed bottom-0 left-50 translate-x-[-50%] w-full max-w-[450px] p-6 bg-white border-t z-[550]">
+            <div class="flex justify-between items-end mb-6 px-1">
+                <div>
+                    <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">Total Payable</p>
+                    <p id="txt-final-total" class="text-4xl font-black text-brand tracking-tighter currency-symbol">0</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-[9px] text-brand font-black uppercase border-b-2 border-brand/20 pb-0.5 tracking-tighter">Saved</p>
+                    <p id="txt-saved-amt" class="text-lg font-black text-gray-800 mt-1 currency-symbol">0</p>
+                </div>
             </div>
+            <button onclick="executeFinalBooking()" class="btn-brand w-full py-5 text-base shadow-2xl">Confirm Booking</button>
         </div>
     </div>
 
     <!-- 6. MY APPOINTMENTS / BOOKINGS -->
     <div id="my-bookings-screen" class="screen p-6 space-y-6">
-        <h2 class="text-2xl font-black tracking-tighter uppercase">My Bookings</h2>
-        <div class="flex gap-2 p-1 bg-gray-100 rounded-2xl">
-            <button onclick="syncMyBookings('Upcoming')" class="flex-1 py-3 text-[10px] font-black rounded-xl bg-white shadow-sm">Upcoming</button>
-            <button onclick="syncMyBookings('Pending')" class="flex-1 py-3 text-[10px] font-black rounded-xl">Pending</button>
-            <button onclick="syncMyBookings('History')" class="flex-1 py-3 text-[10px] font-black rounded-xl">History</button>
+        <h2 class="text-3xl font-black tracking-tighter text-gray-800 uppercase tracking-widest">My Appointments</h2>
+        <div class="flex gap-2 p-1 bg-gray-100 rounded-2xl mb-4">
+            <button onclick="syncMyBookings('Upcoming', this)" class="flex-1 py-3 text-[10px] font-black rounded-xl bg-white shadow-sm">Upcoming</button>
+            <button onclick="syncMyBookings('Pending', this)" class="flex-1 py-3 text-[10px] font-black rounded-xl">Pending</button>
+            <button onclick="syncMyBookings('History', this)" class="flex-1 py-3 text-[10px] font-black rounded-xl">History</button>
         </div>
         <div id="bookings-list-main" class="space-y-4"></div>
     </div>
 
     <!-- OTP & TRACKING -->
     <div id="tracking-screen" class="screen p-10 text-center">
-        <div class="bg-brand-light p-10 rounded-[50px] border-4 border-dashed border-brand/20 my-10">
-            <p class="font-black text-brand uppercase tracking-widest text-xs mb-4">Security OTP</p>
-            <h1 id="track-otp-ui" class="text-6xl font-black text-brand tracking-[8px]">----</h1>
-            <p class="mt-8 text-[10px] font-black text-gray-400 uppercase tracking-widest">Share this with the doctor</p>
+        <div class="bg-brand-light p-14 rounded-[75px] border-4 border-dashed border-brand/20 my-10 relative">
+            <p class="text-[14px] font-black text-brand uppercase tracking-widest mb-2">SECURITY OTP</p>
+            <h1 id="track-otp-ui" class="text-7xl font-black text-brand tracking-[10px] my-10">----</h1>
+            <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest">Share with doctor at arrival</p>
         </div>
-        <button onclick="navigateTo('home')" class="btn-brand w-full py-5 bg-black">Go Home</button>
+        <button onclick="navigateTo('home')" class="btn-brand w-full py-5 bg-black">Back to Dashboard</button>
     </div>
 
-    <!-- DATA VIEWS (MENSTRUAL, PILLS, RECORDS) -->
-    <div id="menstrual-screen" class="screen p-6 space-y-6">
-        <h2 class="text-2xl font-black">Cycle Tracker</h2>
-        <div id="menstrual-insights-ui" class="figma-card p-8 bg-pink-500 text-white border-none shadow-xl shadow-pink-100">
-            <div id="menstrual-text-content" class="text-xl font-bold">Syncing...</div>
+    <!-- MENSTRUAL SCREEN -->
+    <div id="menstrual-screen" class="screen p-8 space-y-8">
+        <h2 class="text-3xl font-black tracking-tighter text-gray-800">Period Tracker</h2>
+        <div id="menstrual-insights-ui" class="figma-card p-8 bg-pink-500 text-white border-none shadow-xl shadow-pink-200">
+            <div id="menstrual-text-content" class="text-xl font-bold">Syncing cycle...</div>
         </div>
-        <div class="figma-card p-6 space-y-5">
-            <input type="date" id="last-period-date" class="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold">
-            <input type="number" id="cycle-len" placeholder="Cycle Length" class="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold">
-            <button onclick="savePeriodData()" class="btn-brand w-full py-4 bg-pink-500 shadow-pink-200">Update Cycle</button>
+        <div class="figma-card p-8 space-y-6">
+            <div class="space-y-2">
+                <label class="text-[10px] font-black uppercase text-gray-400">Last Period Start</label>
+                <input type="date" id="last-period-date" class="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold">
+            </div>
+            <div class="space-y-2">
+                <label class="text-[10px] font-black uppercase text-gray-400">Cycle Length (Days)</label>
+                <input type="number" id="cycle-len" placeholder="e.g. 28" class="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold">
+            </div>
+            <button onclick="savePeriodData()" class="btn-brand w-full py-5 bg-pink-600 shadow-pink-200">Update Health Cycle</button>
         </div>
     </div>
 
+    <!-- OTHER SCREENS -->
     <div id="tracker-screen" class="screen p-6 space-y-6"><h2 class="text-2xl font-black">Stats</h2><div id="calorie-master-ui"></div><div id="hist-list-ui"></div></div>
-    <div id="pills-screen" class="screen p-6 space-y-6"><h2 class="text-2xl font-black">Pills</h2><div id="active-pills-list"></div></div>
+    <div id="pills-screen" class="screen p-6 space-y-6"><h2 class="text-2xl font-black">Medications</h2><div id="active-pills-list"></div></div>
     <div id="prescription-screen" class="screen p-6 space-y-6"><h2 class="text-2xl font-black">Records</h2><div id="records-list-container"></div></div>
 
-    <!-- NAV BAR -->
-    <nav class="nav-pill">
-        <button onclick="navigateTo('home', this)" class="tab-btn active"><i data-lucide="home"></i><span class="text-[8px] uppercase">Home</span></button>
-        <button onclick="navigateTo('doctors', this)" class="tab-btn"><i data-lucide="search"></i><span class="text-[8px] uppercase">Book</span></button>
-        <button onclick="navigateTo('my-bookings', this)" class="tab-btn"><i data-lucide="calendar"></i><span class="text-[8px] uppercase">My List</span></button>
-        <button onclick="navigateTo('pills', this)" class="tab-btn"><i data-lucide="pill"></i><span class="text-[8px] uppercase">Pills</span></button>
+    <!-- BOTTOM TAB NAVIGATION -->
+    <nav class="bottom-nav">
+        <button onclick="navigateTo('home', this)" class="tab-btn active flex flex-col items-center gap-2" data-id="home"><i data-lucide="home"></i><span class="text-[8px] font-black uppercase tracking-widest">Home</span></button>
+        <button onclick="navigateTo('doctors', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="doctors"><i data-lucide="search"></i><span class="text-[8px] font-black uppercase tracking-widest">Find</span></button>
+        <button onclick="navigateTo('my-bookings', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="my-bookings"><i data-lucide="calendar"></i><span class="text-[8px] font-black uppercase tracking-widest">Booking</span></button>
+        <button onclick="navigateTo('pills', this)" class="tab-btn flex flex-col items-center gap-2 text-gray-400" data-id="pills"><i data-lucide="clock"></i><span class="text-[8px] font-black uppercase tracking-widest">Pills</span></button>
     </nav>
 
 </div>
@@ -274,18 +317,13 @@
     let MASTER_HK_STORE = {
         token: localStorage.getItem('token') || "",
         mode: "Doctor",
-        docId: null,
-        hospId: null,
-        bedId: null,
-        wardId: null,
-        slotVal: null,
-        consType: "Clinic Visit",
-        couponCode: null,
-        pricing: {},
-        selectedPatient: null
+        docId: null, hospId: null, bedId: null, wardId: null,
+        slotVal: null, consType: "Clinic Visit",
+        couponCode: null, pricing: {}, selectedPatient: null,
+        fees: {}, status: {}
     };
 
-    // CORE API HANDLER
+    // --- CORE API HANDLER (Full Sync Protection) ---
     async function apiRequest(path, method = 'GET', data = null) {
         const conf = { 
             method, 
@@ -294,25 +332,22 @@
         if(data) conf.body = JSON.stringify(data);
         try {
             const res = await fetch(`${MASTER_API}${path}`, conf);
-            const json = await res.json();
-            if(!json.success) console.warn(`API Error [${path}]:`, json.message);
-            return json;
-        } catch (e) { return { success: false, message: "Network Failed" }; }
+            return await res.json();
+        } catch (e) { return { success: false, message: "Sync Failure" }; }
     }
 
     function navigateTo(id, trigger) {
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         document.getElementById(`${id}-screen`).classList.add('active');
         if(trigger) {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            trigger.classList.add('active');
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active', 'text-brand'));
+            trigger.classList.add('active', 'text-brand');
         }
         
-        // Initializers
         if(id === 'home') syncHome();
         if(id === 'doctors') syncListing();
-        if(id === 'menstrual') syncMenstrual();
         if(id === 'my-bookings') syncMyBookings('Upcoming');
+        if(id === 'menstrual') syncMenstrual();
         if(id === 'tracker') syncStats();
         if(id === 'pills') syncPills();
         if(id === 'prescription') syncRecords();
@@ -337,11 +372,13 @@
         if(dash.success) {
             document.getElementById('u-name-display').innerText = dash.data.header.userName;
             document.getElementById('u-score-val').innerText = dash.data.header.healthScore || "82";
+            document.getElementById('u-loc-txt').innerText = dash.data.header.location || "Mohali, Punjab";
+            document.getElementById('u-pfp-master').src = dash.data.header.profilePic || "https://i.pravatar.cc/100";
         }
 
         if(specs.success) {
             document.getElementById('home-spec-bubbles').innerHTML = specs.data.map(s => `
-                <div onclick="syncListing('${s.name}')" class="bg-white border-2 border-gray-100 px-6 py-2.5 rounded-2xl min-w-fit font-black text-[10px] uppercase text-gray-500 cursor-pointer">
+                <div onclick="toggleListMode('Doctor', '${s.name}')" class="bg-white border-2 border-gray-100 px-6 py-2.5 rounded-2xl min-w-fit font-black text-[10px] uppercase text-gray-500 cursor-pointer">
                     ${s.name}
                 </div>
             `).join('');
@@ -350,11 +387,11 @@
     }
 
     // --- 2. LISTING (DOCTORS vs HOSPITALS) ---
-    function toggleListMode(m) {
-        MASTER_HK_STORE.mode = m;
-        document.getElementById('btn-mode-doc').className = m === 'Doctor' ? 'flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-black text-white' : 'flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-gray-100 text-gray-400';
-        document.getElementById('btn-mode-hosp').className = m === 'Hospital' ? 'flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-black text-white' : 'flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-gray-100 text-gray-400';
-        syncListing();
+    function toggleListMode(mode, filter = "") {
+        MASTER_HK_STORE.mode = mode;
+        document.getElementById('btn-mode-doc').className = mode === 'Doctor' ? 'flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-black text-white' : 'flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-gray-100 text-gray-400';
+        document.getElementById('btn-mode-hosp').className = mode === 'Hospital' ? 'flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-black text-white' : 'flex-1 py-3 rounded-xl font-black text-[10px] uppercase bg-gray-100 text-gray-400';
+        syncListing(filter);
     }
 
     async function syncListing(filter = "") {
@@ -364,47 +401,48 @@
         const container = document.getElementById('listing-main-container');
         if(res.success) {
             container.innerHTML = res.data.map(item => `
-                <div onclick="${MASTER_HK_STORE.mode === 'Doctor' ? `loadDoctor('${item._id}')` : `loadHospitalBeds('${item._id}')`}" class="figma-card p-4 flex gap-4 items-center cursor-pointer">
-                    <img src="${MASTER_API}/${item.profileImage || item.hospitalImage}" class="w-16 h-16 rounded-2xl object-cover border">
+                <div onclick="${MASTER_HK_STORE.mode === 'Doctor' ? `loadDoctor('${item._id}')` : `loadHospitalBeds('${item._id}')`}" class="figma-card p-5 flex gap-5 items-center cursor-pointer">
+                    <img src="${MASTER_API}/${item.profileImage || item.hospitalImage}" class="w-18 h-18 rounded-[30px] object-cover border shadow-sm">
                     <div class="flex-1">
                         <h4 class="font-black text-sm uppercase">${item.name}</h4>
-                        <p class="text-[9px] font-bold text-gray-400 uppercase">${item.speciality || item.type} • ${item.city}</p>
-                        <div class="flex items-center gap-2 mt-2">
-                            <span class="text-brand font-black text-xs">${item.averageRating || '4.5'} ★</span>
-                            <span class="text-[9px] text-gray-300 font-bold uppercase">${item.totalReviews || '120'} Reviews</span>
-                        </div>
+                        <p class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-1">${item.speciality || item.type} • ${item.city}</p>
                     </div>
+                    <i data-lucide="chevron-right" class="text-gray-200"></i>
                 </div>
             `).join('');
         }
         lucide.createIcons();
     }
 
-    // --- 3. HOSPITAL & BEDS LOGIC ---
+    // --- 3. HOSPITAL BED FLOW ---
     async function loadHospitalBeds(hId) {
         MASTER_HK_STORE.hospId = hId;
+        MASTER_HK_STORE.docId = null; 
         navigateTo('hospital-beds');
         const res = await apiRequest(`/user/hospital/beds?hospitalId=${hId}`);
         if(res.success && res.data.length > 0) {
-            const container = document.getElementById('ward-list-container');
-            container.innerHTML = res.data.map((ward, idx) => `
-                <button onclick="loadBedGrid('${ward._id}')" class="px-6 py-3 rounded-xl font-black text-[10px] uppercase ${idx === 0 ? 'bg-black text-white' : 'bg-gray-100 text-gray-500'}">
-                    ${ward.name} (${ward.availableBeds})
+            document.getElementById('ward-list-container').innerHTML = res.data.map((ward, idx) => `
+                <button onclick="loadBedGrid('${ward._id}', this)" class="px-6 py-3 rounded-xl font-black text-[10px] uppercase ${idx === 0 ? 'bg-black text-white' : 'bg-gray-100 text-gray-500'}">
+                    ${ward.name}
                 </button>
             `).join('');
             loadBedGrid(res.data[0]._id);
         }
     }
 
-    async function loadBedGrid(wId) {
+    async function loadBedGrid(wId, btn) {
+        if(btn) {
+            document.querySelectorAll('#ward-list-container button').forEach(b => b.className = 'px-6 py-3 rounded-xl font-black text-[10px] uppercase bg-gray-100 text-gray-500');
+            btn.className = 'px-6 py-3 rounded-xl font-black text-[10px] uppercase bg-black text-white';
+        }
         MASTER_HK_STORE.wardId = wId;
         const res = await apiRequest(`/user/hospital/bed-grid?hospitalId=${MASTER_HK_STORE.hospId}&wardId=${wId}`);
-        const grid = document.getElementById('bed-grid-main');
         if(res.success) {
-            grid.innerHTML = res.data.map(bed => `
+            document.getElementById('bed-grid-main').innerHTML = res.data.map(bed => `
                 <div onclick="selectBed(this, '${bed._id}', ${bed.pricePerDay})" class="bed-unit bed-${bed.status}">
                     <i data-lucide="bed"></i>
                     <span>${bed.bedNumber}</span>
+                    <span class="text-[7px]">₹${bed.pricePerDay}/Day</span>
                 </div>
             `).join('');
         }
@@ -415,20 +453,22 @@
         document.querySelectorAll('.bed-unit').forEach(b => b.classList.remove('bed-Selected'));
         el.classList.add('bed-Selected');
         MASTER_HK_STORE.bedId = id;
-        MASTER_HK_STORE.bedPrice = price;
+        MASTER_HK_STORE.pricing.baseFee = price; 
         document.getElementById('btn-bed-next').disabled = false;
         document.getElementById('btn-bed-next').classList.remove('opacity-30', 'pointer-events-none');
     }
 
     function prepareAdmissionCheckout() {
         MASTER_HK_STORE.bookingType = 'Admission';
+        MASTER_HK_STORE.slotVal = 'Admission';
         navigateTo('checkout');
         syncFinalRecalc();
     }
 
-    // --- 4. DOCTOR LOGIC (UPDATED WITH YOUR RESPONSE) ---
+    // --- 4. DOCTOR PROFILE & SLOTS ---
     async function loadDoctor(id) {
         MASTER_HK_STORE.docId = id;
+        MASTER_HK_STORE.bedId = null;
         navigateTo('profile');
         const [details, slots] = await Promise.all([
             apiRequest(`/user/doctors/details/${id}`),
@@ -439,13 +479,13 @@
             const p = details.data.profile;
             document.getElementById('p-hero-img').src = `${MASTER_API}/${p.profileImage}`;
             document.getElementById('p-doc-name').innerText = p.name;
-            document.getElementById('p-doc-spec').innerText = p.speciality;
+            document.getElementById('p-doc-spec').innerText = p.speciality || p.qualification;
             document.getElementById('p-doc-rating').innerText = p.averageRating;
             
             MASTER_HK_STORE.fees = p.fees;
+            MASTER_HK_STORE.hospId = p.hospitalId?._id || null;
             MASTER_HK_STORE.status = p.consultationStatus;
 
-            // Visibility based on API
             document.getElementById('cs-clinic').className = p.consultationStatus.clinic ? 'type-pill' : 'type-pill disabled-type';
             document.getElementById('cs-video').className = p.consultationStatus.online ? 'type-pill' : 'type-pill disabled-type';
             document.getElementById('cs-home').className = p.consultationStatus.home ? 'type-pill' : 'type-pill disabled-type';
@@ -464,8 +504,8 @@
     function switchType(t) {
         MASTER_HK_STORE.consType = t;
         document.querySelectorAll('.type-pill').forEach(b => b.classList.remove('active-type'));
-        let price = t === 'Clinic Visit' ? MASTER_HK_STORE.fees.clinic : (t === 'Home Visit' ? MASTER_HK_STORE.fees.home : MASTER_HK_STORE.fees.online);
-        document.getElementById('p-fee-display').innerText = price || 0;
+        let fee = t === 'Clinic Visit' ? MASTER_HK_STORE.fees.clinic : (t === 'Home Visit' ? MASTER_HK_STORE.fees.home : MASTER_HK_STORE.fees.online);
+        document.getElementById('p-fee-display').innerText = fee || 0;
         document.getElementById(`cs-${t.split(' ')[0].toLowerCase()}`).classList.add('active-type');
     }
 
@@ -474,6 +514,7 @@
         el.classList.add('selected');
         MASTER_HK_STORE.slotVal = time;
         document.getElementById('p-btn-action-next').disabled = false;
+        document.getElementById('p-btn-action-next').innerText = "Review Summary";
     }
 
     function prepareBookingCheckout() {
@@ -482,7 +523,7 @@
         syncFinalRecalc();
     }
 
-    // --- 5. CHECKOUT & FINAL API CALLS ---
+    // --- 5. CHECKOUT & PRICING ---
     async function syncFinalRecalc() {
         const emg = document.getElementById('emergency-toggle').checked;
         const res = await apiRequest('/user/doctors/checkout-summary', 'POST', {
@@ -497,18 +538,19 @@
             const d = res.data;
             MASTER_HK_STORE.pricing = d;
             document.getElementById('checkout-price-reel').innerHTML = `
-                <div class="flex justify-between text-xs font-bold text-gray-400"><span>BASE FEE</span><span class="currency-symbol text-gray-800">${d.baseFee}</span></div>
-                <div class="flex justify-between text-xs font-bold text-gray-400"><span>VISIT/STAY CHARGES</span><span class="currency-symbol text-gray-800">${d.visitCharge}</span></div>
-                ${d.discount > 0 ? `<div class="flex justify-between text-xs font-bold text-brand uppercase"><span>COUPON SAVINGS</span><span>-₹${d.discount}</span></div>` : ''}
-                ${emg ? `<div class="flex justify-between text-xs font-black text-orange-500 uppercase"><span>EMERGENCY FEE</span><span>+₹200</span></div>` : ''}
-                <div class="pt-4 border-t flex justify-between font-black text-2xl"><span>TOTAL</span><span class="text-brand currency-symbol">${d.totalPayable}</span></div>
+                <div class="flex justify-between text-xs font-bold text-gray-400"><span>${MASTER_HK_STORE.bedId ? 'BED STAY' : 'CONSULT FEE'}</span><span class="currency-symbol text-gray-800">${d.baseFee}</span></div>
+                <div class="flex justify-between text-xs font-bold text-gray-400 py-3 border-b border-gray-50"><span>VISIT CHARGES</span><span class="currency-symbol text-gray-800">${d.visitCharge}</span></div>
+                ${d.discount > 0 ? `<div class="flex justify-between text-xs font-bold text-brand uppercase py-3 border-b border-gray-50"><span>COUPON SAVINGS</span><span>-₹${d.discount}</span></div>` : ''}
+                ${emg ? `<div class="flex justify-between text-xs font-black text-orange-500 uppercase py-3"><span>EMERGENCY FEE</span><span>+₹200</span></div>` : ''}
+                <div class="pt-6 flex justify-between font-black text-2xl"><span>GRAND TOTAL</span><span class="text-brand currency-symbol">${d.totalPayable}</span></div>
             `;
             document.getElementById('txt-final-total').innerText = d.totalPayable;
-            loadCouponsAndProfiles();
+            document.getElementById('txt-saved-amt').innerText = d.discount;
+            loadCheckoutExtras();
         }
     }
 
-    async function loadCouponsAndProfiles() {
+    async function loadCheckoutExtras() {
         const [coupons, profiles] = await Promise.all([
             apiRequest(`/user/doctors/coupons/${MASTER_HK_STORE.docId || 'global'}`),
             apiRequest('/user/hospital/booking-profiles')
@@ -516,17 +558,17 @@
 
         if(coupons.success) {
             document.getElementById('checkout-coupons-reel').innerHTML = coupons.data.map(c => `
-                <div onclick="applyCoupon('${c.couponName}')" class="bg-white border-2 ${MASTER_HK_STORE.couponCode === c.couponName ? 'border-brand' : 'border-gray-100'} p-4 rounded-2xl min-w-[150px] cursor-pointer">
-                    <p class="font-black text-xs text-brand">${c.couponName}</p>
-                    <p class="text-[8px] font-black text-gray-400 uppercase mt-1">Get ${c.discountPercentage}% Off</p>
+                <div onclick="applyCoupon('${c.couponName}')" class="bg-white border-2 ${MASTER_HK_STORE.couponCode === c.couponName ? 'border-brand' : 'border-gray-100'} p-5 rounded-3xl min-w-[170px] cursor-pointer shadow-sm">
+                    <p class="font-black text-xs text-brand uppercase">${c.couponName}</p>
+                    <p class="text-[9px] font-bold text-gray-400 uppercase mt-2">Get ${c.discountPercentage}% OFF</p>
                 </div>
             `).join('');
         }
 
         if(profiles.success) {
             document.getElementById('patient-bubbles').innerHTML = profiles.data.map(p => `
-                <div onclick="selectPatient(this, '${p.name}')" class="flex flex-col items-center gap-2 cursor-pointer">
-                    <img src="${p.profilePic || 'https://i.pravatar.cc/100'}" class="w-14 h-14 rounded-2xl object-cover border-2 border-transparent">
+                <div onclick="selectPatient(this, '${p.name}')" class="flex flex-col items-center gap-3 cursor-pointer">
+                    <img src="${p.profilePic || 'https://i.pravatar.cc/100'}" class="w-16 h-16 rounded-[24px] object-cover border-4 border-transparent transition shadow-sm">
                     <p class="text-[9px] font-black uppercase text-gray-400">${p.name.split(' ')[0]}</p>
                 </div>
             `).join('');
@@ -535,111 +577,77 @@
 
     function applyCoupon(code) { MASTER_HK_STORE.couponCode = code; syncFinalRecalc(); }
     function selectPatient(el, name) {
-        document.querySelectorAll('#patient-bubbles img').forEach(img => img.classList.replace('border-brand', 'border-transparent'));
-        el.querySelector('img').classList.replace('border-transparent', 'border-brand');
+        document.querySelectorAll('#patient-bubbles img').forEach(img => img.className = 'w-16 h-16 rounded-[24px] object-cover border-4 border-transparent transition shadow-sm');
+        el.querySelector('img').className = 'w-16 h-16 rounded-[24px] object-cover border-4 border-brand shadow-xl';
         MASTER_HK_STORE.selectedPatient = name;
     }
 
     async function executeFinalBooking() {
         const res = await apiRequest('/user/doctors/book', 'POST', {
-            doctorId: MASTER_HK_STORE.docId,
-            bedId: MASTER_HK_STORE.bedId,
-            hospitalId: MASTER_HK_STORE.hospId,
-            appointmentDate: moment().format('YYYY-MM-DD'),
-            appointmentTime: MASTER_HK_STORE.slotVal || 'Admission',
-            consultationType: MASTER_HK_STORE.consType,
-            patients: [{ patientName: MASTER_HK_STORE.selectedPatient || 'Self', patientAge: 25, gender: 'Male', relation: 'Self', isMainUser: true }],
-            pricing: {
-                baseFee: MASTER_HK_STORE.pricing.baseFee,
-                visitCharge: MASTER_HK_STORE.pricing.visitCharge,
-                subtotal: MASTER_HK_STORE.pricing.subtotal,
-                totalPayable: MASTER_HK_STORE.pricing.totalPayable,
-                discount: MASTER_HK_STORE.pricing.discount
-            }
+            doctorId: MASTER_HK_STORE.docId, bedId: MASTER_HK_STORE.bedId, hospitalId: MASTER_HK_STORE.hospId,
+            appointmentDate: moment().format('YYYY-MM-DD'), appointmentTime: MASTER_HK_STORE.slotVal, consultationType: MASTER_HK_STORE.consType,
+            patients: [{ patientName: MASTER_HK_STORE.selectedPatient || 'Self', patientAge: 30, gender: 'Male', relation: 'Self', isMainUser: true }],
+            pricing: { baseFee: MASTER_HK_STORE.pricing.baseFee, visitCharge: MASTER_HK_STORE.pricing.visitCharge, subtotal: MASTER_HK_STORE.pricing.subtotal, totalPayable: MASTER_HK_STORE.pricing.totalPayable, discount: MASTER_HK_STORE.pricing.discount }
         });
-
-        if(res.success) {
-            document.getElementById('track-otp-ui').innerText = res.trackingOTP || '8902';
-            navigateTo('tracking');
+        if(res.success) { 
+            document.getElementById('track-otp-ui').innerText = res.trackingOTP || '8902'; 
+            navigateTo('tracking'); 
         }
     }
 
-    // --- 6. MY BOOKINGS SYNC ---
-    async function syncMyBookings(tab) {
+    // --- 6. APPOINTMENT LISTING ---
+    async function syncMyBookings(tab, btn) {
+        if(btn) {
+            document.querySelectorAll('#my-bookings-screen button').forEach(b => b.className = 'flex-1 py-3 text-[10px] font-black rounded-xl');
+            btn.className = 'flex-1 py-3 text-[10px] font-black rounded-xl bg-white shadow-sm';
+        }
         const res = await apiRequest(`/user/hospital/my-bookings?tab=${tab}`);
         const container = document.getElementById('bookings-list-main');
         if(res.success) {
             container.innerHTML = res.data.map(b => `
-                <div class="figma-card p-5 space-y-4">
-                    <div class="flex justify-between items-start">
-                        <div class="flex gap-4">
-                            <img src="${MASTER_API}/${b.doctorId?.profileImage || b.hospitalId?.hospitalImage}" class="w-12 h-12 rounded-xl object-cover">
-                            <div>
-                                <h4 class="font-black text-sm uppercase">${b.doctorId?.name || b.hospitalId?.name}</h4>
-                                <p class="text-[9px] font-black text-gray-400 uppercase">${moment(b.appointmentDate).format('DD MMM')} • ${b.appointmentTime}</p>
-                            </div>
+                <div class="figma-card p-6 flex gap-6 items-center">
+                    <img src="${MASTER_API}/${b.doctorId?.profileImage || b.hospitalId?.hospitalImage}" class="w-16 h-16 rounded-3xl object-cover border">
+                    <div class="flex-1">
+                        <div class="flex justify-between items-start">
+                            <h4 class="font-black text-sm uppercase text-gray-800">${b.doctorId?.name || b.hospitalId?.name}</h4>
+                            <span class="bg-brand-light text-brand text-[8px] font-black px-2 py-1 rounded-lg uppercase">${b.status}</span>
                         </div>
-                        <span class="bg-brand-light text-brand px-3 py-1 rounded-lg text-[8px] font-black uppercase">${b.status}</span>
-                    </div>
-                    <div class="pt-4 border-t flex justify-between items-center">
-                        <span class="text-xs font-black text-gray-800 currency-symbol">${b.totalAmount}</span>
-                        <button class="bg-gray-100 px-4 py-2 rounded-lg text-[9px] font-black uppercase">View Details</button>
+                        <p class="text-[10px] font-bold text-gray-400 uppercase mt-2">${moment(b.appointmentDate).format('DD MMM')} • ${b.appointmentTime}</p>
+                        <div class="flex justify-between items-center mt-3">
+                            <p class="font-black text-brand text-sm currency-symbol">${b.totalAmount}</p>
+                            <button class="bg-gray-50 text-[8px] font-black px-4 py-2 rounded-xl uppercase border">Details</button>
+                        </div>
                     </div>
                 </div>
             `).join('');
         }
+        lucide.createIcons();
     }
 
-    // --- OTHER UI SYNC ---
+    // --- SUB-SYNC LOADERS ---
     async function syncMenstrual() {
         const res = await apiRequest('/user/doctor/menstrual/insights');
         if(res.success && res.data) {
-            document.getElementById('menstrual-text-content').innerHTML = `NEXT PERIOD IN <span class="text-3xl block mt-1">${res.data.daysUntilNext} DAYS</span>`;
-            document.getElementById('period-summary-txt').innerText = `NEXT IN ${res.data.daysUntilNext} DAYS`;
+            document.getElementById('menstrual-text-content').innerHTML = `Next Cycle Expected In <span class="text-3xl block mt-2">${res.data.daysUntilNext} DAYS</span>`;
+            document.getElementById('period-summary-txt').innerText = `Next in ${res.data.daysUntilNext} days`;
         }
-    }
-    async function savePeriodData() {
-        const data = { lastPeriodDate: document.getElementById('last-period-date').value, cycleLength: parseInt(document.getElementById('cycle-len').value), periodDuration: 5 };
-        const res = await apiRequest('/user/doctor/menstrual/update', 'POST', data);
-        if(res.success) { alert("Updated!"); syncMenstrual(); }
     }
 
     async function syncPills() {
         const res = await apiRequest('/user/doctor/pills/my-pills');
         if(res.success) {
             document.getElementById('active-pills-list').innerHTML = res.data.map(p => `
-                <div class="figma-card p-5 border-l-8 border-brand mb-4">
-                    <h4 class="font-black text-sm uppercase">${p.medicineName}</h4>
-                    <p class="text-[9px] font-bold text-gray-400 uppercase mt-1">${p.dosage} • ${p.frequency}</p>
+                <div class="figma-card p-6 border-l-8 border-brand mb-4 flex justify-between items-center">
+                    <div>
+                        <h4 class="font-black text-sm uppercase">${p.medicineName}</h4>
+                        <p class="text-[9px] font-bold text-gray-400 mt-1 uppercase">${p.dosage} • ${p.frequency}</p>
+                    </div>
+                    <i data-lucide="bell" class="w-5 h-5 text-brand"></i>
                 </div>
             `).join('');
             document.getElementById('pill-summary-count').innerText = `${res.data.length} pills today`;
         }
-    }
-
-    async function syncStats() {
-        const res = await apiRequest('/user/health-records/history?page=1&limit=10');
-        if(res.success) {
-            document.getElementById('hist-list-ui').innerHTML = res.data.map(h => `
-                <div class="figma-card p-4 flex justify-between mb-3">
-                    <div><p class="font-black text-xs uppercase">${h.type}</p><p class="text-[8px] font-black text-gray-400">${moment(h.date).format('lll')}</p></div>
-                    <span class="font-black text-brand">${h.value}</span>
-                </div>
-            `).join('');
-        }
-    }
-
-    async function syncRecords() {
-        const res = await apiRequest('/user/doctors/prescriptions');
-        if(res.success) {
-            document.getElementById('records-list-container').innerHTML = res.data.map(p => `
-                <div class="figma-card p-4 flex gap-4 items-center mb-4">
-                    <div class="bg-brand-light p-3 rounded-xl text-brand"><i data-lucide="file-text"></i></div>
-                    <div><h4 class="font-black text-xs uppercase">Prescription #${p._id.slice(-6)}</h4><p class="text-[9px] font-black text-gray-400">${moment(p.createdAt).format('LL')}</p></div>
-                </div>
-            `).join('');
-            lucide.createIcons();
-        }
+        lucide.createIcons();
     }
 
     lucide.createIcons();

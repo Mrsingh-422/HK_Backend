@@ -43,6 +43,10 @@ const doctorSchema = new mongoose.Schema({
         clinic: { type: Boolean, default: true },
         home: { type: Boolean, default: true }
     },
+    location: {
+        lat: { type: Number, default: 0 },
+        lng: { type: Number, default: 0 }
+    },
 
     // --- Figma: Dynamic Slot Management ---
     slotDuration: { type: Number, default: 30 }, // 30 mins per patient
@@ -52,6 +56,8 @@ const doctorSchema = new mongoose.Schema({
         endTime: String,   // "18:00"
         isLiveTrackingAvailable: { type: Boolean, default: false }
     }],
+    treatedConditions: [{ type: String }], // Figma: "I can help you with"
+competencies: [{ type: String }],      // Figma: "Competencies"
 
     // System Stats
     averageRating: { type: Number, default: 0 },

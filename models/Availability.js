@@ -9,7 +9,7 @@ const availabilitySchema = new mongoose.Schema({
     },
     vendorType: { 
         type: String, 
-        enum: ['Lab', 'Pharmacy', 'Nurse','Doctor'], 
+        enum: ['Lab', 'Pharmacy', 'Nurse','Doctor', 'Hospital'], 
         required: true 
     },
 

@@ -15,6 +15,18 @@ const appointmentSchema = new mongoose.Schema({
         reasonForVisit: { type: String },
         isMainUser: { type: Boolean, default: false } 
     }],
+    address: {
+        name: String,        
+        phone: String,       
+        houseNo: String,
+        sector: String,
+        landmark: String,
+        city: String,
+        state: String,
+        country: String,
+        pincode: String,
+        addressType: { type: String, default: 'Home' }
+    },
 
     appointmentDate: { type: Date, required: true },
     appointmentTime: { type: String, required: true }, 

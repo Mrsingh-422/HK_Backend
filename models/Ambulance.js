@@ -49,6 +49,27 @@ const ambulanceSchema = new mongoose.Schema({
     // --- Step 5: Availability Setup ---
     serviceRadius: { type: String, default: '5 km' }, // 5km, 10km, 20km
     availableForEmergency: { type: Boolean, default: true },
+    // Add inside Ambulance Schema
+    pricing: {
+        fixedPrice: { type: Number, default: 0 },
+        baseDistance: { type: Number, default: 0 }, // Distance field
+        pricePerKM: { type: Number, default: 0 }
+    },
+    freeServices: {
+        accidental: { type: Boolean, default: false },
+        emergency: { type: Boolean, default: false },
+        referral: { type: Boolean, default: false }
+    },
+    defaultService: { type: String, default: null }, // Selected from dropdown
+    optionalServices: [{ 
+        name: String, 
+        price: Number 
+    }],
+    driverInfo: {
+        fullName: String,
+        department: String,
+        dob: Date
+    },
 
     // --- System ---
     isPhoneVerified: { type: Boolean, default: false },

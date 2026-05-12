@@ -6,7 +6,7 @@ const { userReportUploads } = require('../../../middleware/multer');
 const { 
     getSpecializations, 
     searchDoctors, 
-    getDoctorDetails, getAvailableCoupons,validateCoupon, getCheckoutSummary,
+    getDoctorDetails,getDoctorVisitConfig, getAvailableCoupons,validateCoupon, getCheckoutSummary,
     bookAppointment, verifyTrackingOTP,
     getUserAppointments, 
     userCancelAppointment,
@@ -14,12 +14,11 @@ const {
 } = require('../../../controllers/user/Doctor/BookAppointment');
 
 // Base URL: /user/doctors
-
-// PUBLIC
+// // PUBLIC
 router.get('/specializations', getSpecializations);
-router.get('/list', searchDoctors);
+router.post('/list', searchDoctors);
 router.get('/details/:id', getDoctorDetails);
-
+router.get('/visit-charges/:doctorId', getDoctorVisitConfig);
 router.get('/coupons/:doctorId', protect('user'), getAvailableCoupons);
 router.post('/validate-coupon', protect('user'), validateCoupon);
 router.post('/checkout-summary', protect('user'), getCheckoutSummary);

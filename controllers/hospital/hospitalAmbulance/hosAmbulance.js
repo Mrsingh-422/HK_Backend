@@ -13,49 +13,36 @@ const generateToken = (id, role) => {
 const addHospitalAmbulance = async (req, res) => {
     try {
         const { 
-            name, email, phone, password, 
-            country, state, city, address,
-            drivingLicenseNumber, licenseExpiryDate, experienceYears, bloodGroup, // Driver info
-            vehicleNumber, vehicleType, rcNumber, rcExpiryDate, insuranceNumber, insuranceValidTill, // Vehicle info
-            serviceRadius, availableForEmergency
+            name, email, phone, password, address, vehicleType, ambulanceNumber,
+            fixedPrice, distance, perKMPrice, // Pricing
+            accidentalService, emergencyService, referralService, // Toggles
+            defaultService, optionalService, // Dropdowns
+            fullName, department, dob 
         } = req.body;
-
-        const files = req.files;
-
-        const exists = await Ambulance.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }] });
-        if (exists) return res.status(400).json({ message: 'Ambulance Partner already registered' });
-
-        const hashedPassword = await bcrypt.hash(String(password || '123456'), 10);
-
-        // Document Mapping (Same as Independent flow)
-        const documentPaths = {
-            drivingLicenseFile: files?.drivingLicenseFile ? files.drivingLicenseFile[0].path : null,
-            rcFile: files?.rcFile ? files.rcFile[0].path : null,
-            insuranceFile: files?.insuranceFile ? files.insuranceFile[0].path : null,
-            fitnessCertificate: files?.fitnessCertificate ? files.fitnessCertificate[0].path : null,
-            ambulancePermit: files?.ambulancePermit ? files.ambulancePermit[0].path : null
-        };
 
         const ambulance = await Ambulance.create({
             hospitalId: req.user.id,
-            name, email, phone,
-            password: hashedPassword,
-            country, state, city, address,
-            // Driver Details
-            drivingLicenseNumber, licenseExpiryDate, experienceYears, bloodGroup,
-            // Vehicle Details
-            vehicleNumber, vehicleType, rcNumber, rcExpiryDate, insuranceNumber, insuranceValidTill,
-            // Availability
-            serviceRadius,
-            availableForEmergency: availableForEmergency === 'true' || availableForEmergency === true,
-            // System
-            documents: documentPaths,
-            role: 'hospital-ambulance',
-            profileStatus: 'Approved', // Hospital added are usually pre-approved
-            isActive: true
+            name: fullName, // Screen pe Full Name hai
+            email, phone, address,
+            password: await bcrypt.hash(password, 10),
+            vehicleType,
+            ambulanceNumber, // API mein ye key use karein
+            pricing: {
+                fixedPrice: Number(fixedPrice),
+                baseDistance: Number(distance),
+                pricePerKM: Number(perKMPrice)
+            },
+            freeServices: {
+                accidental: accidentalService === 'true',
+                emergency: emergencyService === 'true',
+                referral: referralService === 'true'
+            },
+            defaultService,
+            optionalServices: JSON.parse(optionalService || '[]'), // Array format
+            driverInfo: { fullName, department, dob }
         });
 
-        res.status(201).json({ success: true, message: 'Hospital Ambulance Added with Documents', data: ambulance });
+        res.status(201).json({ success: true, data: ambulance });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
