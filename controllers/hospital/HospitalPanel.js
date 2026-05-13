@@ -6,6 +6,9 @@ const Appointment = require('../../models/Appointment');
 const Coupon = require('../../models/Coupon');
 const Specialization = require('../../models/Specialization');
 const Ambulance = require('../../models/Ambulance');
+const Wallet = require('../../models/Wallet');
+const HospitalDoctor = require('../../models/HospitalDoctor');
+const Review = require('../../models/Review');
 const { deleteFile } = require('../../utils/fileHandler');
 
 const getShortName = (name) => {
@@ -44,15 +47,28 @@ const getHospitalDashboardStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         
-        // Real-time counts from Appointment Model
-        const emergency = await Appointment.countDocuments({ hospitalId, triageLevel: 'Emergency', status: 'In-Progress' });
-        const admission = await Appointment.countDocuments({ hospitalId, bookingType: 'Admission', status: 'In-Progress' });
-        const dischargeReady = await Appointment.countDocuments({ hospitalId, status: 'Confirmed' }); // Summary ready
+        const emergency = await Appointment.countDocuments({ 
+            hospitalId, 
+            triageLevel: 'Emergency', 
+            status: { $in: ['Confirmed', 'In-Progress'] } 
+        });
+
+        const admission = await Appointment.countDocuments({ 
+            hospitalId, 
+            bookingType: 'Admission', 
+            status: 'Hospital-Pending' 
+        });
+
+        const dischargeReady = await Appointment.countDocuments({ 
+            hospitalId, 
+            status: 'Confirmed',
+            bookingType: 'Admission'
+        });
 
         res.json({
             success: true,
             data: {
-                emergencyCount: emergency,
+                emergencyCount: emergency, // Ab ye aapke record ko count karega
                 admissionCount: admission,
                 dischargePending: dischargeReady
             }
@@ -475,20 +491,18 @@ const assignDriverToCase = async (req, res) => {
     try {
         const { appointmentId, ambulanceId } = req.body;
 
-        const appointment = await Appointment.findById(appointmentId);
-        if (!appointment) return res.status(404).json({ message: "Case not found" });
+        // 1. Mark Ambulance as Busy (Duty ON)
+        await Ambulance.findByIdAndUpdate(ambulanceId, { 
+            availableForEmergency: false 
+        });
 
-        appointment.status = 'In-Progress';
-        appointment.tracking = {
-            ...appointment.tracking,
-            ambulanceId: ambulanceId // Link the ambulance partner
-        };
+        // 2. Link Trip to Appointment
+        await Appointment.findByIdAndUpdate(appointmentId, {
+            'tracking.ambulanceId': ambulanceId,
+            'tracking.status': 'Driver Assigned'
+        });
 
-        // Mark ambulance as busy
-        await Ambulance.findByIdAndUpdate(ambulanceId, { availableForEmergency: false });
-
-        await appointment.save();
-        res.json({ success: true, message: "Driver Assigned Successfully" });
+        res.json({ success: true, message: "Driver Assigned. Ambulance is now On Duty." });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -583,10 +597,146 @@ const getAllHospitalAdmissions = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// --- EMERGENCY CASES ---
+const getEmergencyCases = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+
+        // Logic: Triage Level "Emergency" hona chahiye aur status "Completed" ya "Cancelled" nahi hona chahiye
+        const data = await Appointment.find({ 
+            hospitalId: hospitalId, 
+            triageLevel: 'Emergency', 
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } // 👈 Status mapping fix
+        })
+        .populate('userId', 'name profilePic phone age gender')
+        .populate({
+            path: 'bedId',
+            select: 'bedNumber status',
+            populate: { path: 'wardId', select: 'name' }
+        })
+        .sort({ createdAt: -1 });
+
+        res.json({ 
+            success: true, 
+            count: data.length, 
+            data 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// --- TRACK AMBULANCES ---
+const trackAllAmbulances = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+
+        // Fetch all ambulances linked to this hospital
+        const ambulances = await Ambulance.find({ hospitalId: hospitalId })
+            .select('name vehicleNumber vehicleType availableForEmergency location driverInfo phone');
+
+        // Logic for Top Cards (Screenshot 14)
+        const stats = {
+            total: ambulances.length,
+            available: ambulances.filter(a => a.availableForEmergency).length,
+            onDuty: ambulances.filter(a => !a.availableForEmergency).length,
+            maintenance: 0 // Agar aapke paas maintenance ka logic hai toh yahan add karein
+        };
+
+        // Format data as per Figma (Screenshot 13 & 37)
+        const formattedData = ambulances.map(amb => ({
+            _id: amb._id,
+            ambulanceCode: amb.name, // e.g. "AMB-002"
+            driverName: amb.driverInfo?.fullName || "Not Assigned",
+            vehicleNumber: amb.vehicleNumber || "N/A",
+            type: amb.vehicleType, // ALS, BLS, Traveller
+            status: amb.availableForEmergency ? 'Available' : 'On Duty',
+            contactNumber: amb.phone,
+            liveLocation: {
+                lat: amb.location?.lat || 0,
+                lng: amb.location?.lng || 0
+            },
+            // Note: ETA aur Distance real-time mein Google Maps API se aayenge
+            // Abhi ke liye professional project mein hum static labels bhejte hain jab tak trip link na ho
+            eta: amb.availableForEmergency ? "Stationary" : "8 mins",
+            distance: amb.availableForEmergency ? "At Base" : "2.3 km"
+        }));
+
+        res.json({ 
+            success: true, 
+            stats, // Figma Screenshot 14: Total, Available, On Duty cards
+            data: formattedData // Figma Screenshot 13: List View
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const toggleAmbulanceStatus = async (req, res) => {
+    try {
+        const { ambulanceId, status } = req.body; // status: 'Available' or 'Maintenance'
+
+        const update = {
+            availableForEmergency: status === 'Available' ? true : false,
+            // Agar status maintenance hai toh is key ko hum use kar sakte hain logic mein
+        };
+
+        const amb = await Ambulance.findByIdAndUpdate(ambulanceId, update, { new: true });
+        res.json({ success: true, message: `Ambulance is now ${status}`, data: amb });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+// --- 1. MANAGE TERMS & CONDITIONS (Screenshot 31) ---
+const updateHospitalTerms = async (req, res) => {
+    try {
+        const { terms } = req.body;
+        const hospital = await Hospital.findByIdAndUpdate(
+            req.user.id,
+            { $set: { termsAndConditions: terms } },
+            { new: true }
+        );
+        res.json({ success: true, message: "Terms & Conditions Updated", data: hospital.termsAndConditions });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const getHospitalTerms = async (req, res) => {
+    try {
+        const hospital = await Hospital.findById(req.params.id || req.user.id).select('termsAndConditions');
+        res.json({ success: true, data: hospital.termsAndConditions });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 2. GET HOSPITAL & AMBULANCE RATINGS (Screenshot 25, 26) ---
+const getHospitalPanelRatings = async (req, res) => {
+    try {
+        const { targetType } = req.query; // 'Hospital' or 'Ambulance'
+        const hospitalId = req.user.id;
+
+        let query = {};
+        if (targetType === 'Hospital') {
+            query = { targetId: hospitalId, targetType: 'Hospital' };
+        } else {
+            // Is hospital se linked saari ambulances ke reviews
+            const ambulances = await Ambulance.find({ hospitalId }).select('_id');
+            const ambIds = ambulances.map(a => a._id);
+            query = { targetId: { $in: ambIds }, targetType: 'Ambulance' };
+        }
+
+        const reviews = await Review.find(query)
+            .populate('userId', 'name profilePic')
+            .sort({ createdAt: -1 });
+
+        res.json({ success: true, data: reviews });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed, updateWardBeds,deleteSpecificBed, addHospitalService, updateHospitalService, 
     generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission, getAvailableDrivers, assignDriverToCase,
-    getIncomingReferrals
+    getIncomingReferrals, getEmergencyCases, trackAllAmbulances,toggleAmbulanceStatus,
+    updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings
 };

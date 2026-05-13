@@ -6,7 +6,9 @@ const {
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed,updateWardBeds, addHospitalService, updateHospitalService, 
     generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons ,deleteSpecificBed,
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission,getAvailableDrivers, assignDriverToCase,
-    getIncomingReferrals,getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions
+    getIncomingReferrals,getEmergencyCases, trackAllAmbulances, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
+    toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings
+
 } = require('../../controllers/hospital/HospitalPanel');
 
 // Base: /hospital/panel
@@ -48,5 +50,14 @@ router.delete('/ward/delete/:wardId', protect('hospital'), deleteWard); // New: 
 // --- PATIENT / ADMISSION MANAGEMENT ---
 router.get('/admissions/all', protect('hospital'), getAllHospitalAdmissions); // New: All Admissions List
 
+// --- EMERGENCY & AMBULANCE ---
+router.get('/emergency-cases', protect('hospital'), getEmergencyCases);
+router.get('/track-ambulances', protect('hospital'), trackAllAmbulances);
+
+router.post('/ambulance/toggle-status', protect('hospital'), toggleAmbulanceStatus);
+
+router.put('/terms', protect('hospital'), updateHospitalTerms);
+router.get('/terms', protect('hospital'), getHospitalTerms);
+router.get('/ratings', protect('hospital'), getHospitalPanelRatings);
 
 module.exports = router;

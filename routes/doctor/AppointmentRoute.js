@@ -9,34 +9,32 @@ const {
     doctorCancelAppointment,
     startVisit,
     completeWithPrescription, 
-    updateLiveLocation, 
-    startVideoCall,
-    updateDoctorSettings,
-    setAvailability,
-    getDoctorStats,getMyConsultationFees, updateConsultationFees
+    getDoctorStats,
+    getMyConsultationFees, 
+    updateConsultationFees, rescheduleAppointment
 } = require('../../controllers/doctor/Appointment');
 
+// Base URL: /doctor/appointments
 
-
-// Listings
-router.get('/patient-bookings', protect('doctor'), getDoctorBookings);
-router.get('/today-appointments', protect('doctor'), getTodayBookings);
+// 1. Dashboard Stats (Figma: Total Revenue, Completed count)
 router.get('/stats', protect('doctor'), getDoctorStats);
-// fees
-router.get('/profile/fees', protect('doctor'), getMyConsultationFees);
-router.put('/profile/update-fees', protect('doctor'), updateConsultationFees);
 
+// 2. Main Appointment List (Figma: Patient Bookings)
+router.get('/patient-bookings', protect('doctor'), getDoctorBookings);
 
-// Actions
+// 3. Today's List (Figma: Today's Schedule)
+router.get('/today-appointments', protect('doctor'), getTodayBookings);
+
+// 4. Actions
 router.patch('/confirm/:id', protect('doctor'), confirmAppointment);
 router.patch('/cancel/:id', protect('doctor'), doctorCancelAppointment);
 router.patch('/start-visit/:id', protect('doctor'), startVisit);
 router.post('/complete/:id', protect('doctor'), completeWithPrescription);
-router.patch('/update-location/:id', protect('doctor'), updateLiveLocation);
-router.post('/start-video/:id', protect('doctor'), startVideoCall);
 
-// Settings & Slots
-router.patch('/update-settings', protect('doctor'), updateDoctorSettings);
-router.post('/set-availability', protect('doctor'), setAvailability);
+// 5. Fees Management
+router.get('/profile/fees', protect('doctor'), getMyConsultationFees);
+router.put('/profile/update-fees', protect('doctor'), updateConsultationFees);
+
+router.post('/reschedule/:id', protect('doctor'), rescheduleAppointment);
 
 module.exports = router;

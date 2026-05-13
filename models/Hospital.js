@@ -50,7 +50,9 @@ const hospitalSchema = new mongoose.Schema({
         enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'],
         default: 'Incomplete'
     },
-    rejectionReason: { type: String }
+    rejectionReason: { type: String },
+    termsAndConditions: { type: String, default: "" },
+
 
 }, { timestamps: true });
 

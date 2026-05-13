@@ -90,46 +90,180 @@ const getBedGrid = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 2. CHECKOUT SUMMARY (Beds + Doctors) ---
-// 4. CHECKOUT SUMMARY (Unified for Beds & Doctors)
+// --- 1. ADD RATING (User Side) ---
+const addReview = async (req, res) => {
+    try {
+        const { targetId, targetType, orderId, rating, comment } = req.body;
+
+        // Validation: Check if user actually had this appointment
+        const appointment = await Appointment.findOne({ _id: orderId, userId: req.user.id });
+        if (!appointment) return res.status(403).json({ message: "You cannot review an order you didn't place." });
+
+        const review = await Review.create({
+            userId: req.user.id,
+            userName: req.user.name,
+            targetId,
+            targetType,
+            orderId,
+            rating,
+            comment
+        });
+
+        // RECALCULATE AVERAGE RATING (Production Standard)
+        const allReviews = await Review.find({ targetId });
+        const avg = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+
+        if (targetType === 'Hospital') {
+            await Hospital.findByIdAndUpdate(targetId, { averageRating: avg.toFixed(1), totalReviews: allReviews.length });
+        } else if (targetType === 'Ambulance') {
+            await Ambulance.findByIdAndUpdate(targetId, { averageRating: avg.toFixed(1), totalReviews: allReviews.length });
+        }
+
+        res.status(201).json({ success: true, message: "Review submitted successfully", data: review });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 2. UPDATE RATING ---
+const updateReview = async (req, res) => {
+    try {
+        const { reviewId } = req.params;
+        const { rating, comment } = req.body;
+
+        const review = await Review.findOneAndUpdate(
+            { _id: reviewId, userId: req.user.id },
+            { $set: { rating, comment } },
+            { new: true }
+        );
+
+        if (!review) return res.status(404).json({ message: "Review not found or unauthorized" });
+
+        res.json({ success: true, message: "Review updated", data: review });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const getDoctorsByHospitalId = async (req, res) => {
+    try {
+        const { hospitalId } = req.params;
+        const doctors = await Doctor.find({ hospitalId, profileStatus: 'Approved', isActive: true })
+            .select('name speciality qualification profileImage fees averageRating consultationStatus');
+        res.json({ success: true, data: doctors });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+const getServicesByHospitalId = async (req, res) => {
+    try {
+        const { hospitalId } = req.params;
+        const services = await HospitalService.find({ hospitalId })
+            .select('serviceName price description image');
+        res.json({ success: true, data: services });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+const getHospitalCoupons = async (req, res) => {
+    try {
+        const { hospitalId } = req.params;
+
+        const coupons = await Coupon.find({
+            isActive: true,
+            expiryDate: { $gt: new Date() },
+            $or: [
+                { vendorId: hospitalId }, // Hospital specific coupons
+                { isAdminCreated: true, vendorType: { $in: ['Hospital', 'All'] } } // Global coupons
+            ]
+        }).sort({ createdAt: -1 });
+
+        res.json({ success: true, count: coupons.length, data: coupons });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 2. VALIDATE COUPON (Checkout Logic) ---
+// endpoint: POST /user/hospital/validate-coupon
+// --- 1. VALIDATE COUPON (Strict Logic) ---
+const validateHospitalCoupon = async (req, res) => {
+    try {
+        const { couponCode, subtotal, hospitalId, doctorId } = req.body;
+        
+        // Validation: Fields required
+        if (!couponCode || !subtotal) {
+            return res.status(400).json({ success: false, message: "Coupon code and subtotal are required." });
+        }
+
+        const coupon = await Coupon.findOne({ 
+            couponName: couponCode.toUpperCase(), 
+            isActive: true 
+        });
+
+        if (!coupon) return res.status(404).json({ success: false, message: "Invalid or expired coupon." });
+
+        // Minimum Amount Check
+        if (Number(subtotal) < coupon.minOrderAmount) {
+            return res.status(400).json({ success: false, message: `Minimum ₹${coupon.minOrderAmount} order required.` });
+        }
+
+        // Provider Check (Specific Coupon)
+        const targetId = hospitalId || doctorId;
+        if (coupon.vendorId && coupon.vendorId.toString() !== targetId) {
+            return res.status(400).json({ success: false, message: "This coupon is not valid for this hospital/doctor." });
+        }
+
+        // Usage Check
+        const userUsage = coupon.usedBy.find(u => u.userId.toString() === req.user.id);
+        if (userUsage && userUsage.usageCount >= coupon.maxUsagePerUser) {
+            return res.status(400).json({ success: false, message: "You've already used this coupon." });
+        }
+
+        let discount = (Number(subtotal) * coupon.discountPercentage) / 100;
+        if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
+
+        res.json({
+            success: true,
+            message: "Coupon Applied!",
+            data: {
+                couponId: coupon._id,
+                discountAmount: Math.round(discount),
+                finalAmount: Math.round(subtotal - discount)
+            }
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+// --- 2. CHECKOUT SUMMARY (Beds + Doctors + Extra Services) ---
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
-        const { doctorId, bedId, consultationType, couponCode, selectedServiceIds, triageLevel } = req.body;
+        const { doctorId, bedId, consultationType, couponCode, selectedServiceIds, triageLevel, days = 1 } = req.body;
 
         let baseFee = 0;
         let subtotal = 0;
 
-        // CASE A: Doctor Logic (Checks if ON/OFF)
+        // CASE A: Doctor
         if (doctorId) {
             const doctor = await Doctor.findById(doctorId);
             const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
             const key = typeMap[consultationType];
-
-            if (!doctor.consultationStatus[key]) {
-                return res.status(400).json({ message: "This consultation type is currently disabled by the doctor." });
+            if (!doctor || !doctor.consultationStatus[key]) {
+                return res.status(400).json({ message: "Consultation type is currently unavailable." });
             }
             baseFee = doctor.fees[key];
         } 
-        // CASE B: Bed Logic
+        // CASE B: Bed
         else if (bedId) {
             const bed = await Bed.findById(bedId);
-            if (bed.status !== 'Available') return res.status(400).json({ message: "Bed is no longer available" });
-            baseFee = bed.pricePerDay;
+            if (!bed || bed.status !== 'Available') return res.status(400).json({ message: "Bed is no longer available." });
+            baseFee = bed.pricePerDay * days;
         }
 
-        // --- DYNAMIC EXTRA SERVICES (Figma Screenshot 29) ---
+        // Extra Services & Triage
         let serviceCharge = 0;
-        if (selectedServiceIds && selectedServiceIds.length > 0) {
-            const extraServices = await HospitalService.find({ _id: { $in: selectedServiceIds } });
-            serviceCharge = extraServices.reduce((sum, s) => sum + s.price, 0);
+        if (selectedServiceIds?.length > 0) {
+            const services = await HospitalService.find({ _id: { $in: selectedServiceIds } });
+            serviceCharge = services.reduce((sum, s) => sum + s.price, 0);
         }
-
-        // Triage Surcharge (Emergency Extra)
         const triageSurcharge = triageLevel === 'Emergency' ? 200 : 0;
 
         subtotal = baseFee + serviceCharge + triageSurcharge;
 
-        // Coupon Logic
+        // Discount logic for Summary
         let discount = 0;
         if (couponCode) {
             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
@@ -140,65 +274,37 @@ const getHospitalCheckoutSummary = async (req, res) => {
 
         res.json({
             success: true,
-            data: {
-                baseFee,
-                serviceCharge,
-                triageSurcharge,
-                discount,
-                subtotal,
-                totalPayable: subtotal - discount,
-                currency: "₹"
-            }
+            data: { baseFee, serviceCharge, triageSurcharge, discount, subtotal, totalPayable: subtotal - discount }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 5. FINAL BOOKING (Admission & Appointment)
+// --- 3. FINAL BOOKING (Sync with Database) ---
 const finalHospitalBooking = async (req, res) => {
     try {
         const { 
             hospitalId, doctorId, bedId, bookingType, triageLevel, 
-            appointmentDate, appointmentTime, patients, pricing, 
-            consultationType, selectedServiceIds, couponId, couponCode 
+            appointmentDate, patients, pricing, couponId, couponCode, selectedServiceIds 
         } = req.body;
 
-        // 1. STRIKT AVAILABILITY VALIDATION
+        // Race condition bed check
         if (bedId) {
             const bed = await Bed.findById(bedId);
-            // Check karein ki bed exist karta hai aur available hai ya nahi
-            if (!bed || bed.status !== 'Available') {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: "Selected bed is no longer available. Please select another bed." 
-                });
-            }
+            if (!bed || bed.status !== 'Available') return res.status(400).json({ message: "Bed already occupied." });
         }
 
         const bookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        const trackingOTP = Math.floor(1000 + Math.random() * 9000).toString();
-
-        // 2. PATIENT DATA PREPARATION
-        const formattedPatients = patients.map(p => ({
-            patientName: p.patientName || p.name,
-            patientAge: Number(p.patientAge || p.age),
-            gender: p.gender,
-            relation: p.relation || 'Self',
-            isMainUser: p.isMainUser || false
-        }));
-
-        // 3. CREATE APPOINTMENT
+        
         const appointment = await Appointment.create({
             userId: req.user.id,
             hospitalId,
             doctorId: doctorId || null,
             bedId: bedId || null,
-            bookingType: bedId ? 'Admission' : 'Appointment',
+            bookingType: bedId ? 'Admission' : (bookingType || 'Appointment'),
             triageLevel: triageLevel || 'Routine',
-            patients: formattedPatients,
+            patients: typeof patients === 'string' ? JSON.parse(patients) : patients,
             appointmentDate,
-            appointmentTime: bedId ? 'Admission' : appointmentTime,
-            consultationType: bedId ? 'Clinic Visit' : consultationType,
-            
+            specialServices: selectedServiceIds || [],
             pricingBreakdown: {
                 baseFee: pricing.baseFee,
                 visitCharges: pricing.triageSurcharge || 0,
@@ -206,39 +312,27 @@ const finalHospitalBooking = async (req, res) => {
                 discountAmount: pricing.discount || 0,
                 subtotal: pricing.subtotal
             },
-            totalAmount: pricing.totalPayable, // Root Level Required Key
+            couponDetails: couponId ? { couponId, couponCode, discountValue: pricing.discount } : undefined,
+            totalAmount: pricing.totalPayable,
             bookingId,
-            status: 'Confirmed', // Direct Confirm if bed is occupied
+            status: 'Confirmed', 
             paymentStatus: 'Paid',
-            'tracking.otp': trackingOTP
+            'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString()
         });
 
-        // 4. REAL-TIME BED & WARD SYNC (IMMEDIATE OCCUPIED)
+        // Bed Status Update
         if (bedId) {
-            // Bed ko 'Occupied' mark karein
-            const occupiedBed = await Bed.findByIdAndUpdate(
-                bedId, 
-                { $set: { status: 'Occupied' } }, 
-                { new: true }
-            );
-
-            // Ward ki available beds count -1 karein
-            await Ward.findByIdAndUpdate(
-                occupiedBed.wardId, 
-                { $inc: { availableBeds: -1 } }
-            );
+            const b = await Bed.findByIdAndUpdate(bedId, { $set: { status: 'Occupied' } });
+            await Ward.findByIdAndUpdate(b.wardId, { $inc: { availableBeds: -1 } });
         }
 
-        res.status(201).json({ 
-            success: true, 
-            message: "Bed Booked & Marked Occupied Successfully", 
-            bookingId, 
-            data: appointment 
-        });
+        // Coupon Usage Update
+        if (couponId) {
+            await Coupon.findByIdAndUpdate(couponId, { $push: { usedBy: { userId: req.user.id, usageCount: 1 } } });
+        }
 
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
+        res.status(201).json({ success: true, bookingId, data: appointment });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 
@@ -276,8 +370,9 @@ const getBookingProfiles = async (req, res) => {
 };
 
 
+
 module.exports = { 
-    getHospitals, getWards, getBedGrid,
+    getHospitals, getWards, getBedGrid,getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
     getHospitalCheckoutSummary, finalHospitalBooking, getMyHospitalBookings, getBookingProfiles,
-    getHospitalDetails
+    getHospitalDetails, addReview, updateReview
 };

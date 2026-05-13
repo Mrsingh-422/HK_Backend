@@ -70,6 +70,10 @@ const ambulanceSchema = new mongoose.Schema({
         department: String,
         dob: Date
     },
+    location: {
+        lat: { type: Number, default: 0 },
+        lng: { type: Number, default: 0 }
+    },
 
     // --- System ---
     isPhoneVerified: { type: Boolean, default: false },
