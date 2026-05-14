@@ -14,7 +14,7 @@ const generateToken = (id, role) => {
 const addHospitalAmbulance = async (req, res) => {
     try {
         const { 
-            name, email, phone, password, address, ambulanceType, ambulanceNumber,
+            name, email, phone, password, address, ambulanceType, ambulanceNumber,vehicleType,
             fixedPrice, distance, perKMPrice, // Pricing
             accidentalService, emergencyService, referralService, // Toggles
             defaultService, optionalService, // Dropdowns
@@ -39,6 +39,8 @@ const addHospitalAmbulance = async (req, res) => {
             address: address,
             vehicleType: ambulanceType,
             ambulanceNumber: ambulanceNumber,
+            vehicleType: vehicleType,
+            role: 'hospital-ambulance',
             
             pricing: {
                 fixedPrice: Number(fixedPrice || 0),

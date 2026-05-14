@@ -8,7 +8,8 @@ const {
     addStaff, getStaffList, addVehicle, getFleetList ,getStaffRemovalReasons,
      updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation,assignResourcesToCase, 
          addVehicleActivityLog,updateVehicleStatus,toggleCaseHoldStatus,
-          getJurisdictionDetails,requestJurisdictionUpdate, getStationNotifications, updatePreferences, getAppLegalInfo
+          getJurisdictionDetails,requestJurisdictionUpdate, getStationNotifications, updatePreferences, getAppLegalInfo,
+          createFireCase
 } = require('../../../controllers/fireHQ/fireStation/stationManage');
 
 // Base URL: /fireStation/management
@@ -66,5 +67,6 @@ router.put('/preferences', protect('fire-station'), updatePreferences);
 router.get('/legal-info', protect('fire-station'), getAppLegalInfo);
 
 
+router.post('/create-case', protect('fire-station'), createFireCase);
 
 module.exports = router;

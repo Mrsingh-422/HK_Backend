@@ -24,14 +24,14 @@ const ambulanceSchema = new mongoose.Schema({
     licenseExpiryDate: { type: Date, default: null },
     experienceYears: { type: String, default: null },
     bloodGroup: { type: String, default: null },
+    vehicleType: { 
+        type: String, 
+        enum: ['Van', 'Mini Van', 'Advance Life Support', 'ICU Ambulance'], 
+        default: 'Van' 
+    },
 
     // --- Step 3: Vehicle Information ---
     vehicleNumber: { type: String, default: null },
-    vehicleType: { 
-        type: String, 
-        enum: ['BLS', 'ALS', 'ICU Ambulance'], 
-        default: 'BLS' 
-    },
     rcNumber: { type: String, default: null },
     rcExpiryDate: { type: Date, default: null },
     insuranceNumber: { type: String, default: null },

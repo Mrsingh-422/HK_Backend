@@ -80,7 +80,8 @@ app.use('/user/nurse', require('./routes/user/Nurse/BookNurseRoute'));
 // --- user pharmacy ---
 app.use('/user/pharmacy', require('./routes/user/Pharmacy/BookPharmacyRoute'));
 app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserRoute'));
- 
+// --- user ambulance ---
+app.use('/user/ambulance', require('./routes/user/Ambulance/AmbulanceBookRoute'));
 
 //////////////// Doctor Routes ///////////////////////
 app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
@@ -142,6 +143,7 @@ app.use('/driver/lab/orders', require('./routes/driver/driverLab/driverLabOrders
 //////////////// Ambulance Routes /////////////////////
 app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulance'));
 app.use('/driver/ambulance', require('./routes/ambulance/AmbulanceJourneyRoute')); // Ambulance Booking Management
+app.use('/ambulance/booking', require('./routes/ambulance/BookingAmbRoute')); // Ambulance Booking Management
 
 //////////////// others Routes or public routes  /////////////////////
 app.use('/api/public', require('./routes/others/locationRoutes'));

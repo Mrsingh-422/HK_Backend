@@ -629,8 +629,43 @@ const getAppLegalInfo = async (req, res) => {
     });
 };
 
+const createFireCase = async (req, res) => {
+    try {
+        const { callerName, callerPhone, fireType, severity, description, address, lat, lng, stationId } = req.body;
+ 
+        if (!lat || !lng) return res.status(400).json({ success: false, message: "Lat/Lng required." });
+ 
+        // Generate a readable Case No (Figma Match: Fire-2026-XXXX)
+        const year = new Date().getFullYear();
+        const randomStr = Math.floor(10000 + Math.random() * 90000);
+        const caseNo = `Fire-${year}-${randomStr}`;
+ 
+        const newCase = await FireCase.create({
+            hqId: req.user.id,
+            stationId,
+            caseNo, // Custom generated
+            callerName, callerPhone, fireType, severity, description, address,
+            location: { lat: Number(lat), lng: Number(lng) },
+            status: 'Fresh',
+            reportedAt: Date.now()
+        });
+ 
+        // Notify the specific station
+        await FireNotification.create({
+            stationId: stationId, // Station ko notification bhejna zaroori hai
+            hqId: req.user.id,
+            title: "New Emergency Case Dispatched",
+            message: `Emergency at ${address}. Incident ID: ${caseNo}`,
+            type: 'Emergency'
+        });
+ 
+        res.status(201).json({ success: true, message: "Fresh Case Dispatched Successfully!", data: newCase });
+    } catch (error) { res.status(500).json({ success: false, message: error. Message }); }
+};
+ 
+
 module.exports = { getStationDashboard, getFreshCases,getFreshCaseDetails, acceptCase,getAcceptedCases,getCaseHistory,
     getIncidentReport, getNearbyStations,updateIncidentStatusDetailed, addStaff, getStaffList, addVehicle, getFleetList, getStaffRemovalReasons, 
     updateStaff, deleteStaff, getStaffProfileDetails, addSupportingStation, assignResourcesToCase, 
     addVehicleActivityLog, updateVehicleStatus, toggleCaseHoldStatus,
-     getJurisdictionDetails,requestJurisdictionUpdate, getStationNotifications, updatePreferences, getAppLegalInfo };
+     getJurisdictionDetails,requestJurisdictionUpdate, getStationNotifications, updatePreferences, getAppLegalInfo,createFireCase };
