@@ -14,22 +14,22 @@ const generateToken = (id, role) => {
 const addHospitalAmbulance = async (req, res) => {
     try {
         const { 
-            name, email, phone, password, address, ambulanceType, ambulanceNumber,vehicleType,
-            fixedPrice, distance, perKMPrice, // Pricing
-            accidentalService, emergencyService, referralService, // Toggles
-            defaultService, optionalService, // Dropdowns
-            fullName, department, dob // Driver Info
+            name, email, phone, password, address, ambulanceNumber, vehicleType,
+            fixedPrice, distance, perKMPrice, 
+            accidentalService, emergencyService, referralService, 
+            defaultService, optionalService,
+            fullName, department, dob,
+            // 👇 Supporting Staff Fields
+            hasNurse, nursePrice, 
+            hasDoctor, doctorPrice 
         } = req.body;
 
-        // 1. Password Safety Check
         if (!password) return res.status(400).json({ message: "Password is required" });
         const hashedPassword = await bcrypt.hash(String(password), 10);
 
-        // 2. File Path Handling
         const files = req.files || {};
         const getPath = (key) => (files[key] ? `/uploads/ambulances/${files[key][0].filename}` : null);
 
-        // 3. Mapping all keys explicitly to match Schema
         const newAmbulance = await Ambulance.create({
             hospitalId: req.user.id,
             name: fullName, 
@@ -37,15 +37,27 @@ const addHospitalAmbulance = async (req, res) => {
             phone: phone,
             password: hashedPassword,
             address: address,
-            vehicleType: ambulanceType,
             ambulanceNumber: ambulanceNumber,
             vehicleType: vehicleType,
             role: 'hospital-ambulance',
+            profileStatus: 'Approved', // Hospital's own ambulance is usually pre-approved
             
             pricing: {
                 fixedPrice: Number(fixedPrice || 0),
                 baseDistance: Number(distance || 0),
                 pricePerKM: Number(perKMPrice || 0)
+            },
+
+            // 👇 New Support Staff Logic
+            supportStaff: {
+                nurse: { 
+                    available: hasNurse === 'true' || hasNurse === true, 
+                    price: Number(nursePrice || 0) 
+                },
+                doctor: { 
+                    available: hasDoctor === 'true' || hasDoctor === true, 
+                    price: Number(doctorPrice || 0) 
+                }
             },
             
             freeServices: {
@@ -74,7 +86,6 @@ const addHospitalAmbulance = async (req, res) => {
 
         res.status(201).json({ success: true, data: newAmbulance });
     } catch (error) {
-        console.error("Ambulance Creation Error:", error);
         res.status(500).json({ message: error.message });
     }
 };

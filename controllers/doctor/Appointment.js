@@ -344,10 +344,97 @@ const createPrescription = async (req, res) => {
     }
 };
 
+// endpoint: GET /doctor/appointments/patient-history
+const getPatientHistory = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+ 
+        // Fetch completed appointments for this doctor
+        const history = await Appointment.find({
+            doctorId,
+            bookingType: 'Appointment',
+            status: 'Completed' // History usually implies finished visits
+        })
+        .populate('userId', 'profileImage') // To get patient profile picture
+        .sort({ appointmentDate: -1 });
+ 
+        // Formatting data for the Figma List UI
+        const formattedHistory = history.map(app => ({
+            appointmentId: app._id,
+            patientName: app.patients[0]?.patientName || "Unknown",
+            // Merging address fields for the subtitle in Figma
+            location: `${app.address.houseNo}, ${app.address.sector} ${app.address.city}`,
+            profileImage: app.userId?.profileImage || null,
+        }));
+ 
+        res.json({
+            success: true,
+            count: formattedHistory.length,
+            data: formattedHistory
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+ 
+ 
+// endpoint: GET /doctor/appointments/patient-history/:id
+const getPatientHistoryDetails = async (req, res) => {
+    try {
+        const appointmentId = req.params.id;
+ 
+        // 1. Get Appointment Data
+        const appointment = await Appointment.findById(appointmentId)
+            .populate('userId', 'phone profileImage');
+ 
+        if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+ 
+        // 2. Get Prescription Data associated with this appointment
+        const prescription = await Prescription.findOne({ appointmentId });
+ 
+        // Formatting data to match Figma Detail UI sections
+        const responseData = {
+            patientInfo: {
+                name: appointment.patients[0]?.patientName,
+                age: appointment.patients[0]?.patientAge,
+                gender: appointment.patients[0]?.gender,
+                bloodGroup: "O+", // Note: Not in model, adding as placeholder/mock
+                phone: appointment.userId?.phone,
+                profileImage: appointment.userId?.profileImage,
+                address: `${appointment.address.houseNo}, ${appointment.address.landmark}, ${appointment.address.city}, ${appointment.address.pincode}`
+            },
+            consultationSummary: {
+                diagnosis: prescription?.diagnosis || [],
+                symptoms: appointment.patients[0]?.reasonForVisit || "Not specified",
+                doctorNotes: prescription?.additionalNotes || "No notes provided",
+                mode: appointment.consultationType, // e.g., 'Home Visit' -> 'Home'
+                duration: "45 mins" // Placeholder as duration is not in schema
+            },
+            prescription: prescription?.medicines.map(m => ({
+                medicineName: m.name,
+                dosage: m.dosage,
+                instruction: m.instruction,
+                duration: m.duration
+            })) || [],
+            paymentDetails: {
+                consultationFee: appointment.pricingBreakdown.baseFee,
+                platformFee: appointment.pricingBreakdown.extraCharges || 50,
+                totalPaid: appointment.totalAmount,
+                paymentMode: "UPI" // Usually derived from transaction info
+            }
+        };
+ 
+        res.json({ success: true, data: responseData });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = { 
     getDoctorBookings, getTodayBookings, confirmAppointment,
     doctorCancelAppointment, startVisit, completeWithPrescription,
     getDoctorStats, getMyConsultationFees, updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
-    getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription
+    getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription,
+    getPatientHistory, getPatientHistoryDetails
 
 };

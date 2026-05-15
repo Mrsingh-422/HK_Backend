@@ -2,10 +2,12 @@ const mongoose = require('mongoose');
 
 const ambulanceBookingSchema = new mongoose.Schema({
     bookingId: { type: String, unique: true, required: true },
+    caseReference: { type: String, unique: true }, // Figma Screen 12
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     ambulanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance' },
     hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital' },
 
+     pickupHospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital' }, // For Referral Ambulance
      serviceType: { 
         type: String, 
         enum: ['Accident emergency', 'Medical Ambulance', 'Referral Ambulance', 'Quick Response'],
@@ -29,10 +31,12 @@ const ambulanceBookingSchema = new mongoose.Schema({
         gender: String,
         condition: { type: String, default: 'Stable' }, // Figma Screen 8
         emergencyDescription: String,
-        incidentPhoto: String
+        incidentPhoto: String,
+        referralCard: String, // Figma Screen 6
+        referralReason: String 
     },
 
-    // Screen 36: Security
+    // Screen 36: Securitybelt
     otp: { type: String }, 
     isOtpVerified: { type: Boolean, default: false },
 
@@ -59,6 +63,13 @@ const ambulanceBookingSchema = new mongoose.Schema({
         timestamp: { type: Date, default: Date.now },
         note: String
     }],
+     handoffDetails: {
+        doctorName: { type: String, default: null },
+        wardName: { type: String, default: null },
+        duration: { type: String, default: null }, // e.g., "22 mins"
+        reasonAtHandoff: { type: String, default: null }, // Figma: "Stable at handoff"
+        completedAt: { type: Date, default: null }
+    },
     
 
 }, { timestamps: true });

@@ -10,4 +10,8 @@ router.patch('/accept/:bookingId', protect(['ambulance', 'hospital-ambulance']),
 router.patch('/update-trip/:id', protect(['ambulance', 'hospital-ambulance']), controller.updateTripStatus);
 router.post('/incident-photo/:id', protect(['ambulance', 'hospital-ambulance']), ambulanceDocUploads, controller.uploadIncidentPhoto);
 
+router.patch('/finalize-handoff/:id', protect(['ambulance', 'hospital-ambulance']), controller.finalizeTripHandoff);
+
+
+
 module.exports = router;

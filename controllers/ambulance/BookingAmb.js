@@ -83,4 +83,60 @@ const uploadIncidentPhoto = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { getIncomingRequests, acceptBooking, updateTripStatus, uploadIncidentPhoto };
+const finalizeTripHandoff = async (req, res) => {
+    try {
+        const { id } = req.params; // Booking ID
+        const { doctorName, wardName, duration, reason } = req.body;
+
+        const booking = await Booking.findById(id);
+        if (!booking) return res.status(404).json({ message: "Booking not found" });
+
+        // 1. Save Handoff Details
+        booking.handoffDetails = {
+            doctorName,
+            wardName,
+            duration,
+            reasonAtHandoff: reason,
+            completedAt: new Date()
+        };
+
+        // 2. Mark Trip as Delivered/Completed
+        booking.status = 'Delivered';
+        
+        // 3. Update Timeline
+        booking.trackingTimeline.push({
+            status: 'Patient delivered to hospital',
+            timestamp: new Date(),
+            note: `Handoff done to ${doctorName} in ${wardName}`
+        });
+
+        // 4. Ambulance ko free karein (On Duty -> Available)
+        await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
+
+        await booking.save();
+        res.json({ success: true, message: "Trip Finalized Successfully", data: booking });
+
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 1. VERIFY OTP (Figma Screen 36) ---
+const verifyPickupOtp = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { otp } = req.body;
+
+        const booking = await Booking.findById(id);
+        if (booking.otp !== otp) return res.status(400).json({ message: "Invalid OTP" });
+
+        booking.isOtpVerified = true;
+        booking.status = 'Picked-Up';
+        booking.trackingTimeline.push({ status: 'Patient pickup confirmed', timestamp: new Date() });
+        await booking.save();
+
+        res.json({ success: true, message: "OTP Verified. Start Navigation." });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+module.exports = { getIncomingRequests, acceptBooking, updateTripStatus, uploadIncidentPhoto,
+    finalizeTripHandoff,verifyPickupOtp
+ };

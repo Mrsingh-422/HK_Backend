@@ -12,7 +12,8 @@ const {
     getDoctorStats,
     getMyConsultationFees, 
     updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
-    getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription
+    getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription,
+    getPatientHistory, getPatientHistoryDetails
 } = require('../../controllers/doctor/Appointment');
 
 // Base URL: /doctor/appointments
@@ -46,5 +47,8 @@ router.get('/prescription/:id', protect('doctor'), getPrescriptionDetails);
 // Figma Actions: Edit and Resend
 router.put('/prescription/edit/:id', protect('doctor'), updatePrescription);
 router.post('/prescription/resend/:id', protect('doctor'), resendPrescription);
+
+router.get('/patient-history', protect('doctor'), getPatientHistory);
+router.get('/patient-history/:id', protect('doctor'), getPatientHistoryDetails);
 
 module.exports = router;

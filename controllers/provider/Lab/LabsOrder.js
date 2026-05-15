@@ -56,15 +56,34 @@ const handleOrderAction = async (req, res) => {
 const assignStaff = async (req, res) => {
     try {
         const { phlebotomistId } = req.body;
+
+        // Validation: Check if phlebotomistId is provided
+        if (!phlebotomistId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Phlebotomist ID is required to assign staff." 
+            });
+        }
+
+        // Update booking only if ID exists
         const booking = await LabBooking.findOneAndUpdate(
             { _id: req.params.orderId, labId: req.user.id },
-            { phlebotomistId, status: 'Phlebotomist Assigned' },
+            { 
+                phlebotomistId: phlebotomistId, 
+                status: 'Phlebotomist Assigned' 
+            },
             { new: true }
         );
-        res.json({ success: true, message: "Phlebotomist assigned", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
 
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Order not found" });
+        }
+
+        res.json({ success: true, message: "Phlebotomist assigned successfully", data: booking });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
 // 5. UPDATE PROGRESS (Sample Collected -> Testing -> Report Generated)
 const updateProgressStatus = async (req, res) => {
     try {

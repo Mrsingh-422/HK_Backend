@@ -4,6 +4,11 @@ const Hospital = require('../../../models/Hospital');
 const User = require('../../../models/User');
 const Coupon = require('../../../models/Coupon');
 const { getDistance } = require('../../../utils/helpers');
+const generateCaseRef = (type) => {
+    const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
+    return `HK-${new Date().getFullYear()}-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+};
+
 
 // --- 1. GET MASTER DATA (Enums for UI Dropdowns) ---
 const getAmbulanceMasterData = async (req, res) => {
@@ -62,25 +67,126 @@ const getNearestAmbulances = async (req, res) => {
         const data = await Promise.all(ambulances.map(async (amb) => {
             const distance = await getDistance(lat, lng, amb.location.lat, amb.location.lng);
             
-            // Check if this ambulance offers this specific service for free
+            // Default pricing from DB
+            let displayPrice = amb.pricing?.fixedPrice || 2000;
             let isFree = false;
-            if (serviceType === 'Accident emergency' && amb.freeServices.accidental) isFree = true;
-            if (serviceType === 'Medical Ambulance' && amb.freeServices.emergency) isFree = true;
-            if (serviceType === 'Referral Ambulance' && amb.freeServices.referral) isFree = true;
+
+            // STRICT OVERRIDE: Agar "Accident emergency" hai toh hamesha 0
+            if (serviceType === 'Accident emergency') {
+                displayPrice = 0;
+                isFree = true;
+            } else if (serviceType === 'Medical Ambulance' && amb.freeServices.emergency) {
+                displayPrice = 0;
+                isFree = true;
+            } else if (serviceType === 'Referral Ambulance' && amb.freeServices.referral) {
+                displayPrice = 0;
+                isFree = true;
+            }
 
             return {
                 ...amb._doc,
                 distance: `${distance} km`,
                 rawDistance: distance,
-                eta: `${Math.round(distance * 3)} mins`,
-                isFreeForThisService: isFree,
-                displayPrice: isFree ? 0 : amb.pricing.fixedPrice
+                displayPrice: displayPrice, // Frontend isko use karega
+                isFreeCase: isFree,
+                eta: `${Math.round(distance * 3)} mins` 
             };
         }));
 
         data.sort((a, b) => a.rawDistance - b.rawDistance);
         res.json({ success: true, count: data.length, data });
     } catch (error) { res.status(500).json({ message: error.message }); }
+};
+const getAmbulanceDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // 1. Fetch with Hospital Population
+        const ambulance = await Ambulance.findById(id)
+            .populate('hospitalId', 'name address city state hospitalImage location')
+            .select('+password'); // Passwords/Tokens excluded by default usually, but we pick all fields
+
+        if (!ambulance) return res.status(404).json({ message: "Ambulance not found" });
+
+        // 2. Prepare Detailed Response
+        const data = {
+            _id: ambulance._id,
+            // --- Driver / Identification ---
+            driverInfo: {
+                name: ambulance.driverInfo?.fullName || ambulance.name,
+                phone: ambulance.phone,
+                email: ambulance.email,
+                experience: ambulance.experienceYears || "N/A",
+                bloodGroup: ambulance.bloodGroup,
+                department: ambulance.driverInfo?.department,
+                rating: 4.8, // Static for now, can be calculated from Review model
+                tripsCount: "1,240+" // Mock logic
+            },
+
+            // --- Vehicle Details (Figma Screen 32/43) ---
+            vehicle: {
+                vehicleNumber: ambulance.vehicleNumber || "Not Assigned",
+                vehicleType: ambulance.vehicleType, // Van, Mini Van, ALS, ICU
+                serviceRadius: ambulance.serviceRadius,
+                isAvailable: ambulance.availableForEmergency,
+                features: ambulance.vehicleType === 'Advance Life Support' 
+                    ? ["Ventilator", "Paramedic", "Oxygen", "Monitor"] 
+                    : ["Oxygen Support", "First Aid Kit", "Stretcher"]
+            },
+
+            // --- Pricing & Supporting Staff (Dynamic) ---
+            pricing: {
+                basePrice: ambulance.pricing?.fixedPrice || 0,
+                baseDistance: ambulance.pricing?.baseDistance || 0,
+                extraKMPrice: ambulance.pricing?.pricePerKM || 0,
+                
+                // Detailed Support Staff Info
+                supportStaff: {
+                    nurse: {
+                        isAvailable: ambulance.supportStaff?.nurse?.available || false,
+                        fee: ambulance.supportStaff?.nurse?.price || 0
+                    },
+                    doctor: {
+                        isAvailable: ambulance.supportStaff?.doctor?.available || false,
+                        fee: ambulance.supportStaff?.doctor?.price || 0
+                    }
+                },
+
+                // Service Specific Free Status
+                freeServices: {
+                    isAccidentalFree: ambulance.freeServices?.accidental || true, // Government standard
+                    isEmergencyFree: ambulance.freeServices?.emergency || false,
+                    isReferralFree: ambulance.freeServices?.referral || false
+                }
+            },
+
+            // --- Location & Association ---
+            location: ambulance.location,
+            address: ambulance.address,
+            
+            // If it's a Hospital Ambulance, show Hospital info
+            associatedHospital: ambulance.hospitalId ? {
+                id: ambulance.hospitalId._id,
+                name: ambulance.hospitalId.name,
+                address: ambulance.hospitalId.address,
+                image: ambulance.hospitalId.hospitalImage?.[0] || null
+            } : null,
+
+            // Documents (Paths for UI preview if needed)
+            documents: {
+                licenseVerified: !!ambulance.documents?.drivingLicenseFile,
+                rcVerified: !!ambulance.documents?.rcFile,
+                insuranceValid: !!ambulance.documents?.insuranceFile
+            }
+        };
+
+        res.json({
+            success: true,
+            data
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 const getAmbulanceCoupons = async (req, res) => {
@@ -132,48 +238,144 @@ const validateAmbulanceCoupon = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 3. CONFIRM BOOKING (Final Checkout Step - Figma Screen) ---
+// --- PRIVATE HELPER: Shared Pricing Logic ---
+const getFinalFare = async (params) => {
+    const { ambulanceId, serviceType, staffType, couponCode } = params;
+    
+    const amb = await Ambulance.findById(ambulanceId);
+    if (!amb) throw new Error("Ambulance not found");
+
+    // 1. Logic Check for Free Case
+    const isFree = (serviceType === 'Accident emergency');
+    
+    let ambulanceCharge = isFree ? 0 : (amb.pricing?.fixedPrice || 2000);
+    let supportingStaffCharge = 0;
+
+    // 2. Staff Charge Calculation
+    if (staffType) {
+        if (isFree) {
+            // Accident cases mein staff charge hamesha zero rahega
+            supportingStaffCharge = 0;
+        } else {
+            // Paid cases mein database se price uthayenge
+            if (staffType === 'Doctor') {
+                if (!amb.supportStaff?.doctor?.available) throw new Error("This ambulance does not provide a Doctor");
+                supportingStaffCharge = amb.supportStaff.doctor.price || 0;
+            } 
+            else if (staffType === 'Nurse') {
+                if (!amb.supportStaff?.nurse?.available) throw new Error("This ambulance does not provide a Nurse");
+                supportingStaffCharge = amb.supportStaff.nurse.price || 0;
+            }
+        }
+    }
+
+    let subtotal = ambulanceCharge + supportingStaffCharge;
+    let discount = 0;
+    let couponId = null;
+
+    // 3. Coupon Logic (Only for Paid trips)
+    if (couponCode && !isFree) {
+        const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+        if (coupon && subtotal >= coupon.minOrderAmount) {
+            discount = (subtotal * coupon.discountPercentage) / 100;
+            if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
+            couponId = coupon._id;
+        }
+    }
+
+    return { 
+        ambulanceCharge, 
+        supportingStaffCharge, 
+        subtotal, 
+        discount, 
+        total: subtotal - discount, 
+        isFree, 
+        couponId 
+    };
+};
+
+// --- 1. CHECKOUT API (Same Keys) ---
+const calculateAmbulanceFare = async (req, res) => {
+    try {
+        const fare = await getFinalFare(req.body); // req.body contains all booking keys
+        res.json({ success: true, data: fare });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 2. BOOKING API (Same Keys + Future Razorpay Support) ---
+// --- UNIVERSAL CONFIRM BOOKING ---
 const confirmAmbulanceBooking = async (req, res) => {
     try {
         const { 
-            ambulanceId, hospitalId, serviceType, triageLevel, 
-            patientDetails, staffType 
+            ambulanceId, hospitalId, pickupHospitalId, serviceType, 
+            triageLevel, patientDetails, staffType, couponCode, paymentId,
+            scheduledDate, appointmentTime,
+            incidentDescription // Root level string key from req.body
         } = req.body;
 
-        const amb = await Ambulance.findById(ambulanceId);
-        if (!amb) return res.status(404).json({ message: "Ambulance not found" });
+        const fare = await getFinalFare(req.body); 
 
-        // DETERMINE PRICING LOGIC
-        let isFree = false;
-        if (serviceType === 'Accident emergency' && amb.freeServices.accidental) isFree = true;
-        
-        const ambCharge = isFree ? 0 : (amb.pricing?.fixedPrice || 2000);
-        const staffCharge = isFree ? 0 : (staffType === 'Doctor' ? 500 : (staffType === 'Nurse' ? 300 : 0));
+        // 1. PATIENT DETAILS PARSING
+        let parsedPatientDetails = {};
+        if (typeof patientDetails === 'string') {
+            try { parsedPatientDetails = JSON.parse(patientDetails); } catch (e) { parsedPatientDetails = {}; }
+        } else {
+            parsedPatientDetails = patientDetails || {};
+        }
+
+        // 2. FILE HANDLING (REFINED)
+        let referralCardPath = null;
+        let incidentPhotoPath = null;
+
+        if (req.files) {
+            // Agar Referral flow hai
+            if (req.files.referralCard && req.files.referralCard[0]) {
+                referralCardPath = `/uploads/ambulances/${req.files.referralCard[0].filename}`;
+            }
+            // Agar Accidental flow hai (Make sure field name in Postman is 'incidentPhoto')
+            if (req.files.incidentPhoto && req.files.incidentPhoto[0]) {
+                incidentPhotoPath = `/uploads/ambulances/${req.files.incidentPhoto[0].filename}`;
+            }
+        }
 
         const booking = await Booking.create({
-            bookingId: `BOK-${Date.now()}`,
-            caseReference: `HK-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`,
+            bookingId: `HK-AMB-${Date.now().toString().slice(-6)}`,
+            caseReference: generateCaseRef(serviceType),
             userId: req.user.id,
             ambulanceId,
             hospitalId,
+            pickupHospitalId: pickupHospitalId || null, 
             serviceType,
-            triageLevel,
-            patientDetails,
-            isFreeCase: isFree,
-            otp: Math.floor(1000 + Math.random() * 9000).toString(),
-            pricing: {
-                ambulanceCharge: ambCharge,
-                supportingStaffCharge: staffCharge,
-                total: ambCharge + staffCharge
+            triageLevel: serviceType === 'Accident emergency' ? 'Emergency' : triageLevel,
+            scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
+            appointmentTime,
+            patientDetails: {
+                ...parsedPatientDetails,
+                // Priority: req.body.incidentDescription -> parsedPatientDetails.emergencyDescription
+                emergencyDescription: incidentDescription || parsedPatientDetails.emergencyDescription || "", 
+                referralCard: referralCardPath,
+                incidentPhoto: incidentPhotoPath
             },
-            status: 'Confirmed'
+            isFreeCase: fare.isFree,
+            pricing: {
+                ambulanceCharge: fare.ambulanceCharge,
+                supportingStaffCharge: fare.supportingStaffCharge,
+                discount: fare.discount,
+                total: fare.total
+            },
+            paymentStatus: fare.isFree ? 'Paid' : (paymentId ? 'Paid' : 'Pending'),
+            transactionId: paymentId || null,
+            status: 'Confirmed',
+            otp: Math.floor(1000 + Math.random() * 9999).toString()
         });
 
-        // Mark Driver Busy
         await Ambulance.findByIdAndUpdate(ambulanceId, { availableForEmergency: false });
 
-        res.status(201).json({ success: true, message: "Booking Confirmed", booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(201).json({ success: true, message: "Booking Initiated", booking });
+    } catch (error) { 
+        console.error("Booking Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 
@@ -344,10 +546,15 @@ const createAccidentalBooking = async (req, res) => {
 const uploadIncidentPhoto = async (req, res) => {
     try {
         const { bookingId } = req.params;
-        if (!req.file) return res.status(400).json({ message: "No photo uploaded" });
+        
+        // Agar aap incident photo ke liye 'vehicleImages' field use kar rahe hain multer mein
+        const photoPath = req.files && req.files.vehicleImages ? 
+            `/uploads/ambulances/${req.files.vehicleImages[0].filename}` : null;
+
+        if (!photoPath) return res.status(400).json({ message: "No photo uploaded" });
 
         const booking = await Booking.findByIdAndUpdate(bookingId, {
-            'patientDetails.incidentPhoto': `/uploads/incidents/${req.file.filename}`
+            'patientDetails.incidentPhoto': photoPath
         }, { new: true });
 
         res.json({ success: true, message: "Incident photo saved", data: booking });
@@ -395,6 +602,55 @@ const getLiveTracking = async (req, res) => {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
+// --- 1. CREATE REFERRAL BOOKING (Figma Screen 4, 6, 7) ---
+const createReferralBooking = async (req, res) => {
+    try {
+        const { 
+            pickupHospitalId, 
+            destinationHospitalId, 
+            scheduledDate, 
+            scheduledTime,
+            patientRelation,
+            referralReason,
+            staffType, // 'Doctor' or 'Nurse'
+            ambulanceId,
+            triageLevel 
+        } = req.body;
+
+        const amb = await Ambulance.findById(ambulanceId);
+        if (!amb) return res.status(404).json({ message: "Ambulance not found" });
+
+        // Pricing Calculation (Screen 7)
+        const ambulanceCharge = amb.pricing?.fixedPrice || 2000;
+        const supportingStaffCharge = staffType === 'Doctor' ? 500 : (staffType === 'Nurse' ? 300 : 0);
+
+        const booking = await Booking.create({
+            bookingId: `HK-REF-${Date.now().toString().slice(-4)}`,
+            caseReference: `HK-2026-${Math.floor(10000 + Math.random() * 90000)}`,
+            userId: req.user.id,
+            ambulanceId,
+            pickupHospitalId,
+            hospitalId: destinationHospitalId,
+            serviceType: 'Referral Ambulance',
+            triageLevel,
+            scheduledAt: new Date(scheduledDate),
+            appointmentTime: scheduledTime,
+            patientDetails: {
+                relation: patientRelation,
+                referralReason: referralReason,
+                referralCard: req.file ? `/uploads/referrals/${req.file.filename}` : null
+            },
+            pricing: {
+                ambulanceCharge,
+                supportingStaffCharge,
+                total: ambulanceCharge + supportingStaffCharge
+            },
+            status: 'Searching'
+        });
+
+        res.status(201).json({ success: true, message: "Referral Request Sent", booking });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 
 
@@ -405,13 +661,17 @@ const getLiveTracking = async (req, res) => {
 module.exports = {
     getAmbulanceMasterData,
     getNearbyHospitals,
-    getNearestAmbulances,
+    getNearestAmbulances,getAmbulanceDetails,
     createAmbulanceBooking,
     getBookingStatus, getAmbulanceCoupons , validateAmbulanceCoupon,
+    calculateAmbulanceFare,
     confirmAmbulanceBooking, updateReview,addReview,
 
     getUserNumbers,
     createAccidentalBooking,
     uploadIncidentPhoto,
-    getLiveTracking
+    getLiveTracking,
+
+    createReferralBooking,
+    
 };

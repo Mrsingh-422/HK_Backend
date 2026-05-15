@@ -74,6 +74,16 @@ const ambulanceSchema = new mongoose.Schema({
         lat: { type: Number, default: 0 },
         lng: { type: Number, default: 0 }
     },
+    supportStaff: {
+        nurse: {
+            available: { type: Boolean, default: false },
+            price: { type: Number, default: 0 }
+        },
+        doctor: {
+            available: { type: Boolean, default: false },
+            price: { type: Number, default: 0 }
+        }
+    },
 
     // --- System ---
     isPhoneVerified: { type: Boolean, default: false },
