@@ -5,7 +5,9 @@ const {
     getHospitals, 
     getWards, getBedGrid, getDoctorsByHospitalId,getServicesByHospitalId,
     getHospitalCoupons, validateHospitalCoupon,
-    getHospitalCheckoutSummary, 
+
+    getAvailableBedsForRange,
+    getHospitalCheckoutSummary, rescheduleBedBooking,
     finalHospitalBooking,
     getMyHospitalBookings ,
     getBookingProfiles,
@@ -28,9 +30,12 @@ router.post('/validate-coupon', protect('user'), validateHospitalCoupon); // Val
 
 
 
+router.post('/check-availability', protect('user'), getAvailableBedsForRange);
 // Payment & Logic
 router.post('/checkout-summary', protect('user'), getHospitalCheckoutSummary);
 router.post('/book', protect('user'), finalHospitalBooking);
+
+router.post('/reschedule', protect('user'), rescheduleBedBooking);
 
 // Management
 router.get('/my-bookings', protect('user'), getMyHospitalBookings);

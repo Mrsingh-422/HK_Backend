@@ -6,6 +6,7 @@ const {
     getAmbulanceCoupons, validateAmbulanceCoupon, calculateAmbulanceFare, 
     confirmAmbulanceBooking, getBookingStatus, addReview, updateReview,
     getUserNumbers, uploadIncidentPhoto, getLiveTracking,
+    getMyAmbulanceBookings, cancelAmbulanceBooking
     
 } = require('../../../controllers/user/Ambulance/AmbulanceBook');
 
@@ -22,7 +23,7 @@ router.get('/details/:id', getAmbulanceDetails);
 // =============================================================================
 // 2. CHECKOUT PHASE (Coupons & Fare calculation)
 // =============================================================================
-router.get('/coupons', protect('user'), getAmbulanceCoupons);
+router.get('/coupons/:id', protect('user'), getAmbulanceCoupons);
 router.post('/validate-coupon', protect('user'), validateAmbulanceCoupon);
 router.post('/calculate-fare', protect('user'), calculateAmbulanceFare); // Combined pricing for all flows
 
@@ -49,5 +50,8 @@ router.get('/live-track/:id', protect('user'), getLiveTracking); // Detailed Dri
 router.post('/review/add', protect('user'), addReview);
 router.put('/review/update/:id', protect('user'), updateReview);
 
+////////
+router.get('/my-bookings', protect('user'), getMyAmbulanceBookings);
+router.patch('/cancel/:id', protect('user'), cancelAmbulanceBooking);
 
 module.exports = router;

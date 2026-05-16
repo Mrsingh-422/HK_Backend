@@ -47,6 +47,13 @@ const availabilitySchema = new mongoose.Schema({
     offDays: [String], // ["Sunday"]
     blockedDates: [String], // Gap Fix: ["2023-12-25", "2024-01-01"] for holidays
 
+
+    // for hospital only
+    startDate: { type: Date }, // Admission start
+    endDate: { type: Date },   // Admission end (Discharge target)
+    rescheduleCount: { type: Number, default: 0 },
+    originalBookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
+
     
 
 }, { timestamps: true });

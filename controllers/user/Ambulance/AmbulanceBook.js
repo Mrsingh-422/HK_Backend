@@ -3,6 +3,8 @@ const Booking = require('../../../models/AmbulanceBooking');
 const Hospital = require('../../../models/Hospital');
 const User = require('../../../models/User');
 const Coupon = require('../../../models/Coupon');
+const mongoose = require('mongoose'); // Upar ise import karein agar nahi hai toh
+
 const { getDistance } = require('../../../utils/helpers');
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
@@ -191,9 +193,14 @@ const getAmbulanceDetails = async (req, res) => {
 
 const getAmbulanceCoupons = async (req, res) => {
     try {
+        const { ambulanceId } = req.params; // Params se ID le rahe hain
         const today = new Date();
+
         const coupons = await Coupon.find({
-            vendorType: { $in: ['Ambulance', 'All'] },
+            $or: [
+                { vendorId: ambulanceId }, // Driver ke apne coupons
+                { isAdminCreated: true, vendorType: { $in: ['Ambulance', 'All'] } } // Admin ke generic coupons
+            ],
             isActive: true,
             expiryDate: { $gt: today },
             startDate: { $lt: today }
@@ -309,31 +316,26 @@ const confirmAmbulanceBooking = async (req, res) => {
         const { 
             ambulanceId, hospitalId, pickupHospitalId, serviceType, 
             triageLevel, patientDetails, staffType, couponCode, paymentId,
-            scheduledDate, appointmentTime,
-            incidentDescription // Root level string key from req.body
+            scheduledDate, appointmentTime, incidentDescription 
         } = req.body;
 
         const fare = await getFinalFare(req.body); 
 
-        // 1. PATIENT DETAILS PARSING
+        // PATIENT DETAILS PARSING (Multipart form-data handles nested objects as strings)
         let parsedPatientDetails = {};
         if (typeof patientDetails === 'string') {
             try { parsedPatientDetails = JSON.parse(patientDetails); } catch (e) { parsedPatientDetails = {}; }
-        } else {
-            parsedPatientDetails = patientDetails || {};
-        }
+        } else { parsedPatientDetails = patientDetails || {}; }
 
-        // 2. FILE HANDLING (REFINED)
+        // HANDLE IMAGES FROM MULTER FIELDS
         let referralCardPath = null;
         let incidentPhotoPath = null;
 
         if (req.files) {
-            // Agar Referral flow hai
-            if (req.files.referralCard && req.files.referralCard[0]) {
+            if (req.files.referralCard) {
                 referralCardPath = `/uploads/ambulances/${req.files.referralCard[0].filename}`;
             }
-            // Agar Accidental flow hai (Make sure field name in Postman is 'incidentPhoto')
-            if (req.files.incidentPhoto && req.files.incidentPhoto[0]) {
+            if (req.files.incidentPhoto) {
                 incidentPhotoPath = `/uploads/ambulances/${req.files.incidentPhoto[0].filename}`;
             }
         }
@@ -351,7 +353,6 @@ const confirmAmbulanceBooking = async (req, res) => {
             appointmentTime,
             patientDetails: {
                 ...parsedPatientDetails,
-                // Priority: req.body.incidentDescription -> parsedPatientDetails.emergencyDescription
                 emergencyDescription: incidentDescription || parsedPatientDetails.emergencyDescription || "", 
                 referralCard: referralCardPath,
                 incidentPhoto: incidentPhotoPath
@@ -366,16 +367,13 @@ const confirmAmbulanceBooking = async (req, res) => {
             paymentStatus: fare.isFree ? 'Paid' : (paymentId ? 'Paid' : 'Pending'),
             transactionId: paymentId || null,
             status: 'Confirmed',
-            otp: Math.floor(1000 + Math.random() * 9999).toString()
+            otp: Math.floor(1000 + Math.random() * 9000).toString()
         });
 
         await Ambulance.findByIdAndUpdate(ambulanceId, { availableForEmergency: false });
 
         res.status(201).json({ success: true, message: "Booking Initiated", booking });
-    } catch (error) { 
-        console.error("Booking Error:", error);
-        res.status(500).json({ message: error.message }); 
-    }
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 
@@ -547,11 +545,11 @@ const uploadIncidentPhoto = async (req, res) => {
     try {
         const { bookingId } = req.params;
         
-        // Agar aap incident photo ke liye 'vehicleImages' field use kar rahe hain multer mein
-        const photoPath = req.files && req.files.vehicleImages ? 
-            `/uploads/ambulances/${req.files.vehicleImages[0].filename}` : null;
+        // Field name logic: 'incidentPhoto' use karein Postman/Flutter mein
+        const photoPath = req.files && req.files.incidentPhoto ? 
+            `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
 
-        if (!photoPath) return res.status(400).json({ message: "No photo uploaded" });
+        if (!photoPath) return res.status(400).json({ message: "No photo uploaded or wrong field name" });
 
         const booking = await Booking.findByIdAndUpdate(bookingId, {
             'patientDetails.incidentPhoto': photoPath
@@ -658,6 +656,64 @@ const createReferralBooking = async (req, res) => {
 
 
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// --- 1. CANCEL BOOKING (Figma Screen 35/43) ---
+const cancelAmbulanceBooking = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        const booking = await Booking.findById(id);
+        if (!booking) return res.status(404).json({ message: "Booking not found" });
+
+        // Update Status
+        booking.status = 'Cancelled';
+        booking.trackingTimeline.push({ 
+            status: 'Cancelled', 
+            timestamp: new Date(), 
+            note: reason || "Cancelled by User" 
+        });
+
+        // Driver ko wapas free karein
+        if (booking.ambulanceId) {
+            await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
+        }
+
+        await booking.save();
+        res.json({ success: true, message: "Booking cancelled successfully" });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- 2. GET USER BOOKING HISTORY (PAGINATED) ---
+const getMyAmbulanceBookings = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 10;
+
+        const bookings = await Booking.find({ userId: req.user.id })
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
+            .populate('hospitalId', 'name address')
+            .sort({ createdAt: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit);
+
+        const total = await Booking.countDocuments({ userId: req.user.id });
+
+        res.json({ 
+            success: true, 
+            count: bookings.length, 
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: bookings 
+        });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+
+
 module.exports = {
     getAmbulanceMasterData,
     getNearbyHospitals,
@@ -673,5 +729,5 @@ module.exports = {
     getLiveTracking,
 
     createReferralBooking,
-    
+    cancelAmbulanceBooking,getMyAmbulanceBookings
 };
