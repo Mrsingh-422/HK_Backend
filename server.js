@@ -47,6 +47,8 @@ app.use('/api/hospitalpage', require('./routes/admin/user/home/HoppitalPageRoute
 app.use('/api/nursepage', require('./routes/admin/user/home/NursePageRoute')); // Nurse Page Content Management Route
 app.use('/api/footer', require('./routes/admin/user/home/footerRoutes')); // Footer Management Route
 app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); // List Management Route (Doctors, Hospitals, etc.)
+//-- admin others folder routes ---
+app.use('/api/admin/fire', require('./routes/admin/others/manageFireStationAndHeadquaterRoute')); // Fire Management Route
 // --- Admin pharmacy Routes ---
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
 // --- Admin Lab Routes ---

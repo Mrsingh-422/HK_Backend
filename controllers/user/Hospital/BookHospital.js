@@ -83,10 +83,38 @@ const getWards = async (req, res) => {
 const getBedGrid = async (req, res) => {
     try {
         const { wardId } = req.params;
-        if (!wardId) return res.status(400).json({ message: "wardId is required" });
+        const { startDate, endDate } = req.query; // 👈 Frontend se aayenge
 
-        const beds = await Bed.find({ wardId }).select('bedNumber status pricePerDay isVentilatorAvailable');
-        res.json({ success: true, data: beds });
+        if (!startDate || !endDate) {
+            return res.status(400).json({ success: false, message: "Please select date range." });
+        }
+
+        const userStart = moment(startDate).startOf('day').toDate();
+        const userEnd = moment(endDate).endOf('day').toDate();
+
+        // 1. Ward ke saare beds fetch karein
+        const allBeds = await Bed.find({ wardId }).lean();
+        const bedIds = allBeds.map(b => b._id);
+
+        // 2. Overlapping Bookings find karein
+        const overlaps = await Appointment.find({
+            bedId: { $in: bedIds },
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            $and: [
+                { startDate: { $lte: userEnd } },
+                { endDate: { $gte: userStart } }
+            ]
+        }).select('bedId');
+
+        const bookedIds = overlaps.map(o => o.bedId.toString());
+
+        // 3. Dynamic Status Mapping
+        const data = allBeds.map(bed => ({
+            ...bed,
+            status: bookedIds.includes(bed._id.toString()) ? 'Occupied' : bed.status
+        }));
+
+        res.json({ success: true, data });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -228,6 +256,9 @@ const validateHospitalCoupon = async (req, res) => {
 };
 
 
+
+
+
 // --- 2. CHECKOUT SUMMARY (Beds + Doctors + Extra Services) ---
 // --- 1. DATE-RANGE BASED BED GRID (Screenshot 27 Logic) ---
 // endpoint: POST /api/user/hospital/check-availability
@@ -286,35 +317,52 @@ const getHospitalCheckoutSummary = async (req, res) => {
 // --- 3. FINAL RANGE BOOKING ---
 const finalHospitalBooking = async (req, res) => {
     try {
-        const { hospitalId, bedId, startDate, endDate, patients, pricing } = req.body;
+        const { 
+            hospitalId, bedId, startDate, endDate, patients, pricing 
+        } = req.body;
 
-        // Security Check: Dobara check karein ki range mein bed free hai ya nahi
-        const isOccupied = await Appointment.findOne({
+        // 1. Date Sanitization
+        const start = moment(startDate).startOf('day').toDate();
+        const end = moment(endDate).endOf('day').toDate();
+
+        // 2. Double Booking Prevention (Security check)
+        const conflict = await Appointment.findOne({
             bedId,
-            status: { $in: ['Confirmed', 'In-Progress'] },
-            startDate: { $lte: new Date(endDate) },
-            endDate: { $gte: new Date(startDate) }
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            $and: [
+                { startDate: { $lte: end } },
+                { endDate: { $gte: start } }
+            ]
         });
 
-        if (isOccupied) return res.status(400).json({ message: "Bed already booked for selected dates." });
+        if (conflict) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Sorry, this bed was just booked by another patient for these dates." 
+            });
+        }
 
         const bookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
+        // 3. Create Admission Record
         const appointment = await Appointment.create({
             userId: req.user.id,
             hospitalId,
             bedId,
             bookingType: 'Admission',
-            startDate: new Date(startDate),
-            endDate: new Date(endDate),
-            stayDuration: moment(endDate).diff(moment(startDate), 'days'),
-            patients,
+            startDate: start,
+            endDate: end,
+            stayDuration: moment(end).diff(moment(start), 'days') || 1,
+            patients: typeof patients === 'string' ? JSON.parse(patients) : patients,
+            pricingBreakdown: pricing, // Frontend se aayi pricing breakdown
             totalAmount: pricing.totalPayable,
             bookingId,
-            status: 'Hospital-Pending'
+            status: 'Hospital-Pending',
+            paymentStatus: 'Paid'
         });
 
         res.status(201).json({ success: true, bookingId, data: appointment });
+
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -349,6 +397,9 @@ const rescheduleBedBooking = async (req, res) => {
 
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+
+
 
 
 

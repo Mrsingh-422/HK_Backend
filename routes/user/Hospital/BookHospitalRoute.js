@@ -30,9 +30,9 @@ router.post('/validate-coupon', protect('user'), validateHospitalCoupon); // Val
 
 
 
-router.post('/check-availability', protect('user'), getAvailableBedsForRange);
+router.post('/check-availability', getAvailableBedsForRange);
 // Payment & Logic
-router.post('/checkout-summary', protect('user'), getHospitalCheckoutSummary);
+router.post('/checkout-summary', getHospitalCheckoutSummary);
 router.post('/book', protect('user'), finalHospitalBooking);
 
 router.post('/reschedule', protect('user'), rescheduleBedBooking);

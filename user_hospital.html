@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo - Enterprise Booking v2.8</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root { --brand: #00B377; --brand-light: #E6F7F1; --brand-dark: #008f6d; }
+        body { background-color: #0F172A; font-family: 'Plus Jakarta Sans', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; color: #1E293B; }
+        .app-shell { width: 390px; height: 844px; background: #F8FAFB; border-radius: 50px; overflow: hidden; position: relative; box-shadow: 0 25px 100px rgba(0,0,0,0.6); border: 10px solid #1E293B; }
+        .screen { width: 100%; height: 100%; overflow-y: auto; padding-bottom: 150px; display: none; background: #F8FAFB; }
+        .screen.active { display: block; animation: figmaSlide 0.4s ease-out; }
+        @keyframes figmaSlide { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .figma-card { background: white; border-radius: 32px; border: 1px solid #F1F5F9; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.05); }
+        .btn-brand { background: var(--brand); color: white; border-radius: 22px; width: 100%; padding: 18px; font-weight: 800; font-size: 14px; transition: 0.3s; border: none; box-shadow: 0 10px 20px rgba(0,179,119,0.2); text-transform: uppercase; }
+        .bed-unit { aspect-ratio: 1/1; border-radius: 16px; border: 2.5px solid #F1F5F9; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 11px; transition: 0.2s; background: white; }
+        .bed-Available { background: #E6F7F1; border-color: #00B377; color: #00B377; }
+        .bed-Occupied { background: #FFEBEE !important; border-color: #FF5252 !important; color: #FF5252 !important; opacity: 0.8; cursor: not-allowed; pointer-events: none; }
+        .bed-Reserved { background: #FFF3E0; border-color: #FF9800; color: #FF9800; }
+        .bed-selected { background: #00B377 !important; color: white !important; transform: scale(1.05); box-shadow: 0 8px 20px rgba(0,179,119,0.3); }
+        .currency-symbol::before { content: '₹'; margin-right: 2px; }
+    </style>
+</head>
+<body>
+
+    <div class="app-shell no-scrollbar">
+
+        <!-- SCREEN 1: LIST -->
+        <div id="screen-list" class="screen active p-6">
+            <div class="flex justify-between items-center mb-8">
+                <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Enterprise</p><h2 class="text-2xl font-black text-slate-800 tracking-tight">Hospitals</h2></div>
+                <button onclick="fetchHospitalsSync()" class="w-12 h-12 rounded-2xl bg-green-50 flex items-center justify-center border border-green-100"><i data-lucide="refresh-cw" class="text-green-600"></i></button>
+            </div>
+            <div id="hosp-list-reel" class="space-y-5"></div>
+        </div>
+
+        <!-- SCREEN 2: DETAILS -->
+        <div id="screen-details" class="screen">
+            <div id="h-hero" class="h-64 relative bg-slate-200 bg-cover bg-center">
+                <button onclick="navigateTo('screen-list')" class="absolute top-10 left-6 bg-white/20 backdrop-blur-xl p-3 rounded-2xl text-white shadow-2xl"><i data-lucide="chevron-left"></i></button>
+            </div>
+            <div class="p-8 -mt-12 bg-white rounded-t-[50px] relative z-10 space-y-8 min-h-[600px]">
+                <div id="h-header-box" class="text-center"></div>
+                <div class="space-y-4">
+                    <h4 class="font-black text-xs text-slate-400 uppercase tracking-[2px]">Ward Facilities</h4>
+                    <div id="h-wards-grid" class="grid grid-cols-2 gap-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SCREEN 3: BED SELECTION (S-27) -->
+        <div id="screen-beds" class="screen p-6 space-y-7">
+            <div class="flex items-center gap-4">
+                <button onclick="navigateTo('screen-details')" class="p-3 bg-slate-100 rounded-2xl"><i data-lucide="arrow-left" class="w-5 h-5 text-slate-600"></i></button>
+                <h2 id="w-title-txt" class="text-2xl font-black text-slate-800 tracking-tighter uppercase">Admission</h2>
+            </div>
+            
+            <div class="figma-card p-6 space-y-5 border-2 border-slate-50">
+                <div class="flex gap-3">
+                    <div class="flex-1 space-y-2">
+                        <label class="text-[9px] font-black opacity-40 uppercase">Check In</label>
+                        <input type="date" id="st-date" class="w-full bg-slate-50 p-3 rounded-xl text-[10px] font-black border-none outline-none ring-1 ring-slate-100">
+                    </div>
+                    <div class="flex-1 space-y-2">
+                        <label class="text-[9px] font-black opacity-40 uppercase">Check Out</label>
+                        <input type="date" id="en-date" class="w-full bg-slate-50 p-3 rounded-xl text-[10px] font-black border-none outline-none ring-1 ring-slate-100">
+                    </div>
+                </div>
+                <button onclick="apiCheckGridSync()" class="bg-black text-white w-full py-3 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl">Refresh Bed Grid</button>
+            </div>
+
+            <div id="bed-master-grid" class="grid grid-cols-4 gap-4"></div>
+        </div>
+
+        <!-- SCREEN 4: CHECKOUT (Fixed Validation) -->
+        <div id="screen-checkout" class="screen p-8 space-y-8">
+            <h2 class="text-3xl font-black tracking-tight text-slate-800">Checkout</h2>
+            <div id="checkout-pricing-card" class="bg-white border-2 border-slate-50 p-8 rounded-[40px] space-y-4 shadow-inner">
+                <h4 class="font-black text-[10px] text-slate-400 uppercase tracking-[3px] mb-4">Summary</h4>
+                <div id="checkout-breakdown-box" class="space-y-3"></div>
+            </div>
+            <div class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[390px] p-8 bg-white border-t rounded-t-[45px] shadow-2xl z-[200]">
+                <div class="flex justify-between items-end mb-6">
+                    <div><p class="text-[9px] text-slate-400 font-black uppercase tracking-widest">Total Amount</p><h2 id="ui-final-total" class="text-4xl font-black text-green-600 tracking-tighter currency-symbol">0</h2></div>
+                </div>
+                <button id="final-book-btn" onclick="apiFinalHospitalBook()" class="btn-brand">Confirm & Book Now</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const API_ROOT = "http://localhost:5002";
+        const PATH = "/user/hospital";
+        const getAuthToken = () => localStorage.getItem('token');
+        const enterpriseHeaders = () => ({ "Authorization": `Bearer ${getAuthToken()}`, "Content-Type": "application/json" });
+
+        let HK_STATE = { hospId: null, wardId: null, bedId: null, pricing: null };
+
+        function navigateTo(id) {
+            document.querySelectorAll('.screen').forEach(s => { s.classList.remove('active'); s.style.display = 'none'; });
+            const target = document.getElementById(id);
+            target.style.display = 'block'; target.classList.add('active');
+            lucide.createIcons();
+        }
+
+        async function fetchHospitalsSync() {
+            const res = await fetch(`${API_ROOT}${PATH}/list`, { method: 'POST', headers: enterpriseHeaders(), body: JSON.stringify({ city: "Mohali" }) });
+            const json = await res.json();
+            document.getElementById('hosp-list-reel').innerHTML = json.data.map(h => `
+                <div class="figma-card overflow-hidden">
+                    <img src="${API_ROOT}/${h.hospitalImage[0]}" class="h-44 w-full object-cover">
+                    <div class="p-6 flex justify-between items-center">
+                        <div><h4 class="font-black text-slate-800">${h.name}</h4><p class="text-[10px] text-slate-400 font-bold uppercase">${h.city}</p></div>
+                        <button onclick="loadHospDetailSync('${h._id}')" class="bg-green-600 text-white px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest">Details</button>
+                    </div>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        async function loadHospDetailSync(id) {
+            HK_STATE.hospId = id;
+            const res = await fetch(`${API_ROOT}${PATH}/details/${id}`, { headers: enterpriseHeaders() });
+            const json = await res.json();
+            document.getElementById('h-hero').style.backgroundImage = `url('${API_ROOT}/${json.data.hospital.hospitalImage[0]}')`;
+            document.getElementById('h-header-box').innerHTML = `<h3 class="text-3xl font-black tracking-tighter text-slate-800 uppercase">${json.data.hospital.name}</h3>`;
+            document.getElementById('h-wards-grid').innerHTML = json.data.wards.map(w => `
+                <button onclick="triggerWardEnv('${w._id}', '${w.name}')" class="bg-white border-2 border-slate-50 p-5 rounded-[28px] text-left">
+                    <p class="text-[9px] font-black opacity-30 uppercase">${w.type}</p>
+                    <h5 class="font-black text-sm text-slate-800">${w.name}</h5>
+                </button>
+            `).join('');
+            navigateTo('screen-details');
+        }
+
+        function triggerWardEnv(id, name) {
+            HK_STATE.wardId = id;
+            document.getElementById('w-title-txt').innerText = name;
+            navigateTo('screen-beds');
+        }
+
+        async function apiCheckGridSync() {
+            const start = document.getElementById('st-date').value;
+            const end = document.getElementById('en-date').value;
+            if(!start || !end) return alert("Select Dates");
+
+            // CRITICAL FIX: Sending Dates to check availability overlap
+            const res = await fetch(`${API_ROOT}${PATH}/bed-grid/${HK_STATE.wardId}?startDate=${start}&endDate=${end}`, { headers: enterpriseHeaders() });
+            const json = await res.json();
+            document.getElementById('bed-master-grid').innerHTML = json.data.map(b => `
+                <button onclick="selectHkBed(this, '${b._id}')" class="bed-unit bed-${b.status}">
+                    ${b.bedNumber.split('-')[1] || b.bedNumber}
+                </button>
+            `).join('');
+        }
+
+        function selectHkBed(btn, id) {
+            document.querySelectorAll('.bed-unit').forEach(el => el.classList.remove('bed-selected'));
+            btn.classList.add('bed-selected');
+            HK_STATE.bedId = id;
+            setTimeout(() => runCheckoutModule(), 400);
+        }
+
+        async function runCheckoutModule() {
+            navigateTo('screen-checkout');
+            const res = await fetch(`${API_ROOT}${PATH}/checkout-summary`, { method: 'POST', headers: enterpriseHeaders(), body: JSON.stringify({ bedId: HK_STATE.bedId, startDate: document.getElementById('st-date').value, endDate: document.getElementById('en-date').value }) });
+            const json = await res.json();
+            HK_STATE.pricing = json.data;
+            document.getElementById('checkout-breakdown-box').innerHTML = `
+                <div class="flex justify-between uppercase text-[10px] font-black"><span>Stay Duration</span><span>${json.data.days} Days</span></div>
+                <div class="flex justify-between uppercase text-[10px] font-black"><span>Daily Rate</span><span>₹${json.data.baseFee/json.data.days}</span></div>
+                <div class="flex justify-between uppercase text-xs font-black text-brand pt-2 border-t"><span>Subtotal Fee</span><span>₹${json.data.baseFee}</span></div>
+            `;
+            document.getElementById('ui-final-total').innerText = json.data.totalPayable;
+        }
+
+        async function apiFinalHospitalBook() {
+            const start = document.getElementById('st-date').value;
+            // CRITICAL FIX: All Required Schema keys included at root and nested levels
+            const payload = {
+                hospitalId: HK_STATE.hospId,
+                bedId: HK_STATE.bedId,
+                startDate: start,
+                endDate: document.getElementById('en-date').value,
+                appointmentDate: new Date(start), // Root Field
+                appointmentTime: "Admission",      // Root Field
+                totalAmount: Number(HK_STATE.pricing.totalPayable), // Root Field
+                bookingType: 'Admission',
+                patients: [{ patientName: "Rahul Verma", patientAge: 30, gender: "Male", relation: "Self" }],
+                pricing: {
+                    baseFee: Number(HK_STATE.pricing.baseFee),
+                    subtotal: Number(HK_STATE.pricing.subtotal),
+                    totalPayable: Number(HK_STATE.pricing.totalPayable)
+                }
+            };
+
+            const res = await fetch(`${API_ROOT}${PATH}/book`, { method: 'POST', headers: enterpriseHeaders(), body: JSON.stringify(payload) });
+            const json = await res.json();
+            if(json.success) { alert("SUCCESS! ID: " + json.bookingId); location.reload(); }
+            else { alert("FAILED: " + json.message); console.log(json); }
+        }
+
+        lucide.createIcons();
+        if(getAuthToken()) fetchHospitalsSync(); else alert("token missing in LocalStorage.");
+    </script>
+</body>
+</html>

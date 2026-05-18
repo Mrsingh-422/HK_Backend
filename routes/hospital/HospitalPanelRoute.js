@@ -7,7 +7,8 @@ const {
     generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons ,deleteSpecificBed,
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission,getAvailableDrivers, assignDriverToCase,
     getIncomingReferrals,getEmergencyCases, trackAllAmbulances, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
-    toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings
+    toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
+    getDailyOccupancy,finalizeDischarge, setHospitalShift
 
 } = require('../../controllers/hospital/HospitalPanel');
 
@@ -59,5 +60,10 @@ router.post('/ambulance/toggle-status', protect('hospital'), toggleAmbulanceStat
 router.put('/terms', protect('hospital'), updateHospitalTerms);
 router.get('/terms', protect('hospital'), getHospitalTerms);
 router.get('/ratings', protect('hospital'), getHospitalPanelRatings);
+
+
+router.get('/daily-occupancy', protect('hospital'), getDailyOccupancy);
+router.post('/finalize-discharge', protect('hospital'), finalizeDischarge);
+router.post('/set-shift', protect('hospital'), setHospitalShift);
 
 module.exports = router;

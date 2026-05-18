@@ -10,7 +10,10 @@ const Wallet = require('../../models/Wallet');
 const HospitalDoctor = require('../../models/HospitalDoctor');
 const Review = require('../../models/Review');
 const { deleteFile } = require('../../utils/fileHandler');
-
+const { getDistance } = require('../../utils/helpers');
+const mongoose = require('mongoose');
+const { generateTimeSlots } = require('../../utils/timeSlotHelper');
+const moment = require('moment');
 const getShortName = (name) => {
     return name.split(' ').map(word => word[0]).join('').toUpperCase();
 };
@@ -46,33 +49,22 @@ const getHospitalMasterData = async (req, res) => {
 const getHospitalDashboardStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        
-        const emergency = await Appointment.countDocuments({ 
-            hospitalId, 
-            triageLevel: 'Emergency', 
-            status: { $in: ['Confirmed', 'In-Progress'] } 
-        });
+        const today = moment().startOf('day').toDate();
 
-        const admission = await Appointment.countDocuments({ 
-            hospitalId, 
-            bookingType: 'Admission', 
-            status: 'Hospital-Pending' 
-        });
+        const stats = await Appointment.aggregate([
+            { $match: { hospitalId: new mongoose.Types.ObjectId(hospitalId) } },
+            { $group: {
+                _id: null,
+                // Aaj kitne emergency cases active hain
+                emergency: { $sum: { $cond: [{ $and: [{ $eq: ["$triageLevel", "Emergency"] }, { $eq: ["$status", "In-Progress"] }] }, 1, 0] } },
+                // Aaj kitne naye admissions scheduled hain
+                upcomingAdmissions: { $sum: { $cond: [{ $and: [{ $eq: ["$bookingType", "Admission"] }, { $eq: ["$startDate", today] }] }, 1, 0] } },
+                // Kitne log aaj discharge hone wale hain (EndDate = Today)
+                todaysDischarges: { $sum: { $cond: [{ $and: [{ $eq: ["$status", "Confirmed"] }, { $eq: ["$endDate", today] }] }, 1, 0] } }
+            }}
+        ]);
 
-        const dischargeReady = await Appointment.countDocuments({ 
-            hospitalId, 
-            status: 'Confirmed',
-            bookingType: 'Admission'
-        });
-
-        res.json({
-            success: true,
-            data: {
-                emergencyCount: emergency, // Ab ye aapke record ko count karega
-                admissionCount: admission,
-                dischargePending: dischargeReady
-            }
-        });
+        res.json({ success: true, data: stats[0] || { emergency: 0, upcomingAdmissions: 0, todaysDischarges: 0 } });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -732,11 +724,86 @@ const getHospitalPanelRatings = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+const getDailyOccupancy = async (req, res) => {
+    try {
+        const { wardId, date } = req.query;
+        const targetDate = moment(date).startOf('day').toDate();
+
+        // 1. Find overlapping bookings for this specific date
+        const bookings = await Appointment.find({
+            wardName: (await Ward.findById(wardId)).name,
+            status: { $in: ['Confirmed', 'In-Progress'] },
+            startDate: { $lte: targetDate },
+            endDate: { $gte: targetDate }
+        }).populate('userId', 'name');
+
+        const occupancyMap = {};
+        bookings.forEach(b => occupancyMap[b.bedId] = b.userId.name);
+
+        // 2. Fetch all beds
+        const allBeds = await Bed.find({ wardId }).lean();
+
+        const grid = allBeds.map(bed => ({
+            ...bed,
+            currentOccupant: occupancyMap[bed._id] || null,
+            status: occupancyMap[bed._id] ? 'Occupied' : bed.status
+        }));
+
+        res.json({ success: true, data: grid });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const finalizeDischarge = async (req, res) => {
+    try {
+        const { appointmentId, billingItems, dischargeDate } = req.body;
+
+        const appt = await Appointment.findById(appointmentId);
+        
+        // Finalize billing... (purana logic)
+        appt.status = 'Completed';
+        appt.endDate = dischargeDate ? new Date(dischargeDate) : new Date(); // Actual discharge date set karein
+        
+        await appt.save();
+
+        // Bed Release logic (Check if actual discharge is today or in past)
+        if (moment(appt.endDate).isSameOrBefore(moment(), 'day')) {
+            await Bed.findByIdAndUpdate(appt.bedId, { status: 'Available' });
+            await Ward.findOneAndUpdate({ name: appt.wardName }, { $inc: { availableBeds: 1 } });
+        }
+
+        res.json({ success: true, message: "Patient Discharged. Range inventory updated." });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const setHospitalShift = async (req, res) => {
+    try {
+        const { morning, afternoon, evening, startTime, endTime } = req.body;
+
+        const config = await Availability.findOneAndUpdate(
+            { vendorId: req.user.id },
+            { 
+                vendorId: req.user.id,
+                vendorType: 'Hospital',
+                morningSlots: morning,
+                afternoonSlots: afternoon,
+                eveningSlots: evening,
+                startTime, 
+                endTime 
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({ success: true, message: "Shift timings updated", data: config });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed, updateWardBeds,deleteSpecificBed, addHospitalService, updateHospitalService, 
     generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission, getAvailableDrivers, assignDriverToCase,
     getIncomingReferrals, getEmergencyCases, trackAllAmbulances,toggleAmbulanceStatus,
-    updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings
+    updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
+    getDailyOccupancy, finalizeDischarge, setHospitalShift
 };

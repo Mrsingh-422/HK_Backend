@@ -28,8 +28,8 @@ const appointmentSchema = new mongoose.Schema({
         addressType: { type: String, default: 'Home' }
     },
 
-    appointmentDate: { type: Date, required: true },
-    appointmentTime: { type: String, required: true }, 
+    appointmentDate: { type: Date},
+    appointmentTime: { type: String }, 
     consultationType: { 
         type: String, 
         enum: ['Video Consult', 'Clinic Visit', 'Home Visit']
@@ -37,7 +37,7 @@ const appointmentSchema = new mongoose.Schema({
     
     // --- Pricing & Coupon Logic ---
     pricingBreakdown: {
-        baseFee: { type: Number, required: true },
+        baseFee: { type: Number },
         visitCharges: { type: Number, default: 0 }, // Distance based
         extraCharges: { type: Number, default: 0 }, // Fast delivery/Emergency
         discountAmount: { type: Number, default: 0 },
@@ -70,6 +70,11 @@ const appointmentSchema = new mongoose.Schema({
         serviceName: String, 
         price: Number 
     }],
+
+    // For Hospital Admissions
+    startDate: { type: Date }, // Admission start
+    endDate: { type: Date },   // Admission end
+    stayDuration: { type: Number }
 
 }, { timestamps: true });
 
