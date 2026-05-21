@@ -4,6 +4,11 @@ const path = require('path');
 const dotenv = require('dotenv');
 const os = require('os');
 
+///////// For bypassing the Windows DNS bug //////////
+const dns = require('node:dns/promises'); // For bypassing the Windows DNS bug
+dns.setServers(["1.1.1.1", "8.8.8.8"]); // Forces Node to bypass the Windows DNS bug
+ ////////////////// end bypassing DNS bug //////////////////////////////////
+
 // Config
 const envFile = path.join(__dirname, '.env');
 dotenv.config({ path: envFile });

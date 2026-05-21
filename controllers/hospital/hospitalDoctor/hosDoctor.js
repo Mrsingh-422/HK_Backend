@@ -135,4 +135,5 @@ const loginHospitalDoctor = async (req, res) => {
     }
 };
 
+
 module.exports = { addHospitalDoctor, getMyHospitalDoctors, updateHospitalDoctor, deleteHospitalDoctor, loginHospitalDoctor };

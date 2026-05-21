@@ -47,16 +47,26 @@ const ambulanceBookingSchema = new mongoose.Schema({
         default: 'Searching' 
     },
     
+
+    couponDetails: {
+        couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon', default: null },
+        couponCode: { type: String, default: null  },
+        discountValue: { type: Number, default: 0 }
+    },
     // Screen 44: Price Breakdown
     pricing: {
         ambulanceCharge: { type: Number, default: 0 },
-        supportingStaffCharge: { type: Number, default: 0 }, // Doctor/Nurse
-        discount: { type: Number, default: 0 },
-        total: { type: Number, default: 0 }
+        supportingStaffCharge: { type: Number, default: 0 },
+        subtotal: { type: Number, default: 0 }, // Price before discount
+        discount: { type: Number, default: 0 }, // Same as couponDetails.discountValue
+        total: { type: Number, default: 0 }    // Final payable amount
     },
 
     // Screen 40: For Referral Bookings
     scheduledAt: { type: Date }, 
+    scheduledTime: { type: String }, // e.g., "10:30 AM"
+
+
 
     trackingTimeline: [{
         status: String,

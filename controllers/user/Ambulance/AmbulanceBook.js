@@ -3,9 +3,11 @@ const Booking = require('../../../models/AmbulanceBooking');
 const Hospital = require('../../../models/Hospital');
 const User = require('../../../models/User');
 const Coupon = require('../../../models/Coupon');
-const mongoose = require('mongoose'); // Upar ise import karein agar nahi hai toh
-
+const Review = require('../../../models/Review');
+const Wallet = require('../../../models/Wallet');
+const mongoose = require('mongoose');
 const { getDistance } = require('../../../utils/helpers');
+
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
     return `HK-${new Date().getFullYear()}-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -246,58 +248,66 @@ const validateAmbulanceCoupon = async (req, res) => {
 };
 
 // --- PRIVATE HELPER: Shared Pricing Logic ---
-const getFinalFare = async (params) => {
+const getFinalFare = async (params, userId) => {
     const { ambulanceId, serviceType, staffType, couponCode } = params;
     
     const amb = await Ambulance.findById(ambulanceId);
     if (!amb) throw new Error("Ambulance not found");
 
-    // 1. Logic Check for Free Case
     const isFree = (serviceType === 'Accident emergency');
-    
     let ambulanceCharge = isFree ? 0 : (amb.pricing?.fixedPrice || 2000);
     let supportingStaffCharge = 0;
 
-    // 2. Staff Charge Calculation
-    if (staffType) {
-        if (isFree) {
-            // Accident cases mein staff charge hamesha zero rahega
-            supportingStaffCharge = 0;
-        } else {
-            // Paid cases mein database se price uthayenge
-            if (staffType === 'Doctor') {
-                if (!amb.supportStaff?.doctor?.available) throw new Error("This ambulance does not provide a Doctor");
-                supportingStaffCharge = amb.supportStaff.doctor.price || 0;
-            } 
-            else if (staffType === 'Nurse') {
-                if (!amb.supportStaff?.nurse?.available) throw new Error("This ambulance does not provide a Nurse");
-                supportingStaffCharge = amb.supportStaff.nurse.price || 0;
-            }
+    // --- MULTIPLE STAFF PRICE CALCULATION ---
+    if (!isFree && staffType) {
+        // Handle both: "Doctor" (String) or ["Doctor", "Nurse"] (Array) or "Doctor,Nurse" (Comma String)
+        let staffList = [];
+        if (Array.isArray(staffType)) {
+            staffList = staffType;
+        } else if (typeof staffType === 'string') {
+            staffList = staffType.split(',').map(s => s.trim());
+        }
+
+        // Calculate Sum
+        if (staffList.includes('Doctor')) {
+            if (!amb.supportStaff?.doctor?.available) throw new Error("Doctor is not available in this ambulance");
+            supportingStaffCharge += (amb.supportStaff.doctor.price || 0);
+        }
+        if (staffList.includes('Nurse')) {
+            if (!amb.supportStaff?.nurse?.available) throw new Error("Nurse is not available in this ambulance");
+            supportingStaffCharge += (amb.supportStaff.nurse.price || 0);
         }
     }
 
     let subtotal = ambulanceCharge + supportingStaffCharge;
     let discount = 0;
     let couponId = null;
+    let finalCouponCode = null;
 
-    // 3. Coupon Logic (Only for Paid trips)
+    // Coupon logic (Safe check)
     if (couponCode && !isFree) {
         const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-        if (coupon && subtotal >= coupon.minOrderAmount) {
-            discount = (subtotal * coupon.discountPercentage) / 100;
-            if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
-            couponId = coupon._id;
+        if (coupon) {
+            const today = new Date();
+            let isLimitMet = false;
+            if (userId && coupon.usedBy) {
+                const userUsage = coupon.usedBy.find(u => u.userId && u.userId.toString() === userId.toString());
+                isLimitMet = userUsage ? userUsage.usageCount >= coupon.maxUsagePerUser : false;
+            }
+
+            if (today <= coupon.expiryDate && subtotal >= coupon.minOrderAmount && !isLimitMet) {
+                discount = (subtotal * coupon.discountPercentage) / 100;
+                if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
+                couponId = coupon._id;
+                finalCouponCode = coupon.couponName;
+            }
         }
     }
 
     return { 
-        ambulanceCharge, 
-        supportingStaffCharge, 
-        subtotal, 
-        discount, 
-        total: subtotal - discount, 
-        isFree, 
-        couponId 
+        ambulanceCharge, supportingStaffCharge, subtotal, 
+        discount, total: subtotal - discount, isFree, 
+        couponId, finalCouponCode 
     };
 };
 
@@ -311,70 +321,75 @@ const calculateAmbulanceFare = async (req, res) => {
 
 // --- 2. BOOKING API (Same Keys + Future Razorpay Support) ---
 // --- UNIVERSAL CONFIRM BOOKING ---
+// controllers/user/Ambulance/AmbulanceBook.js
+// controllers/user/Ambulance/AmbulanceBook.js
+
 const confirmAmbulanceBooking = async (req, res) => {
     try {
         const { 
             ambulanceId, hospitalId, pickupHospitalId, serviceType, 
             triageLevel, patientDetails, staffType, couponCode, paymentId,
-            scheduledDate, appointmentTime, incidentDescription 
+            scheduledDate, appointmentTime, reason, incidentDescription, referralReason 
         } = req.body;
 
-        const fare = await getFinalFare(req.body); 
+        const fare = await getFinalFare(req.body, req.user.id); 
 
-        // PATIENT DETAILS PARSING (Multipart form-data handles nested objects as strings)
-        let parsedPatientDetails = {};
-        if (typeof patientDetails === 'string') {
-            try { parsedPatientDetails = JSON.parse(patientDetails); } catch (e) { parsedPatientDetails = {}; }
-        } else { parsedPatientDetails = patientDetails || {}; }
+        let parsedDetails = typeof patientDetails === 'string' ? JSON.parse(patientDetails || '{}') : patientDetails || {};
 
-        // HANDLE IMAGES FROM MULTER FIELDS
-        let referralCardPath = null;
-        let incidentPhotoPath = null;
+        let referralCardPath = req.files?.referralCard ? `/uploads/ambulances/${req.files.referralCard[0].filename}` : null;
+        let incidentPhotoPath = req.files?.incidentPhoto ? `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
 
-        if (req.files) {
-            if (req.files.referralCard) {
-                referralCardPath = `/uploads/ambulances/${req.files.referralCard[0].filename}`;
-            }
-            if (req.files.incidentPhoto) {
-                incidentPhotoPath = `/uploads/ambulances/${req.files.incidentPhoto[0].filename}`;
-            }
-        }
+        const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
         const booking = await Booking.create({
-            bookingId: `HK-AMB-${Date.now().toString().slice(-6)}`,
+            bookingId: `HK-BOK-${Date.now().toString().slice(-6)}`,
             caseReference: generateCaseRef(serviceType),
             userId: req.user.id,
             ambulanceId,
             hospitalId,
             pickupHospitalId: pickupHospitalId || null, 
             serviceType,
-            triageLevel: serviceType === 'Accident emergency' ? 'Emergency' : triageLevel,
+            triageLevel: serviceType === 'Accident emergency' ? 'Emergency' : (triageLevel || 'Routine'),
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
-            appointmentTime,
+            scheduledTime: appointmentTime || null,
             patientDetails: {
-                ...parsedPatientDetails,
-                emergencyDescription: incidentDescription || parsedPatientDetails.emergencyDescription || "", 
-                referralCard: referralCardPath,
-                incidentPhoto: incidentPhotoPath
+                ...parsedDetails,
+                emergencyDescription: finalReason,
+                referralReason: finalReason,
+                referralCard: referralCardPath || parsedDetails.referralCard,
+                incidentPhoto: incidentPhotoPath || parsedDetails.incidentPhoto,
+                condition: parsedDetails.condition || "Stable"
             },
-            isFreeCase: fare.isFree,
+            couponDetails: {
+                couponId: fare.couponId,
+                couponCode: fare.finalCouponCode,
+                discountValue: fare.discount
+            },
             pricing: {
                 ambulanceCharge: fare.ambulanceCharge,
                 supportingStaffCharge: fare.supportingStaffCharge,
+                subtotal: fare.subtotal,
                 discount: fare.discount,
                 total: fare.total
             },
+            isFreeCase: fare.isFree,
             paymentStatus: fare.isFree ? 'Paid' : (paymentId ? 'Paid' : 'Pending'),
             transactionId: paymentId || null,
             status: 'Confirmed',
             otp: Math.floor(1000 + Math.random() * 9000).toString()
         });
 
+        if (fare.couponId) {
+            await Coupon.findByIdAndUpdate(fare.couponId, { $push: { usedBy: { userId: req.user.id, usageCount: 1 } } });
+        }
+
         await Ambulance.findByIdAndUpdate(ambulanceId, { availableForEmergency: false });
 
-        res.status(201).json({ success: true, message: "Booking Initiated", booking });
+        res.status(201).json({ success: true, message: "Booking Confirmed", booking });
+
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 
 const addReview = async (req, res) => {
@@ -690,7 +705,7 @@ const cancelAmbulanceBooking = async (req, res) => {
 const getMyAmbulanceBookings = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 10;
+        const limit = 20;
 
         const bookings = await Booking.find({ userId: req.user.id })
             .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
@@ -729,5 +744,7 @@ module.exports = {
     getLiveTracking,
 
     createReferralBooking,
-    cancelAmbulanceBooking,getMyAmbulanceBookings
+    cancelAmbulanceBooking,getMyAmbulanceBookings,
+
+    
 };
