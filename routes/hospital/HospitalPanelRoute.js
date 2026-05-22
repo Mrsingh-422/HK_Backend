@@ -4,14 +4,14 @@ const { serviceUpload } = require('../../middleware/multer');
 const { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed,updateWardBeds, addHospitalService, updateHospitalService, 
-    generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons ,deleteSpecificBed,
+    generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons ,updateHospitalCoupon,toggleCouponStatus,deleteSpecificBed,
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission,getAvailableDrivers, assignDriverToCase,
     getIncomingReferrals,getEmergencyCases, trackAllAmbulances, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
     toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
-    getDailyOccupancy,finalizeDischarge, setHospitalShift
+    getDailyOccupancy,finalizeDischarge, setHospitalShift ,getHospitalReferralBookings
 
 } = require('../../controllers/hospital/HospitalPanel');
-
+ 
 // Base: /hospital/panel
 
 router.get('/get-enums', protect('hospital'), getHospitalMasterData);
@@ -33,9 +33,13 @@ router.put('/service/update/:id', protect('hospital'), serviceUpload.single('ima
 router.get('/services', protect('hospital'), getHospitalServices);
 
 
+// coupon management routes
 router.post('/coupon/generate', protect('hospital'), generateHospitalCoupon);
 router.get('/coupon/list', protect('hospital'), getHospitalCoupons);
+router.put('/coupon/update/:id', protect('hospital'), updateHospitalCoupon);
+router.patch('/coupon/toggle/:id', protect('hospital'), toggleCouponStatus);
 
+// --- DRIVER MANAGEMENT ---
 router.get('/available-drivers', protect('hospital'), getAvailableDrivers);
 router.post('/assign-driver', protect('hospital'), assignDriverToCase);
 
@@ -65,5 +69,7 @@ router.get('/ratings', protect('hospital'), getHospitalPanelRatings);
 router.get('/daily-occupancy', protect('hospital'), getDailyOccupancy);
 router.post('/finalize-discharge', protect('hospital'), finalizeDischarge);
 router.post('/set-shift', protect('hospital'), setHospitalShift);
+
+router.get('/referral-bookings', protect('hospital'), getHospitalReferralBookings);
 
 module.exports = router;

@@ -249,8 +249,11 @@ const validateAmbulanceCoupon = async (req, res) => {
 
 // --- PRIVATE HELPER: Shared Pricing Logic ---
 const getFinalFare = async (params, userId) => {
-    const { ambulanceId, serviceType, staffType, couponCode } = params;
+    let { ambulanceId, serviceType, staffType, couponCode } = params;
     
+    // Safety: Trim and handle "null" strings from Flutter
+    const cleanCoupon = (couponCode && couponCode !== "null" && couponCode !== "undefined") ? couponCode.trim().toUpperCase() : null;
+
     const amb = await Ambulance.findById(ambulanceId);
     if (!amb) throw new Error("Ambulance not found");
 
@@ -258,24 +261,15 @@ const getFinalFare = async (params, userId) => {
     let ambulanceCharge = isFree ? 0 : (amb.pricing?.fixedPrice || 2000);
     let supportingStaffCharge = 0;
 
-    // --- MULTIPLE STAFF PRICE CALCULATION ---
     if (!isFree && staffType) {
-        // Handle both: "Doctor" (String) or ["Doctor", "Nurse"] (Array) or "Doctor,Nurse" (Comma String)
-        let staffList = [];
-        if (Array.isArray(staffType)) {
-            staffList = staffType;
-        } else if (typeof staffType === 'string') {
-            staffList = staffType.split(',').map(s => s.trim());
-        }
+        let staffList = Array.isArray(staffType) ? staffType : (typeof staffType === 'string' ? staffType.split(',') : []);
+        staffList = staffList.map(s => s.trim());
 
-        // Calculate Sum
         if (staffList.includes('Doctor')) {
-            if (!amb.supportStaff?.doctor?.available) throw new Error("Doctor is not available in this ambulance");
-            supportingStaffCharge += (amb.supportStaff.doctor.price || 0);
+            supportingStaffCharge += (amb.supportStaff?.doctor?.price || 0);
         }
         if (staffList.includes('Nurse')) {
-            if (!amb.supportStaff?.nurse?.available) throw new Error("Nurse is not available in this ambulance");
-            supportingStaffCharge += (amb.supportStaff.nurse.price || 0);
+            supportingStaffCharge += (amb.supportStaff?.nurse?.price || 0);
         }
     }
 
@@ -284,9 +278,10 @@ const getFinalFare = async (params, userId) => {
     let couponId = null;
     let finalCouponCode = null;
 
-    // Coupon logic (Safe check)
-    if (couponCode && !isFree) {
-        const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+    // --- ENHANCED COUPON VALIDATION ---
+    if (cleanCoupon && !isFree) {
+        const coupon = await Coupon.findOne({ couponName: cleanCoupon, isActive: true });
+        
         if (coupon) {
             const today = new Date();
             let isLimitMet = false;
@@ -295,9 +290,11 @@ const getFinalFare = async (params, userId) => {
                 isLimitMet = userUsage ? userUsage.usageCount >= coupon.maxUsagePerUser : false;
             }
 
+            // Validation Checks
             if (today <= coupon.expiryDate && subtotal >= coupon.minOrderAmount && !isLimitMet) {
                 discount = (subtotal * coupon.discountPercentage) / 100;
                 if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
+                
                 couponId = coupon._id;
                 finalCouponCode = coupon.couponName;
             }
@@ -326,21 +323,46 @@ const calculateAmbulanceFare = async (req, res) => {
 
 const confirmAmbulanceBooking = async (req, res) => {
     try {
+        // console.log("Incoming Request Body:", req.body);
+
+        // 1. Flutter/Form-data Parsing (Kyunki Flutter se data strings mein aa raha hai)
+        let body = { ...req.body };
+        
+        // Agar pricing string hai toh parse karein
+        if (typeof body.pricing === 'string') {
+            try { body.pricing = JSON.parse(body.pricing); } catch (e) {}
+        }
+        
+        // Agar couponDetails string hai toh usme se couponCode nikaalein
+        if (typeof body.couponDetails === 'string') {
+            try { 
+                const parsedCoupon = JSON.parse(body.couponDetails);
+                body.couponCode = parsedCoupon.couponCode; // Root level par set kar rahe hain helper ke liye
+            } catch (e) {}
+        }
+
         const { 
             ambulanceId, hospitalId, pickupHospitalId, serviceType, 
             triageLevel, patientDetails, staffType, couponCode, paymentId,
             scheduledDate, appointmentTime, reason, incidentDescription, referralReason 
-        } = req.body;
+        } = body; // Use 'body' instead of 'req.body'
 
-        const fare = await getFinalFare(req.body, req.user.id); 
+        // 2. Calculate Fare & Validate Coupon (Helper ab body.couponCode use karega)
+        const fare = await getFinalFare(body, req.user.id); 
 
-        let parsedDetails = typeof patientDetails === 'string' ? JSON.parse(patientDetails || '{}') : patientDetails || {};
+        // 3. Parsing Patient Details
+        let parsedDetails = {};
+        if (typeof patientDetails === 'string') {
+            try { parsedDetails = JSON.parse(patientDetails || '{}'); } catch (e) { parsedDetails = {}; }
+        } else { parsedDetails = patientDetails || {}; }
 
+        // 4. Handle Images
         let referralCardPath = req.files?.referralCard ? `/uploads/ambulances/${req.files.referralCard[0].filename}` : null;
         let incidentPhotoPath = req.files?.incidentPhoto ? `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
 
         const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
+        // 5. Create Booking
         const booking = await Booking.create({
             bookingId: `HK-BOK-${Date.now().toString().slice(-6)}`,
             caseReference: generateCaseRef(serviceType),
@@ -376,18 +398,34 @@ const confirmAmbulanceBooking = async (req, res) => {
             paymentStatus: fare.isFree ? 'Paid' : (paymentId ? 'Paid' : 'Pending'),
             transactionId: paymentId || null,
             status: 'Confirmed',
-            otp: Math.floor(1000 + Math.random() * 9000).toString()
+            otp: Math.floor(1000 + Math.random() * 9000).toString(),
+            trackingTimeline: [{ 
+                status: 'Confirmed', 
+                timestamp: new Date(),
+                note: `Booking confirmed for ${serviceType}` 
+            }]
         });
 
+        // 6. Update Coupon Usage History
         if (fare.couponId) {
-            await Coupon.findByIdAndUpdate(fare.couponId, { $push: { usedBy: { userId: req.user.id, usageCount: 1 } } });
+            const coupon = await Coupon.findById(fare.couponId);
+            const userIndex = coupon.usedBy.findIndex(u => u.userId && u.userId.toString() === req.user.id.toString());
+            if (userIndex > -1) {
+                coupon.usedBy[userIndex].usageCount += 1;
+            } else {
+                coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
+            }
+            await coupon.save();
         }
 
         await Ambulance.findByIdAndUpdate(ambulanceId, { availableForEmergency: false });
 
         res.status(201).json({ success: true, message: "Booking Confirmed", booking });
 
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("Booking Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 

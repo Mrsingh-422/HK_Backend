@@ -7,20 +7,37 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Flatpickr Calendar for Day-wise Occupancy Tracker -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght=300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        :root { --brand: #00B377; --brand-light: #E6F7F1; }
+        :root { --brand: #00B377; --brand-light: #E6F7F1; --brand-dark: #008f6d; }
         body { background-color: #F8FAFB; font-family: 'Plus Jakarta Sans', sans-serif; }
         .figma-card { background: white; border-radius: 28px; border: 1px solid #F1F5F9; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.04); transition: 0.3s; }
+        .figma-card:hover { transform: translateY(-2px); box-shadow: 0 15px 35px -5px rgba(0,0,0,0.06); }
         .sidebar-link.active { background: var(--brand-light); color: var(--brand); font-weight: 800; border-right: 4px solid var(--brand); }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        .btn-action { background: var(--brand); color: white; border-radius: 14px; font-weight: 700; padding: 10px 20px; transition: 0.3s; }
+        .btn-action { background: var(--brand); color: white; border-radius: 16px; font-weight: 700; padding: 12px 24px; transition: 0.3s; border: none; cursor: pointer; }
+        .btn-action:hover { background: var(--brand-dark); }
         .btn-action:active { transform: scale(0.95); }
         .modal-backdrop { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); }
-        .bed-box { aspect-ratio: 1/1; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 10px; border: 2px solid #EEE; }
+        .bed-box { aspect-ratio: 1/1; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 800; font-size: 10px; border: 2px solid #EEE; cursor: pointer; transition: 0.2s; padding: 4px; text-align: center; }
+        .bed-box:hover { transform: scale(1.05); }
         .bed-Available { background: #E6F7F1; border-color: #00B377; color: #00B377; }
         .bed-Occupied { background: #FFEBEE; border-color: #FF5252; color: #FF5252; }
         .bed-Reserved { background: #FFF3E0; border-color: #FF9800; color: #FF9800; }
+        .bed-Maintenance { background: #F1F5F9; border-color: #94A3B8; color: #475569; }
+
+        /* Custom Styling for Calendar popup in Panel */
+        .flatpickr-calendar { border-radius: 20px !important; box-shadow: 0 15px 40px rgba(0,0,0,0.08) !important; border: 1px solid #F1F5F9 !important; font-family: 'Plus Jakarta Sans', sans-serif !important; }
+        .flatpickr-day.selected {
+            background: var(--brand) !important;
+            border-color: var(--brand) !important;
+            color: white !important;
+        }
     </style>
 </head>
 <body class="flex min-h-screen">
@@ -36,7 +53,7 @@
 
         <nav class="flex-1 space-y-2 no-scrollbar overflow-y-auto">
             <button onclick="switchTab('dashboard', this)" class="sidebar-link active flex items-center gap-4 w-full p-4 rounded-2xl transition"><i data-lucide="layout-grid"></i> Dashboard</button>
-            <button onclick="switchTab('emergency', this)" class="sidebar-link flex items-center gap-4 w-full p-4 rounded-2xl transition"><i data-lucide="alert-circle"></i> Emergency Case</button>
+            <button onclick="switchTab('emergency', this)" class="sidebar-link flex items-center gap-4 w-full p-4 rounded-2xl transition"><i data-lucide="alert-circle"></i> Emergency Cases</button>
             <button onclick="switchTab('wards', this)" class="sidebar-link flex items-center gap-4 w-full p-4 rounded-2xl transition"><i data-lucide="bed"></i> Manage Wards</button>
             <button onclick="switchTab('admissions', this)" class="sidebar-link flex items-center gap-4 w-full p-4 rounded-2xl transition"><i data-lucide="users"></i> Admissions</button>
             <button onclick="switchTab('referrals', this)" class="sidebar-link flex items-center gap-4 w-full p-4 rounded-2xl transition"><i data-lucide="truck"></i> Referrals / Fleet</button>
@@ -58,7 +75,7 @@
                 <h2 id="tab-title" class="text-3xl font-black text-slate-800 tracking-tight">Dashboard Overview</h2>
                 <p class="text-slate-400 text-sm font-medium mt-1 uppercase tracking-widest">Real-time Node: http://localhost:5002</p>
             </div>
-            <button onclick="loadStats()" class="bg-white border p-3 rounded-2xl shadow-sm hover:bg-slate-50 transition">
+            <button onclick="refreshCurrentTab()" class="bg-white border p-3 rounded-2xl shadow-sm hover:bg-slate-50 transition">
                 <i data-lucide="refresh-cw" class="w-5 h-5 text-slate-600"></i>
             </button>
         </header>
@@ -68,26 +85,26 @@
         <!-- A. DASHBOARD SECTION -->
         <div id="dashboard-sec" class="tab-section space-y-8">
             <div class="grid grid-cols-3 gap-8">
-                <div class="figma-card p-8 border-t-8 border-red-500 shadow-lg">
-                    <p class="text-slate-400 text-xs font-black uppercase">Emergency Cases</p>
+                <div class="figma-card p-8 border-t-8 border-red-500 shadow-lg cursor-pointer" onclick="navigateToSection('emergency')">
+                    <p class="text-slate-400 text-xs font-black uppercase">Emergency Cases Active</p>
                     <h1 id="stat-emg" class="text-5xl font-black text-red-500 mt-2">0</h1>
                 </div>
-                <div class="figma-card p-8 border-t-8 border-blue-500 shadow-lg">
-                    <p class="text-slate-400 text-xs font-black uppercase">New Admissions</p>
+                <div class="figma-card p-8 border-t-8 border-blue-500 shadow-lg cursor-pointer" onclick="navigateToSection('admissions')">
+                    <p class="text-slate-400 text-xs font-black uppercase">Admission Requests</p>
                     <h1 id="stat-adm" class="text-5xl font-black text-blue-500 mt-2">0</h1>
                 </div>
                 <div class="figma-card p-8 border-t-8 border-green-500 shadow-lg">
-                    <p class="text-slate-400 text-xs font-black uppercase">Pending Discharges</p>
+                    <p class="text-slate-400 text-xs font-black uppercase">Pending Discharges Today</p>
                     <h1 id="stat-dis" class="text-5xl font-black text-green-500 mt-2">0</h1>
                 </div>
             </div>
             <div class="grid grid-cols-2 gap-8">
                 <div class="figma-card p-8">
-                    <h3 class="font-bold mb-6">Today's Occupancy</h3>
+                    <h3 class="font-bold mb-6 text-slate-800 text-lg flex items-center gap-2"><i data-lucide="activity" class="text-green-600"></i> Today's Occupancy</h3>
                     <div id="occupancy-reel" class="space-y-4"></div>
                 </div>
                 <div class="figma-card p-8">
-                    <h3 class="font-bold mb-6">Ambulance Status</h3>
+                    <h3 class="font-bold mb-6 text-slate-800 text-lg flex items-center gap-2"><i data-lucide="ambulance" class="text-green-600"></i> Live Ambulance Status</h3>
                     <div id="fleet-summary-box" class="space-y-4"></div>
                 </div>
             </div>
@@ -100,6 +117,10 @@
 
         <!-- C. WARDS SECTION -->
         <div id="wards-sec" class="tab-section hidden space-y-8">
+            <div class="flex justify-between items-center">
+                <h3 class="text-xl font-bold text-slate-800">Wards Directory</h3>
+                <button onclick="openCreateWardModal()" class="btn-action flex items-center gap-2"><i data-lucide="plus-circle"></i> Create New Ward</button>
+            </div>
             <div id="ward-grid-list" class="grid grid-cols-2 gap-6"></div>
         </div>
 
@@ -124,19 +145,103 @@
         </div>
 
         <!-- H. SETTINGS SECTION -->
-        <div id="settings-sec" class="tab-section hidden">
-            <div class="figma-card p-8">
-                <textarea id="cms-terms" class="w-full h-96 border rounded-2xl p-4"></textarea>
+        <div id="settings-sec" class="tab-section hidden space-y-6">
+            <div class="figma-card p-8 space-y-4">
+                <h4 class="font-bold text-lg text-slate-800">Hospital Terms & Conditions (CMS)</h4>
+                <textarea id="cms-terms" class="w-full h-80 border rounded-2xl p-4 text-slate-700 font-medium text-sm outline-none focus:ring-2 focus:ring-green-400"></textarea>
+                <button onclick="saveTermsAndConditions()" class="btn-action">Save Changes</button>
             </div>
         </div>
 
     </main>
 
-    <!-- BED MODAL -->
+    <!-- 3. MODAL: BED GRID VIEWER (Single Date day-by-day filter) -->
     <div id="bed-grid-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
-        <div class="bg-white w-[600px] rounded-[40px] p-10 relative">
-            <button onclick="closeModal()" class="absolute top-6 right-6"><i data-lucide="x"></i></button>
-            <div id="bed-master-grid" class="grid grid-cols-6 gap-3"></div>
+        <div class="bg-white w-[680px] rounded-[40px] p-10 relative shadow-2xl">
+            <button onclick="closeModal('bed-grid-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full"><i data-lucide="x"></i></button>
+            <h3 class="text-xl font-black text-slate-800 mb-1">Ward Bed Grid Map</h3>
+            <p class="text-xs text-slate-400 uppercase tracking-widest mb-6">Select date below to track patient bookings</p>
+            
+            <!-- Date Filter inside Modal (Single Date Selector) -->
+            <div class="mb-6 space-y-2 bg-slate-50 p-4 rounded-3xl">
+                <label class="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                    <i data-lucide="calendar" class="w-4 h-4 text-slate-400"></i> View Occupancy For Target Date
+                </label>
+                <div class="relative">
+                    <input type="text" id="panel-date-range" placeholder="Choose date..." class="w-full bg-white p-3 pl-12 rounded-xl text-xs font-bold border outline-none cursor-pointer text-slate-700">
+                    <i data-lucide="calendar" class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none"></i>
+                </div>
+            </div>
+
+            <div id="bed-master-grid" class="grid grid-cols-6 gap-3 max-h-[350px] overflow-y-auto pr-2"></div>
+        </div>
+    </div>
+
+    <!-- 4. MODAL: CREATE WARD -->
+    <div id="create-ward-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
+        <div class="bg-white w-[500px] rounded-[40px] p-10 relative shadow-2xl space-y-6">
+            <button onclick="closeModal('create-ward-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full"><i data-lucide="x"></i></button>
+            <div>
+                <h3 class="text-2xl font-black text-slate-800 tracking-tight">Create Ward Unit</h3>
+                <p class="text-xs text-slate-400 font-medium">Beds will automatically be generated using Ward shortcode</p>
+            </div>
+            
+            <form id="create-ward-form" onsubmit="handleCreateWard(event)" class="space-y-4">
+                <div class="space-y-1">
+                    <label class="text-[10px] font-black text-slate-400 uppercase">Ward Title / Name</label>
+                    <input type="text" id="ward-name" required placeholder="e.g., Neurological ICU" class="w-full bg-slate-50 border p-4 rounded-xl text-xs font-bold outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                        <label class="text-[10px] font-black text-slate-400 uppercase">Ward Category Type</label>
+                        <select id="ward-type" class="w-full bg-slate-50 border p-4 rounded-xl text-xs font-bold outline-none">
+                            <option value="Ward">General Ward</option>
+                            <option value="ICU">ICU Unit</option>
+                        </select>
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[10px] font-black text-slate-400 uppercase">Total Beds Count</label>
+                        <input type="number" id="ward-beds-count" required min="1" max="100" placeholder="10" class="w-full bg-slate-50 border p-4 rounded-xl text-xs font-bold outline-none">
+                    </div>
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[10px] font-black text-slate-400 uppercase">Bed Cost Per Day (INR)</label>
+                    <input type="number" id="ward-bed-price" required placeholder="500" class="w-full bg-slate-50 border p-4 rounded-xl text-xs font-bold outline-none">
+                </div>
+                <button type="submit" class="btn-action w-full mt-2">Generate Ward & Beds</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 5. MODAL: FINAL DISCHARGE & BILLING -->
+    <div id="discharge-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
+        <div class="bg-white w-[500px] rounded-[40px] p-10 relative shadow-2xl space-y-6">
+            <button onclick="closeModal('discharge-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full"><i data-lucide="x"></i></button>
+            <div>
+                <h3 class="text-2xl font-black text-slate-800 tracking-tight">Billing & Discharge</h3>
+                <p class="text-xs text-slate-400 font-medium">Add dynamic services charges to compile the final patient receipt</p>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="space-y-2 border-b pb-4">
+                    <h5 class="text-xs font-bold text-slate-400 uppercase">Extra Billing Items</h5>
+                    <div id="billing-items-list" class="space-y-2 max-h-[150px] overflow-y-auto"></div>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4">
+                    <input type="text" id="bill-service-name" placeholder="Service Name (e.g. Lab Tests)" class="bg-slate-50 border p-3 rounded-xl text-xs font-bold outline-none">
+                    <input type="number" id="bill-service-price" placeholder="Cost (INR)" class="bg-slate-50 border p-3 rounded-xl text-xs font-bold outline-none">
+                </div>
+                <button onclick="addBillingItem()" class="w-full bg-slate-100 text-slate-700 py-3 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-slate-200">Add Item</button>
+
+                <div class="pt-4 border-t flex justify-between items-center">
+                    <div>
+                        <p class="text-[10px] text-slate-400 font-bold uppercase">Total Compiled Extra</p>
+                        <h4 id="discharge-extra-total" class="text-2xl font-black text-green-600">₹0</h4>
+                    </div>
+                    <button onclick="executeFinalDischarge()" class="btn-action bg-red-500 hover:bg-red-600">Finalize Discharge</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -144,6 +249,13 @@
         const BASE = "http://localhost:5002/hospital/panel";
         const getToken = () => localStorage.getItem('h_token');
         const headers = () => ({ "Authorization": `Bearer ${getToken()}`, "Content-Type": "application/json" });
+
+        let currentActiveSection = "dashboard";
+        let targetDischargeAppointmentId = null;
+        let compiledBillingItems = [];
+        
+        let selectedWardIdForGrid = null;
+        let panelDatePickerInstance = null;
 
         async function api(path, method = 'GET', body = null) {
             const config = { method, headers: headers() };
@@ -162,130 +274,398 @@
                 target.classList.remove('hidden');
                 el.classList.add('active');
                 document.getElementById('tab-title').innerText = el.innerText.trim();
+                currentActiveSection = id;
                 
-                if(id === 'dashboard') loadStats();
-                if(id === 'emergency') loadEmergency();
-                if(id === 'wards') loadWards();
-                if(id === 'admissions') loadAdmissions();
-                if(id === 'referrals') loadReferrals();
-                if(id === 'services') loadServices();
-                if(id === 'ratings') loadRatings();
-                if(id === 'settings') loadSettings();
+                refreshCurrentTab();
             }
         }
 
-        // 1. FIXED DASHBOARD STATS (Matches your JSON Response)
+        function refreshCurrentTab() {
+            if(currentActiveSection === 'dashboard') loadStats();
+            if(currentActiveSection === 'emergency') loadEmergency();
+            if(currentActiveSection === 'wards') loadWards();
+            if(currentActiveSection === 'admissions') loadAdmissions();
+            if(currentActiveSection === 'referrals') loadReferrals();
+            if(currentActiveSection === 'services') loadServices();
+            if(currentActiveSection === 'ratings') loadRatings();
+            if(currentActiveSection === 'settings') loadSettings();
+        }
+
+        function navigateToSection(id) {
+            const sidebarLinks = document.querySelectorAll('.sidebar-link');
+            sidebarLinks.forEach(link => {
+                if(link.innerText.toLowerCase().includes(id)) {
+                    switchTab(id, link);
+                }
+            });
+        }
+
+        // Initialize Calendar component in Bed Modal (Fixed to Single-Date selection Mode)
+        document.addEventListener("DOMContentLoaded", () => {
+            panelDatePickerInstance = flatpickr("#panel-date-range", {
+                mode: "single", // 👈 FIX: Mode changed to 'single' to prevent date-overlap aggregation bugs
+                dateFormat: "Y-m-d",
+                defaultDate: moment().format("YYYY-MM-DD"), // Defaults dynamically to today
+                onChange: function(selectedDates) {
+                    if (selectedDates.length === 1 && selectedWardIdForGrid) {
+                        const dateStr = moment(selectedDates[0]).format("YYYY-MM-DD");
+                        fetchPanelOccupancyGrid(selectedWardIdForGrid, dateStr);
+                    }
+                }
+            });
+        });
+
+        // 1. DASHBOARD OVERVIEW
         async function loadStats() {
-            const res = await api('/dashboard-stats');
-            if(res.success) {
-                // Key Matching with your JSON: data.emergency, data.upcomingAdmissions, data.todaysDischarges
-                document.getElementById('stat-emg').innerText = res.data.emergency || 0;
-                document.getElementById('stat-adm').innerText = res.data.upcomingAdmissions || 0;
-                document.getElementById('stat-dis').innerText = res.data.todaysDischarges || 0;
-            }
-            loadFleetSummary();
+            try {
+                const res = await api('/dashboard-stats');
+                if(res.success && res.data) {
+                    document.getElementById('stat-emg').innerText = res.data.emergency || 0;
+                    document.getElementById('stat-adm').innerText = res.data.upcomingAdmissions || 0;
+                    document.getElementById('stat-dis').innerText = res.data.todaysDischarges || 0;
+                }
+                loadFleetSummary();
+                loadOccupancyOverview();
+            } catch(e) { console.error(e); }
+        }
+
+        async function loadOccupancyOverview() {
+            try {
+                const res = await api('/wards/list');
+                const container = document.getElementById('occupancy-reel');
+                if(res.success && res.data) {
+                    container.innerHTML = res.data.map(w => {
+                        const occupied = w.totalBeds - w.availableBeds;
+                        const percentage = w.totalBeds > 0 ? Math.round((occupied / w.totalBeds) * 100) : 0;
+                        return `
+                            <div class="space-y-1 text-slate-700">
+                                <div class="flex justify-between text-xs font-bold"><span>${w.name} (${w.type})</span><span>${percentage}% occupied</span></div>
+                                <div class="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+                                    <div class="bg-green-500 h-full rounded-full" style="width: ${percentage}%"></div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            } catch(e) { console.error(e); }
         }
 
         // 2. EMERGENCY CASES
         async function loadEmergency() {
-            const res = await api('/emergency-cases');
-            const container = document.getElementById('emg-list');
-            container.innerHTML = res.data.map(item => `
-                <div class="figma-card p-6 flex justify-between items-center border-l-8 border-red-500">
-                    <div><h4 class="font-bold text-lg">${item.userId?.name || 'Unknown'}</h4><p class="text-xs opacity-50 uppercase">${item.bookingId}</p></div>
-                    <button class="bg-red-500 text-white px-4 py-2 rounded-xl text-xs font-bold">Details</button>
-                </div>
-            `).join('');
+            try {
+                const res = await api('/emergency-cases');
+                const container = document.getElementById('emg-list');
+                if(res.success && res.data) {
+                    if(res.data.length === 0) {
+                        container.innerHTML = `<div class="p-8 text-center text-slate-400 font-bold">No active emergency cases found.</div>`;
+                        return;
+                    }
+                    container.innerHTML = res.data.map(item => `
+                        <div class="figma-card p-6 flex justify-between items-center border-l-8 border-red-500">
+                            <div>
+                                <h4 class="font-bold text-lg text-slate-800">${item.userId?.name || 'Emergency Patient'}</h4>
+                                <p class="text-xs text-slate-400 uppercase tracking-widest font-black">${item.bookingId}</p>
+                                <p class="text-xs text-slate-500 mt-1">Bed Number: ${item.bedNumber || 'Not Assigned'}</p>
+                            </div>
+                            <button class="bg-red-500 text-white px-5 py-2.5 rounded-2xl text-xs font-bold hover:bg-red-600 transition">View Details</button>
+                        </div>
+                    `).join('');
+                }
+            } catch(e) { console.error(e); }
         }
 
-        // 3. WARDS
+        // 3. WARD & BEDS MANAGEMENT
         async function loadWards() {
-            const res = await api('/wards/list');
-            document.getElementById('ward-grid-list').innerHTML = res.data.map(w => `
-                <div class="figma-card p-6">
-                    <div class="flex justify-between mb-4">
-                        <h4 class="font-bold">${w.name}</h4>
-                        <span class="text-green-500 font-bold">${w.availableBeds}/${w.totalBeds} Beds</span>
-                    </div>
-                    <button onclick="openBedGrid('${w._id}')" class="w-full bg-slate-100 py-2 rounded-xl text-xs font-bold uppercase">View Beds</button>
-                </div>
-            `).join('');
+            try {
+                const res = await api('/wards/list');
+                const container = document.getElementById('ward-grid-list');
+                if(res.success && res.data) {
+                    container.innerHTML = res.data.map(w => `
+                        <div class="figma-card p-6 flex flex-col justify-between h-[180px]">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h4 class="font-black text-slate-800 text-lg">${w.name}</h4>
+                                    <p class="text-xs text-slate-400 uppercase font-black tracking-widest">${w.type}</p>
+                                </div>
+                                <span class="bg-green-100 text-green-700 font-black text-xs px-3.5 py-1.5 rounded-full">${w.availableBeds}/${w.totalBeds} Available</span>
+                            </div>
+                            <button onclick="openBedGrid('${w._id}')" class="w-full bg-slate-100 hover:bg-slate-200 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition">View & Manage Beds</button>
+                        </div>
+                    `).join('');
+                }
+            } catch(e) { console.error(e); }
         }
 
         async function openBedGrid(wardId) {
+            selectedWardIdForGrid = wardId;
             document.getElementById('bed-grid-modal').classList.remove('hidden');
-            const res = await api(`/ward/${wardId}/beds`);
-            document.getElementById('bed-master-grid').innerHTML = res.data.map(b => `
-                <div class="bed-box bed-${b.status}">${b.bedNumber.split('-')[1] || b.bedNumber}</div>
-            `).join('');
+            
+            const dateStr = moment().format("YYYY-MM-DD");
+            if (panelDatePickerInstance) {
+                panelDatePickerInstance.setDate(dateStr); // Set date display back to today
+            }
+
+            fetchPanelOccupancyGrid(wardId, dateStr);
         }
 
-        // 4. ADMISSIONS
+        // Fetch Day-wise dynamically occupied beds using standard target date query
+        async function fetchPanelOccupancyGrid(wardId, date) {
+            try {
+                const res = await api(`/daily-occupancy?wardId=${wardId}&date=${date}`);
+                if(res.success && res.data) {
+                    document.getElementById('bed-master-grid').innerHTML = res.data.map(b => {
+                        const bedLabel = b.bedNumber.includes('-') ? b.bedNumber.split('-')[1] : b.bedNumber;
+                        const labelSubtitle = b.currentOccupant ? b.currentOccupant : b.status;
+                        
+                        return `
+                            <div onclick="toggleBedStatus('${b._id}', '${b.status}')" class="bed-box bed-${b.status}" title="${b.currentOccupant ? 'Occupant: ' + b.currentOccupant + ' (ID: ' + b.activeBookingId + ')' : 'Click to Toggle Maintenance'}">
+                                <span class="font-black text-xs">${bedLabel}</span>
+                                <span class="text-[7.5px] font-black truncate max-w-full uppercase opacity-80 mt-0.5">${labelSubtitle}</span>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        async function toggleBedStatus(bedId, currentStatus) {
+            const nextStatus = currentStatus === 'Available' ? 'Maintenance' : 'Available';
+            if(currentStatus === 'Occupied' || currentStatus === 'Reserved') {
+                alert("Cannot toggle maintenance mode: Bed is currently booked or occupied by a patient in this slot.");
+                return;
+            }
+            try {
+                const res = await api('/bed/status', 'PATCH', { bedId, status: nextStatus });
+                if(res.success) {
+                    alert(`Bed Status updated to ${nextStatus}`);
+                    // Refresh the grid inside the modal instantly
+                    if (panelDatePickerInstance) {
+                        const dateStr = moment(panelDatePickerInstance.selectedDates[0]).format("YYYY-MM-DD");
+                        fetchPanelOccupancyGrid(selectedWardIdForGrid, dateStr);
+                    }
+                    loadWards();
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        function openCreateWardModal() { document.getElementById('create-ward-modal').classList.remove('hidden'); }
+
+        async function handleCreateWard(e) {
+            e.preventDefault();
+            const name = document.getElementById('ward-name').value;
+            const type = document.getElementById('ward-type').value;
+            const totalBeds = document.getElementById('ward-beds-count').value;
+            const pricePerDay = document.getElementById('ward-bed-price').value;
+
+            try {
+                const res = await api('/ward/create', 'POST', { name, type, totalBeds, pricePerDay });
+                if(res.success) {
+                    alert("Ward Generated successfully along with beds!");
+                    closeModal('create-ward-modal');
+                    document.getElementById('create-ward-form').reset();
+                    loadWards();
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        // 4. ADMISSIONS & BILL DISCHARGE
         async function loadAdmissions() {
-            const res = await api('/admissions/all');
-            document.getElementById('adm-list').innerHTML = res.data.map(a => `
-                <div class="figma-card p-6 flex justify-between items-center">
-                    <div><h4 class="font-bold">${a.userId?.name}</h4><p class="text-xs opacity-50">${a.bookingId}</p></div>
-                    <span class="text-blue-500 font-bold text-xs uppercase">${a.status}</span>
-                </div>
-            `).join('');
+            try {
+                const res = await api('/admissions/all');
+                const container = document.getElementById('adm-list');
+                if(res.success && res.data) {
+                    if(res.data.length === 0) {
+                        container.innerHTML = `<div class="p-8 text-center text-slate-400 font-bold">No admission records found.</div>`;
+                        return;
+                    }
+                    container.innerHTML = res.data.map(a => {
+                        const statusColor = a.status === 'Completed' ? 'text-green-500' : 'text-blue-500';
+                        const showDischargeBtn = a.status === 'In-Progress' || a.status === 'Confirmed' ? 
+                            `<button onclick="openDischargeModal('${a._id}')" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition">Discharge & Bill</button>` : '';
+                        
+                        return `
+                            <div class="figma-card p-6 flex justify-between items-center">
+                                <div>
+                                    <h4 class="font-bold text-lg text-slate-800">${a.userId?.name || 'Patient'}</h4>
+                                    <p class="text-xs text-slate-400 uppercase font-black">${a.bookingId}</p>
+                                    <p class="text-xs font-bold mt-1 text-slate-500">Bed Number: ${a.bedNumber || 'No Bed Assigned'} (${a.wardName || 'Ward N/A'})</p>
+                                </div>
+                                <div class="flex items-center gap-4">
+                                    <span class="${statusColor} font-black text-xs uppercase">${a.status}</span>
+                                    ${showDischargeBtn}
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            } catch(e) { console.error(e); }
         }
 
-        // 5. REFERRALS
-        async function loadReferrals() {
-            const res = await api('/referrals/incoming');
-            document.getElementById('ref-list').innerHTML = res.data.map(r => `
-                <div class="p-4 bg-white border rounded-2xl flex justify-between items-center">
-                    <p class="text-sm font-bold">${r.userId?.name}</p>
-                    <button class="text-green-600 font-bold text-xs">ACCEPT</button>
+        // Bill compiling functions
+        function openDischargeModal(appointmentId) {
+            targetDischargeAppointmentId = appointmentId;
+            compiledBillingItems = [];
+            renderBillingList();
+            document.getElementById('discharge-modal').classList.remove('hidden');
+        }
+
+        function addBillingItem() {
+            const name = document.getElementById('bill-service-name').value;
+            const price = document.getElementById('bill-service-price').value;
+
+            if(!name || !price) return alert("Kripya item ki full details (Name & Price) bharein");
+            
+            compiledBillingItems.push({ serviceName: name, price: Number(price) });
+            document.getElementById('bill-service-name').value = '';
+            document.getElementById('bill-service-price').value = '';
+            renderBillingList();
+        }
+
+        function renderBillingList() {
+            const container = document.getElementById('billing-items-list');
+            const totalBox = document.getElementById('discharge-extra-total');
+            
+            container.innerHTML = compiledBillingItems.map((item, idx) => `
+                <div class="flex justify-between items-center text-xs bg-slate-50 p-2.5 rounded-lg font-bold">
+                    <span>${item.serviceName}</span>
+                    <span class="text-slate-600">₹${item.price}</span>
                 </div>
             `).join('');
+
+            const total = compiledBillingItems.reduce((acc, current) => acc + current.price, 0);
+            totalBox.innerText = `₹${total}`;
+        }
+
+        async function executeFinalDischarge() {
+            if(!targetDischargeAppointmentId) return;
+            try {
+                const res = await api('/discharge/finalize', 'POST', { 
+                    appointmentId: targetDischargeAppointmentId, 
+                    billingItems: compiledBillingItems 
+                });
+                if(res.success) {
+                    alert("Patient successfully Discharged, Bed released, Wallet balance updated!");
+                    closeModal('discharge-modal');
+                    loadAdmissions();
+                } else {
+                    alert(res.message || "Discharge failed");
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        // 5. INCOMING REFERRALS
+        async function loadReferrals() {
+            try {
+                const res = await api('/referrals/incoming');
+                const container = document.getElementById('ref-list');
+                if(res.success && res.data) {
+                    if(res.data.length === 0) {
+                        container.innerHTML = `<div class="p-8 text-center text-slate-400 font-bold">No incoming admission referrals.</div>`;
+                        return;
+                    }
+                    container.innerHTML = res.data.map(r => `
+                        <div class="figma-card p-6 flex justify-between items-center">
+                            <div>
+                                <h4 class="font-bold text-slate-800 text-lg">${r.userId?.name}</h4>
+                                <p class="text-xs opacity-50 uppercase font-black">${r.bookingId}</p>
+                            </div>
+                            <button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2.5 rounded-2xl text-xs font-bold uppercase tracking-widest transition">ACCEPT</button>
+                        </div>
+                    `).join('');
+                }
+            } catch(e) { console.error(e); }
         }
 
         // 6. SERVICES
         async function loadServices() {
-            const res = await api('/services');
-            document.getElementById('serv-reel').innerHTML = res.data.map(s => `
-                <div class="figma-card p-4 text-center">
-                    <p class="font-bold">${s.serviceName}</p>
-                    <p class="text-green-600 font-bold">₹${s.price}</p>
-                </div>
-            `).join('');
+            try {
+                const res = await api('/services');
+                const container = document.getElementById('serv-reel');
+                if(res.success && res.data) {
+                    container.innerHTML = res.data.map(s => `
+                        <div class="figma-card p-6 text-center space-y-2">
+                            <h4 class="font-black text-slate-800">${s.serviceName}</h4>
+                            <p class="text-xs text-slate-400">${s.description || 'Enterprise Hospital Service'}</p>
+                            <p class="text-green-600 font-black text-lg">₹${s.price}</p>
+                        </div>
+                    `).join('');
+                }
+            } catch(e) { console.error(e); }
         }
 
-        // 7. RATINGS
+        // 7. RATINGS & REVIEWS
         async function loadRatings() {
-            const res = await api('/ratings?targetType=Hospital');
-            document.getElementById('ratings-reel').innerHTML = res.data.map(r => `
-                <div class="figma-card p-6">
-                    <p class="font-bold">${r.userId?.name}</p>
-                    <p class="text-slate-500 text-sm italic">"${r.comment}"</p>
-                </div>
-            `).join('');
+            try {
+                const res = await api('/ratings?targetType=Hospital');
+                const container = document.getElementById('ratings-reel');
+                if(res.success && res.data) {
+                    if(res.data.length === 0) {
+                        container.innerHTML = `<div class="p-8 text-center text-slate-400 font-bold">No hospital ratings or reviews submitted yet.</div>`;
+                        return;
+                    }
+                    container.innerHTML = res.data.map(r => `
+                        <div class="figma-card p-6 space-y-3">
+                            <div class="flex justify-between items-center">
+                                <h4 class="font-bold text-slate-800">${r.userId?.name || 'Anonymous User'}</h4>
+                                <span class="bg-green-50 text-green-600 text-xs px-3.5 py-1.5 rounded-full font-black flex items-center gap-1"><i data-lucide="star" class="w-3.5 h-3.5 fill-current"></i> ${r.rating || 5} / 5</span>
+                            </div>
+                            <p class="text-slate-500 text-sm font-medium italic">"${r.comment || 'No feedback comment.'}"</p>
+                        </div>
+                    `).join('');
+                    lucide.createIcons();
+                }
+            } catch(e) { console.error(e); }
         }
 
-        // 8. SETTINGS
+        // 8. SETTINGS & TERMS
         async function loadSettings() {
-            const res = await api('/terms');
-            document.getElementById('cms-terms').value = res.data;
+            try {
+                const res = await api('/terms');
+                if(res.success) {
+                    document.getElementById('cms-terms').value = res.data || '';
+                }
+            } catch(e) { console.error(e); }
         }
 
-        // OTHERS
+        async function saveTermsAndConditions() {
+            const terms = document.getElementById('cms-terms').value;
+            try {
+                const res = await api('/terms', 'PUT', { terms });
+                if(res.success) {
+                    alert("Terms & Conditions successfully saved!");
+                    loadSettings();
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        // OTHERS / AMBULANCES
         async function loadFleetSummary() {
-            const res = await api('/track-ambulances');
-            document.getElementById('fleet-summary-box').innerHTML = res.data.map(amb => `
-                <div class="flex justify-between items-center text-xs">
-                    <span>${amb.ambulanceCode}</span>
-                    <span class="font-bold text-green-600">${amb.status}</span>
-                </div>
-            `).join('');
+            try {
+                const res = await api('/track-ambulances');
+                const container = document.getElementById('fleet-summary-box');
+                if(res.success && res.data) {
+                    container.innerHTML = res.data.map(amb => `
+                        <div class="flex justify-between items-center text-xs font-bold border-b pb-2">
+                            <div class="flex flex-col">
+                                <span class="text-slate-700">${amb.ambulanceCode} (${amb.type})</span>
+                                <span class="text-[10px] text-slate-400 font-medium">Driver: ${amb.driverName}</span>
+                            </div>
+                            <span class="font-black ${amb.status === 'Available' ? 'text-green-600' : 'text-blue-500'} bg-slate-50 px-2.5 py-1 rounded-md">${amb.status}</span>
+                        </div>
+                    `).join('');
+                }
+            } catch(e) { console.error(e); }
         }
 
-        function closeModal() { document.getElementById('bed-grid-modal').classList.add('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
         function logout() { localStorage.removeItem('h_token'); location.reload(); }
 
         lucide.createIcons();
-        if(getToken()) loadStats(); else alert("h_token missing in LocalStorage");
+        if(getToken()) {
+            loadStats();
+        } else {
+            alert("h_token missing in LocalStorage. Please set localStorage.setItem('h_token', 'value') to access details.");
+        }
     </script>
 </body>
 </html>

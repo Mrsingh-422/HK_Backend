@@ -9,10 +9,12 @@ const Ambulance = require('../../models/Ambulance');
 const Wallet = require('../../models/Wallet');
 const HospitalDoctor = require('../../models/HospitalDoctor');
 const Review = require('../../models/Review');
+const Availability = require('../../models/Availability');
 const { deleteFile } = require('../../utils/fileHandler');
 const { getDistance } = require('../../utils/helpers');
 const mongoose = require('mongoose');
 const { generateTimeSlots } = require('../../utils/timeSlotHelper');
+const Booking = require('../../models/AmbulanceBooking');
 const moment = require('moment');
 const getShortName = (name) => {
     return name.split(' ').map(word => word[0]).join('').toUpperCase();
@@ -334,25 +336,27 @@ const generateFinalBillAndDischarge = async (req, res) => {
 
         const extraTotal = billingItems.reduce((sum, item) => sum + Number(item.price), 0);
         
-        // 1. Update Appointment
+        // 1. Update Appointment details
         appointment.status = 'Completed';
         appointment.totalAmount += extraTotal;
         appointment.pricingBreakdown.extraCharges = extraTotal;
         appointment.billingDetails = billingItems; 
         await appointment.save();
 
-        // 2. Wallet Sync: Add money to hospital wallet
+        // 2. Wallet Sync (FIXED: Added upsert check if wallet does not exist)
         let wallet = await Wallet.findOne({ vendorId: hospitalId });
-        if (wallet) {
-            wallet.balance += appointment.totalAmount;
-            wallet.transactions.push({
-                type: 'Credit',
-                amount: appointment.totalAmount,
-                remark: `Discharge Bill - ${appointment.bookingId}`,
-                orderId: appointment.bookingId
-            });
-            await wallet.save();
+        if (!wallet) {
+            wallet = await Wallet.create({ vendorId: hospitalId, balance: 0, transactions: [] });
         }
+        
+        wallet.balance += appointment.totalAmount;
+        wallet.transactions.push({
+            type: 'Credit',
+            amount: appointment.totalAmount,
+            remark: `Discharge Bill - ${appointment.bookingId}`,
+            orderId: appointment.bookingId
+        });
+        await wallet.save();
 
         // 3. Release Bed & Update Ward
         if (appointment.bedId) {
@@ -363,7 +367,9 @@ const generateFinalBillAndDischarge = async (req, res) => {
         }
 
         res.json({ success: true, message: "Discharged. Bed Released. Wallet Updated.", billAmount: appointment.totalAmount });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // POST /api/hospital/panel/discharge/finalize
@@ -394,7 +400,13 @@ const generateFinalBillAndDischarge = async (req, res) => {
 //     } catch (error) { res.status(500).json({ message: error.message }); }
 // };
 
-// --- 4. COUPON MANAGEMENT (Screenshot 18, 19) ---
+
+
+
+
+
+
+/////////////// --- 4. COUPON MANAGEMENT (Screenshot 18, 19) --- //////////////
 const generateHospitalCoupon = async (req, res) => {
     try {
         const { 
@@ -463,6 +475,29 @@ const getHospitalCoupons = async (req, res) => {
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
     }
+};
+// EDIT COUPON
+const updateHospitalCoupon = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updated = await Coupon.findOneAndUpdate(
+            { _id: id, vendorId: req.user.id },
+            { $set: req.body },
+            { new: true }
+        );
+        res.json({ success: true, message: "Coupon updated", data: updated });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// TOGGLE COUPON
+const toggleCouponStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const coupon = await Coupon.findOne({ _id: id, vendorId: req.user.id });
+        coupon.isActive = !coupon.isActive;
+        await coupon.save();
+        res.json({ success: true, message: `Coupon now ${coupon.isActive ? 'Active' : 'Inactive'}` });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 
@@ -617,7 +652,6 @@ const getEmergencyCases = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
 // --- TRACK AMBULANCES ---
 const trackAllAmbulances = async (req, res) => {
     try {
@@ -728,30 +762,60 @@ const getHospitalPanelRatings = async (req, res) => {
 const getDailyOccupancy = async (req, res) => {
     try {
         const { wardId, date } = req.query;
-        const targetDate = moment(date).startOf('day').toDate();
 
-        // 1. Find overlapping bookings for this specific date
+        // Default to today's date if not passed
+        const targetDate = date ? moment(date).startOf('day').toDate() : moment().startOf('day').toDate();
+
+        // 1. Fetch all beds for this specific ward
+        const allBeds = await Bed.find({ wardId }).lean();
+        const bedIds = allBeds.map(b => b._id);
+
+        // 2. Find overlapping bookings STRICTLY for this specific target date
         const bookings = await Appointment.find({
-            wardName: (await Ward.findById(wardId)).name,
-            status: { $in: ['Confirmed', 'In-Progress'] },
+            bedId: { $in: bedIds },
+            bookingType: 'Admission', // Strictly admission records only
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
             startDate: { $lte: targetDate },
             endDate: { $gte: targetDate }
         }).populate('userId', 'name');
 
+        // Create occupancy map
         const occupancyMap = {};
-        bookings.forEach(b => occupancyMap[b.bedId] = b.userId.name);
+        bookings.forEach(b => {
+            if (b.bedId) {
+                const patientName = b.patients && b.patients[0] ? b.patients[0].patientName : (b.userId ? b.userId.name : 'Admitted');
+                occupancyMap[b.bedId.toString()] = {
+                    patientName: patientName,
+                    bookingId: b.bookingId,
+                    status: b.status
+                };
+            }
+        });
 
-        // 2. Fetch all beds
-        const allBeds = await Bed.find({ wardId }).lean();
+        // 3. Map dynamic bed grid status day-by-day (FIXED: Overriding buggy static db status)
+        const grid = allBeds.map(bed => {
+            const occupant = occupancyMap[bed._id.toString()];
+            
+            let finalStatus = 'Available'; // Default dynamic status is always Available
 
-        const grid = allBeds.map(bed => ({
-            ...bed,
-            currentOccupant: occupancyMap[bed._id] || null,
-            status: occupancyMap[bed._id] ? 'Occupied' : bed.status
-        }));
+            if (occupant) {
+                finalStatus = 'Occupied'; // Agar us specific day booking hai
+            } else if (bed.status === 'Maintenance') {
+                finalStatus = 'Maintenance'; // Agar use strictly maintenance par dala gaya hai
+            }
+
+            return {
+                ...bed,
+                currentOccupant: occupant ? occupant.patientName : null,
+                activeBookingId: occupant ? occupant.bookingId : null,
+                status: finalStatus // Overriding static status with computed finalStatus
+            };
+        });
 
         res.json({ success: true, data: grid });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 const finalizeDischarge = async (req, res) => {
@@ -759,21 +823,28 @@ const finalizeDischarge = async (req, res) => {
         const { appointmentId, billingItems, dischargeDate } = req.body;
 
         const appt = await Appointment.findById(appointmentId);
+        if (!appt) return res.status(404).json({ message: "Appointment record not found." });
         
-        // Finalize billing... (purana logic)
         appt.status = 'Completed';
-        appt.endDate = dischargeDate ? new Date(dischargeDate) : new Date(); // Actual discharge date set karein
+        appt.endDate = dischargeDate ? new Date(dischargeDate) : new Date(); 
         
         await appt.save();
 
         // Bed Release logic (Check if actual discharge is today or in past)
         if (moment(appt.endDate).isSameOrBefore(moment(), 'day')) {
             await Bed.findByIdAndUpdate(appt.bedId, { status: 'Available' });
-            await Ward.findOneAndUpdate({ name: appt.wardName }, { $inc: { availableBeds: 1 } });
+            
+            // FIX: Added appt.hospitalId constraint so that wards across different hospitals don't overlap by name
+            await Ward.findOneAndUpdate(
+                { name: appt.wardName, hospitalId: appt.hospitalId }, 
+                { $inc: { availableBeds: 1 } }
+            );
         }
 
         res.json({ success: true, message: "Patient Discharged. Range inventory updated." });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 const setHospitalShift = async (req, res) => {
@@ -798,12 +869,63 @@ const setHospitalShift = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const getHospitalReferralBookings = async (req, res) => {
+    try {
+        const hospitalId = req.user.id; // Logged-in Hospital ID
+        const { type, page = 1, limit = 10 } = req.query; 
+
+        let query = { 
+            serviceType: 'Referral Ambulance' 
+        };
+
+        // Logic: 
+        // 1. Incoming: Patient is coming TO this hospital (hospitalId)
+        // 2. Outgoing: Patient is going FROM this hospital (pickupHospitalId)
+        // 3. All: Both scenarios
+        if (type === 'incoming') {
+            query.hospitalId = hospitalId;
+        } else if (type === 'outgoing') {
+            query.pickupHospitalId = hospitalId;
+        } else {
+            query.$or = [
+                { hospitalId: hospitalId },
+                { pickupHospitalId: hospitalId }
+            ];
+        }
+
+        const bookings = await Booking.find(query)
+            .populate('userId', 'name phone profilePic')
+            .populate('ambulanceId', 'name vehicleNumber phone vehicleType')
+            .populate('pickupHospitalId', 'name address')
+            .populate('hospitalId', 'name address')
+            .sort({ createdAt: -1 })
+            .skip((page - 1) * limit)
+            .limit(Number(limit));
+
+        const total = await Booking.countDocuments(query);
+
+        res.json({
+            success: true,
+            totalRecords: total,
+            currentPage: Number(page),
+            totalPages: Math.ceil(total / limit),
+            data: bookings
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed, updateWardBeds,deleteSpecificBed, addHospitalService, updateHospitalService, 
-    generateFinalBillAndDischarge, generateHospitalCoupon, getHospitalCoupons, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
+    generateFinalBillAndDischarge, 
+
+    generateHospitalCoupon, getHospitalCoupons,updateHospitalCoupon,toggleCouponStatus,
+
+    getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission, getAvailableDrivers, assignDriverToCase,
     getIncomingReferrals, getEmergencyCases, trackAllAmbulances,toggleAmbulanceStatus,
     updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
-    getDailyOccupancy, finalizeDischarge, setHospitalShift
+    getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings
 };

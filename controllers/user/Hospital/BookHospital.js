@@ -5,6 +5,9 @@ const Appointment = require('../../../models/Appointment');
 const HospitalService = require('../../../models/HospitalService');
 const Coupon = require('../../../models/Coupon');
 const Doctor = require('../../../models/Doctor');
+const User = require('../../../models/User');
+const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
+const Review = require('../../../models/Review');
 const { getDistance } = require('../../../utils/helpers');
 const crypto = require('crypto');
 const moment = require('moment');
@@ -13,7 +16,7 @@ const moment = require('moment');
 const getHospitals = async (req, res) => {
     try {
         const { search, city, userLat, userLng } = req.body;
-        
+
         let query = { profileStatus: 'Approved', isActive: true };
         if (city) query.city = { $regex: city, $options: 'i' };
         if (search) query.name = { $regex: search, $options: 'i' };
@@ -68,7 +71,7 @@ const getWards = async (req, res) => {
     try {
         const { hospitalId, type } = req.query;
         console.log("Fetching Wards for Hospital:", hospitalId, "Type:", type);
-        
+
         // Agar hospitalId nahi mili to error do
         if (!hospitalId) return res.status(400).json({ message: "hospitalId is required" });
 
@@ -83,20 +86,21 @@ const getWards = async (req, res) => {
 const getBedGrid = async (req, res) => {
     try {
         const { wardId } = req.params;
-        const { startDate, endDate } = req.query; // 👈 Frontend se aayenge
+        const { startDate, endDate } = req.query; // Frontend query parameters
 
         if (!startDate || !endDate) {
             return res.status(400).json({ success: false, message: "Please select date range." });
         }
 
+        // Timezone offsets door karne ke liye startOf/endOf standard parse kiya hai
         const userStart = moment(startDate).startOf('day').toDate();
         const userEnd = moment(endDate).endOf('day').toDate();
 
-        // 1. Ward ke saare beds fetch karein
+        // Ward ke sabhi beds ko fetch kiya
         const allBeds = await Bed.find({ wardId }).lean();
         const bedIds = allBeds.map(b => b._id);
 
-        // 2. Overlapping Bookings find karein
+        // Strictly checking overlapping bookings for target beds
         const overlaps = await Appointment.find({
             bedId: { $in: bedIds },
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
@@ -106,16 +110,29 @@ const getBedGrid = async (req, res) => {
             ]
         }).select('bedId');
 
-        const bookedIds = overlaps.map(o => o.bedId.toString());
+        // Safe array map (handling null/undefined bedId check)
+        const bookedIds = overlaps.filter(o => o.bedId).map(o => o.bedId.toString());
 
-        // 3. Dynamic Status Mapping
-        const data = allBeds.map(bed => ({
-            ...bed,
-            status: bookedIds.includes(bed._id.toString()) ? 'Occupied' : bed.status
-        }));
+        // Dynamic status mapping logic
+        const data = allBeds.map(bed => {
+            let dynamicStatus = bed.status;
+
+            if (bookedIds.includes(bed._id.toString())) {
+                dynamicStatus = 'Occupied'; // Agar same date ko overlap hai toh block hoga
+            } else if (bed.status === 'Occupied' || bed.status === 'Reserved') {
+                dynamicStatus = 'Available'; // Past/Future matches ke liye display available hoga
+            }
+
+            return {
+                ...bed,
+                status: dynamicStatus
+            };
+        });
 
         res.json({ success: true, data });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // --- 1. ADD RATING (User Side) ---
@@ -210,15 +227,15 @@ const getHospitalCoupons = async (req, res) => {
 const validateHospitalCoupon = async (req, res) => {
     try {
         const { couponCode, subtotal, hospitalId, doctorId } = req.body;
-        
+
         // Validation: Fields required
         if (!couponCode || !subtotal) {
             return res.status(400).json({ success: false, message: "Coupon code and subtotal are required." });
         }
 
-        const coupon = await Coupon.findOne({ 
-            couponName: couponCode.toUpperCase(), 
-            isActive: true 
+        const coupon = await Coupon.findOne({
+            couponName: couponCode.toUpperCase(),
+            isActive: true
         });
 
         if (!coupon) return res.status(404).json({ success: false, message: "Invalid or expired coupon." });
@@ -266,68 +283,247 @@ const getAvailableBedsForRange = async (req, res) => {
     try {
         const { hospitalId, wardId, startDate, endDate } = req.body;
 
+        if (!startDate || !endDate) {
+            return res.status(400).json({ success: false, message: "Please select date range." });
+        }
+
         const start = moment(startDate).startOf('day').toDate();
         const end = moment(endDate).endOf('day').toDate();
 
-        // 1. Find all active appointments that overlap with this range
+        const allBeds = await Bed.find({ wardId }).lean();
+        const bedIds = allBeds.map(b => b._id);
+
+        // FIX: wardName database string compare karne ke bajaye direct Bed ObjectIds check karega
         const overlappingAppointments = await Appointment.find({
             hospitalId,
-            wardName: (await Ward.findById(wardId)).name,
+            bedId: { $in: bedIds },
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
-            $or: [
-                { startDate: { $lte: end }, endDate: { $gte: start } }
+            $and: [
+                { startDate: { $lte: end } },
+                { endDate: { $gte: start } }
             ]
         }).select('bedId');
 
-        const bookedBedIds = overlappingAppointments.map(appt => String(appt.bedId));
+        const bookedBedIds = overlappingAppointments.filter(appt => appt.bedId).map(appt => String(appt.bedId));
 
-        // 2. Fetch all beds in that ward
-        const allBeds = await Bed.find({ wardId }).lean();
-
-        // 3. Mark status dynamically based on overlap
         const bedGrid = allBeds.map(bed => {
-            let currentStatus = bed.status; // Default: Available/Maintenance
+            let dynamicStatus = bed.status;
+
             if (bookedBedIds.includes(String(bed._id))) {
-                currentStatus = 'Occupied'; // Range mein booked hai
+                dynamicStatus = 'Occupied';
+            } else if (bed.status === 'Occupied' || bed.status === 'Reserved') {
+                dynamicStatus = 'Available';
             }
-            return { ...bed, status: currentStatus };
+
+            return { 
+                ...bed, 
+                status: dynamicStatus 
+            };
         });
 
         res.json({ success: true, data: bedGrid });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // --- 2. UPDATED CHECKOUT (Based on stay duration) ---
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
-        const { bedId, startDate, endDate, couponCode, specialServices } = req.body;
+        const { 
+            hospitalId, 
+            doctorId, 
+            bedId, 
+            consultationType, 
+            couponCode, 
+            specialServices, 
+            startDate, 
+            endDate,
+            triageLevel 
+        } = req.body;
 
-        const bed = await Bed.findById(bedId);
-        const days = moment(endDate).diff(moment(startDate), 'days') || 1;
-        
-        let baseFee = bed.pricePerDay * days;
-        const serviceCharge = (specialServices?.length || 0) * 100;
-        let subtotal = baseFee + serviceCharge;
+        let baseFee = 0;         // Bed stay charges
+        let visitCharge = 0;     // Doctor consultation fees
+        let triageSurcharge = 0; // Emergency/Urgent surcharge
+        let days = 1;            // Stay duration in days
 
-        // Coupon calculation... (same as previous logic)
-        res.json({ success: true, data: { baseFee, days, subtotal, totalPayable: subtotal } });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 1. Bed Stay Fee Calculation based on Dates
+        if (bedId && startDate && endDate) {
+            const start = moment(startDate).startOf('day');
+            const end = moment(endDate).endOf('day');
+            
+            // Calculate total days (minimum 1 day)
+            days = end.diff(start, 'days');
+            if (days <= 0) days = 1;
+
+            const bed = await Bed.findById(bedId);
+            if (bed) {
+                // Bed database schema fields mapping (support 'price' or 'pricePerDay')
+                const bedPrice = bed.price || bed.pricePerDay || 0;
+                baseFee = bedPrice * days;
+            }
+        }
+
+        // 2. Doctor Consultation Fee
+        if (doctorId) {
+            const doctor = await Doctor.findById(doctorId);
+            if (doctor) {
+                visitCharge = doctor.fees || 0;
+            }
+        }
+
+        // 3. Triage Surcharge
+        if (triageLevel === 'Urgent') {
+            triageSurcharge = 300; // Standard surcharge for urgent cases
+        } else if (triageLevel === 'Emergency') {
+            triageSurcharge = 500;
+        }
+
+        // 4. Special Services Charge
+        const serviceCharge = (specialServices?.length || 0) * 100; // standard 100 per service
+
+        // 5. Subtotal calculation
+        let subtotal = baseFee + visitCharge + serviceCharge + triageSurcharge;
+
+        // 6. Coupon Discount Calculation
+        let discount = 0;
+        if (couponCode) {
+            const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+            if (coupon) {
+                // Check if order meets minimum amount criteria
+                if (subtotal >= coupon.minOrderAmount) {
+                    discount = (subtotal * coupon.discountPercentage) / 100;
+                    if (discount > coupon.maxDiscount) {
+                        discount = coupon.maxDiscount;
+                    }
+                }
+            }
+        }
+
+        res.json({
+            success: true,
+            data: {
+                baseFee,
+                visitCharge,
+                serviceCharge,
+                triageSurcharge,
+                days,
+                discount: Math.round(discount),
+                subtotal: Math.round(subtotal),
+                totalPayable: Math.round(subtotal - discount)
+            }
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // --- 3. FINAL RANGE BOOKING ---
+// 3. FINAL RANGE BOOKING (Fixed Ward available bed update and schema binding)
 const finalHospitalBooking = async (req, res) => {
     try {
-        const { 
-            hospitalId, bedId, startDate, endDate, patients, pricing 
+        const {
+            hospitalId, doctorId, bedId, bookingType, triageLevel,
+            startDate, endDate, appointmentDate, appointmentTime, patients, pricing,
+            specialServices, couponId, couponCode
         } = req.body;
 
-        // 1. Date Sanitization
-        const start = moment(startDate).startOf('day').toDate();
-        const end = moment(endDate).endOf('day').toDate();
+        // Strict validation check for overlapping date ranges
+        if (bedId && startDate && endDate) {
+            const start = moment(startDate).startOf('day').toDate();
+            const end = moment(endDate).endOf('day').toDate();
 
-        // 2. Double Booking Prevention (Security check)
-        const conflict = await Appointment.findOne({
-            bedId,
+            const isAlreadyBooked = await Appointment.findOne({
+                bedId,
+                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+                $and: [
+                    { startDate: { $lte: end } },
+                    { endDate: { $gte: start } }
+                ]
+            });
+
+            if (isAlreadyBooked) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Selected dates ke liye ye bed pehle se hi occupied hai. Kripya koi dusra bed ya date select karein."
+                });
+            }
+        }
+
+        const bookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+        let wardName = "";
+        let bedNumber = "";
+
+        // Bed updates aur direct Ward reference decrement handling (FIXED beds._id bug)
+        if (bedId) {
+            const bed = await Bed.findById(bedId).populate('wardId');
+            if (bed) {
+                bedNumber = bed.bedNumber;
+                if (bed.wardId) {
+                    wardName = bed.wardId.name;
+                    // Direct correct Ward matching update
+                    await Ward.findByIdAndUpdate(bed.wardId._id, { $inc: { availableBeds: -1 } });
+                }
+            }
+            await Bed.findByIdAndUpdate(bedId, { status: 'Occupied' });
+        }
+
+        const appointment = await Appointment.create({
+            userId: req.user.id,
+            hospitalId,
+            doctorId: doctorId || null,
+            bedId: bedId || null,
+            bookingType,
+            triageLevel,
+            startDate: startDate ? new Date(startDate) : undefined,
+            endDate: endDate ? new Date(endDate) : undefined,
+            appointmentDate: appointmentDate ? new Date(appointmentDate) : undefined,
+            appointmentTime,
+            patients,
+            specialServices: specialServices || [],
+            pricingBreakdown: {
+                baseFee: pricing.baseFee,
+                visitCharges: pricing.visitCharges || 0,
+                extraCharges: pricing.extraCharges || 0,
+                discountAmount: pricing.discountAmount || 0,
+                subtotal: pricing.subtotal
+            },
+            couponDetails: couponId ? { couponId, couponCode, discountValue: pricing.discountAmount } : undefined,
+            totalAmount: pricing.totalPayable,
+            bookingId,
+            status: 'Hospital-Pending',
+            wardName,
+            bedNumber
+        });
+
+        if (couponId) {
+            await Coupon.findByIdAndUpdate(couponId, { $push: { usedBy: { userId: req.user.id, usageCount: 1 } } });
+        }
+
+        res.status(201).json({ success: true, bookingId, data: appointment });
+    } catch (error) { 
+        console.log(error);
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+// 4. RESCHEDULE LOGIC (Fixed gap check status and standardized dates)
+const rescheduleBedBooking = async (req, res) => {
+    try {
+        const { appointmentId, newStartDate, newEndDate, newBedId } = req.body;
+
+        const appt = await Appointment.findById(appointmentId);
+        if (!appt) return res.status(404).json({ message: "Booking not found." });
+        if (appt.rescheduleCount >= 2) return res.status(400).json({ message: "Reschedule limit reached (Max 2 times)." });
+
+        const start = moment(newStartDate).startOf('day').toDate();
+        const end = moment(newEndDate).endOf('day').toDate();
+
+        // FIX: Included 'Hospital-Pending' state during rescheduling to prevent date clashes
+        const isOccupied = await Appointment.findOne({
+            _id: { $ne: appointmentId },
+            bedId: newBedId || appt.bedId,
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
             $and: [
                 { startDate: { $lte: end } },
@@ -335,67 +531,20 @@ const finalHospitalBooking = async (req, res) => {
             ]
         });
 
-        if (conflict) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Sorry, this bed was just booked by another patient for these dates." 
-            });
-        }
+        if (isOccupied) return res.status(400).json({ message: "New slot/bed is not available for requested dates." });
 
-        const bookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-
-        // 3. Create Admission Record
-        const appointment = await Appointment.create({
-            userId: req.user.id,
-            hospitalId,
-            bedId,
-            bookingType: 'Admission',
-            startDate: start,
-            endDate: end,
-            stayDuration: moment(end).diff(moment(start), 'days') || 1,
-            patients: typeof patients === 'string' ? JSON.parse(patients) : patients,
-            pricingBreakdown: pricing, // Frontend se aayi pricing breakdown
-            totalAmount: pricing.totalPayable,
-            bookingId,
-            status: 'Hospital-Pending',
-            paymentStatus: 'Paid'
-        });
-
-        res.status(201).json({ success: true, bookingId, data: appointment });
-
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-// --- 4. RESCHEDULE LOGIC (Max 2 times) ---
-// endpoint: PATCH /api/user/hospital/reschedule
-const rescheduleBedBooking = async (req, res) => {
-    try {
-        const { appointmentId, newStartDate, newEndDate, newBedId } = req.body;
-
-        const appt = await Appointment.findById(appointmentId);
-        if (appt.rescheduleCount >= 2) return res.status(400).json({ message: "Reschedule limit reached (Max 2 times)." });
-
-        // Range Overlap Check for new dates/bed
-        const isOccupied = await Appointment.findOne({
-            _id: { $ne: appointmentId },
-            bedId: newBedId || appt.bedId,
-            status: { $in: ['Confirmed', 'In-Progress'] },
-            startDate: { $lte: new Date(newEndDate) },
-            endDate: { $gte: new Date(newStartDate) }
-        });
-
-        if (isOccupied) return res.status(400).json({ message: "New slot/bed is not available." });
-
-        appt.startDate = new Date(newStartDate);
-        appt.endDate = new Date(newEndDate);
+        appt.startDate = start;
+        appt.endDate = end;
         if (newBedId) appt.bedId = newBedId;
         appt.rescheduleCount += 1;
-        appt.status = 'Hospital-Pending'; // Wapas approval ke liye bhej dein
+        appt.status = 'Hospital-Pending'; 
 
         await appt.save();
         res.json({ success: true, message: "Admission rescheduled successfully", data: appt });
 
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 
@@ -406,20 +555,55 @@ const rescheduleBedBooking = async (req, res) => {
 // 5. GET MY BOOKINGS (Screenshot 20, 21 - Upcoming, Pending, History)
 const getMyHospitalBookings = async (req, res) => {
     try {
-        const { tab } = req.query; // 'Upcoming', 'Pending', 'History'
-        let query = { userId: req.user.id };
+        const { tab, page = 1 } = req.query; // default page 1 rahega
+        const limit = 20; // 20 orders ki limit
+        const skip = (parseInt(page) - 1) * limit;
+        
+        let query = { 
+            userId: req.user.id, 
+            bookingType: 'Admission' 
+        };
 
-        if (tab === 'Upcoming') query.status = 'Confirmed';
-        else if (tab === 'Pending') query.status = { $in: ['Pending', 'Hospital-Pending'] };
-        else if (tab === 'History') query.status = { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Hospital'] };
+        if (tab === 'Upcoming') {
+            query.status = 'Confirmed';
+        } else if (tab === 'Pending') {
+            query.status = { $in: ['Pending', 'Hospital-Pending'] };
+        } else if (tab === 'History') {
+            query.status = { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Hospital'] };
+        }
+
+        // Total documents count nikalne ke liye
+        const totalCount = await Appointment.countDocuments(query);
 
         const data = await Appointment.find(query)
             .populate('hospitalId', 'name address hospitalImage')
             .populate('doctorId', 'name speciality profileImage')
-            .sort({ appointmentDate: 1 });
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
+                populate: {
+                    path: 'wardId',
+                    select: 'name type'
+                }
+            })
+            .sort({ appointmentDate: 1 })
+            .skip(skip)
+            .limit(limit);
 
-        res.json({ success: true, data });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            count: data.length,
+            pagination: {
+                totalCount,
+                totalPages: Math.ceil(totalCount / limit),
+                currentPage: parseInt(page),
+                limit
+            },
+            data 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // GET FAMILY MEMBERS FOR BUBBLES (Screenshot 24)
@@ -437,8 +621,8 @@ const getBookingProfiles = async (req, res) => {
 
 
 
-module.exports = { 
-    getHospitals, getWards, getBedGrid,getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
+module.exports = {
+    getHospitals, getWards, getBedGrid, getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
     getAvailableBedsForRange, rescheduleBedBooking,
     getHospitalCheckoutSummary, finalHospitalBooking, getMyHospitalBookings, getBookingProfiles,
     getHospitalDetails, addReview, updateReview
