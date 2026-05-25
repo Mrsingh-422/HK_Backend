@@ -10,6 +10,7 @@ const Wallet = require('../../models/Wallet');
 const HospitalDoctor = require('../../models/HospitalDoctor');
 const Review = require('../../models/Review');
 const Availability = require('../../models/Availability');
+const AmbulanceBooking = require('../../models/AmbulanceBooking');
 const { deleteFile } = require('../../utils/fileHandler');
 const { getDistance } = require('../../utils/helpers');
 const mongoose = require('mongoose');
@@ -51,24 +52,100 @@ const getHospitalMasterData = async (req, res) => {
 const getHospitalDashboardStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const today = moment().startOf('day').toDate();
+        const todayStart = moment().startOf('day').toDate();
+        const todayEnd = moment().endOf('day').toDate();
 
-        const stats = await Appointment.aggregate([
-            { $match: { hospitalId: new mongoose.Types.ObjectId(hospitalId) } },
-            { $group: {
-                _id: null,
-                // Aaj kitne emergency cases active hain
-                emergency: { $sum: { $cond: [{ $and: [{ $eq: ["$triageLevel", "Emergency"] }, { $eq: ["$status", "In-Progress"] }] }, 1, 0] } },
-                // Aaj kitne naye admissions scheduled hain
-                upcomingAdmissions: { $sum: { $cond: [{ $and: [{ $eq: ["$bookingType", "Admission"] }, { $eq: ["$startDate", today] }] }, 1, 0] } },
-                // Kitne log aaj discharge hone wale hain (EndDate = Today)
-                todaysDischarges: { $sum: { $cond: [{ $and: [{ $eq: ["$status", "Confirmed"] }, { $eq: ["$endDate", today] }] }, 1, 0] } }
-            }}
+        // 1. Parallel collection queries execution for best performance
+        const [
+            emergencyActive,       // Tab 1: Emergency Cases (Ambulance active cases)
+            directAdmissions,      // Tab 2: Direct Admission requests pending
+            emergencyDischarges,   // Tab 3: Emergency admissions ready to discharge (In-Progress)
+            hospitalDischarges,    // Tab 4: Direct admissions completed today
+            referralAmbulances,    // Tab 5: Live Transfer requests from Ambulance bookings
+            historyRecords         // Tab 6: Total completed cases history
+        ] = await Promise.all([
+            
+            // Tab 1: Emergency Case count (ambulanceId exists and status is active)
+            Appointment.countDocuments({
+                hospitalId,
+                ambulanceId: { $ne: null, $exists: true },
+                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
+            }),
+
+            // Tab 2: Hospital Admission count (ambulanceId null/missing and status is pending)
+            Appointment.countDocuments({
+                hospitalId,
+                bookingType: 'Admission',
+                $or: [
+                    { ambulanceId: null },
+                    { ambulanceId: { $exists: false } }
+                ],
+                status: 'Hospital-Pending'
+            }),
+
+            // Tab 3: Emergency Discharge (Brought by ambulance and currently occupying bed 'In-Progress')
+            Appointment.countDocuments({
+                hospitalId,
+                ambulanceId: { $ne: null, $exists: true },
+                status: 'In-Progress'
+            }),
+
+            // Tab 4: Hospital Discharge (Direct admission completed today)
+            Appointment.countDocuments({
+                hospitalId,
+                bookingType: 'Admission',
+                $or: [
+                    { ambulanceId: null },
+                    { ambulanceId: { $exists: false } }
+                ],
+                status: 'Completed',
+                endDate: { $gte: todayStart, $lte: todayEnd }
+            }),
+
+            // Tab 5: Referral Ambulance count (Active transfer trips headed to this hospital)
+            AmbulanceBooking.countDocuments({
+                hospitalId,
+                serviceType: 'Referral Ambulance',
+                status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
+            }),
+
+            // Tab 6: History (Total complete patient records)
+            Appointment.countDocuments({
+                hospitalId,
+                status: 'Completed'
+            })
         ]);
 
-        res.json({ success: true, data: stats[0] || { emergency: 0, upcomingAdmissions: 0, todaysDischarges: 0 } });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // Calculate High-level Top 3 Cards from the counts
+        const topEmergency = emergencyActive; 
+        const topAdmission = directAdmissions;
+        const topDischarge = emergencyDischarges + hospitalDischarges; // Total discharge pool
+
+        res.json({
+            success: true,
+            data: {
+                // --- TOP 3 MAIN CARDS ---
+                emergency: topEmergency,
+                admission: topAdmission,
+                discharge: topDischarge,
+
+                // --- BOTTOM 6 HOSPITAL SERVICES TABS ---
+                servicesTabs: {
+                    emergencyCase: emergencyActive,            // Tab 1: Emergency Case
+                    hospitalAdmission: directAdmissions,       // Tab 2: Hospital Admission
+                    emergencyDischarge: emergencyDischarges,   // Tab 3: Emergency Discharge
+                    hospitalDischarge: hospitalDischarges,     // Tab 4: Hospital Discharge
+                    referralAmbulance: referralAmbulances,     // Tab 5: Referral Ambulance
+                    history: historyRecords                    // Tab 6: History
+                }
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
+
 
 // --- 2. WARD & BED MANAGEMENT (Strict Sync) ---
 const createWardUnit = async (req, res) => {
@@ -323,9 +400,7 @@ const getHospitalServices = async (req, res) => {
 };
 
 
-
-
-// --- 3. FINAL DISCHARGE & DYNAMIC BILLING (Screenshot 29, 30) ---
+// --- 3. FINAL DISCHARGE & DYNAMIC BILLING (FIXED: Handles undefined subdocuments and NaN states safely) ---
 const generateFinalBillAndDischarge = async (req, res) => {
     try {
         const { appointmentId, billingItems } = req.body; 
@@ -334,31 +409,64 @@ const generateFinalBillAndDischarge = async (req, res) => {
         const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
         if (!appointment) return res.status(404).json({ message: "Admission Record Not Found" });
 
-        const extraTotal = billingItems.reduce((sum, item) => sum + Number(item.price), 0);
+        let overstayCharge = 0;
+        let actualEndDate = new Date();
+
+        // Safe Dates check
+        if (appointment.startDate && appointment.endDate) {
+            const scheduledEnd = moment(appointment.endDate).startOf('day');
+            const actualEnd = moment(actualEndDate).startOf('day');
+            
+            const extraDays = actualEnd.diff(scheduledEnd, 'days');
+            if (extraDays > 0 && appointment.bedId) {
+                const bed = await Bed.findById(appointment.bedId);
+                const dailyRate = bed ? (bed.pricePerDay || 500) : 500;
+                overstayCharge = extraDays * dailyRate;
+            }
+        }
+
+        const items = Array.isArray(billingItems) ? billingItems : [];
+        const extraTotal = items.reduce((sum, item) => sum + Number(item.price), 0) + overstayCharge;
         
-        // 1. Update Appointment details
+        // Dynamic properties assignment with fallback to prevent NaN schema validation failures
         appointment.status = 'Completed';
-        appointment.totalAmount += extraTotal;
-        appointment.pricingBreakdown.extraCharges = extraTotal;
-        appointment.billingDetails = billingItems; 
+        appointment.endDate = actualEndDate;
+        appointment.totalAmount = (appointment.totalAmount || 0) + extraTotal;
+        
+        // Safeguard pricingBreakdown object to prevent undefined read properties
+        if (!appointment.pricingBreakdown) {
+            appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
+        }
+        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + extraTotal;
+        
+        // Mapping billing items dynamically into specialServices array schema
+        appointment.specialServices = items.map(itm => ({
+            serviceName: itm.serviceName,
+            price: Number(itm.price)
+        }));
+
+        if (overstayCharge > 0) {
+            appointment.specialServices.push({ serviceName: `Overstay Bed Surcharge`, price: overstayCharge });
+        }
+
         await appointment.save();
 
-        // 2. Wallet Sync (FIXED: Added upsert check if wallet does not exist)
+        // Safe Wallet Sync
         let wallet = await Wallet.findOne({ vendorId: hospitalId });
         if (!wallet) {
             wallet = await Wallet.create({ vendorId: hospitalId, balance: 0, transactions: [] });
         }
         
-        wallet.balance += appointment.totalAmount;
+        wallet.balance += extraTotal;
         wallet.transactions.push({
             type: 'Credit',
-            amount: appointment.totalAmount,
-            remark: `Discharge Bill - ${appointment.bookingId}`,
+            amount: extraTotal,
+            remark: `Discharge Bill Extra - ${appointment.bookingId}`,
             orderId: appointment.bookingId
         });
         await wallet.save();
 
-        // 3. Release Bed & Update Ward
+        // Release Bed & Update Ward
         if (appointment.bedId) {
             const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             if (bed) {
@@ -366,43 +474,19 @@ const generateFinalBillAndDischarge = async (req, res) => {
             }
         }
 
-        res.json({ success: true, message: "Discharged. Bed Released. Wallet Updated.", billAmount: appointment.totalAmount });
+        // Release linked Ambulance
+        if (appointment.ambulanceId) {
+            await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
+                $set: { availableForEmergency: true } 
+            });
+        }
+
+        res.json({ success: true, message: "Patient Discharged Successfully", billAmount: appointment.totalAmount });
     } catch (error) { 
+        console.error("Discharge Error:", error);
         res.status(500).json({ message: error.message }); 
     }
 };
-
-// POST /api/hospital/panel/discharge/finalize
-// const finalizeDischargeWithBilling = async (req, res) => {
-//     try {
-//         const { appointmentId, billingItems } = req.body; 
-//         // billingItems: [{ serviceName: 'Lab Test', price: 200 }, { serviceName: 'Pharmacy', price: 800 }]
-
-//         const appointment = await Appointment.findById(appointmentId);
-//         if(!appointment) return res.status(404).json({ message: "Record not found" });
-
-//         const additionalTotal = billingItems.reduce((sum, item) => sum + Number(item.price), 0);
-        
-//         appointment.status = 'Completed';
-//         appointment.totalAmount += additionalTotal;
-//         appointment.pricingBreakdown.extraCharges = additionalTotal;
-//         appointment.billingDetails = billingItems; // Breakdown array for Bill PDF
-
-//         await appointment.save();
-
-//         // Release the Bed automatically
-//         if (appointment.bedId) {
-//             await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
-//             await Ward.findOneAndUpdate({ name: appointment.wardName }, { $inc: { availableBeds: 1 } });
-//         }
-
-//         res.json({ success: true, message: "Patient Discharged. Final Bill Generated.", totalBill: appointment.totalAmount });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
-
-
-
-
 
 
 
@@ -543,10 +627,12 @@ const getIncomingReferrals = async (req, res) => {
             status: 'Hospital-Pending' 
         })
         .populate('userId', 'name phone profilePic')
-        .populate('tracking.ambulanceId', 'name vehicleNumber');
+        .populate('ambulanceId', 'name vehicleNumber'); // 👈 FIXED tracking path to direct populated ambulanceId
 
         res.json({ success: true, data: referrals });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 
@@ -610,11 +696,22 @@ const deleteWard = async (req, res) => {
 // 4. GET ALL ADMISSIONS/PATIENTS (Figma: Patient List)
 const getAllHospitalAdmissions = async (req, res) => {
     try {
-        const { status, search } = req.query; // status: 'In-Progress', 'Completed'
-        let query = { hospitalId: req.user.id, bookingType: 'Admission' };
+        const hospitalId = req.user.id;
+        const { status, bedBookingType } = req.query;
+
+        // Base Query: Direct self-bookings only (checks both explicit null and field missing)
+        let query = { 
+            hospitalId, 
+            bookingType: 'Admission',
+            $or: [
+                { ambulanceId: null },
+                { ambulanceId: { $exists: false } }
+            ]
+        };
 
         if (status) query.status = status;
-        
+        if (bedBookingType) query.bedBookingType = bedBookingType; 
+
         const admissions = await Appointment.find(query)
             .populate('userId', 'name phone')
             .populate('doctorId', 'name speciality')
@@ -629,13 +726,14 @@ const getEmergencyCases = async (req, res) => {
     try {
         const hospitalId = req.user.id;
 
-        // Logic: Triage Level "Emergency" hona chahiye aur status "Completed" ya "Cancelled" nahi hona chahiye
+        // Query: brought in by ambulance (ambulanceId must exist and not be null)
         const data = await Appointment.find({ 
             hospitalId: hospitalId, 
-            triageLevel: 'Emergency', 
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } // 👈 Status mapping fix
+            ambulanceId: { $ne: null, $exists: true }, // Explicitly check exists & not null
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
         })
         .populate('userId', 'name profilePic phone age gender')
+        .populate('ambulanceId', 'name vehicleNumber vehicleType')
         .populate({
             path: 'bedId',
             select: 'bedNumber status',

@@ -83,9 +83,10 @@ const uploadIncidentPhoto = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// 5. FINALIZE TRIP HANDOFF & AUTO-REGISTER HOSPITAL EMERGENCY ADMISSION
 const finalizeTripHandoff = async (req, res) => {
     try {
-        const { id } = req.params; // Booking ID
+        const { id } = req.params; // Ambulance Booking ID
         const { doctorName, wardName, duration, reason } = req.body;
 
         const booking = await Booking.findById(id);
@@ -114,9 +115,44 @@ const finalizeTripHandoff = async (req, res) => {
         await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
 
         await booking.save();
-        res.json({ success: true, message: "Trip Finalized Successfully", data: booking });
 
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 5. 🚀 AUTO-CREATE HOSPITAL ADMISSION (APPOINTMENT) RECORD
+        // Generating Unique Booking ID for Hospital Side
+        const hospitalBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+        // Map Patient details from Ambulance Booking model
+        const patientsData = [{
+            patientName: booking.patientDetails?.name || "Emergency Patient",
+            patientAge: booking.patientDetails?.age || 30,
+            gender: booking.patientDetails?.gender || "Male",
+            relation: booking.patientDetails?.relation || "Self",
+            reasonForVisit: reason || booking.patientDetails?.emergencyDescription || "Ambulance Emergency Drop-off"
+        }];
+
+        await Appointment.create({
+            userId: booking.userId,
+            hospitalId: booking.hospitalId, // Destination Hospital ID
+            ambulanceId: booking.ambulanceId, // Tracking Ambulance ID (Brought by Ambulance)
+            bookingType: 'Admission',
+            bedBookingType: 'Emergency-Bed', // 👈 Categorized as Emergency Bed Booking
+            status: 'Hospital-Pending', // Hospital Panel me "Incoming Referral/Pending" me show hoga
+            bookingId: hospitalBookingId,
+            triageLevel: booking.triageLevel || 'Emergency',
+            patients: patientsData,
+            startDate: new Date(), // Admission starts instantly at handoff
+            pricingBreakdown: {
+                baseFee: 0,
+                subtotal: 0
+            },
+            totalAmount: 0
+        });
+
+        res.json({ success: true, message: "Trip Finalized & Hospital Admission Created", data: booking });
+
+    } catch (error) { 
+        console.error("Handoff Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // --- 1. VERIFY OTP (Figma Screen 36) ---
