@@ -514,13 +514,36 @@ const rescheduleBedBooking = async (req, res) => {
         const { appointmentId, newStartDate, newEndDate, newBedId } = req.body;
 
         const appt = await Appointment.findById(appointmentId);
-        if (!appt) return res.status(404).json({ message: "Booking not found." });
-        if (appt.rescheduleCount >= 2) return res.status(400).json({ message: "Reschedule limit reached (Max 2 times)." });
+        if (!appt) return res.status(404).json({ success: false, message: "Booking not found." });
+        
+        // 1. RULE 1: Strict Limit Check (Max 2 times reschedule allowed)
+        if (appt.rescheduleCount >= 2) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Reschedule limit exceeded: Aap sirf maximum 2 baar hi reschedule kar sakte hain." 
+            });
+        }
+
+        // 2. RULE 2: Calculate and Validate Stay Duration Match
+        const originalStart = moment(appt.startDate).startOf('day');
+        const originalEnd = moment(appt.endDate).startOf('day');
+        const originalDuration = originalEnd.diff(originalStart, 'days'); // Original stay duration in days
 
         const start = moment(newStartDate).startOf('day').toDate();
         const end = moment(newEndDate).endOf('day').toDate();
 
-        // FIX: Included 'Hospital-Pending' state during rescheduling to prevent date clashes
+        const newStartMoment = moment(newStartDate).startOf('day');
+        const newEndMoment = moment(newEndDate).startOf('day');
+        const newDuration = newEndMoment.diff(newStartMoment, 'days'); // New stay duration in days
+
+        if (originalDuration !== newDuration) {
+            return res.status(400).json({
+                success: false,
+                message: `Reschedule failed: Aapki original booking ${originalDuration} din ki thi. Aap naye slots me bhi strictly sirf ${originalDuration} din ke liye hi reschedule kar sakte hain.`
+            });
+        }
+
+        // 3. RULE 3: Strict Bed Overlap Checking for selected Date range
         const isOccupied = await Appointment.findOne({
             _id: { $ne: appointmentId },
             bedId: newBedId || appt.bedId,
@@ -531,13 +554,20 @@ const rescheduleBedBooking = async (req, res) => {
             ]
         });
 
-        if (isOccupied) return res.status(400).json({ message: "New slot/bed is not available for requested dates." });
+        // Agar target bed pehle se un dates ke liye book hai, toh clear error chala jayega
+        if (isOccupied) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Selected bed naye target dates ke liye pehle se hi occupied hai. Kripya naya date range ya bed choose karein." 
+            });
+        }
 
+        // 4. Update and Save changes
         appt.startDate = start;
         appt.endDate = end;
         if (newBedId) appt.bedId = newBedId;
         appt.rescheduleCount += 1;
-        appt.status = 'Hospital-Pending'; 
+        appt.status = 'Hospital-Pending'; // Approval pipeline me wapas bhejein
 
         await appt.save();
         res.json({ success: true, message: "Admission rescheduled successfully", data: appt });
@@ -548,6 +578,86 @@ const rescheduleBedBooking = async (req, res) => {
 };
 
 
+
+
+const getBedMonthlySchedule = async (req, res) => {
+    try {
+        const { bedId, month, year } = req.query;
+
+        if (!bedId) {
+            return res.status(400).json({ success: false, message: "bedId is required." });
+        }
+
+        // Agar month ya year nahi bheja, toh current month/year select hoga
+        const targetMonth = month ? parseInt(month) : moment().month() + 1; // 1-indexed (1-12)
+        const targetYear = year ? parseInt(year) : moment().year();
+
+        const bed = await Bed.findById(bedId);
+        if (!bed) return res.status(404).json({ success: false, message: "Bed not found" });
+
+        // Select kiye gaye month ka start aur end date range nikalenge
+        const startOfMonth = moment([targetYear, targetMonth - 1]).startOf('month');
+        const endOfMonth = moment([targetYear, targetMonth - 1]).endOf('month');
+
+        const totalDays = endOfMonth.date(); // Us month me total kitne din hain (e.g. 30 ya 31)
+
+        // Find active overlapping bookings strictly for this bed inside this month
+        const bookings = await Appointment.find({
+            bedId,
+            bookingType: 'Admission',
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            $and: [
+                { startDate: { $lte: endOfMonth.toDate() } },
+                { endDate: { $gte: startOfMonth.toDate() } }
+            ]
+        }).populate('userId', 'name');
+
+        const calendar = [];
+
+        // Pooray month ke sabhi days ka loop chalayenge (1 to totalDays)
+        for (let day = 1; day <= totalDays; day++) {
+            const currentDay = moment([targetYear, targetMonth - 1, day]).startOf('day');
+            const currentDayDate = currentDay.toDate();
+            
+            // Check if any booking is overlapping on this specific day
+            const match = bookings.find(b => {
+                const bStart = moment(b.startDate).startOf('day').toDate();
+                const bEnd = moment(b.endDate).startOf('day').toDate();
+                return currentDayDate >= bStart && currentDayDate <= bEnd;
+            });
+
+            let dayStatus = 'Available';
+            if (match) {
+                dayStatus = 'Occupied';
+            } else if (bed.status === 'Maintenance') {
+                dayStatus = 'Maintenance'; // Agar bed manual maintenance par lock hai
+            }
+
+            calendar.push({
+                date: currentDay.format("YYYY-MM-DD"),
+                day: day,
+                status: dayStatus,
+                currentOccupant: match ? (match.patients?.[0]?.patientName || match.userId?.name || 'Admitted') : null,
+                bookingId: match ? match.bookingId : null
+            });
+        }
+
+        res.json({
+            success: true,
+            month: targetMonth,
+            year: targetYear,
+            totalDays,
+            bedDetails: {
+                bedNumber: bed.bedNumber,
+                pricePerDay: bed.pricePerDay
+            },
+            data: calendar
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
 
 
 
@@ -623,7 +733,7 @@ const getBookingProfiles = async (req, res) => {
 
 module.exports = {
     getHospitals, getWards, getBedGrid, getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
-    getAvailableBedsForRange, rescheduleBedBooking,
+    getAvailableBedsForRange, rescheduleBedBooking, getBedMonthlySchedule,
     getHospitalCheckoutSummary, finalHospitalBooking, getMyHospitalBookings, getBookingProfiles,
     getHospitalDetails, addReview, updateReview
 };

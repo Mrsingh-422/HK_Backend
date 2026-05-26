@@ -618,6 +618,30 @@ const serviceUpload = multer({
     limits: { fileSize: 3 * 1024 * 1024 } // 3MB
 });
 
+// ==========================================
+// 34. HOSPITAL TERMS FILE CONFIGURATION (TXT Only)
+// ==========================================
+const termsFileDir = 'public/uploads/hospital_terms';
+ensureDir(termsFileDir);
+
+const termsUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, termsFileDir),
+        filename: (req, file, cb) => cb(null, `terms-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        // Strictly allow only .txt extension
+        if (ext === '.txt' || file.mimetype === 'text/plain') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only TXT (Plain Text) files are allowed!'), false);
+        }
+    },
+    limits: { fileSize: 2 * 1024 * 1024 } // 2MB limit (TXT file ke liye bahut hai)
+}).single('termsPdf'); // Postman key: 'termsPdf'
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -654,6 +678,7 @@ module.exports = {
     fireEvidenceUploads, // Screen 101: Upload Evidence
     fireLeaveUploads, // Screen: New Request
     nursePackageUploads, // Screen: New Package
-    serviceUpload // Screen: Add Service
+    serviceUpload, // Screen: Add Service
+    termsUpload
 
 };  

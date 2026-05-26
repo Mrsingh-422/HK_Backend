@@ -17,6 +17,8 @@ const mongoose = require('mongoose');
 const { generateTimeSlots } = require('../../utils/timeSlotHelper');
 const Booking = require('../../models/AmbulanceBooking');
 const moment = require('moment');
+const path = require('path');
+const fs = require('fs');
 const getShortName = (name) => {
     return name.split(' ').map(word => word[0]).join('').toUpperCase();
 };
@@ -1014,6 +1016,104 @@ const getHospitalReferralBookings = async (req, res) => {
     }
 };
 
+
+
+// --- API 1: UPDATE BED PRICE (Supports both single bed update and bulk ward update) ---
+const updateBedPrice = async (req, res) => {
+    try {
+        const { bedId, wardId, pricePerDay } = req.body;
+
+        if (!pricePerDay || isNaN(Number(pricePerDay))) {
+            return res.status(400).json({ success: false, message: "Valid pricePerDay is required." });
+        }
+
+        // Case A: Agar single Bed ID di gayi hai
+        if (bedId) {
+            const bed = await Bed.findOneAndUpdate(
+                { _id: bedId, hospitalId: req.user.id },
+                { $set: { pricePerDay: Number(pricePerDay) } },
+                { new: true }
+            );
+            if (!bed) return res.status(404).json({ success: false, message: "Bed not found or unauthorized." });
+            return res.json({ success: true, message: "Bed price updated successfully", data: bed });
+        } 
+        
+        // Case B: Agar pure Ward ki beds bulk update karni hai
+        else if (wardId) {
+            const ward = await Ward.findOne({ _id: wardId, hospitalId: req.user.id });
+            if (!ward) return res.status(404).json({ success: false, message: "Ward not found or unauthorized." });
+
+            await Bed.updateMany(
+                { wardId: wardId, hospitalId: req.user.id },
+                { $set: { pricePerDay: Number(pricePerDay) } }
+            );
+
+            return res.json({ success: true, message: "All ward beds price updated successfully" });
+        } 
+        
+        else {
+            return res.status(400).json({ success: false, message: "Either bedId or wardId is required." });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API 2: IMPORT TERMS & CONDITIONS FROM PLAIN TEXT (.txt) FILE ONLY ---
+const uploadHospitalTermsPdf = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: "Kripya TXT file upload karein." });
+        }
+
+        const tempFilePath = req.file.path;
+        const fileExtension = path.extname(req.file.originalname).toLowerCase();
+
+        // 1. Strict Format Verification
+        if (fileExtension !== '.txt') {
+            fs.unlinkSync(tempFilePath); // Invalid file ko instantly delete karein
+            return res.status(400).json({ 
+                success: false, 
+                message: "Format error: Sirf '.txt' (Plain Text) file hi allowed hai." 
+            });
+        }
+
+        // 2. Read TXT file using Node's native UTF-8 reader (100% accurate, no package needed)
+        const extractedText = fs.readFileSync(tempFilePath, 'utf-8');
+
+        if (!extractedText || extractedText.trim().length === 0) {
+            fs.unlinkSync(tempFilePath);
+            return res.status(400).json({ 
+                success: false, 
+                message: "File khali hai. Kripya content wali TXT file upload karein." 
+            });
+        }
+
+        // 3. Save plain text in database
+        const hospital = await Hospital.findByIdAndUpdate(
+            req.user.id,
+            { $set: { termsAndConditions: extractedText.trim() } },
+            { new: true }
+        );
+
+        // 4. Cleanup temporary file from server disk
+        fs.unlinkSync(tempFilePath);
+
+        res.json({ 
+            success: true, 
+            message: "TXT text successfully extracted and saved", 
+            data: hospital.termsAndConditions 
+        });
+
+    } catch (error) {
+        console.error("TXT Import Error:", error);
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path); // Safe cleanup on crash
+        }
+        res.status(500).json({ success: false, message: "File processing error: " + error.message });
+    }
+};
+
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed, updateWardBeds,deleteSpecificBed, addHospitalService, updateHospitalService, 
@@ -1025,5 +1125,6 @@ module.exports = {
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission, getAvailableDrivers, assignDriverToCase,
     getIncomingReferrals, getEmergencyCases, trackAllAmbulances,toggleAmbulanceStatus,
     updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
-    getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings
+    getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings,
+    updateBedPrice, uploadHospitalTermsPdf
 };

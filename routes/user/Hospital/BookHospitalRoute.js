@@ -7,7 +7,7 @@ const {
     getHospitalCoupons, validateHospitalCoupon,
 
     getAvailableBedsForRange,
-    getHospitalCheckoutSummary, rescheduleBedBooking,
+    getHospitalCheckoutSummary, rescheduleBedBooking, getBedMonthlySchedule,
     finalHospitalBooking,
     getMyHospitalBookings ,
     getBookingProfiles,
@@ -36,6 +36,10 @@ router.post('/checkout-summary', getHospitalCheckoutSummary);
 router.post('/book', protect('user'), finalHospitalBooking);
 
 router.post('/reschedule', protect('user'), rescheduleBedBooking);
+
+
+
+router.get('/monthly-schedule', getBedMonthlySchedule);
 
 // Management
 router.get('/my-bookings', protect('user'), getMyHospitalBookings);

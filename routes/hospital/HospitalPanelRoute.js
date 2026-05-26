@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { protect } = require('../../middleware/authMiddleware');
-const { serviceUpload } = require('../../middleware/multer');
+const { serviceUpload, termsUpload } = require('../../middleware/multer');
 const { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed,updateWardBeds, addHospitalService, updateHospitalService, 
@@ -8,7 +8,8 @@ const {
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission,getAvailableDrivers, assignDriverToCase,
     getIncomingReferrals,getEmergencyCases, trackAllAmbulances, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
     toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
-    getDailyOccupancy,finalizeDischarge, setHospitalShift ,getHospitalReferralBookings
+    getDailyOccupancy,finalizeDischarge, setHospitalShift ,getHospitalReferralBookings,
+    updateBedPrice, uploadHospitalTermsPdf
 
 } = require('../../controllers/hospital/HospitalPanel');
  
@@ -71,5 +72,10 @@ router.post('/finalize-discharge', protect('hospital'), finalizeDischarge);
 router.post('/set-shift', protect('hospital'), setHospitalShift);
 
 router.get('/referral-bookings', protect('hospital'), getHospitalReferralBookings);
+
+
+router.put('/bed/update-price', protect('hospital'), updateBedPrice);
+// Terms and Conditions PDF Import route
+router.put('/terms/uploadfile', protect('hospital'), termsUpload, uploadHospitalTermsPdf);
 
 module.exports = router;
