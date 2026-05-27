@@ -19,14 +19,80 @@ const connectDB = require('./config/db');
 connectDB();
 
 const app = express();
+
+
+////////////////////////// for console log format ----- start ----- ////////////////////////////
+// 1. Indian Standard Time (IST) Token
 morgan.token('local-date', () => {
     return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 });
-// 2. Custom format me 'local-date' ko include karke use karein
-app.use(morgan('[:local-date] :method :url :status - :response-time ms'))
+
+// 2. Real Client IP Token
+morgan.token('real-ip', (req) => {
+    const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    if (ip && ip.includes(',')) {
+        return ip.split(',')[0].trim();
+    }
+    return ip;
+});
+
+// 3. User Name Token
+morgan.token('user-name', (req) => {
+    if (req.user && req.user.name) {
+        return req.user.name;
+    }
+    if (req.doctor && req.doctor.name) {
+        return req.doctor.name;
+    }
+    if (req.user) {
+        return req.user.email || req.user.phone || 'Auth-User';
+    }
+    return 'Guest';
+});
+
+// 4. Custom Location Token (Multiple key options ko check karega)
+morgan.token('location', (req) => {
+    if (req.body && typeof req.body === 'object') {
+        // Latitudes ke sabhi possible options
+        const latKeys = ['lat', 'userlat', 'latitude', 'userLatitude'];
+        // Longitudes ke sabhi possible options
+        const lngKeys = ['lng', 'userlng', 'longitude', 'userLongitude'];
+
+        let foundLat = null;
+        let foundLng = null;
+
+        // Sabse pehli matching latitude key dhundhein
+        for (const key of latKeys) {
+            if (req.body[key] !== undefined && req.body[key] !== null) {
+                foundLat = req.body[key];
+                break;
+            }
+        }
+
+        // Sabse pehli matching longitude key dhundhein
+        for (const key of lngKeys) {
+            if (req.body[key] !== undefined && req.body[key] !== null) {
+                foundLng = req.body[key];
+                break;
+            }
+        }
+
+        // Agar dono keys mil jati hain, toh print karein
+        if (foundLat !== null && foundLng !== null) {
+            return ` [Loc: ${foundLat}, ${foundLng}]`;
+        }
+    }
+    return ''; // Agar location data nahi hai toh khali chhod dega
+});
+
+// 5. Final Custom Format (Sirf isi ek app.use(morgan...) ko pure file me rakhein)
+app.use(morgan('[:local-date] [IP: :real-ip] [User: :user-name] :method :url :status:location - :response-time ms'));
+/////////////////////////// for console log format ---- end ---- ////////////////////////////
+
+
 
 // Middleware
-app.use(cors()); // Allow all origins
+app.use(cors({ origin: '*' })); // Allow all origins
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Form डेटा के लिए (Optional)
 
