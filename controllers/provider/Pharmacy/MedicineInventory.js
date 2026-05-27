@@ -107,10 +107,32 @@ const updateInventoryItem = async (req, res) => {
     }
 };
 
+const deleteInventoryItem = async (req, res) => {
+    try {
+        const pharmacyId = req.user.id; // Logged-in pharmacy id
+        
+        // Taaki pharmacy sirf apne hi inventory item ko delete kar sake
+        const deleted = await MedicineInventory.findOneAndDelete({
+            _id: req.params.id,
+            pharmacyId
+        });
+
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: "Medicine not found in your inventory or unauthorized" });
+        }
+
+        res.status(200).json({ success: true, message: "Medicine removed from your inventory successfully!" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     searchMasterMedicines, 
     getMasterMedicineById, 
     addToInventory, 
     getMyInventory, 
-    updateInventoryItem 
+    updateInventoryItem ,
+    deleteInventoryItem
 };

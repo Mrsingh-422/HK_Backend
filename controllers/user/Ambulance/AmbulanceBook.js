@@ -323,21 +323,17 @@ const calculateAmbulanceFare = async (req, res) => {
 
 const confirmAmbulanceBooking = async (req, res) => {
     try {
-        // console.log("Incoming Request Body:", req.body);
-
-        // 1. Flutter/Form-data Parsing (Kyunki Flutter se data strings mein aa raha hai)
+        // 1. Flutter/Form-data Parsing
         let body = { ...req.body };
         
-        // Agar pricing string hai toh parse karein
         if (typeof body.pricing === 'string') {
             try { body.pricing = JSON.parse(body.pricing); } catch (e) {}
         }
         
-        // Agar couponDetails string hai toh usme se couponCode nikaalein
         if (typeof body.couponDetails === 'string') {
             try { 
                 const parsedCoupon = JSON.parse(body.couponDetails);
-                body.couponCode = parsedCoupon.couponCode; // Root level par set kar rahe hain helper ke liye
+                body.couponCode = parsedCoupon.couponCode;
             } catch (e) {}
         }
 
@@ -345,10 +341,18 @@ const confirmAmbulanceBooking = async (req, res) => {
             ambulanceId, hospitalId, pickupHospitalId, serviceType, 
             triageLevel, patientDetails, staffType, couponCode, paymentId,
             scheduledDate, appointmentTime, reason, incidentDescription, referralReason 
-        } = body; // Use 'body' instead of 'req.body'
+        } = body;
 
-        // 2. Calculate Fare & Validate Coupon (Helper ab body.couponCode use karega)
+        // 2. Calculate Fare & Validate Coupon
         const fare = await getFinalFare(body, req.user.id); 
+
+        // --- NEW: Parse staffType to store individual selection flags in DB ---
+        let staffList = staffType ? (typeof staffType === 'string' ? staffType.split(',') : staffType) : [];
+        staffList = staffList.map(s => s.trim());
+        const supportStaffSelected = {
+            doctor: staffList.includes('Doctor'),
+            nurse: staffList.includes('Nurse')
+        };
 
         // 3. Parsing Patient Details
         let parsedDetails = {};
@@ -362,7 +366,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
-        // 5. Create Booking
+        // 5. Create Booking (Added supportStaffSelected key)
         const booking = await Booking.create({
             bookingId: `HK-BOK-${Date.now().toString().slice(-6)}`,
             caseReference: generateCaseRef(serviceType),
@@ -374,6 +378,10 @@ const confirmAmbulanceBooking = async (req, res) => {
             triageLevel: serviceType === 'Accident emergency' ? 'Emergency' : (triageLevel || 'Routine'),
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
             scheduledTime: appointmentTime || null,
+
+            // 👇 New Data Addon
+            supportStaffSelected: supportStaffSelected,
+
             patientDetails: {
                 ...parsedDetails,
                 emergencyDescription: finalReason,
@@ -420,6 +428,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         await Ambulance.findByIdAndUpdate(ambulanceId, { availableForEmergency: false });
 
+        // RESPONSE: SAME AS ORIGINAL (Frontend requirement met)
         res.status(201).json({ success: true, message: "Booking Confirmed", booking });
 
     } catch (error) { 

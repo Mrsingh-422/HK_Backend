@@ -81,6 +81,23 @@ const ambulanceBookingSchema = new mongoose.Schema({
         completedAt: { type: Date, default: null }
     },
     
+    // 👇 NEW: Store exactly what was selected
+    supportStaffSelected: {
+        nurse: { type: Boolean, default: false },
+        doctor: { type: Boolean, default: false }
+    },
+
+    // 👇 NEW: Payment Lifecycle
+    paymentStatus: { 
+        type: String, 
+        enum: ['Pending', 'Paid', 'Failed', 'Refunded'], 
+        default: 'Pending' 
+    },
+    paymentMethod: { type: String, enum: ['Cash', 'Online', 'Wallet'], default: 'Online' },
+
+    // 👇 NEW: Better Cancellation Tracking
+    cancelledBy: { type: String, enum: ['User', 'Driver', 'System', null], default: null },
+    cancellationReason: { type: String, default: null },
 
 }, { timestamps: true });
 

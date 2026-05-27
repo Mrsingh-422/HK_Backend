@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const dotenv = require('dotenv');
 const os = require('os');
+const morgan = require('morgan');
 
 ///////// For bypassing the Windows DNS bug //////////
 const dns = require('node:dns/promises'); // For bypassing the Windows DNS bug
@@ -18,6 +19,11 @@ const connectDB = require('./config/db');
 connectDB();
 
 const app = express();
+morgan.token('local-date', () => {
+    return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+});
+// 2. Custom format me 'local-date' ko include karke use karein
+app.use(morgan('[:local-date] :method :url :status - :response-time ms'))
 
 // Middleware
 app.use(cors()); // Allow all origins
