@@ -53,7 +53,6 @@ const hospitalSchema = new mongoose.Schema({
     rejectionReason: { type: String },
     termsAndConditions: { type: String, default: "" },
 
-
 }, { timestamps: true });
 
 module.exports = mongoose.model('Hospital', hospitalSchema);

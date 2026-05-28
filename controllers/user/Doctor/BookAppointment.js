@@ -5,6 +5,8 @@ const Prescription = require('../../../models/Prescription');
 const Availability = require('../../../models/Availability'); // For slots
 const Coupon = require('../../../models/Coupon'); // For coupons
 const DeliveryCharge = require('../../../models/DeliveryCharge'); // For home visit charges
+const User = require('../../../models/User');
+const DocReschleduleLimit = require("../../../models/DocRescheduleLimit"); 
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
 const moment = require('moment');
@@ -461,6 +463,7 @@ const getUserAppointments = async (req, res) => {
 
 // 6. CANCEL APPOINTMENT (User Side)
 // endpoint: PATCH /user/doctors/cancel/:id
+// 6. CANCEL APPOINTMENT (User Side - Secure Cancellation-Reschedule Loop)
 const userCancelAppointment = async (req, res) => {
     try {
         const { reason } = req.body;
@@ -468,24 +471,102 @@ const userCancelAppointment = async (req, res) => {
 
         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
         
-        // Block cancellation if already in progress or completed
+        // In-progress ya completed cases cancel nahi ho sakte
         if (['In-Progress', 'Completed'].includes(appointment.status)) {
             return res.status(400).json({ message: "Cannot cancel appointment in its current state" });
         }
 
+        if (appointment.status.startsWith('Cancelled')) {
+            return res.status(400).json({ message: "This appointment is already cancelled." });
+        }
+
+        // 1. Fetch Dynamic Global limit configuration for Doctors
+        const globalConfig = await DocRescheduleLimit.findOne();
+        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
+
+        const currentCancelCount = appointment.cancellationCount || 0;
+
+        // 2. STRICT CHECK: Limit reach hone par cancel block ho jayega
+        if (currentCancelCount >= maxLimit) {
+            return res.status(400).json({
+                success: false,
+                message: `Cancellation Blocked: Aap is appointment ko maximum ${maxLimit} baar hi cancel kar sakte hain. Limit reached.`
+            });
+        }
+
+        // 3. Status set to Cancelled & increment counter safely
         appointment.status = 'Cancelled-By-User';
+        appointment.cancellationCount = currentCancelCount + 1;
         appointment.cancellationDetails = {
             cancelledBy: req.user.id,
             reason: reason || "Cancelled by user",
             cancelledAt: new Date()
         };
         
-        appointment.paymentStatus = 'Refund-Initiated'; 
+        appointment.paymentStatus = 'Refund-Initiated'; // Maintaining original refund pipeline
 
         await appointment.save();
-        res.json({ success: true, message: "Appointment cancelled. Refund initiated.", data: appointment });
+        res.json({ 
+            success: true, 
+            message: "Appointment cancelled successfully. You can reschedule this appointment.", 
+            cancellationLeft: maxLimit - appointment.cancellationCount,
+            data: appointment 
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
+    }
+};
+
+// --- NEW API: RESCHEDULE DOCTOR APPOINTMENT ---
+const rescheduleAppointment = async (req, res) => {
+    try {
+        const { appointmentId, newDate, newTimeSlot } = req.body;
+
+        if (!appointmentId || !newDate || !newTimeSlot) {
+            return res.status(400).json({ success: false, message: "Appointment, Date, and TimeSlot are mandatory." });
+        }
+
+        const appt = await Appointment.findOne({ _id: appointmentId, userId: req.user.id });
+        if (!appt) return res.status(404).json({ success: false, message: "Appointment record not found." });
+
+        // 1. Fetch Dynamic Global limit configuration for Doctors
+        const globalConfig = await DocRescheduleLimit.findOne();
+        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
+
+        const currentRescheduleCount = appt.rescheduleCount || 0;
+
+        // 2. RULE 1: Reschedule Count Validation (Checks against global admin limit)
+        if (currentRescheduleCount >= maxLimit) {
+            return res.status(400).json({
+                success: false,
+                message: `Reschedule failed: Aapki maximum reschedule limit (${maxLimit} times) poori ho chuki hai.`
+            });
+        }
+
+        // 3. RULE 2: Target Slot Availability Checking (Overlaps checking)
+        const isBooked = await Appointment.findOne({
+            _id: { $ne: appointmentId },
+            doctorId: appt.doctorId,
+            appointmentDate: new Date(newDate),
+            appointmentTime: newTimeSlot,
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] }
+        });
+
+        if (isBooked) {
+            return res.status(400).json({ success: false, message: "Naya selected slot pehle se hi kisi aur patient ke liye booked hai." });
+        }
+
+        // 4. Update and Save changes
+        appt.appointmentDate = new Date(newDate);
+        appt.appointmentTime = newTimeSlot;
+        appt.rescheduleCount = currentRescheduleCount + 1;
+        appt.status = 'Confirmed'; // Wapas active state par return laya gaya
+
+        await appt.save();
+        res.json({ success: true, message: "Appointment rescheduled successfully", data: appt });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -637,7 +718,7 @@ module.exports = {
     bookAppointment, 
     verifyTrackingOTP,
     getUserAppointments,
-    userCancelAppointment,
+    userCancelAppointment,rescheduleAppointment,
     trackAppointment ,
     getMyPrescriptions,
     getAvailableSlots,getTrackingStatus,getShareableTrackingLink

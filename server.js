@@ -132,6 +132,10 @@ app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUpl
 app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // Master Lab Test Upload & List Route
 // --- Admin Nurse Routes ---
 app.use('/admin/nurse-csv', require('./routes/admin/Nurse/CategoryUploadRoute')); // Master Nurse Category Upload & List Route
+// --- Admin Hospital Routes ---
+app.use('/admin/hospital', require('./routes/admin/Hospital/HospitalAdminRoute')); // Hospital Management Route
+// --- Admin Doctor Routes ---
+app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // Doctor Management Route
 
 
 

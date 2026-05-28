@@ -9,7 +9,7 @@ const {
     getDoctorDetails,getDoctorVisitConfig, getAvailableCoupons,validateCoupon, getCheckoutSummary,
     bookAppointment, verifyTrackingOTP,
     getUserAppointments, 
-    userCancelAppointment,
+    userCancelAppointment,rescheduleAppointment,
     trackAppointment , getMyPrescriptions, getAvailableSlots,getTrackingStatus,getShareableTrackingLink
 } = require('../../../controllers/user/Doctor/BookAppointment');
 
@@ -29,6 +29,7 @@ router.post('/verify-otp', protect('user'), verifyTrackingOTP);
 router.get('/my-appointments', protect('user'), getUserAppointments);
 router.get('/track/:appointmentId', protect('user'), trackAppointment);
 router.patch('/cancel/:id', protect('user'), userCancelAppointment);
+router.patch('/reschedule/:id', protect('user'), rescheduleAppointment);
 router.get('/prescriptions', protect('user'), getMyPrescriptions);
 router.get('/slots/:doctorId', protect('user'), getAvailableSlots);
 

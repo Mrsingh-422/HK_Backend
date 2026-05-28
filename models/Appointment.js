@@ -81,7 +81,9 @@ const appointmentSchema = new mongoose.Schema({
     // For Hospital Admissions
     startDate: { type: Date }, // Admission start
     endDate: { type: Date },   // Admission end
-    stayDuration: { type: Number }
+    stayDuration: { type: Number },
+    cancellationCount: { type: Number, default: 0 },
+    rescheduleCount: { type: Number, default: 0 },
 
 }, { timestamps: true });
 

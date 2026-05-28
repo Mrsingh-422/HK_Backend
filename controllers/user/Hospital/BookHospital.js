@@ -6,6 +6,7 @@ const HospitalService = require('../../../models/HospitalService');
 const Coupon = require('../../../models/Coupon');
 const Doctor = require('../../../models/Doctor');
 const User = require('../../../models/User');
+const BedRescheduleLimit = require("../../../models/BedRescheduleLimit"); // 👈 Import Global Model
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const Review = require('../../../models/Review');
 const { getDistance } = require('../../../utils/helpers');
@@ -508,45 +509,109 @@ const finalHospitalBooking = async (req, res) => {
     }
 };
 
-// 4. RESCHEDULE LOGIC (Fixed gap check status and standardized dates)
+
+const cancelBedBooking = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        const appt = await Appointment.findOne({ _id: id, userId: req.user.id });
+        if (!appt) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
+
+        if (appt.status === 'Completed' || appt.status.startsWith('Cancelled')) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "This booking is either already completed or already cancelled." 
+            });
+        }
+
+        // FIX: Fetch platform-wide limit from dynamic global model (Fallback is 2)
+        const globalConfig = await BedRescheduleLimit.findOne();
+        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
+
+        const currentCancelCount = appt.cancellationCount || 0;
+
+        // Validation against Global Limit
+        if (currentCancelCount >= maxLimit) {
+            return res.status(400).json({
+                success: false,
+                message: `Cancellation Blocked: Aap is booking ko maximum ${maxLimit} baar hi cancel kar sakte hain. Dynamic global limit reached.`
+            });
+        }
+
+        // Release Inventory
+        if (appt.bedId) {
+            await Bed.findByIdAndUpdate(appt.bedId, { $set: { status: 'Available' } });
+            await Ward.findOneAndUpdate(
+                { name: appt.wardName, hospitalId: appt.hospitalId },
+                { $inc: { availableBeds: 1 } }
+            );
+        }
+
+        appt.status = 'Cancelled-By-User';
+        appt.cancellationCount = currentCancelCount + 1;
+        appt.cancelReason = reason || "Cancelled by User";
+
+        await appt.save();
+
+        res.json({
+            success: true,
+            message: "Booking cancelled successfully. Note: No refund is issued. You can reschedule this booking.",
+            cancellationLeft: maxLimit - appt.cancellationCount,
+            data: appt
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2. RESCHEDULE BED BOOKING (Strict Global Limits Integration - No Conflicts) ---
 const rescheduleBedBooking = async (req, res) => {
     try {
         const { appointmentId, newStartDate, newEndDate, newBedId } = req.body;
 
         const appt = await Appointment.findById(appointmentId);
         if (!appt) return res.status(404).json({ success: false, message: "Booking not found." });
-        
-        // 1. RULE 1: Strict Limit Check (Max 2 times reschedule allowed)
-        if (appt.rescheduleCount >= 2) {
+
+        // FIX: Fetch platform-wide limit from dynamic global model (Fallback is 2)
+        const globalConfig = await BedRescheduleLimit.findOne();
+        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
+
+        const currentRescheduleCount = appt.rescheduleCount || 0;
+
+        // Validation against Global Limit
+        if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Reschedule limit exceeded: Aap sirf maximum 2 baar hi reschedule kar sakte hain." 
+                message: `Reschedule failed: Aapki maximum reschedule limit (${maxLimit} times) poori ho chuki hai.` 
             });
         }
 
-        // 2. RULE 2: Calculate and Validate Stay Duration Match
         const originalStart = moment(appt.startDate).startOf('day');
         const originalEnd = moment(appt.endDate).startOf('day');
-        const originalDuration = originalEnd.diff(originalStart, 'days'); // Original stay duration in days
+        const originalDuration = originalEnd.diff(originalStart, 'days');
 
         const start = moment(newStartDate).startOf('day').toDate();
         const end = moment(newEndDate).endOf('day').toDate();
 
         const newStartMoment = moment(newStartDate).startOf('day');
         const newEndMoment = moment(newEndDate).startOf('day');
-        const newDuration = newEndMoment.diff(newStartMoment, 'days'); // New stay duration in days
+        const newDuration = newEndMoment.diff(newStartMoment, 'days');
 
         if (originalDuration !== newDuration) {
             return res.status(400).json({
                 success: false,
-                message: `Reschedule failed: Aapki original booking ${originalDuration} din ki thi. Aap naye slots me bhi strictly sirf ${originalDuration} din ke liye hi reschedule kar sakte hain.`
+                message: `Reschedule failed: Aapki original booking ${originalDuration} din ki thi. Naye schedule me bhi strictly ${originalDuration} din select karein.`
             });
         }
 
-        // 3. RULE 3: Strict Bed Overlap Checking for selected Date range
+        const targetBedId = newBedId || appt.bedId;
         const isOccupied = await Appointment.findOne({
             _id: { $ne: appointmentId },
-            bedId: newBedId || appt.bedId,
+            bedId: targetBedId,
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
             $and: [
                 { startDate: { $lte: end } },
@@ -554,7 +619,6 @@ const rescheduleBedBooking = async (req, res) => {
             ]
         });
 
-        // Agar target bed pehle se un dates ke liye book hai, toh clear error chala jayega
         if (isOccupied) {
             return res.status(400).json({ 
                 success: false, 
@@ -562,12 +626,16 @@ const rescheduleBedBooking = async (req, res) => {
             });
         }
 
-        // 4. Update and Save changes
         appt.startDate = start;
         appt.endDate = end;
-        if (newBedId) appt.bedId = newBedId;
-        appt.rescheduleCount += 1;
-        appt.status = 'Hospital-Pending'; // Approval pipeline me wapas bhejein
+        if (newBedId) {
+            appt.bedId = newBedId;
+            const bed = await Bed.findById(newBedId);
+            appt.bedNumber = bed ? bed.bedNumber : appt.bedNumber;
+        }
+        
+        appt.rescheduleCount = currentRescheduleCount + 1;
+        appt.status = 'Hospital-Pending'; 
 
         await appt.save();
         res.json({ success: true, message: "Admission rescheduled successfully", data: appt });
