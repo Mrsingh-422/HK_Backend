@@ -20,36 +20,77 @@ const generateToken = (id, role) => {
 // Endpoint: POST /api/auth/hospital/register
 const registerHospital = async (req, res) => {
     try {
-        const { name, email, phone, country, state, city, password, type } = req.body;
+        const {
+            name,
+            email,
+            phone,
+            country,
+            state,
+            city,
+            password,
+            type
+        } = req.body;
 
-        if (!email && !phone) return res.status(400).json({ message: 'Email or Phone required' });
+        if (!email && !phone) {
+            return res.status(400).json({
+                message: 'Email or Phone required'
+            });
+        }
 
-        const exists = await Hospital.findOne({ $or: [{ email: email || undefined }, { phone: phone || undefined }] });
-        if (exists) return res.status(400).json({ message: 'Hospital already exists' });
+        if (!password) {
+            return res.status(400).json({
+                message: 'Password is required'
+            });
+        }
+
+        if (!type) {
+            return res.status(400).json({
+                message: 'Hospital type is required'
+            });
+        }
+
+        const query = [];
+
+        if (email) query.push({ email });
+        if (phone) query.push({ phone });
+
+        const exists = await Hospital.findOne({
+            $or: query
+        });
+
+        if (exists) {
+            return res.status(400).json({
+                message: 'Hospital already exists'
+            });
+        }
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newHospital = await Hospital.create({
             name,
-            email: email || undefined,
-            phone: phone || undefined,
-            country, state, city, type,
+            email,
+            phone,
+            country,
+            state,
+            city,
+            type,
             password: hashedPassword,
-            profileStatus: 'Incomplete' // Pehla step complete, documents baaki hain
+            profileStatus: 'Incomplete'
         });
 
         const token = generateToken(newHospital._id);
-        newHospital.token = token;
-        await newHospital.save();
 
-        res.status(201).json({ 
-            success: true, 
+        res.status(201).json({
+            success: true,
             message: 'Registered successfully. Please upload documents.',
             token,
             profileStatus: 'Incomplete'
         });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({
+            message: error.message
+        });
     }
 };
 
