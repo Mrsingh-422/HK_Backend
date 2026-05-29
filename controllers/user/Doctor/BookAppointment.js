@@ -609,7 +609,6 @@ const getMyPrescriptions = async (req, res) => {
 };
 
 // GET /user/doctors/slots/:doctorId?date=2026-03-20
-// GET /user/doctors/slots/:doctorId?date=2026-03-20
 const getAvailableSlots = async (req, res) => {
     try {
         const { doctorId } = req.params;

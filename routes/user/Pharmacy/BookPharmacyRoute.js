@@ -3,7 +3,8 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { pharmacyPrescriptionUploads } = require('../../../middleware/multer');
 const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
-    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder } = require('../../../controllers/user/Pharmacy/BookPharmacy');
+    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder,
+getLatestAddedMedicines } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
 
@@ -49,5 +50,7 @@ router.post('/place-order', pharmacyPrescriptionUploads.fields([{ name: 'prescri
 
 router.get('/order-history',protect('user'),getOrderHistory);
 router.get('/track-order/:orderId',protect('user'),trackOrder);
+
+router.get('/latest-added-medicines',protect('user'),getLatestAddedMedicines);
 
 module.exports = router;

@@ -565,6 +565,7 @@ const cancelBedBooking = async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
+        console.log(error);
     }
 };
 
@@ -733,8 +734,8 @@ const getBedMonthlySchedule = async (req, res) => {
 // 5. GET MY BOOKINGS (Screenshot 20, 21 - Upcoming, Pending, History)
 const getMyHospitalBookings = async (req, res) => {
     try {
-        const { tab, page = 1 } = req.query; // default page 1 rahega
-        const limit = 20; // 20 orders ki limit
+        const { tab, page = 1 } = req.query; 
+        const limit = 20; 
         const skip = (parseInt(page) - 1) * limit;
         
         let query = { 
@@ -750,8 +751,11 @@ const getMyHospitalBookings = async (req, res) => {
             query.status = { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Hospital'] };
         }
 
-        // Total documents count nikalne ke liye
         const totalCount = await Appointment.countDocuments(query);
+
+        // Fetch Global Bed Reschedule Limit dynamically
+        const globalConfig = await BedRescheduleLimit.findOne();
+        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const data = await Appointment.find(query)
             .populate('hospitalId', 'name address hospitalImage')
@@ -771,6 +775,7 @@ const getMyHospitalBookings = async (req, res) => {
         res.json({ 
             success: true, 
             count: data.length,
+            maxRescheduleLimit: maxLimit, // 👈 Flutter dynamically uses this to gray out Cancel buttons
             pagination: {
                 totalCount,
                 totalPages: Math.ceil(totalCount / limit),
@@ -783,6 +788,7 @@ const getMyHospitalBookings = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
 
 // GET FAMILY MEMBERS FOR BUBBLES (Screenshot 24)
 const getBookingProfiles = async (req, res) => {
@@ -801,7 +807,7 @@ const getBookingProfiles = async (req, res) => {
 
 module.exports = {
     getHospitals, getWards, getBedGrid, getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
-    getAvailableBedsForRange, rescheduleBedBooking, getBedMonthlySchedule,
+    getAvailableBedsForRange,cancelBedBooking, rescheduleBedBooking, getBedMonthlySchedule,
     getHospitalCheckoutSummary, finalHospitalBooking, getMyHospitalBookings, getBookingProfiles,
     getHospitalDetails, addReview, updateReview
 };

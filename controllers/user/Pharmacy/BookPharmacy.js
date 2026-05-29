@@ -651,8 +651,29 @@ const getStandardMedicineCatalog = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = 20;
         const skip = (page - 1) * limit;
+        
+        // Extract category and subCategory from query params
+        const { category, subCategory } = req.query;
 
-        const aggregate = await Medicine.aggregate([
+        // 1. Build Dynamic bread_crumb Filter (From getMedicineCategoryDetails logic)
+        let filter = {};
+        if (category) {
+            const breadcrumbRegex = subCategory 
+                ? new RegExp(`^${category}\\s*>\\s*${subCategory}`, 'i')
+                : new RegExp(`^${category}\\s*>`, 'i');
+            filter.bread_crumb = breadcrumbRegex;
+        }
+
+        // 2. Build Pipeline
+        const pipeline = [];
+
+        // Apply category filter if provided
+        if (category) {
+            pipeline.push({ $match: filter });
+        }
+
+        // Maintain the standard catalog logic
+        pipeline.push(
             {
                 $lookup: {
                     from: "medicineinventories", // Collection name
@@ -674,18 +695,29 @@ const getStandardMedicineCatalog = async (req, res) => {
                 }
             },
             { 
-                // Sirf zaroori data bhejna, sellers array ko remove karna
+                // Remove raw sellers list to keep payload clean
                 $project: {
-                    sellers: 0 // Isse sellers ki badi list remove ho jayegi
+                    sellers: 0 
                 }
             },
-            { $sort: { vendorCount: -1, name: 1 } },
-            { $skip: skip },
-            { $limit: limit }
+            { 
+                $sort: { vendorCount: -1, name: 1 } 
+            },
+            { 
+                $skip: skip 
+            },
+            { 
+                $limit: limit 
+            }
+        );
+
+        // Fetch paginated data and dynamic count in parallel for optimization
+        const [aggregate, total] = await Promise.all([
+            Medicine.aggregate(pipeline),
+            Medicine.countDocuments(filter)
         ]);
 
-        const total = await Medicine.countDocuments();
-
+        // Keep the exact same response structure
         res.json({
             success: true,
             total,
@@ -694,7 +726,7 @@ const getStandardMedicineCatalog = async (req, res) => {
             data: aggregate
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -1226,5 +1258,103 @@ const trackOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+const getLatestAddedMedicines = async (req, res) => {
+    try {
+        const latestMeds = await MedicineInventory.aggregate([
+            // 1. Sirf wahi medicines uthayein jo stock mein hain aur available hain
+            {
+                $match: {
+                    is_available: true,
+                    stock_quantity: { $gt: 0 }
+                }
+            },
+            // 2. Latest additions ke hisab se sort karein
+            {
+                $sort: { createdAt: -1 }
+            },
+            // 3. Medicine ID ke base par group karein taaki duplicate medicines repeat na ho (no data overwrite/duplication)
+            {
+                $group: {
+                    _id: "$medicineId",
+                    latestInventoryId: { $first: "$_id" },
+                    latestVendorPrice: { $first: "$vendor_price" },
+                    pharmacyId: { $first: "$pharmacyId" },
+                    latestCreatedAt: { $first: "$createdAt" }
+                }
+            },
+            // 4. Grouping ke baad fir se global latest added order maintain karein
+            {
+                $sort: { latestCreatedAt: -1 }
+            },
+            // 5. Sirf top 10 records limit karein
+            {
+                $limit: 10
+            },
+            // 6. Master Medicine collection se details match karein
+            {
+                $lookup: {
+                    from: "medicines",
+                    localField: "_id",
+                    foreignField: "_id",
+                    as: "details"
+                }
+            },
+            { $unwind: "$details" },
+            // 7. UI ke liye data format aur output fields select karein
+            {
+                $project: {
+                    _id: 0,
+                    medicineId: "$_id",
+                    inventoryId: "$latestInventoryId",
+                    pharmacyId: 1,
+                    name: "$details.name",
+                    image: { $arrayElemAt: ["$details.image_url", 0] },
+                    mrp: "$details.mrp",
+                    bestPrice: "$latestVendorPrice",
+                    discount: {
+                        $cond: {
+                            if: { 
+                                $and: [
+                                    { $ne: ["$details.mrp", null] },
+                                    { $gt: [{ $toDouble: { $ifNull: ["$details.mrp", "0"] } }, 0] }
+                                ]
+                            },
+                            then: {
+                                $round: [
+                                    {
+                                        $multiply: [
+                                            {
+                                                $divide: [
+                                                    { $subtract: [{ $toDouble: { $ifNull: ["$details.mrp", "0"] } }, "$latestVendorPrice"] },
+                                                    { $toDouble: { $ifNull: ["$details.mrp", "1"] } }
+                                                ]
+                                            },
+                                            100
+                                        ]
+                                    },
+                                    0
+                                ]
+                            },
+                            else: 0
+                        }
+                    },
+                    salt: "$details.salt_composition",
+                    addedAt: "$latestCreatedAt"
+                }
+            }
+        ]);
+
+        res.json({
+            success: true,
+            count: latestMeds.length,
+            data: latestMeds
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
-   getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder };
+   getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder,
+getLatestAddedMedicines };
