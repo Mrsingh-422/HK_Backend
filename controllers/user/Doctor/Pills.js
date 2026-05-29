@@ -20,8 +20,10 @@ const addPill = async (req, res) => {
 // endpoint: GET /user/doctor/pills/today
 const getTodaySchedule = async (req, res) => {
     try {
-        const todayStr = moment().format('YYYY-MM-DD');
-        const dayNum = moment().day();
+        // Timezone Fix: Accept date/day index dynamically from Flutter client to avoid server-client gap
+        // Flutter side format: YYYY-MM-DD & dayNum: 0 (Sunday) to 6 (Saturday)
+        const todayStr = req.query.clientDate || moment().format('YYYY-MM-DD');
+        const dayNum = req.query.clientDay !== undefined ? parseInt(req.query.clientDay) : moment().day();
 
         // Pehle wo saari pills nikale jo aaj ke liye active hain
         let pills = await PillReminder.find({
@@ -31,25 +33,29 @@ const getTodaySchedule = async (req, res) => {
             $or: [{ frequency: 'Daily' }, { daysOfWeek: dayNum }]
         });
 
-        // 🚀 Production Logic: Check if we need to reset "isTakenToday"
-        // Agar history me aaj ki date ki entry nahi hai aur isTakenToday true hai, 
-        // to iska matlab naya din shuru ho gaya hai.
+        // Check if we need to reset "isTakenToday"
         for (let pill of pills) {
             let needsSave = false;
             pill.times.forEach(t => {
                 // Check history for this specific pill and time for today
-                const alreadyRecorded = pill.history.some(h => h.date === todayStr && h.time === t.time && h.action === 'Taken');
+                const alreadyRecorded = pill.history.some(
+                    h => h.date === todayStr && h.time === t.time && h.action === 'Taken'
+                );
                 
                 if (!alreadyRecorded && t.isTakenToday) {
                     t.isTakenToday = false; // Reset for new day
                     needsSave = true;
                 }
             });
-            if (needsSave) await pill.save();
+            if (needsSave) {
+                await pill.save();
+            }
         }
 
         res.json({ success: true, data: pills });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 3. RECORD ACTION (Taken / Snooze 10 Min)
@@ -115,15 +121,18 @@ const deletePill = async (req, res) => {
 const updatePillSettings = async (req, res) => {
     try {
         const { times, isReminderOn, notes, endDate } = req.body;
-        
+        const pillId = req.params.id;
+        const userId = req.user.id; // Authenticated user ID
+
         // Frontend se times array me aayega ["09:00 AM", "01:00 PM"]
-        const formattedTimes = times.map(t => ({
+        const formattedTimes = times ? times.map(t => ({
             time: t,
             isTakenToday: false
-        }));
+        })) : [];
 
-        const updatedPill = await PillReminder.findByIdAndUpdate(
-            req.params.id,
+        // Security Fix: findOneAndUpdate with userId check
+        const updatedPill = await PillReminder.findOneAndUpdate(
+            { _id: pillId, userId: userId },
             { 
                 $set: { 
                     times: formattedTimes, 
@@ -132,11 +141,20 @@ const updatePillSettings = async (req, res) => {
                     endDate: endDate === "No end date" ? null : endDate
                 } 
             },
-            { new: true }
+            { new: true } // Returns updated document
         );
 
+        if (!updatedPill) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Pill reminder not found or unauthorized access" 
+            });
+        }
+
         res.json({ success: true, message: "Changes saved", data: updatedPill });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 module.exports = { 
     addPill, 

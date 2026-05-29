@@ -1,10 +1,29 @@
-const Appointment = require('../../../models/Appointment');
-const Doctor = require('../../../models/Doctor');
-const Prescription = require('../../../models/Prescription');
-const mongoose = require('mongoose');
+// controllers/hospital/Doctor/hosDocPanel.js
 
-// --- 1. DASHBOARD CONTROLLER (Screenshot 2) ---
-// Isme real-time counts aayenge jo sirf is doctor se linked hain
+const Doctor = require('../../../models/Doctor');
+const Appointment = require('../../../models/Appointment');
+const Specialization = require('../../../models/Specialization');
+const Prescription = require('../../../models/Prescription');
+const Availability = require('../../../models/Availability'); 
+const Coupon = require('../../../models/Coupon'); 
+const DeliveryCharge = require('../../../models/DeliveryCharge'); 
+const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
+const { getDistance } = require('../../../utils/helpers');
+const moment = require('moment');
+const crypto = require('crypto');
+const Bed = require('../../../models/Bed'); 
+
+// 1. GET ALL SPECIALIZATIONS
+const getSpecializations = async (req, res) => {
+    try {
+        const list = await Specialization.find({ isActive: true });
+        res.json({ success: true, data: list });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// --- 1. DASHBOARD CONTROLLER (Hospital Doctor Panel) ---
 const getDocDashboard = async (req, res) => {
     try {
         const doctorId = req.user.id;
@@ -15,25 +34,24 @@ const getDocDashboard = async (req, res) => {
             active: await Appointment.countDocuments({ doctorId, status: 'In-Progress' })
         };
 
-        // Hospital specific counts for icons
         const emergencyCount = await Appointment.countDocuments({ doctorId, triageLevel: 'Emergency', status: 'In-Progress' });
         const admissionCount = await Appointment.countDocuments({ doctorId, bookingType: 'Admission', status: 'In-Progress' });
-        const transferCount = await Appointment.countDocuments({ doctorId, status: 'Hospital-Pending' }); // Incoming transfers
+        const transferCount = await Appointment.countDocuments({ doctorId, status: 'Hospital-Pending' }); 
 
         res.json({
             success: true,
             welcomeName: req.user.name,
-            dutyStatus: req.user.dutyStatus, // On Duty, Off Duty, etc.
+            dutyStatus: req.user.dutyStatus, 
             stats,
             grid: { emergencyCount, admissionCount, transferCount }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 2. CASE LISTING (Screenshot 11, 13) ---
+// --- 2. CASE LISTING ---
 const getAssignedCases = async (req, res) => {
     try {
-        const { type, status } = req.query; // type: 'Emergency'/'Admission', status: 'In-Progress'/'Completed'
+        const { type, status } = req.query; 
         let query = { doctorId: req.user.id };
 
         if (type === 'Emergency') query.triageLevel = 'Emergency';
@@ -48,7 +66,7 @@ const getAssignedCases = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 3. GET PATIENT FULL DETAILS (Screenshot 11 Patient Details) ---
+// --- 3. GET PATIENT DETAILS ---
 const getPatientDetails = async (req, res) => {
     try {
         const patient = await Appointment.findById(req.params.id)
@@ -61,20 +79,23 @@ const getPatientDetails = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 4. CREATE PRESCRIPTION (Screenshot 18, 19) ---
+// --- 4. CREATE PRESCRIPTION (Fixed Array Safe Map Logic) ---
 const processPrescription = async (req, res) => {
     try {
         const { appointmentId, diagnosis, medicines, advice } = req.body;
-        // medicines format: [{ name: "Insulin", dosage: "1-1-1", duration: "30 days" }]
 
         const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) return res.status(404).json({ message: "Appointment record not found" });
         
+        // FIX: Safe array converter if diagnosis comes as a string from frontend
+        const diagnosisArray = Array.isArray(diagnosis) ? diagnosis : (diagnosis ? [diagnosis] : []);
+
         const prescription = await Prescription.create({
             appointmentId,
             doctorId: req.user.id,
             userId: appointment.userId,
-            diagnosis,
-            medicines,
+            diagnosis: diagnosisArray,
+            medicines, // Maps [{name, dosage, frequency, duration, instructions}] dynamically
             additionalNotes: advice
         });
 
@@ -82,11 +103,7 @@ const processPrescription = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 5. TRANSFER/ASSIGN OTHER DOCTOR (Screenshot 24, 25) ---
-/* 
-   Logic Explanation: Hospital mein Senior doctor ya Roster change hone par 
-   ek doctor dusre ko patient hand-over karta hai. 
-*/
+// --- 5. TRANSFER/ASSIGN OTHER DOCTOR (Fixed Security Role check) ---
 const transferPatient = async (req, res) => {
     try {
         const { appointmentId, toDoctorId, reason, condition, priority } = req.body;
@@ -94,10 +111,24 @@ const transferPatient = async (req, res) => {
         const appointment = await Appointment.findById(appointmentId);
         if (!appointment) return res.status(404).json({ message: "Case not found" });
 
-        // Update Appointment with New Doctor
+        // FIX: Strictly verify target doctor is from the SAME hospital and is a 'hospital-doctor'
+        const targetDoctor = await Doctor.findOne({ 
+            _id: toDoctorId, 
+            hospitalId: req.user.hospitalId, 
+            role: 'hospital-doctor',
+            isActive: true 
+        });
+
+        if (!targetDoctor) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Transfer Failed: Target doctor aapke hospital se associated ya active nahi hai." 
+            });
+        }
+
+        // Update Appointment with New Doctor Details
         appointment.doctorId = toDoctorId;
         appointment.triageLevel = priority || appointment.triageLevel;
-        // Add to history (Professional Audit)
         appointment.status = 'In-Progress'; 
 
         await appointment.save();
@@ -105,13 +136,21 @@ const transferPatient = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 6. GET COLLEAGUES (For Transfer Dropdown) ---
-// Doctor ko sirf apne hospital ke baaki doctors dikhne chahiye
+// --- 6. GET COLLEAGUES (Fixed Privacy data leak) ---
 const getHospitalColleagues = async (req, res) => {
     try {
+        // FIX: Prevent null/undefined matching leaks for independent doctors
+        if (!req.user.hospitalId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Unauthorized: Aap kisi hospital se associated nahi hain." 
+            });
+        }
+
         const doctors = await Doctor.find({ 
             hospitalId: req.user.hospitalId, 
-            _id: { $ne: req.user.id }, // Khud ko chorkar
+            _id: { $ne: req.user.id }, // Self excluded
+            role: 'hospital-doctor',   // Only hospital associated colleagues
             isActive: true 
         }).select('name speciality profileImage dutyStatus');
 
@@ -119,12 +158,13 @@ const getHospitalColleagues = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 7. DISCHARGE SUMMARY (Screenshot 21, 22) ---
+// --- 7. DISCHARGE SUMMARY ---
 const submitDischargeSummary = async (req, res) => {
     try {
         const { appointmentId, diagnosis, investigation, treatmentResult, dischargeNote } = req.body;
 
         const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) return res.status(404).json({ message: "Case not found" });
         
         // Final Summary save logic
         appointment.clinicalSummary = {
@@ -141,12 +181,11 @@ const submitDischargeSummary = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 8. DUTY STATUS TOGGLE (FIXED LOGIC) ---
+// --- 8. DUTY STATUS TOGGLE ---
 const updateDutyStatus = async (req, res) => {
     try {
         const { status } = req.body; // 'On Duty', 'Off Duty', 'On Leave', 'Busy'
         
-        // Hum isActive ko nahi chedenge, sirf dutyStatus badlenge
         const doctor = await Doctor.findByIdAndUpdate(
             req.user.id, 
             { dutyStatus: status }, 
@@ -157,17 +196,15 @@ const updateDutyStatus = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-
-// 1. GET MEDICINE TEMPLATES (Screenshot 18 Dropdown)
+// 9. GET MEDICINE TEMPLATES
 const getMedicineList = async (req, res) => {
     try {
-        // Isme aap Pharmacy model ya global Medicine model use karenge
         const medicines = ["Insulin 40IU/ml", "Paracetamol 500mg", "Telmisartan 40mg"];
         res.json({ success: true, data: medicines });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. UPDATE ADMISSION CLINICAL SUMMARY (Screenshot 22)
+// 10. UPDATE ADMISSION CLINICAL SUMMARY
 const updateClinicalSummary = async (req, res) => {
     try {
         const { appointmentId, chiefComplaint, triagePriority, admissionNote, bloodGroup } = req.body;
@@ -185,6 +222,7 @@ const updateClinicalSummary = async (req, res) => {
 };
 
 module.exports = { 
+    getSpecializations,
     getDocDashboard, getAssignedCases, getPatientDetails, 
     processPrescription, transferPatient, getHospitalColleagues,
     submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary

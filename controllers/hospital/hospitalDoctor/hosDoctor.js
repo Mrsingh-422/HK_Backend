@@ -101,38 +101,90 @@ const deleteHospitalDoctor = async (req, res) => {
 // --- 5. LOGIN HOSPITAL DOCTOR ---
 // Endpoint: POST /api/hospital/doctors/login
 const loginHospitalDoctor = async (req, res) => {
-    try {
-        const { email, phone, password } = req.body;
-        if (!password) return res.status(400).json({ message: 'Please provide a password' });
 
-        let query = email ? { email: email.toLowerCase() } : { phone };
-        const doctor = await Doctor.findOne(query).select('+password');
-        
-        if (!doctor || !(await bcrypt.compare(String(password), doctor.password))) {
-            return res.status(400).json({ message: 'Invalid Credentials' });
-        }
+   try {
 
-        if (!doctor.isActive) return res.status(403).json({ message: 'Account Deactivated' });
+      const { email, password } = req.body;
 
-        let token = null;
-        if (process.env.NODE_ENV === 'development' && doctor.token) {
-            try {
-                jwt.verify(doctor.token, process.env.JWT_SECRET);
-                token = doctor.token;
-            } catch (err) { token = null; }
-        }
+      // CHECK INPUTS
+      if (!email || !password) {
+         return res.status(400).json({
+            success:false,
+            message:"Email and password required"
+         });
+      }
 
-        if (!token) {
-            token = generateToken(doctor._id, 'hospital-doctor');
-            doctor.token = token;
-            await doctor.save();
-        }
+      // FIND DOCTOR
+      const doctor = await Doctor
+         .findOne({ email })
+         .select("+password");
 
-        doctor.password = undefined;
-        res.json({ success: true, token, role: 'hospital-doctor', data: doctor });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+      // DOCTOR EXISTS?
+      if (!doctor) {
+         return res.status(404).json({
+            success:false,
+            message:"Doctor not found"
+         });
+      }
+
+      // ONLY HOSPITAL DOCTOR ALLOWED
+      if (doctor.role !== "hospital-doctor") {
+         return res.status(403).json({
+            success:false,
+            message:"Only hospital doctors can login"
+         });
+      }
+
+      // ACCOUNT ACTIVE?
+      if (!doctor.isActive) {
+         return res.status(403).json({
+            success:false,
+            message:"Account deactivated"
+         });
+      }
+
+      // PASSWORD MATCH
+      const isMatch = await bcrypt.compare(
+         password,
+         doctor.password
+      );
+
+      if (!isMatch) {
+         return res.status(401).json({
+            success:false,
+            message:"Invalid password"
+         });
+      }
+
+      // TOKEN
+      const token = jwt.sign(
+         {
+            id: doctor._id,
+            role: doctor.role
+         },
+         process.env.JWT_SECRET,
+         {
+            expiresIn: "7d"
+         }
+      );
+
+      // SUCCESS
+      res.status(200).json({
+         success:true,
+         message:"Login successful",
+         token,
+         doctor
+      });
+
+   } catch (error) {
+
+      res.status(500).json({
+         success:false,
+         message:error.message
+      });
+
+   }
+
 };
 
 
