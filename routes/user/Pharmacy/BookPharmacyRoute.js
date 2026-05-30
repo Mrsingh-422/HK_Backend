@@ -51,6 +51,6 @@ router.post('/place-order', pharmacyPrescriptionUploads.fields([{ name: 'prescri
 router.get('/order-history',protect('user'),getOrderHistory);
 router.get('/track-order/:orderId',protect('user'),trackOrder);
 
-router.get('/latest-added-medicines',protect('user'),getLatestAddedMedicines);
+router.get('/latest-added-medicines',getLatestAddedMedicines);
 
 module.exports = router;

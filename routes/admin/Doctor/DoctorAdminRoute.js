@@ -8,7 +8,7 @@ const {
 
 // Base URL: /admin/doctor
 
-router.post('/update-reschedule-limit', protect('admin'), updateDocRescheduleLimit);
+router.patch('/update-reschedule-limit', protect('admin'), updateDocRescheduleLimit);
 router.get('/reschedule-limit', protect('admin'), getDocRescheduleLimit);
 
 module.exports = router;

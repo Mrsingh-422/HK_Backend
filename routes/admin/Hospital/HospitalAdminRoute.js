@@ -8,7 +8,7 @@ const {
 
 // Base URL: /admin/hospital
 
-router.post('/update-reschedule-limit', protect('admin'), updateHospitalRescheduleLimit);
+router.patch('/update-reschedule-limit', protect('admin'), updateHospitalRescheduleLimit);
 router.get('/reschedule-limit', protect('admin'), getHospitalRescheduleLimit);
 
 

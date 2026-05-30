@@ -1,7 +1,7 @@
 // controllers/admin/Hospital/HospitalAdmin.js
 const BedRescheduleLimit = require("../../../models/BedRescheduleLimit"); // 👈 Import Global Limit Model
 
-// 1. UPDATE GLOBAL LIMIT (POST API)
+// 1. UPDATE GLOBAL LIMIT (patch API)
 const updateHospitalRescheduleLimit = async (req, res) => {
     try {
         const { limit } = req.body; 

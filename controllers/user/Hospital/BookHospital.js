@@ -6,9 +6,11 @@ const HospitalService = require('../../../models/HospitalService');
 const Coupon = require('../../../models/Coupon');
 const Doctor = require('../../../models/Doctor');
 const User = require('../../../models/User');
-const BedRescheduleLimit = require("../../../models/BedRescheduleLimit"); // 👈 Import Global Model
+const BedRescheduleLimit = require('../../../models/BedRescheduleLimit'); // 👈 Ye import hona zaroori hai!
+
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const Review = require('../../../models/Review');
+const DocReschleduleLimit = require("../../../models/DocRescheduleLimit");
 const { getDistance } = require('../../../utils/helpers');
 const crypto = require('crypto');
 const moment = require('moment');
@@ -512,7 +514,7 @@ const finalHospitalBooking = async (req, res) => {
 
 const cancelBedBooking = async (req, res) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params; 
         const { reason } = req.body;
 
         const appt = await Appointment.findOne({ _id: id, userId: req.user.id });
@@ -527,21 +529,27 @@ const cancelBedBooking = async (req, res) => {
             });
         }
 
-        // FIX: Fetch platform-wide limit from dynamic global model (Fallback is 2)
         const globalConfig = await BedRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const currentCancelCount = appt.cancellationCount || 0;
+        const currentRescheduleCount = appt.rescheduleCount || 0; // 👈 Fetch current reschedule count
 
-        // Validation against Global Limit
-        if (currentCancelCount >= maxLimit) {
+        // 🚀 CRITICAL RULE: Agar reschedule limits exhaust (khatam) ho chuki hain, toh cancellation strictly block hoga
+        if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
-                message: `Cancellation Blocked: Aap is booking ko maximum ${maxLimit} baar hi cancel kar sakte hain. Dynamic global limit reached.`
+                message: `Cancellation Blocked: Aapka reschedule limit (${maxLimit} times) pehle hi khatam ho chuka hai, isliye aap is booking ko ab cancel nahi kar sakte.`
             });
         }
 
-        // Release Inventory
+        if (currentCancelCount >= maxLimit) {
+            return res.status(400).json({
+                success: false,
+                message: `Cancellation Blocked: Aap is booking ko maximum ${maxLimit} baar hi cancel kar sakte hain.`
+            });
+        }
+
         if (appt.bedId) {
             await Bed.findByIdAndUpdate(appt.bedId, { $set: { status: 'Available' } });
             await Ward.findOneAndUpdate(
@@ -558,14 +566,13 @@ const cancelBedBooking = async (req, res) => {
 
         res.json({
             success: true,
-            message: "Booking cancelled successfully. Note: No refund is issued. You can reschedule this booking.",
+            message: "Booking cancelled successfully. Note: No refund is issued. You have the option to reschedule this booking.",
             cancellationLeft: maxLimit - appt.cancellationCount,
             data: appt
         });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
-        console.log(error);
     }
 };
 
@@ -732,10 +739,11 @@ const getBedMonthlySchedule = async (req, res) => {
 
 
 // 5. GET MY BOOKINGS (Screenshot 20, 21 - Upcoming, Pending, History)
+// 5. GET MY BOOKINGS (Strictly mapped with your exact JSON Keys)
 const getMyHospitalBookings = async (req, res) => {
     try {
-        const { tab, page = 1 } = req.query; 
-        const limit = 20; 
+        const { tab, page = 1 } = req.query; // default page 1 rahega
+        const limit = 20; // 20 orders ki limit
         const skip = (parseInt(page) - 1) * limit;
         
         let query = { 
@@ -751,9 +759,10 @@ const getMyHospitalBookings = async (req, res) => {
             query.status = { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Hospital'] };
         }
 
+        // Total documents count nikalne ke liye
         const totalCount = await Appointment.countDocuments(query);
 
-        // Fetch Global Bed Reschedule Limit dynamically
+        // Fetch dynamic global limit set by Super Admin (default fallback is 2)
         const globalConfig = await BedRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
@@ -772,10 +781,11 @@ const getMyHospitalBookings = async (req, res) => {
             .skip(skip)
             .limit(limit);
 
+        // Returning exact old structure with ONLY one extra key "maxRescheduleLimit"
         res.json({ 
             success: true, 
             count: data.length,
-            maxRescheduleLimit: maxLimit, // 👈 Flutter dynamically uses this to gray out Cancel buttons
+            maxRescheduleLimit: maxLimit,   // 👈 Purely added as an extra key at root
             pagination: {
                 totalCount,
                 totalPages: Math.ceil(totalCount / limit),

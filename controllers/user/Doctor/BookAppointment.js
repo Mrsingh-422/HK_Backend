@@ -6,7 +6,7 @@ const Availability = require('../../../models/Availability'); // For slots
 const Coupon = require('../../../models/Coupon'); // For coupons
 const DeliveryCharge = require('../../../models/DeliveryCharge'); // For home visit charges
 const User = require('../../../models/User');
-const DocReschleduleLimit = require("../../../models/DocRescheduleLimit"); 
+const DocRescheduleLimit = require("../../../models/DocRescheduleLimit"); 
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
 const moment = require('moment');
@@ -448,18 +448,26 @@ const getUserAppointments = async (req, res) => {
         const { status } = req.query; 
         const query = { userId: req.user.id };
         
-        // Status filters can include: Pending, Hospital-Pending, Confirmed, etc.
         if (status) query.status = status;
+
+        // Fetch Global Doctor Reschedule Limit dynamically
+        const globalConfig = await DocRescheduleLimit.findOne();
+        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const appointments = await Appointment.find(query)
             .populate('doctorId', 'name speciality profileImage profileStatus role')
             .sort({ appointmentDate: -1 });
 
-        res.json({ success: true, count: appointments.length, data: appointments });
+        res.json({ 
+            success: true, 
+            count: appointments.length, 
+            maxRescheduleLimit: maxLimit, // 👈 Flutter dynamically uses this to gray out Cancel buttons
+            data: appointments 
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-}; 
+};
 
 // 6. CANCEL APPOINTMENT (User Side)
 // endpoint: PATCH /user/doctors/cancel/:id
@@ -471,7 +479,6 @@ const userCancelAppointment = async (req, res) => {
 
         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
         
-        // In-progress ya completed cases cancel nahi ho sakte
         if (['In-Progress', 'Completed'].includes(appointment.status)) {
             return res.status(400).json({ message: "Cannot cancel appointment in its current state" });
         }
@@ -480,21 +487,27 @@ const userCancelAppointment = async (req, res) => {
             return res.status(400).json({ message: "This appointment is already cancelled." });
         }
 
-        // 1. Fetch Dynamic Global limit configuration for Doctors
         const globalConfig = await DocRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const currentCancelCount = appointment.cancellationCount || 0;
+        const currentRescheduleCount = appointment.rescheduleCount || 0; // 👈 Fetch current reschedule count
 
-        // 2. STRICT CHECK: Limit reach hone par cancel block ho jayega
-        if (currentCancelCount >= maxLimit) {
+        // 🚀 CRITICAL RULE: Agar reschedule limits exhaust ho chuki hain, toh cancellation strictly block hoga
+        if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
-                message: `Cancellation Blocked: Aap is appointment ko maximum ${maxLimit} baar hi cancel kar sakte hain. Limit reached.`
+                message: `Cancellation Blocked: Aapka reschedule limit (${maxLimit} times) pehle hi khatam ho chuka hai, isliye aap is appointment ko ab cancel nahi kar sakte.`
             });
         }
 
-        // 3. Status set to Cancelled & increment counter safely
+        if (currentCancelCount >= maxLimit) {
+            return res.status(400).json({
+                success: false,
+                message: `Cancellation Blocked: Aap is appointment ko maximum ${maxLimit} baar hi cancel kar sakte hain.`
+            });
+        }
+
         appointment.status = 'Cancelled-By-User';
         appointment.cancellationCount = currentCancelCount + 1;
         appointment.cancellationDetails = {
@@ -503,7 +516,7 @@ const userCancelAppointment = async (req, res) => {
             cancelledAt: new Date()
         };
         
-        appointment.paymentStatus = 'Refund-Initiated'; // Maintaining original refund pipeline
+        appointment.paymentStatus = 'Refund-Initiated'; 
 
         await appointment.save();
         res.json({ 
@@ -518,6 +531,7 @@ const userCancelAppointment = async (req, res) => {
 };
 
 // --- NEW API: RESCHEDULE DOCTOR APPOINTMENT ---
+// method : POST
 const rescheduleAppointment = async (req, res) => {
     try {
         const { appointmentId, newDate, newTimeSlot } = req.body;

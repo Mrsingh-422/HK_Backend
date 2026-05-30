@@ -84,13 +84,15 @@
             </div>
         </div>
 
-        <!-- Dynamic Summary Grid (Heart rate, steps, blood pressure etc.) -->
+        <!-- Dynamic Summary Grid -->
         <div id="home-summary-grid" class="grid grid-cols-2 gap-5"></div>
 
         <!-- Period Cycle Card -->
         <div class="figma-card p-6 border-pink-100 bg-pink-50/30 flex justify-between items-center group cursor-pointer" onclick="navigateTo('menstrual')">
             <div class="flex items-center gap-5">
-                <div class="bg-pink-500 text-white p-4 rounded-2xl shadow-2xl transition group-hover:rotate-12"><i data-lucide="calendar" class="w-7 h-7"></i></div>
+                <div class="bg-pink-500 text-white p-4 rounded-2xl shadow-2xl transition group-hover:rotate-12">
+                    <i data-lucide="calendar" class="w-7 h-7"></i>
+                </div>
                 <div>
                     <h4 class="font-black text-sm text-pink-900 uppercase tracking-tighter">Period Cycle</h4>
                     <p id="period-summary-txt" class="text-[10px] text-pink-600 font-black uppercase tracking-widest mt-1">Loading Insights...</p>
@@ -102,7 +104,9 @@
         <!-- Pill Reminder Card -->
         <div class="figma-card p-6 border-brand/5 bg-brand-light/20 flex justify-between items-center group cursor-pointer" onclick="navigateTo('pills')">
             <div class="flex items-center gap-5">
-                <div class="bg-brand text-white p-4 rounded-2xl shadow-2xl transition group-hover:rotate-12"><i data-lucide="pill" class="w-7 h-7"></i></div>
+                <div class="bg-brand text-white p-4 rounded-2xl shadow-2xl transition group-hover:rotate-12">
+                    <i data-lucide="pill" class="w-7 h-7"></i>
+                </div>
                 <div>
                     <h4 class="font-black text-sm text-gray-800 uppercase tracking-tighter">Pill Reminder</h4>
                     <p id="pill-summary-count" class="text-[10px] text-brand font-black uppercase tracking-widest mt-1">Checking Schedule...</p>
@@ -217,21 +221,100 @@
     </div>
 
     <!-- 4. MENSTRUAL SCREEN -->
-    <div id="menstrual-screen" class="screen p-8 space-y-8">
-        <h2 class="text-3xl font-black tracking-tighter text-gray-800">Period Tracker</h2>
-        <div id="menstrual-insights-ui" class="figma-card p-8 bg-pink-500 text-white border-none shadow-xl shadow-pink-200">
-            <div id="menstrual-text-content" class="text-xl font-bold">Syncing cycle...</div>
+    <div id="menstrual-screen" class="screen p-0 space-y-6">
+        <!-- Pink Header Banner -->
+        <div class="bg-gradient-to-r from-pink-500 to-pink-600 text-white rounded-b-[40px] px-6 pt-10 pb-8 relative shadow-lg shadow-pink-200">
+            <div class="flex items-center gap-4">
+                <div class="w-14 h-14 bg-white/20 backdrop-blur-md rounded-3xl flex items-center justify-center text-white border border-white/10 shadow-inner">
+                    <svg class="w-8 h-8 fill-white" viewBox="0 0 24 24">
+                        <path d="M12 2a4 4 0 0 0-4 4 4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0 4-4 4 4 0 0 0-4-4 4 4 0 0 0-4-4zm0 2c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm-4 4c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm8 0c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm-8 4c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm8 0c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm-4 4c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-2xl font-black tracking-tight leading-none">Period Cycle</h2>
+                    <p id="cycle-length-header" class="text-[11px] font-bold text-white/80 uppercase tracking-widest mt-1.5">Cycle length: -- days</p>
+                </div>
+            </div>
         </div>
-        <div class="figma-card p-8 space-y-6">
-            <div class="space-y-2">
-                <label class="text-[10px] font-black uppercase text-gray-400">Last Period Start</label>
-                <input type="date" id="last-period-date" class="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold">
+
+        <!-- Navigation Tabs Bar -->
+        <div class="border-b border-gray-100 px-6">
+            <div class="flex justify-between items-center">
+                <button id="m-trigger-overview" onclick="switchMenstrualTab('overview')" class="m-tab-trigger pb-3 text-sm font-semibold text-gray-400 border-b-2 border-transparent transition">Overview</button>
+                <button id="m-trigger-calendar" onclick="switchMenstrualTab('calendar')" class="m-tab-trigger pb-3 text-sm font-semibold text-gray-400 border-b-2 border-transparent transition">Calendar</button>
+                <button id="m-trigger-history" onclick="switchMenstrualTab('history')" class="m-tab-trigger pb-3 text-sm font-semibold text-gray-400 border-b-2 border-transparent transition">History</button>
             </div>
-            <div class="space-y-2">
-                <label class="text-[10px] font-black uppercase text-gray-400">Cycle Length (Days)</label>
-                <input type="number" id="cycle-len" placeholder="e.g. 28" class="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold">
+        </div>
+
+        <!-- A. Overview Tab -->
+        <div id="m-tab-overview" class="m-sub-tab p-6 space-y-6 hidden">
+            <div class="figma-card p-6 border-pink-100 bg-pink-50/20 flex items-center gap-5">
+                <div class="relative w-24 h-24 rounded-full border-4 border-pink-400 flex flex-col items-center justify-center bg-white shadow-md shadow-pink-100 flex-shrink-0">
+                    <span id="m-days-left-val" class="font-black text-2xl text-pink-600 leading-none">--</span>
+                    <span class="text-[8px] text-pink-400 font-bold uppercase mt-1">days left</span>
+                </div>
+                <div class="space-y-1">
+                    <h4 class="font-black text-sm text-gray-400 uppercase tracking-wide">Next Period Expected</h4>
+                    <p id="m-next-expected-date" class="text-xl font-black text-pink-500 tracking-tight">--</p>
+                    <p id="m-last-period-date-lbl" class="text-[10px] text-gray-400 font-bold uppercase">Last Period: --</p>
+                </div>
             </div>
-            <button onclick="savePeriodData()" class="btn-brand w-full py-5 bg-pink-600 shadow-pink-200">Update Health Cycle</button>
+
+            <div class="flex gap-3">
+                <span class="flex items-center gap-1 px-4 py-2 bg-blue-50 text-blue-600 border border-blue-100 font-black text-[10px] uppercase rounded-full">
+                    <i data-lucide="droplet" class="w-3.5 h-3.5"></i> <span id="m-avg-cycle-tag">Avg cycle: -- days</span>
+                </span>
+                <span class="flex items-center gap-1 px-4 py-2 bg-green-50 text-green-600 border border-green-100 font-black text-[10px] uppercase rounded-full">
+                    <i data-lucide="check-circle" class="w-3.5 h-3.5"></i> <span id="m-regularity-tag">Regular cycle</span>
+                </span>
+            </div>
+
+            <div class="space-y-4">
+                <h3 class="font-black text-gray-700 text-sm uppercase tracking-wide">Log new Period start date</h3>
+                <div class="flex gap-3 items-center">
+                    <div class="relative flex-1 bg-gray-900 border border-gray-800 rounded-3xl px-5 py-4 text-white flex items-center justify-between">
+                        <input type="date" id="m-start-date-picker" class="bg-transparent border-none text-white outline-none font-bold text-sm w-full outline-none select-none">
+                    </div>
+                    <button onclick="logPeriodFromOverview()" class="bg-pink-500 hover:bg-pink-600 text-white px-8 py-4 rounded-3xl font-black text-sm transition">Add</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- B. Calendar Tab -->
+        <div id="m-tab-calendar" class="m-sub-tab p-6 space-y-6 hidden">
+            <div class="figma-card p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <button onclick="prevMenstrualMonth()" class="p-3 bg-gray-50 border rounded-xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-4 h-4 text-gray-500"></i></button>
+                    <h3 id="m-calendar-title" class="font-black text-base text-gray-800">--</h3>
+                    <button onclick="nextMenstrualMonth()" class="p-3 bg-gray-50 border rounded-xl hover:bg-gray-100 transition"><i data-lucide="chevron-right" class="w-4 h-4 text-gray-500"></i></button>
+                </div>
+
+                <div class="grid grid-cols-7 text-center text-[9px] font-black text-gray-400 uppercase tracking-widest mb-4">
+                    <div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div><div>Sun</div>
+                </div>
+
+                <div id="m-calendar-grid" class="grid grid-cols-7 gap-y-2 text-center"></div>
+            </div>
+
+            <!-- Dynamic Selected Day Operations Panel (Edit / Action Portal) -->
+            <div id="m-calendar-action-panel" class="hidden figma-card p-5 border border-pink-100 bg-pink-50/10 space-y-4 transition">
+                <div class="flex justify-between items-center">
+                    <h4 class="font-black text-xs text-gray-700 uppercase tracking-wide">Manage Selected Log</h4>
+                    <span id="m-selected-day-lbl" class="text-[10px] bg-white border border-pink-200 px-3 py-1 rounded-lg font-black text-pink-500 uppercase">--</span>
+                </div>
+                
+                <div id="m-calendar-actions-container" class="space-y-4"></div>
+            </div>
+
+            <div class="flex gap-4 justify-center items-center px-2">
+                <span class="flex items-center gap-1.5 text-[8px] font-black uppercase text-pink-500"><div class="w-2.5 h-2.5 bg-pink-500 rounded-full"></div> Logged Period</span>
+                <span class="flex items-center gap-1.5 text-[8px] font-black uppercase text-pink-400"><div class="w-2.5 h-2.5 border-2 border-pink-500 rounded-full"></div> Predicted Cycle</span>
+            </div>
+        </div>
+
+        <!-- C. History Tab -->
+        <div id="m-tab-history" class="m-sub-tab p-6 space-y-4 hidden">
+            <div id="m-history-list" class="space-y-4"></div>
         </div>
     </div>
 
@@ -250,6 +333,10 @@
     let MASTER_HK_STORE = {
         token: localStorage.getItem('token') || ""
     };
+
+    let currentMenstrualTab = 'overview';
+    let menstrualCalendarMonth = moment().format('YYYY-MM'); // e.g. "2025-05"
+    let mSelectedDate = null; // Currently clicked date inside calendar
 
     // --- CORE API HANDLER ---
     async function apiRequest(path, method = 'GET', data = null) {
@@ -342,39 +429,252 @@
             }).join('');
         }
         
-        syncMenstrual();
+        syncMenstrualSummary();
         lucide.createIcons();
     }
 
-    // --- 2. PERIOD TRACKER ACTIONS ---
-    async function syncMenstrual() {
+    async function syncMenstrualSummary() {
         const res = await apiRequest('/user/doctor/menstrual/insights');
         if(res.success && res.data) {
-            document.getElementById('menstrual-text-content').innerHTML = `Next Cycle Expected In <span class="text-3xl block mt-2">${res.data.daysUntilNext} DAYS</span>`;
             document.getElementById('period-summary-txt').innerText = `Next in ${res.data.daysUntilNext} days`;
         }
     }
 
-    async function savePeriodData() {
-        const lastPeriodDate = document.getElementById('last-period-date').value;
-        const cycleLength = parseInt(document.getElementById('cycle-len').value);
-        
-        if(!lastPeriodDate || isNaN(cycleLength)) {
-            alert("Kripya valid tareekh aur cycle length select karein");
+    // --- 2. PERIOD TRACKER ACTIONS ---
+    async function syncMenstrual() {
+        document.querySelectorAll('.m-sub-tab').forEach(el => el.classList.add('hidden'));
+        document.getElementById(`m-tab-${currentMenstrualTab}`).classList.remove('hidden');
+
+        document.querySelectorAll('.m-tab-trigger').forEach(b => {
+            b.className = 'm-tab-trigger pb-3 text-sm font-semibold text-gray-400 border-b-2 border-transparent transition';
+        });
+        const activeTrigger = document.getElementById(`m-trigger-${currentMenstrualTab}`);
+        if(activeTrigger) {
+            activeTrigger.className = 'm-tab-trigger pb-3 text-sm font-black text-pink-500 border-b-2 border-pink-500 transition';
+        }
+
+        // Hide edit/action portal panel when shifting tabs
+        document.getElementById('m-calendar-action-panel').classList.add('hidden');
+        mSelectedDate = null;
+
+        if(currentMenstrualTab === 'overview') {
+            const res = await apiRequest('/user/doctor/menstrual/insights');
+            if(res.success && res.data) {
+                document.getElementById('cycle-length-header').innerText = `Cycle length: ${res.data.cycleLength} days`;
+                document.getElementById('m-days-left-val').innerText = res.data.daysUntilNext;
+                document.getElementById('m-next-expected-date').innerText = moment(res.data.nextPeriodDate).format('MMM DD, YYYY');
+                document.getElementById('m-last-period-date-lbl').innerText = `Last Period: ${moment(res.data.lastPeriodDate).format('MMM DD')}`;
+                document.getElementById('m-avg-cycle-tag').innerText = `Avg cycle: ${res.data.cycleLength} days`;
+                document.getElementById('m-regularity-tag').innerText = res.data.regularity || "Regular cycle";
+            }
+        } else if(currentMenstrualTab === 'calendar') {
+            await renderMenstrualCalendar();
+        } else if(currentMenstrualTab === 'history') {
+            await renderMenstrualHistory();
+        }
+        lucide.createIcons();
+    }
+
+    function switchMenstrualTab(tabName) {
+        currentMenstrualTab = tabName;
+        syncMenstrual();
+    }
+
+    async function logPeriodFromOverview() {
+        const selectedDate = document.getElementById('m-start-date-picker').value;
+        if(!selectedDate) {
+            alert("Kripya log date select karein!");
             return;
         }
 
-        const res = await apiRequest('/user/doctor/menstrual/update', 'POST', {
-            lastPeriodDate,
-            cycleLength,
-            periodDuration: 5 
+        const res = await apiRequest('/user/doctor/menstrual/log-period', 'POST', {
+            startDate: selectedDate
         });
 
         if(res.success) {
-            alert("Period cycle saved and supplements activated!");
+            alert("New cycle logged successfully!");
             syncMenstrual();
         } else {
-            alert("Error: " + res.message);
+            alert(res.message || "Something went wrong.");
+        }
+    }
+
+    // Generate Dynamic Month Days, Empty Paddings and Highlights
+    async function renderMenstrualCalendar() {
+        const res = await apiRequest(`/user/doctor/menstrual/calendar?month=${menstrualCalendarMonth}`);
+        if(res.success) {
+            document.getElementById('m-calendar-title').innerText = moment(menstrualCalendarMonth, 'YYYY-MM').format('MMMM YYYY');
+            
+            const recordedDays = res.recordedPeriodDays || [];
+            const predictedDays = res.predictedPeriodDays || [];
+
+            const startOfMonth = moment(menstrualCalendarMonth, 'YYYY-MM').startOf('month');
+            const daysInMonth = startOfMonth.daysInMonth();
+            
+            let rawDay = startOfMonth.day();
+            let paddingDays = rawDay === 0 ? 6 : rawDay - 1;
+
+            let gridHtml = '';
+
+            for(let i = 0; i < paddingDays; i++) {
+                gridHtml += `<div class="aspect-square"></div>`;
+            }
+
+            for(let day = 1; day <= daysInMonth; day++) {
+                const dateStr = moment(startOfMonth).date(day).format('YYYY-MM-DD');
+                
+                // Track highlights class logic
+                let isRecorded = recordedDays.includes(dateStr);
+                let isPredicted = predictedDays.includes(dateStr);
+                let highlightType = isRecorded ? 'recorded' : (isPredicted ? 'predicted' : 'none');
+
+                let dayClass = 'aspect-square flex flex-col items-center justify-center text-xs font-bold rounded-full w-9 h-9 mx-auto transition cursor-pointer ';
+
+                if(isRecorded) {
+                    dayClass += ' bg-pink-500 text-white shadow-md shadow-pink-100';
+                } else if(isPredicted) {
+                    dayClass += ' border-2 border-pink-500 text-pink-500';
+                } else {
+                    dayClass += ' text-gray-800 hover:bg-gray-100';
+                }
+
+                gridHtml += `
+                    <div class="flex items-center justify-center py-1">
+                        <div onclick="clickCalendarDay('${dateStr}', '${highlightType}')" class="${dayClass}">${day}</div>
+                    </div>
+                `;
+            }
+
+            document.getElementById('m-calendar-grid').innerHTML = gridHtml;
+        }
+    }
+
+    function prevMenstrualMonth() {
+        menstrualCalendarMonth = moment(menstrualCalendarMonth, 'YYYY-MM').subtract(1, 'months').format('YYYY-MM');
+        renderMenstrualCalendar();
+    }
+
+    function nextMenstrualMonth() {
+        menstrualCalendarMonth = moment(menstrualCalendarMonth, 'YYYY-MM').add(1, 'months').format('YYYY-MM');
+        renderMenstrualCalendar();
+    }
+
+    // Dynamic Edit / Change dates portal interface selection handler
+    function clickCalendarDay(dateStr, highlightType) {
+        mSelectedDate = dateStr;
+        const panel = document.getElementById('m-calendar-action-panel');
+        const label = document.getElementById('m-selected-day-lbl');
+        const container = document.getElementById('m-calendar-actions-container');
+
+        panel.classList.remove('hidden');
+        label.innerText = moment(dateStr).format('DD MMM, YYYY');
+
+        if(highlightType === 'recorded') {
+            container.innerHTML = `
+                <p class="text-[10px] text-pink-600 font-bold uppercase tracking-wide">This day is logged as bleeding period. Choose operation:</p>
+                <div class="flex gap-2">
+                    <button onclick="deleteSelectedPeriodLog()" class="flex-1 py-3.5 bg-red-500 text-white font-bold text-xs rounded-2xl shadow-md">Delete Log</button>
+                    <button onclick="showCalendarEditForm()" class="flex-1 py-3.5 bg-gray-900 text-white font-bold text-xs rounded-2xl shadow-md">Edit Date</button>
+                </div>
+                <div id="m-calendar-edit-form" class="hidden space-y-3 pt-2">
+                    <label class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Select New Start Date</label>
+                    <input type="date" id="m-calendar-new-start-date" class="w-full p-3 border rounded-xl font-bold text-xs outline-none" value="${dateStr}">
+                    <button onclick="applyPeriodEdit()" class="btn-brand w-full py-3 text-xs">Save Changes</button>
+                </div>
+            `;
+        } else {
+            container.innerHTML = `
+                <p class="text-[10px] text-gray-400 font-bold uppercase tracking-wide">No period logged for this date. Create a new log starting here?</p>
+                <button onclick="logPeriodFromCalendar()" class="btn-brand w-full py-4 text-xs font-black">🌸 Log Period Start Here</button>
+            `;
+        }
+    }
+
+    function showCalendarEditForm() {
+        document.getElementById('m-calendar-edit-form').classList.remove('hidden');
+    }
+
+    async function deleteSelectedPeriodLog() {
+        if(!confirm("Kripya confirm karein: Kya aap is period entry ko delete karna chahte hain?")) return;
+        const res = await apiRequest('/user/doctor/menstrual/delete-period', 'DELETE', {
+            startDate: mSelectedDate
+        });
+
+        if(res.success) {
+            alert("Entry successfully deleted!");
+            document.getElementById('m-calendar-action-panel').classList.add('hidden');
+            syncMenstrual();
+        } else {
+            alert(res.message || "Failed to delete log");
+        }
+    }
+
+    async function applyPeriodEdit() {
+        const newStart = document.getElementById('m-calendar-new-start-date').value;
+        if(!newStart) {
+            alert("Kripya valid date choose karein");
+            return;
+        }
+
+        const res = await apiRequest('/user/doctor/menstrual/edit-period', 'PUT', {
+            oldStartDate: mSelectedDate,
+            newStartDate: newStart
+        });
+
+        if(res.success) {
+            alert("Log updated successfully!");
+            document.getElementById('m-calendar-action-panel').classList.add('hidden');
+            syncMenstrual();
+        } else {
+            alert(res.message || "Edit operation failed");
+        }
+    }
+
+    async function logPeriodFromCalendar() {
+        const res = await apiRequest('/user/doctor/menstrual/log-period', 'POST', {
+            startDate: mSelectedDate
+        });
+
+        if(res.success) {
+            alert("Period start date registered successfully!");
+            document.getElementById('m-calendar-action-panel').classList.add('hidden');
+            syncMenstrual();
+        } else {
+            alert(res.message || "Process failed");
+        }
+    }
+
+    // history list loader with dynamic Duration fallback metrics
+    async function renderMenstrualHistory() {
+        const res = await apiRequest('/user/doctor/menstrual/history');
+        if(res.success) {
+            const container = document.getElementById('m-history-list');
+            if(!res.data || res.data.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-10 bg-gray-50 rounded-3xl p-6">
+                        <p class="text-gray-400 font-bold text-xs uppercase">No logged history found</p>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = res.data.map(item => {
+                    // Fallback to resolve undefined durations calculation
+                    const calculatedDuration = item.duration || (item.endDate ? moment(item.endDate).diff(moment(item.startDate), 'days') + 1 : 5);
+                    
+                    return `
+                        <div class="figma-card p-5 border border-pink-100 bg-pink-50/10 flex items-center gap-4 transition hover:shadow-lg">
+                            <div class="w-3.5 h-3.5 rounded-full bg-pink-500 flex-shrink-0 animate-pulse"></div>
+                            <div>
+                                <h4 class="font-black text-sm text-gray-800 uppercase tracking-tight">
+                                    ${moment(item.startDate).format('MMMM DD, YYYY')}
+                                </h4>
+                                <p class="text-[10px] text-pink-600 font-black uppercase tracking-wider mt-1">
+                                    ${calculatedDuration} days duration
+                                </p>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
         }
     }
 
@@ -589,6 +889,8 @@
         lucide.createIcons();
     }
 
+    // Default configuration
+    document.getElementById('m-start-date-picker').value = moment().format('YYYY-MM-DD');
     lucide.createIcons();
 </script>
 </body>

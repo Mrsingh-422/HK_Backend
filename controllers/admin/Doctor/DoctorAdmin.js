@@ -1,5 +1,5 @@
 const DocRescheduleLimit = require("../../../models/DocRescheduleLimit"); // 👈 ADD THIS AT THE TOP
-// --- UPDATE DOCTOR GLOBAL LIMIT (POST API) ---
+// --- UPDATE DOCTOR GLOBAL LIMIT (patch API) ---
 const updateDocRescheduleLimit = async (req, res) => {
     try {
         const { limit } = req.body; 
