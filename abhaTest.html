@@ -62,7 +62,7 @@
             </div>
         </div>
         <div class="flex gap-2">
-            <input id="sync-token-input" type="text" placeholder="JWT Token from LocalStorage" class="flex-1 bg-gray-50 border rounded-2xl p-4 text-[10px] font-bold outline-none focus:ring-2 focus:ring-brand/20 transition">
+            <input id="sync-token-input" type="text" placeholder="JWT Token from LocalStorage" class="flex-1 bg-gray-50 border rounded-2xl p-4 text-[10px] font-bold outline-none focus:ring-2 focus:ring-brand/20 transition text-gray-800 font-bold">
             <button onclick="igniteSync()" class="bg-black text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest">Connect</button>
         </div>
     </header>
@@ -134,90 +134,604 @@
         </div>
     </div>
 
-    <!-- 2. TRACKER / STATS SCREEN -->
-    <div id="tracker-screen" class="screen p-6 space-y-6">
-        <div class="flex justify-between items-center">
-            <h2 class="text-2xl font-black">Stats & Calories</h2>
-            <button onclick="toggleQuickMetricForm()" class="bg-brand text-white px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-wider">+ Log Parameter</button>
-        </div>
-
-        <!-- Hidden Quick Log Metric & Meal Form -->
-        <div id="quick-metric-form-panel" class="hidden figma-card p-6 border-brand bg-brand-light/10 space-y-4">
-            <h4 class="font-black text-xs uppercase text-gray-500">Log Health Parameter</h4>
-            <div class="grid grid-cols-2 gap-3">
-                <select id="metric-type-input" class="p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-                    <option value="Heart rate">Heart rate</option>
-                    <option value="Blood Pressure">Blood Pressure</option>
-                    <option value="Weight">Weight</option>
-                    <option value="Sugar">Sugar</option>
-                    <option value="Steps">Steps</option>
-                </select>
-                <input id="metric-value-input" type="text" placeholder="Value (e.g. 72 or 120/80)" class="p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-            </div>
-            <input id="metric-notes-input" type="text" placeholder="Add Note" class="w-full p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-            <button onclick="submitNewMetric()" class="btn-brand w-full py-3.5 text-xs">Save Parameter</button>
-
-            <hr class="border-gray-100 my-4">
-
-            <!-- Log Meal Section -->
-            <h4 class="font-black text-xs uppercase text-orange-500">Log A Meal</h4>
-            <div class="grid grid-cols-2 gap-3">
-                <select id="meal-type-input" class="p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-                    <option value="Breakfast">Breakfast</option>
-                    <option value="Lunch">Lunch</option>
-                    <option value="Dinner">Dinner</option>
-                    <option value="Snacks">Snacks</option>
-                </select>
-                <input id="meal-kcal-input" type="number" placeholder="Calories (kcal)" class="p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-            </div>
-            <input id="meal-item-name" type="text" placeholder="Food Name (e.g., Apple)" class="w-full p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-            <button onclick="submitNewMeal()" class="w-full py-3.5 bg-orange-500 text-white font-black text-xs rounded-2xl shadow-lg">Log Food Intake</button>
-        </div>
-
-        <div id="calorie-master-ui"></div>
+    <!-- 2. TRACKER SCREEN (Screenshot 1-7 Dynamic Views) -->
+    <div id="tracker-screen" class="screen p-0 space-y-6">
         
-        <!-- Weekly Health Stats Summary -->
-        <div id="metric-stats-summary" class="figma-card p-5 bg-gray-50 border space-y-3">
+        <!-- SUB SCREEN A: OVERVIEW BOARD -->
+        <div id="tracker-view-main" class="tracker-view p-6 space-y-6">
             <div class="flex justify-between items-center">
-                <h4 class="font-black text-[10px] text-gray-400 uppercase tracking-widest">Heart Rate (7-Day Stats)</h4>
-                <span class="text-[8px] bg-white border px-2.5 py-1 rounded-lg font-black text-brand uppercase">Weekly</span>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Health Tracker</h2>
+                <button onclick="switchTrackerSubview('add-data')" class="w-12 h-12 bg-gray-50 border rounded-full flex items-center justify-center hover:bg-gray-100 transition shadow-sm">
+                    <i data-lucide="plus" class="w-6 h-6 text-gray-700"></i>
+                </button>
             </div>
-            <div class="grid grid-cols-3 gap-3 text-center">
-                <div class="bg-white p-3 rounded-2xl border"><p class="text-[8px] font-bold text-gray-400 uppercase">Min</p><p id="stat-min" class="text-lg font-black text-gray-800">--</p></div>
-                <div class="bg-white p-3 rounded-2xl border"><p class="text-[8px] font-bold text-gray-400 uppercase">Avg</p><p id="stat-avg" class="text-lg font-black text-brand">--</p></div>
-                <div class="bg-white p-3 rounded-2xl border"><p class="text-[8px] font-bold text-gray-400 uppercase">Max</p><p id="stat-max" class="text-lg font-black text-gray-800">--</p></div>
+
+            <!-- Progress Meter -->
+            <div class="figma-card p-6 bg-gradient-to-br from-emerald-50/20 to-teal-50/10 border border-emerald-100/50 flex items-center gap-5">
+                <div class="relative w-24 h-24 rounded-full border-4 border-brand flex flex-col items-center justify-center bg-white shadow-md shadow-brand/10 flex-shrink-0">
+                    <span id="tracker-main-healthscore" class="font-black text-2xl text-brand leading-none">82%</span>
+                    <span class="text-[7px] text-gray-400 font-bold uppercase mt-1 leading-none">Health score</span>
+                </div>
+                <div class="space-y-1">
+                    <h3 class="font-black text-sm text-gray-800 tracking-tight leading-none">Weekly Progress</h3>
+                    <p class="text-[11px] text-gray-400 font-medium">You are doing better than last week.</p>
+                    <p id="tracker-main-weeklyprogress" class="text-xs font-black text-brand uppercase tracking-wider">12% vs last week</p>
+                </div>
+            </div>
+
+            <div class="flex gap-2 p-1.5 bg-gray-100 rounded-2xl">
+                <button onclick="changeTrackerPeriod('weekly', this)" class="tracker-period-btn flex-1 py-2.5 font-black text-[10px] uppercase rounded-xl bg-white shadow-sm">Daily</button>
+                <button onclick="changeTrackerPeriod('weekly', this)" class="tracker-period-btn flex-1 py-2.5 font-black text-[10px] uppercase rounded-xl text-gray-400">Weekly</button>
+                <button onclick="changeTrackerPeriod('monthly', this)" class="tracker-period-btn flex-1 py-2.5 font-black text-[10px] uppercase rounded-xl text-gray-400">Monthly</button>
+            </div>
+
+            <!-- Key Metrics Grid -->
+            <div class="space-y-3">
+                <h3 class="font-black text-base text-gray-800 tracking-tight px-1">Key metrics</h3>
+                <div id="tracker-main-metrics-grid" class="grid grid-cols-2 gap-4"></div>
+            </div>
+
+            <!-- Today's activity list -->
+            <div class="figma-card p-6 border bg-amber-50/10 space-y-4">
+                <div>
+                    <h3 class="font-black text-base text-gray-800 tracking-tight">Today's activity</h3>
+                    <p class="text-[9px] text-gray-400 font-bold uppercase mt-1 tracking-widest">Auto-synced from your tracker</p>
+                </div>
+                <div class="space-y-3 pt-2">
+                    <div class="flex justify-between items-baseline py-1 border-b border-dashed border-gray-100">
+                        <span class="text-xs font-semibold text-gray-400 uppercase">Steps Walked</span>
+                        <span id="tracker-activity-steps" class="text-xs font-black text-gray-800">-- steps</span>
+                    </div>
+                    <div class="flex justify-between items-baseline py-1 border-b border-dashed border-gray-100">
+                        <span class="text-xs font-semibold text-gray-400 uppercase">Calories burned</span>
+                        <span id="tracker-activity-calories" class="text-xs font-black text-gray-800">-- kcal</span>
+                    </div>
+                    <div class="flex justify-between items-baseline py-1 border-b border-dashed border-gray-100">
+                        <span class="text-xs font-semibold text-gray-400 uppercase">Average heart rate</span>
+                        <span id="tracker-activity-heartrate" class="text-xs font-black text-gray-800">-- bpm</span>
+                    </div>
+                    <div class="flex justify-between items-baseline py-1">
+                        <span class="text-xs font-semibold text-gray-400 uppercase">Active minutes</span>
+                        <span id="tracker-activity-minutes" class="text-xs font-black text-gray-800">-- min</span>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <div id="hist-list-ui"></div>
+        <!-- SUB SCREEN B: HEART RATE DETAIL PROFILE -->
+        <div id="tracker-view-heart-rate" class="tracker-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchTrackerSubview('main')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Heart rate</h2>
+            </div>
+
+            <!-- Heart rate dynamic Today Card -->
+            <div class="figma-card p-6 bg-rose-50/10 border border-rose-100/50 space-y-4">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h4 class="font-black text-[10px] text-gray-400 uppercase tracking-widest mb-1.5">Today</h4>
+                        <p class="text-xs font-bold text-gray-500">Average across all readings</p>
+                    </div>
+                    <div class="p-3 bg-rose-100 text-rose-500 rounded-2xl"><i data-lucide="activity" class="w-5 h-5"></i></div>
+                </div>
+                <div class="flex justify-between items-center">
+                    <p class="text-3xl font-black text-gray-800 tracking-tight"><span id="hr-detail-today-avg">72</span> <span class="text-xs text-gray-400 font-bold uppercase">bpm</span></p>
+                    <div class="flex gap-1.5">
+                        <span id="hr-detail-today-min" class="bg-white border text-gray-700 font-bold text-[9px] uppercase px-3 py-1.5 rounded-xl">Min --</span>
+                        <span id="hr-detail-today-max" class="bg-white border text-gray-700 font-bold text-[9px] uppercase px-3 py-1.5 rounded-xl">Max --</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trend graph placeholder -->
+            <div class="figma-card p-6 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h3 class="font-black text-sm text-gray-800 tracking-wide uppercase">Heart rate trend</h3>
+                    <div class="flex gap-1 bg-gray-100 p-1 rounded-xl text-[8px] font-black uppercase">
+                        <span class="bg-white px-2.5 py-1 rounded-md text-brand">24h</span>
+                        <span class="px-2.5 py-1 rounded-md text-gray-400">7d</span>
+                        <span class="px-2.5 py-1 rounded-md text-gray-400">30d</span>
+                    </div>
+                </div>
+                <!-- Mock graph border -->
+                <div class="border-2 border-dashed border-brand/20 rounded-[28px] h-36 flex items-center justify-center text-xs font-bold text-gray-400 bg-brand-light/10">
+                    Heart rate logs diagram graph
+                </div>
+                <div class="flex justify-between text-[8px] font-black text-gray-400 uppercase tracking-wider pt-1">
+                    <span>Resting 60-80 bpm</span>
+                    <span>Target zone 110-140 bpm</span>
+                </div>
+            </div>
+
+            <!-- Heart rate History list -->
+            <div class="space-y-3.5">
+                <h3 class="font-black text-base text-gray-800 tracking-tight px-1">History</h3>
+                <p class="text-[10px] text-gray-400 font-bold uppercase px-1 -mt-1">Recent heart rate readings</p>
+                <div id="hr-history-list" class="space-y-3.5"></div>
+            </div>
+        </div>
+
+        <!-- SUB SCREEN C: BLOOD PRESSURE TRACKER PROFILE -->
+        <div id="tracker-view-bp" class="tracker-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchTrackerSubview('main')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">BP Tracker</h2>
+            </div>
+
+            <!-- Blood Pressure Card Banner -->
+            <div class="rounded-[32px] p-6 bg-gradient-to-r from-red-500 to-rose-600 text-white text-center space-y-1 shadow-lg shadow-red-200">
+                <h4 class="text-[10px] font-black text-white/80 uppercase tracking-widest">Blood Pressure</h4>
+                <p class="text-3xl font-black tracking-tight" id="bp-detail-banner-value">-- / -- <span class="text-xs uppercase text-white/70 font-bold">mmHg</span></p>
+                <span class="bg-white/20 backdrop-blur-md text-[9px] font-black px-4 py-1 rounded-full uppercase inline-block border border-white/10" id="bp-detail-banner-status">Normal</span>
+            </div>
+
+            <!-- BP Weekly graph -->
+            <div class="figma-card p-6 space-y-4">
+                <h3 class="font-black text-sm text-gray-800 tracking-wide uppercase">Weekly Activity</h3>
+                <div class="border-2 border-dashed border-red-500/20 rounded-[28px] h-32 flex items-center justify-center text-xs font-bold text-gray-400 bg-red-50/10">
+                    BP fluctuations weekly curve line
+                </div>
+                <div class="grid grid-cols-6 text-center text-[8px] font-black text-gray-400 uppercase tracking-widest pt-1">
+                    <div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                </div>
+            </div>
+
+            <!-- Recently BP readings -->
+            <div class="space-y-3">
+                <h3 class="font-black text-base text-gray-800 tracking-tight px-1">Recently Reading</h3>
+                <div id="bp-recent-readings" class="space-y-3.5"></div>
+            </div>
+
+            <!-- Stability Advice Card -->
+            <div class="rounded-3xl p-5 border border-sky-100 bg-sky-50/20 text-xs font-bold text-gray-600 leading-relaxed flex gap-3.5 items-start">
+                <span class="text-lg">💡</span>
+                <p>Your blood pressure is stable this week, keep up the good work with your medication routine</p>
+            </div>
+
+            <button onclick="switchTrackerSubview('add-bp')" class="w-full py-5 bg-red-500 text-white font-black rounded-3xl shadow-lg shadow-red-200 uppercase text-xs tracking-wider">Add Blood pressure</button>
+        </div>
+
+        <!-- SUB SCREEN D: DEDICATED ADD BP FORM -->
+        <div id="tracker-view-add-bp" class="tracker-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchTrackerSubview('bp')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Add Blood Pressure</h2>
+            </div>
+
+            <div class="figma-card p-6 space-y-5">
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Blood Pressure</label>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-gray-50 border p-4 rounded-2xl flex justify-between items-center">
+                            <span class="text-[10px] font-bold text-gray-400 uppercase">Systolic</span>
+                            <input id="bp-add-systolic" type="number" value="118" class="bg-transparent text-right font-black text-sm w-16 outline-none text-red-500">
+                        </div>
+                        <div class="bg-gray-50 border p-4 rounded-2xl flex justify-between items-center">
+                            <span class="text-[10px] font-bold text-gray-400 uppercase">Diastolic</span>
+                            <input id="bp-add-diastolic" type="number" value="76" class="bg-transparent text-right font-black text-sm w-16 outline-none text-red-500">
+                        </div>
+                    </div>
+                    <p class="text-center text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-1">Unit: mmHg</p>
+                </div>
+
+                <!-- Optional Heart Rate log picker -->
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Heart Rate (Optional)</label>
+                    <div class="bg-gray-50 border p-4 rounded-2xl flex justify-between items-center">
+                        <input id="bp-add-heartrate" type="number" value="72" placeholder="Tap to enter" class="bg-transparent font-black text-sm outline-none w-full">
+                        <span class="text-xs font-black text-red-500 lowercase">bpm</span>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Date & Time</label>
+                    <div class="grid grid-cols-2 gap-4">
+                        <input id="bp-add-date" type="date" class="p-4 bg-gray-50 border rounded-2xl font-bold text-xs text-gray-800 outline-none">
+                        <input id="bp-add-time" type="time" class="p-4 bg-gray-50 border rounded-2xl font-bold text-xs text-gray-800 outline-none">
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Notes</label>
+                    <textarea id="bp-add-notes" placeholder="feeling normal after walking walk" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none h-24 resize-none"></textarea>
+                </div>
+
+                <button onclick="saveNewBPReading()" class="w-full py-5 bg-red-500 text-white font-black text-xs rounded-3xl shadow-lg shadow-red-200">Save Reading</button>
+            </div>
+        </div>
+
+        <!-- SUB SCREEN E: CALORIES TRACKER DETAILS VIEW -->
+        <div id="tracker-view-calories" class="tracker-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchTrackerSubview('main')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Calories Tracker</h2>
+            </div>
+
+            <!-- Calories Intakes Banners Card -->
+            <div class="figma-card p-6 bg-orange-50/10 border border-orange-100/50 space-y-4">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h4 class="font-black text-[10px] text-gray-400 uppercase tracking-widest mb-1">Calories Intake</h4>
+                        <p class="text-3xl font-black text-gray-800 tracking-tight"><span id="cal-detail-consumed-val">--</span> <span class="text-xs text-gray-400 font-bold uppercase">kcal</span></p>
+                        <p class="text-xs text-gray-400 font-bold uppercase mt-1">Goal <span id="cal-detail-goal-val">2,000</span> kcal</p>
+                    </div>
+                    <span id="cal-detail-pct-badge" class="bg-orange-500 text-white font-black text-xs px-4 py-2.5 rounded-2xl">--%</span>
+                </div>
+            </div>
+
+            <!-- Weekly Activity placeholder -->
+            <div class="figma-card p-6 space-y-4">
+                <h3 class="font-black text-sm text-gray-800 tracking-wide uppercase">Weekly Activity</h3>
+                <div class="border-2 border-dashed border-orange-500/20 rounded-[28px] h-32 flex items-center justify-center text-xs font-bold text-gray-400 bg-orange-50/10">
+                    Calorie intake analysis graph
+                </div>
+                <div class="grid grid-cols-6 text-center text-[8px] font-black text-gray-400 uppercase tracking-widest pt-1">
+                    <div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                </div>
+            </div>
+
+            <!-- Calories breakfast breakdowns -->
+            <div class="figma-card p-6 space-y-3.5">
+                <h3 class="font-black text-base text-gray-800 tracking-tight">Calories Breakdown</h3>
+                <div class="space-y-3 pt-1">
+                    <div class="flex justify-between items-baseline py-1 border-b border-dashed border-gray-100">
+                        <span class="text-xs font-bold text-gray-400 uppercase">Breakfast</span>
+                        <span id="cal-breakdown-breakfast" class="text-xs font-black text-orange-500">0 kcal</span>
+                    </div>
+                    <div class="flex justify-between items-baseline py-1 border-b border-dashed border-gray-100">
+                        <span class="text-xs font-bold text-gray-400 uppercase">Lunch</span>
+                        <span id="cal-breakdown-lunch" class="text-xs font-black text-orange-500">0 kcal</span>
+                    </div>
+                    <div class="flex justify-between items-baseline py-1 border-b border-dashed border-gray-100">
+                        <span class="text-xs font-bold text-gray-400 uppercase">Dinner</span>
+                        <span id="cal-breakdown-dinner" class="text-xs font-black text-orange-500">0 kcal</span>
+                    </div>
+                    <div class="flex justify-between items-baseline py-1">
+                        <span class="text-xs font-bold text-gray-400 uppercase">Snacks</span>
+                        <span id="cal-breakdown-snacks" class="text-xs font-black text-orange-500">0 kcal</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity dynamic Burns indicators -->
+            <div class="space-y-3">
+                <h4 class="font-black text-[10px] text-gray-400 uppercase tracking-widest px-1">Activity Burn</h4>
+                <div class="grid grid-cols-3 gap-3 text-center">
+                    <div class="bg-orange-50/20 border border-orange-100 rounded-3xl p-4">
+                        <p class="text-[8px] font-bold text-gray-400 uppercase">walking</p>
+                        <p class="text-sm font-black text-orange-500 mt-1">120 kcal</p>
+                    </div>
+                    <div class="bg-orange-50/20 border border-orange-100 rounded-3xl p-4">
+                        <p class="text-[8px] font-bold text-gray-400 uppercase">Running</p>
+                        <p class="text-sm font-black text-orange-500 mt-1">350 kcal</p>
+                    </div>
+                    <div class="bg-orange-50/20 border border-orange-100 rounded-3xl p-4">
+                        <p class="text-[8px] font-bold text-gray-400 uppercase">Workout</p>
+                        <p class="text-sm font-black text-orange-500 mt-1">210 kcal</p>
+                    </div>
+                </div>
+            </div>
+
+            <button onclick="switchTrackerSubview('add-meal')" class="w-full py-5 bg-orange-500 text-white font-black rounded-3xl shadow-lg shadow-orange-200 uppercase text-xs tracking-wider">Add Meal</button>
+        </div>
+
+        <!-- SUB SCREEN F: DEDICATED ADD MEAL PANELS -->
+        <div id="tracker-view-add-meal" class="tracker-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchTrackerSubview('calories')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Add Meal</h2>
+            </div>
+
+            <div class="flex gap-2 p-1.5 bg-gray-100 rounded-2xl">
+                <button onclick="setAddMealType('Breakfast', this)" class="add-meal-type-btn flex-1 py-3 rounded-xl font-black text-xs bg-orange-500 text-white">Breakfast</button>
+                <button onclick="setAddMealType('Lunch', this)" class="add-meal-type-btn flex-1 py-3 rounded-xl font-black text-xs text-gray-400">Lunch</button>
+                <button onclick="setAddMealType('Dinner', this)" class="add-meal-type-btn flex-1 py-3 rounded-xl font-black text-xs text-gray-400">Dinner</button>
+                <button onclick="setAddMealType('Snacks', this)" class="add-meal-type-btn flex-1 py-3 rounded-xl font-black text-xs text-gray-400">Snack</button>
+            </div>
+
+            <div class="figma-card p-6 space-y-3.5">
+                <h4 class="font-black text-xs text-gray-700 uppercase tracking-wide">Search Food</h4>
+                <div class="relative bg-gray-50 border rounded-2xl p-4 flex items-center gap-3">
+                    <i data-lucide="search" class="w-5 h-5 text-gray-400"></i>
+                    <input type="text" placeholder="Search by specialist, symptoms..." class="bg-transparent font-bold text-xs outline-none w-full text-gray-700">
+                </div>
+                <div class="py-4 border-2 border-dashed border-orange-500/20 rounded-2xl flex items-center justify-center gap-3 text-orange-500 text-xs font-black uppercase cursor-pointer hover:bg-orange-50/10">
+                    <span>|||||||</span> Scan Barcode
+                </div>
+            </div>
+
+            <div class="space-y-3.5">
+                <div id="add-meal-items-list" class="space-y-3.5"></div>
+            </div>
+
+            <button onclick="saveMealIntakeRecord()" class="w-full py-5 bg-orange-500 text-white font-black text-xs rounded-3xl shadow-lg shadow-orange-200">Save</button>
+        </div>
+
+        <!-- SUB SCREEN G: GENERIC ADD HEALTH DATA -->
+        <div id="tracker-view-add-data" class="tracker-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchTrackerSubview('main')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Add health data</h2>
+            </div>
+
+            <div class="figma-card p-6 space-y-5">
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Select Type</label>
+                    <div class="grid grid-cols-2 gap-3.5" id="add-data-type-grid">
+                        <button onclick="setAddDataType('Heart rate', this)" class="add-data-type-btn py-3 font-bold text-xs rounded-xl bg-brand text-white shadow-md">Heart rate</button>
+                        <button onclick="setAddDataType('Blood Pressure', this)" class="add-data-type-btn py-3 font-bold text-xs rounded-xl bg-gray-50 border text-gray-500">Blood Pressure</button>
+                        <button onclick="setAddDataType('Weight', this)" class="add-data-type-btn py-3 font-bold text-xs rounded-xl bg-gray-50 border text-gray-500">Weight</button>
+                        <button onclick="setAddDataType('Sugar', this)" class="add-data-type-btn py-3 font-bold text-xs rounded-xl bg-gray-50 border text-gray-500">Sugar</button>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Value</label>
+                    <p class="text-[9px] text-gray-400 font-bold uppercase -mt-1 leading-none">Enter the latest reading for the selected type.</p>
+                    <div class="bg-gray-50 border p-4 rounded-2xl flex justify-between items-center mt-2">
+                        <input id="add-data-value-input" type="text" placeholder="Tap to enter" class="bg-transparent font-black text-sm outline-none w-full">
+                        <span id="add-data-unit-label" class="text-xs font-black text-brand lowercase">bpm</span>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Date & Time</label>
+                    <p class="text-[9px] text-gray-400 font-bold uppercase -mt-1 leading-none">When was this reading taken?</p>
+                    <div class="grid grid-cols-2 gap-4 mt-2">
+                        <input id="add-data-date-input" type="date" class="p-4 bg-gray-50 border rounded-2xl font-bold text-xs text-gray-800 outline-none">
+                        <input id="add-data-time-input" type="time" class="p-4 bg-gray-50 border rounded-2xl font-bold text-xs text-gray-800 outline-none">
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Notes (Optional)</label>
+                    <p class="text-[9px] text-gray-400 font-bold uppercase -mt-1 leading-none">Add context like after meal, post-workout, or on medication</p>
+                    <textarea id="add-data-notes-input" placeholder="Add a note" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none h-24 resize-none mt-2"></textarea>
+                </div>
+
+                <button onclick="submitGenericHealthData()" class="w-full py-5 bg-brand text-white font-black text-xs rounded-3xl shadow-lg shadow-brand/20">Save</button>
+            </div>
+        </div>
     </div>
 
     <!-- 3. PILLS SCREEN -->
-    <div id="pills-screen" class="screen p-6 space-y-6">
-        <div class="flex justify-between items-center">
-            <h2 class="text-2xl font-black">Medications</h2>
-            <button onclick="toggleAddPillForm()" class="bg-brand text-white px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-wider">+ Add Pill</button>
-        </div>
+    <div id="pills-screen" class="screen p-0 space-y-6">
+        
+        <!-- SUB SCREEN A: MAIN MEDICATION DASHBOARD -->
+        <div id="pills-view-list" class="pills-view p-6 space-y-6">
+            <div class="flex justify-between items-center">
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Pill Reminder</h2>
+                <button onclick="switchPillsSubview('add')" class="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center border hover:bg-gray-200 transition">
+                    <i data-lucide="plus" class="w-6 h-6 text-gray-700"></i>
+                </button>
+            </div>
 
-        <!-- Hidden Add Medication Form -->
-        <div id="add-pill-form-panel" class="hidden figma-card p-6 border-brand bg-brand-light/10 space-y-4">
-            <h4 class="font-black text-xs uppercase text-brand">Configure Medication</h4>
-            <div class="space-y-3">
-                <input id="pill-name-input" type="text" placeholder="Medicine Name (e.g., Aspirin)" class="w-full p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-                <input id="pill-dosage-input" type="text" placeholder="Dosage (e.g., 1 Tablet)" class="w-full p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-                <div class="grid grid-cols-2 gap-3">
-                    <input id="pill-time-input" type="text" placeholder="Time (e.g., 09:00 AM)" class="p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-                    <select id="pill-freq-input" class="p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-                        <option value="Daily">Daily</option>
-                        <option value="Weekly">Weekly</option>
-                    </select>
+            <!-- Your Progress Card -->
+            <div class="figma-card p-6 bg-gradient-to-br from-pink-50/30 to-orange-50/20 border border-pink-100/50 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h3 class="font-black text-sm text-gray-800 tracking-tight">Your Progress</h3>
+                    <span class="text-[10px] font-black text-gray-400 uppercase">Course Progress</span>
                 </div>
-                <input id="pill-notes-input" type="text" placeholder="Instructions/Notes" class="w-full p-3 bg-white border rounded-xl text-[11px] font-bold outline-none">
-                <button onclick="submitNewPill()" class="btn-brand w-full py-4 text-xs">Activate Reminder</button>
+                <div class="flex justify-between items-baseline">
+                    <p class="font-black text-base text-gray-800" id="pills-progress-ratio">-- / -- doses taken</p>
+                    <span id="pills-progress-percentage" class="text-xs font-black text-brand">--%</span>
+                </div>
+                <div class="w-full bg-gray-100 h-3.5 rounded-full overflow-hidden">
+                    <div id="pills-progress-bar" class="bg-brand h-full transition-all duration-500" style="width: 0%"></div>
+                </div>
+                
+                <div class="grid grid-cols-3 gap-2 pt-2 text-center">
+                    <div class="bg-white/60 p-3 rounded-2xl border border-gray-100 flex flex-col items-center">
+                        <span class="text-lg">🔥</span>
+                        <span id="pills-streak-val" class="font-black text-sm text-gray-800 mt-1">--</span>
+                        <span class="text-[7px] text-gray-400 font-bold uppercase mt-0.5">Day Streak</span>
+                    </div>
+                    <div class="bg-white/60 p-3 rounded-2xl border border-gray-100 flex flex-col items-center">
+                        <span class="text-lg">📅</span>
+                        <span id="pills-taken-count" class="font-black text-sm text-gray-800 mt-1">--</span>
+                        <span class="text-[7px] text-gray-400 font-bold uppercase mt-0.5">Doses Taken</span>
+                    </div>
+                    <div class="bg-white/60 p-3 rounded-2xl border border-gray-100 flex flex-col items-center">
+                        <span class="text-lg">⏰</span>
+                        <span id="pills-upcoming-count" class="font-black text-sm text-gray-800 mt-1">--</span>
+                        <span class="text-[7px] text-gray-400 font-bold uppercase mt-0.5">Upcoming</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Courses Reel Section -->
+            <div class="space-y-3">
+                <div class="flex justify-between items-center px-1">
+                    <h3 class="font-black text-base text-gray-800 tracking-tight">Active Courses</h3>
+                    <button class="text-[10px] font-black text-brand uppercase">View all</button>
+                </div>
+                <div id="active-courses-reel" class="flex gap-4 overflow-x-auto no-scrollbar pb-2"></div>
+            </div>
+
+            <!-- Today's Schedule Checklist Section -->
+            <div class="space-y-3">
+                <div class="flex justify-between items-center px-1">
+                    <h3 class="font-black text-base text-gray-800 tracking-tight">Today's Schedule</h3>
+                    <span id="pills-completed-label" class="bg-brand-light text-brand text-[8px] font-black px-2.5 py-1 rounded-lg uppercase">-- Completed</span>
+                </div>
+                <div id="pills-schedule-list" class="space-y-3.5"></div>
+            </div>
+
+            <!-- All Medications Management Panel -->
+            <div class="space-y-3">
+                <h3 class="font-black text-base text-gray-800 tracking-tight">All medications</h3>
+                <p class="text-[10px] text-gray-400 font-bold uppercase px-1">Manage reminder for each medicine</p>
+                <div id="all-medications-list" class="space-y-3"></div>
             </div>
         </div>
 
-        <div id="active-pills-list"></div>
+        <!-- SUB SCREEN B: ADD MEDICATION FORM -->
+        <div id="pills-view-add" class="pills-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchPillsSubview('list')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Add Medication</h2>
+            </div>
+            
+            <div class="figma-card p-6 space-y-5">
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Medicine name</label>
+                    <input id="pill-add-name" type="text" placeholder="Enter medicine name" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Dosage</label>
+                    <input id="pill-add-dosage" type="text" placeholder="e.g. 500 mg, 1 tablet" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Frequency</label>
+                    <div class="flex gap-2">
+                        <button onclick="setPillAddFrequency('Daily', this)" class="add-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-brand text-white shadow-md">Daily</button>
+                        <button onclick="setPillAddFrequency('Weekly', this)" class="add-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-gray-50 border text-gray-400">Weekly</button>
+                        <button onclick="setPillAddFrequency('Custom', this)" class="add-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-gray-50 border text-gray-400">Custom</button>
+                    </div>
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Times</label>
+                    <div id="add-pill-times-container" class="flex flex-wrap gap-2"></div>
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Start date</label>
+                    <input id="pill-add-start-date" type="date" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none text-gray-800">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">End date</label>
+                    <select id="pill-add-end-date" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none">
+                        <option value="No end date">No end date</option>
+                        <option value="7 days">7 days</option>
+                        <option value="14 days">14 days</option>
+                        <option value="30 days">30 days</option>
+                    </select>
+                </div>
+                <div class="flex justify-between items-center py-2 border-y border-gray-50">
+                    <div>
+                        <h4 class="font-black text-xs text-gray-800 uppercase">Reminder</h4>
+                        <p class="text-[8px] text-gray-400 font-bold uppercase mt-1">Send notification at selected times</p>
+                    </div>
+                    <input type="checkbox" id="pill-add-reminder-on" checked class="w-6 h-6 accent-brand rounded">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Notes (Optional)</label>
+                    <textarea id="pill-add-notes" placeholder="Add a note" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none h-24 resize-none"></textarea>
+                </div>
+                <button onclick="saveNewPill()" class="btn-brand w-full py-5 text-sm font-black">Save Medication</button>
+            </div>
+        </div>
+
+        <!-- SUB SCREEN C: MEDICATION PROFILE DETAILS -->
+        <div id="pills-view-details" class="pills-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchPillsSubview('list')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 id="pills-detail-header-title" class="text-2xl font-black tracking-tight text-gray-800">--</h2>
+            </div>
+
+            <!-- Overview parameters card -->
+            <div class="figma-card p-6 bg-amber-50/15 border border-amber-100/50 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h3 class="font-black text-sm text-gray-800 tracking-wide uppercase">Overview</h3>
+                    <span class="bg-brand text-white text-[8px] font-black px-2.5 py-1 rounded-lg uppercase">Active</span>
+                </div>
+                <div class="space-y-2.5">
+                    <div class="flex justify-between text-xs font-bold text-gray-400"><span>Medicine name</span><span id="pills-detail-name" class="text-gray-800 font-black">--</span></div>
+                    <div class="flex justify-between text-xs font-bold text-gray-400"><span>Dosage</span><span id="pills-detail-dosage" class="text-gray-800 font-black">--</span></div>
+                    <div class="flex justify-between text-xs font-bold text-gray-400 pt-1 border-t"><span>Status</span><span class="text-orange-500 font-black uppercase text-[10px]">Ongoing</span></div>
+                </div>
+            </div>
+
+            <!-- Schedule Card -->
+            <div class="figma-card p-6 space-y-4">
+                <h3 class="font-black text-sm text-gray-800 tracking-wide uppercase border-b pb-3">Schedule</h3>
+                <div class="space-y-3">
+                    <div class="flex justify-between text-xs font-bold text-gray-400"><span>Frequency</span><span id="pills-detail-frequency" class="text-gray-800 font-black">--</span></div>
+                    <div class="flex justify-between items-center text-xs font-bold text-gray-400 py-1">
+                        <span>Times</span>
+                        <div id="pills-detail-times" class="flex gap-1.5 flex-wrap justify-end"></div>
+                    </div>
+                    <div class="flex justify-between text-xs font-bold text-gray-400"><span>Start date</span><span id="pills-detail-start" class="text-gray-800 font-black">--</span></div>
+                    <div class="flex justify-between text-xs font-bold text-gray-400"><span>End date</span><span id="pills-detail-end" class="text-gray-800 font-black">--</span></div>
+                    <div class="flex justify-between items-center text-xs font-bold text-gray-400 pt-2 border-t">
+                        <span>Reminder</span>
+                        <input type="checkbox" id="pills-detail-reminder-toggle" checked disabled class="w-5 h-5 accent-brand rounded">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Notes Card -->
+            <div class="space-y-2">
+                <h4 class="font-black text-[10px] text-gray-400 uppercase tracking-widest px-1">Notes</h4>
+                <div class="figma-card p-5 border border-orange-100 bg-orange-50/10 text-xs font-bold text-gray-700 leading-relaxed" id="pills-detail-notes">
+                    --
+                </div>
+            </div>
+
+            <!-- Bottom Operation Action row -->
+            <div class="space-y-4 pt-4">
+                <div class="flex gap-4">
+                    <button onclick="editSelectedMedication()" class="flex-1 py-4 bg-white border-2 border-brand text-brand font-black text-sm rounded-3xl hover:bg-brand-light/20 transition text-center">Edit</button>
+                    <button onclick="switchPillsSubview('list')" class="flex-1 py-4 bg-brand text-white font-black text-sm rounded-3xl shadow-lg shadow-brand/20 text-center">Done</button>
+                </div>
+                <button onclick="deleteSelectedMedication()" class="w-full py-4 bg-white border-2 border-red-500 text-red-500 font-black text-sm rounded-3xl hover:bg-red-50 transition text-center">Delete medication</button>
+            </div>
+        </div>
+
+        <!-- SUB SCREEN D: EDIT MEDICATION FORM -->
+        <div id="pills-view-edit" class="pills-view p-6 space-y-6 hidden">
+            <div class="flex items-center gap-4">
+                <button onclick="switchPillsSubview('details')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                <h2 class="text-2xl font-black tracking-tight text-gray-800">Edit medication</h2>
+            </div>
+
+            <div class="figma-card p-6 space-y-5">
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Medicine name</label>
+                    <input id="pill-edit-name" type="text" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Dosage</label>
+                    <input id="pill-edit-dosage" type="text" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Frequency</label>
+                    <div class="flex gap-2">
+                        <button onclick="setPillEditFrequency('Daily', this)" class="edit-freq-btn flex-1 py-3 font-black text-xs rounded-xl">Daily</button>
+                        <button onclick="setPillEditFrequency('Weekly', this)" class="edit-freq-btn flex-1 py-3 font-black text-xs rounded-xl">Weekly</button>
+                        <button onclick="setPillEditFrequency('Custom', this)" class="edit-freq-btn flex-1 py-3 font-black text-xs rounded-xl">Custom</button>
+                    </div>
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Times</label>
+                    <div id="edit-pill-times-container" class="flex flex-wrap gap-2"></div>
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Start date</label>
+                    <input id="pill-edit-start-date" type="date" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none text-gray-800">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">End date</label>
+                    <select id="pill-edit-end-date" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none">
+                        <option value="No end date">No end date</option>
+                        <option value="7 days">7 days</option>
+                        <option value="14 days">14 days</option>
+                        <option value="30 days">30 days</option>
+                    </select>
+                </div>
+                <div class="flex justify-between items-center py-2 border-y border-gray-50">
+                    <div>
+                        <h4 class="font-black text-xs text-gray-800 uppercase">Reminder</h4>
+                        <p class="text-[8px] text-gray-400 font-bold uppercase mt-1">Send notification at selected times</p>
+                    </div>
+                    <input type="checkbox" id="pill-edit-reminder-on" class="w-6 h-6 accent-brand rounded">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black uppercase text-gray-400 tracking-wider">Notes (Optional)</label>
+                    <textarea id="pill-edit-notes" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none h-24 resize-none"></textarea>
+                </div>
+                <button onclick="saveMedicationEdit()" class="btn-brand w-full py-5 text-sm font-black">Save changes</button>
+            </div>
+        </div>
     </div>
 
     <!-- 4. MENSTRUAL SCREEN -->
@@ -296,7 +810,7 @@
                 <div id="m-calendar-grid" class="grid grid-cols-7 gap-y-2 text-center"></div>
             </div>
 
-            <!-- Dynamic Selected Day Operations Panel (Edit / Action Portal) -->
+            <!-- Dynamic Selected Day Operations Panel -->
             <div id="m-calendar-action-panel" class="hidden figma-card p-5 border border-pink-100 bg-pink-50/10 space-y-4 transition">
                 <div class="flex justify-between items-center">
                     <h4 class="font-black text-xs text-gray-700 uppercase tracking-wide">Manage Selected Log</h4>
@@ -328,15 +842,75 @@
 
 </div>
 
+<!-- Dynamic Overlay Modal (Pill Reminder Notification Popup - Screenshot 5) -->
+<div id="pills-reminder-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-6">
+    <div class="bg-white rounded-[40px] w-full max-w-[380px] p-8 space-y-6 shadow-2xl relative border border-gray-100">
+        <!-- Close overlay dynamic header -->
+        <button onclick="closePillModal()" class="absolute top-6 right-6 text-gray-300 hover:text-gray-500"><i data-lucide="x" class="w-5 h-5"></i></button>
+        
+        <div class="space-y-2 text-center pt-2">
+            <h3 class="font-black text-xs text-gray-400 uppercase tracking-widest leading-none">Pill Reminder</h3>
+            <span class="text-[8px] font-black bg-pink-50 text-pink-500 border border-pink-100 px-2 py-0.5 rounded uppercase inline-block">Now</span>
+            <h2 class="text-xl font-black text-gray-800 leading-snug mt-3">It's time to take your medicine</h2>
+            <p class="text-xs text-gray-400 max-w-[220px] mx-auto leading-relaxed">it's time to take your medicine.</p>
+        </div>
+
+        <!-- Pill Details Widget Card -->
+        <div class="bg-gray-50 border p-5 rounded-3xl flex justify-between items-center shadow-inner">
+            <div>
+                <h4 class="font-black text-sm text-gray-800 uppercase" id="pills-modal-title">--</h4>
+                <p class="text-[10px] text-gray-400 font-bold uppercase mt-1" id="pills-modal-desc">--</p>
+            </div>
+            <span class="bg-orange-50 border border-orange-100 text-orange-600 text-[8px] font-black px-3 py-1.5 rounded-lg uppercase">Reminder</span>
+        </div>
+
+        <!-- Period Monitoring sub-text mockup (Figma Screenshot 5) -->
+        <div class="bg-pink-50/20 border border-pink-100 rounded-2xl px-5 py-3.5 flex justify-between items-center text-xs font-bold text-gray-400">
+            <span>Period Monitoring</span>
+            <span class="text-pink-600 font-black flex items-center gap-1.5" id="pills-modal-date">-- <i data-lucide="calendar" class="w-3.5 h-3.5"></i></span>
+        </div>
+
+        <!-- Operational Action Button Triggers -->
+        <div class="space-y-3">
+            <button onclick="submitPillModalAction('Taken')" class="w-full py-4.5 bg-brand text-white font-black text-sm rounded-3xl shadow-lg shadow-brand/20">Taken</button>
+            <button onclick="submitPillModalAction('Snoozed')" class="w-full py-4.5 bg-white border-2 border-brand text-brand font-black text-sm rounded-3xl hover:bg-brand-light/10 transition">Snooze 10 min</button>
+        </div>
+    </div>
+</div>
+
 <script>
     const MASTER_API = "http://localhost:5002";
     let MASTER_HK_STORE = {
-        token: localStorage.getItem('token') || ""
+        token: localStorage.getItem('token') || "",
+        // Client-side cache to support deep statistics and offline mock calculations
+        activePills: [],
+        addPillFrequency: "Daily",
+        addPillTimes: ["09:00 AM", "01:00 PM", "09:00 PM"],
+        editPillFrequency: "Daily",
+        editPillTimes: [],
+        selectedPillId: null,
+        
+        // Calories logging dynamic variables
+        addMealType: "Breakfast",
+        availableFoods: [
+            { id: "apple", name: "Apple", kcal: 95, qty: 0 },
+            { id: "banana", name: "Banana", kcal: 105, qty: 0 },
+            { id: "chicken", name: "Grilled Chicken", kcal: 165, qty: 0 },
+            { id: "rice", name: "Brown Rice", kcal: 215, qty: 0 },
+            { id: "yogurt", name: "Greek Yogurt", kcal: 110, qty: 0 }
+        ],
+        
+        // General parameter add selector
+        addDataType: "Heart rate"
     };
 
     let currentMenstrualTab = 'overview';
     let menstrualCalendarMonth = moment().format('YYYY-MM'); // e.g. "2025-05"
     let mSelectedDate = null; // Currently clicked date inside calendar
+    
+    // Tracker Screen displayed subview state (Screenshot 1-7)
+    let currentTrackerSubview = "main"; 
+    let trackerPeriodState = "weekly";
 
     // --- CORE API HANDLER ---
     async function apiRequest(path, method = 'GET', data = null) {
@@ -365,8 +939,13 @@
         }
         
         if(id === 'home') syncHome();
-        if(id === 'tracker') syncStats();
-        if(id === 'pills') syncPills();
+        if(id === 'tracker') {
+            currentTrackerSubview = "main";
+            syncStats();
+        }
+        if(id === 'pills') {
+            switchPillsSubview('list');
+        }
         if(id === 'menstrual') syncMenstrual();
         
         lucide.createIcons();
@@ -430,6 +1009,7 @@
         }
         
         syncMenstrualSummary();
+        triggerPillNotificationModal(); // Notification trigger
         lucide.createIcons();
     }
 
@@ -453,7 +1033,6 @@
             activeTrigger.className = 'm-tab-trigger pb-3 text-sm font-black text-pink-500 border-b-2 border-pink-500 transition';
         }
 
-        // Hide edit/action portal panel when shifting tabs
         document.getElementById('m-calendar-action-panel').classList.add('hidden');
         mSelectedDate = null;
 
@@ -499,7 +1078,6 @@
         }
     }
 
-    // Generate Dynamic Month Days, Empty Paddings and Highlights
     async function renderMenstrualCalendar() {
         const res = await apiRequest(`/user/doctor/menstrual/calendar?month=${menstrualCalendarMonth}`);
         if(res.success) {
@@ -523,7 +1101,6 @@
             for(let day = 1; day <= daysInMonth; day++) {
                 const dateStr = moment(startOfMonth).date(day).format('YYYY-MM-DD');
                 
-                // Track highlights class logic
                 let isRecorded = recordedDays.includes(dateStr);
                 let isPredicted = predictedDays.includes(dateStr);
                 let highlightType = isRecorded ? 'recorded' : (isPredicted ? 'predicted' : 'none');
@@ -559,7 +1136,6 @@
         renderMenstrualCalendar();
     }
 
-    // Dynamic Edit / Change dates portal interface selection handler
     function clickCalendarDay(dateStr, highlightType) {
         mSelectedDate = dateStr;
         const panel = document.getElementById('m-calendar-action-panel');
@@ -644,7 +1220,6 @@
         }
     }
 
-    // history list loader with dynamic Duration fallback metrics
     async function renderMenstrualHistory() {
         const res = await apiRequest('/user/doctor/menstrual/history');
         if(res.success) {
@@ -657,7 +1232,6 @@
                 `;
             } else {
                 container.innerHTML = res.data.map(item => {
-                    // Fallback to resolve undefined durations calculation
                     const calculatedDuration = item.duration || (item.endDate ? moment(item.endDate).diff(moment(item.startDate), 'days') + 1 : 5);
                     
                     return `
@@ -678,219 +1252,1041 @@
         }
     }
 
-    // --- 3. PILLS TODAY SCHEDULE & ACTIONS ---
+    // --- 3. PILLS SCHEDULER ENHANCED FLOW ---
+    
+    function switchPillsSubview(viewId) {
+        document.querySelectorAll('.pills-view').forEach(view => view.classList.add('hidden'));
+        document.getElementById(`pills-view-${viewId}`).classList.remove('hidden');
+        
+        if(viewId === 'list') {
+            syncPills();
+        } else if(viewId === 'add') {
+            resetPillAddForm();
+        }
+        lucide.createIcons();
+    }
+
     async function syncPills() {
         const clientDate = moment().format('YYYY-MM-DD');
         const clientDay = moment().day();
 
-        const res = await apiRequest(`/user/doctor/pills/today?clientDate=${clientDate}&clientDay=${clientDay}`);
-        
-        if(res.success) {
-            if(!res.data || res.data.length === 0) {
-                document.getElementById('active-pills-list').innerHTML = `
+        const [todayRes, allRes] = await Promise.all([
+            apiRequest(`/user/doctor/pills/today?clientDate=${clientDate}&clientDay=${clientDay}`),
+            apiRequest('/user/doctor/pills/my-pills')
+        ]);
+
+        if (allRes.success && todayRes.success) {
+            MASTER_HK_STORE.activePills = allRes.data;
+            const todayPills = todayRes.data;
+
+            let totalDosesToday = 0;
+            let takenDosesToday = 0;
+
+            todayPills.forEach(p => {
+                p.times.forEach(t => {
+                    totalDosesToday++;
+                    if (t.isTakenToday) takenDosesToday++;
+                });
+            });
+
+            const streakVal = todayRes.streak !== undefined ? todayRes.streak : 0;
+            const totalDosesTakenOverall = todayRes.totalDosesTakenOverall !== undefined ? todayRes.totalDosesTakenOverall : 0;
+            const upcomingCount = todayRes.upcomingCount !== undefined ? todayRes.upcomingCount : 0;
+            const progressPct = todayRes.progressPercentage !== undefined ? todayRes.progressPercentage : 0;
+            const progressRatio = todayRes.progressRatio !== undefined ? todayRes.progressRatio : "-- / --";
+
+            document.getElementById('pills-progress-ratio').innerText = `${progressRatio} doses taken`;
+            document.getElementById('pills-progress-percentage').innerText = `${progressPct}%`;
+            document.getElementById('pills-progress-bar').style.width = `${progressPct}%`;
+
+            document.getElementById('pills-streak-val').innerText = streakVal;
+            document.getElementById('pills-taken-count').innerText = totalDosesTakenOverall;
+            document.getElementById('pills-upcoming-count').innerText = upcomingCount;
+            document.getElementById('pills-completed-label').innerText = `${takenDosesToday}/${totalDosesToday} Completed`;
+
+            if (allRes.data.length === 0) {
+                document.getElementById('active-courses-reel').innerHTML = `
+                    <div class="text-center py-4 text-gray-400 font-bold text-xs uppercase w-full">No Active Courses</div>
+                `;
+            } else {
+                document.getElementById('active-courses-reel').innerHTML = allRes.data.map(p => {
+                    const totalCourseDays = p.totalCourseDays || 14;
+                    const elapsedDays = p.elapsedDays || 1;
+                    const progressPct = p.progressPct || 0;
+                    const daysRemaining = p.daysRemaining || 0;
+                    const themeClass = p.isOngoing ? 'border-sky-100 bg-sky-50/20 text-sky-600' : 'border-emerald-100 bg-emerald-50/20 text-brand';
+                    const courseLabel = p.isOngoing ? 'Ongoing Course' : `${totalCourseDays} Days Course`;
+                    const elapsedText = p.isOngoing ? 'Ongoing' : `Day ${elapsedDays} of ${totalCourseDays}`;
+                    const remainingText = p.isOngoing ? 'Perpetual Use' : `${daysRemaining} Days Remaining`;
+                    const pctText = p.isOngoing ? '∞' : `${progressPct}%`;
+                    const pctWidth = p.isOngoing ? '100%' : `${progressPct}%`;
+
+                    return `
+                        <div onclick="openPillProfile('${p._id}')" class="figma-card p-5 min-w-[210px] border ${themeClass} space-y-3 cursor-pointer">
+                            <div>
+                                <span class="text-[8px] font-black uppercase px-2.5 py-1 bg-white/80 rounded-lg shadow-sm border">${courseLabel}</span>
+                                <h4 class="font-black text-sm text-gray-800 mt-2.5 uppercase tracking-tight">${p.medicineName}</h4>
+                            </div>
+                            <div class="space-y-1">
+                                <div class="flex justify-between text-[10px] font-bold text-gray-400 uppercase">
+                                    <span>${elapsedText}</span>
+                                    <span class="font-black">${pctText}</span>
+                                </div>
+                                <div class="w-full bg-gray-100/50 h-2 rounded-full overflow-hidden">
+                                    <div class="bg-current h-full" style="width: ${pctWidth}"></div>
+                                </div>
+                            </div>
+                            <p class="text-[9px] text-gray-400 font-bold uppercase tracking-wider">${remainingText}</p>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            if (todayPills.length === 0) {
+                document.getElementById('pills-schedule-list').innerHTML = `
                     <div class="text-center py-10 bg-gray-50 rounded-3xl p-6">
-                        <p class="text-gray-400 font-bold text-xs uppercase">No medication due for today</p>
+                        <p class="text-gray-400 font-bold text-xs uppercase">No medications scheduled for today</p>
                     </div>
                 `;
             } else {
-                document.getElementById('active-pills-list').innerHTML = res.data.map(p => {
-                    return p.times.map(t => `
-                        <div class="figma-card p-6 border-l-8 ${t.isTakenToday ? 'border-gray-300 bg-gray-50/50' : 'border-brand'} mb-4 flex justify-between items-center transition">
-                            <div>
-                                <div class="flex items-center gap-2">
-                                    <h4 class="font-black text-sm uppercase ${t.isTakenToday ? 'line-through text-gray-400' : 'text-gray-800'}">${p.medicineName}</h4>
-                                    ${t.isTakenToday ? '<span class="bg-gray-100 text-gray-400 text-[7px] font-black px-1.5 py-0.5 rounded-md uppercase">Taken</span>' : ''}
+                let scheduleHtml = '';
+                todayPills.forEach(p => {
+                    p.times.forEach(t => {
+                        scheduleHtml += `
+                            <div class="figma-card p-5 border-l-8 ${t.isTakenToday ? 'border-gray-200 bg-gray-50/40' : 'border-brand'} flex justify-between items-center transition">
+                                <div>
+                                    <h4 class="font-black text-sm ${t.isTakenToday ? 'line-through text-gray-400' : 'text-gray-800'} uppercase">${p.medicineName}</h4>
+                                    <p class="text-[10px] text-gray-400 font-bold uppercase mt-1">${p.dosage || '1 Tablet'} - Time: ${t.time}</p>
                                 </div>
-                                <p class="text-[9px] font-bold text-gray-400 mt-1 uppercase">${p.dosage || '1 Pill'} • Time: ${t.time}</p>
+                                <div class="flex gap-2.5">
+                                    ${!t.isTakenToday ? `
+                                        <button onclick="submitMedicationActionOnRow('${p._id}', '${t.time}', 'Taken')" class="w-10 h-10 border-2 border-brand text-brand rounded-full flex items-center justify-center font-bold text-sm bg-white hover:bg-brand-light/30 transition">✓</button>
+                                        <button onclick="submitMedicationActionOnRow('${p._id}', '${t.time}', 'Skipped')" class="w-10 h-10 border-2 border-red-400 text-red-500 rounded-full flex items-center justify-center font-bold text-sm bg-white hover:bg-red-50 transition">✕</button>
+                                    ` : `
+                                        <i data-lucide="check-circle" class="w-6 h-6 text-brand"></i>
+                                    `}
+                                </div>
                             </div>
-                            <div class="flex gap-2">
-                                ${!t.isTakenToday ? `
-                                    <button onclick="recordPillAction('${p._id}', '${t.time}', 'Taken')" class="bg-brand-light text-brand text-[8px] font-black px-3 py-2 rounded-xl uppercase">Take</button>
-                                    <button onclick="recordPillAction('${p._id}', '${t.time}', 'Snoozed')" class="bg-yellow-50 text-yellow-600 text-[8px] font-black px-3 py-2 rounded-xl uppercase border border-yellow-100">Snooze</button>
-                                ` : `
-                                    <i data-lucide="check-circle-2" class="w-5.5 h-5.5 text-brand"></i>
-                                `}
+                        `;
+                    });
+                });
+                document.getElementById('pills-schedule-list').innerHTML = scheduleHtml;
+            }
+
+            if (allRes.data.length === 0) {
+                document.getElementById('all-medications-list').innerHTML = `
+                    <div class="text-center py-6 bg-gray-50 rounded-3xl p-6">
+                        <p class="text-gray-400 font-bold text-xs uppercase">No Medications Found</p>
+                    </div>
+                `;
+            } else {
+                document.getElementById('all-medications-list').innerHTML = allRes.data.map(p => {
+                    const totalCourseDays = p.totalCourseDays || 14;
+                    const elapsedDays = p.elapsedDays || 1;
+                    const progressPct = p.progressPct || 0;
+                    const progressText = p.isOngoing ? 'Ongoing' : `Day ${elapsedDays} of ${totalCourseDays}`;
+                    const pctText = p.isOngoing ? '∞' : `${progressPct}%`;
+
+                    return `
+                        <div onclick="openPillProfile('${p._id}')" class="figma-card p-5 border flex justify-between items-center cursor-pointer hover:shadow-lg transition">
+                            <div>
+                                <h4 class="font-black text-sm text-gray-800 uppercase">${p.medicineName}</h4>
+                                <p class="text-[10px] text-gray-400 font-bold uppercase mt-1">${p.frequency} - ${p.dosage || '1 Tablet'}</p>
+                            </div>
+                            <div class="flex items-center gap-4" onclick="event.stopPropagation()">
+                                <div class="text-right">
+                                    <span class="text-[8px] font-black text-gray-400 uppercase">${progressText}</span>
+                                    <p class="text-xs font-black text-pink-500 mt-0.5">${pctText}</p>
+                                </div>
+                                <input type="checkbox" onchange="toggleReminderAlert('${p._id}', this.checked)" ${p.isReminderOn ? 'checked' : ''} class="w-6 h-6 accent-brand rounded cursor-pointer">
                             </div>
                         </div>
-                    `).join('');
+                    `;
                 }).join('');
             }
         }
         lucide.createIcons();
     }
 
-    async function recordPillAction(pillId, time, action) {
+    async function toggleReminderAlert(pillId, isChecked) {
+        const pill = MASTER_HK_STORE.activePills.find(p => p._id === pillId);
+        if(!pill) return;
+
+        const timesArray = pill.times.map(t => t.time);
+        const res = await apiRequest(`/user/doctor/pills/update-pill-settings/${pillId}`, 'PUT', {
+            times: timesArray,
+            isReminderOn: isChecked,
+            notes: pill.notes,
+            endDate: pill.endDate || "No end date"
+        });
+
+        if(!res.success) {
+            alert(res.message || "Failed to update alert settings");
+            syncPills();
+        }
+    }
+
+    async function submitMedicationActionOnRow(pillId, time, action) {
         const res = await apiRequest(`/user/doctor/pills/action/${pillId}`, 'PATCH', {
             time,
             action
         });
 
         if(res.success) {
-            alert(`Medication marked as ${action}`);
             syncPills();
         } else {
-            alert(res.message || "Request failed");
+            alert(res.message || "Failed to update action");
         }
     }
 
-    function toggleAddPillForm() {
-        const form = document.getElementById('add-pill-form-panel');
-        form.classList.toggle('hidden');
+    function resetPillAddForm() {
+        document.getElementById('pill-add-name').value = "";
+        document.getElementById('pill-add-dosage').value = "";
+        document.getElementById('pill-add-notes').value = "";
+        document.getElementById('pill-add-start-date').value = moment().format('YYYY-MM-DD');
+        document.getElementById('pill-add-end-date').value = "No end date";
+        MASTER_HK_STORE.addPillFrequency = "Daily";
+        MASTER_HK_STORE.addPillTimes = ["09:00 AM", "01:00 PM", "09:00 PM"];
+        renderAddTimesTags();
     }
 
-    async function submitNewPill() {
-        const medicineName = document.getElementById('pill-name-input').value;
-        const dosage = document.getElementById('pill-dosage-input').value;
-        const timeInput = document.getElementById('pill-time-input').value; 
-        const frequency = document.getElementById('pill-freq-input').value;
-        const notes = document.getElementById('pill-notes-input').value;
+    function setPillAddFrequency(freq, btn) {
+        MASTER_HK_STORE.addPillFrequency = freq;
+        document.querySelectorAll('.add-freq-btn').forEach(b => {
+            b.className = "add-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-gray-50 border text-gray-400";
+        });
+        btn.className = "add-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-brand text-white shadow-md";
+    }
 
-        if(!medicineName || !timeInput) {
-            alert("Kripya medicine name aur timing zaroor likhein");
+    function renderAddTimesTags() {
+        const container = document.getElementById('add-pill-times-container');
+        container.innerHTML = MASTER_HK_STORE.addPillTimes.map((t, idx) => `
+            <div class="bg-brand-light text-brand font-black text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 border border-brand/10">
+                <span>${t}</span>
+                <span onclick="removeAddTime(${idx})" class="cursor-pointer font-bold text-gray-400 hover:text-brand">✕</span>
+            </div>
+        `).join('') + `
+            <button onclick="addNewTimeInput()" class="bg-gray-100 font-bold text-xs px-4 py-2 rounded-xl border border-dashed text-gray-500 hover:bg-gray-200">+ Add time</button>
+        `;
+    }
+
+    function removeAddTime(idx) {
+        MASTER_HK_STORE.addPillTimes.splice(idx, 1);
+        renderAddTimesTags();
+    }
+
+    function addNewTimeInput() {
+        const val = prompt("Enter Time (e.g. 09:00 AM):", "09:00 AM");
+        if(val) {
+            MASTER_HK_STORE.addPillTimes.push(val);
+            renderAddTimesTags();
+        }
+    }
+
+    async function saveNewPill() {
+        const name = document.getElementById('pill-add-name').value;
+        const dosage = document.getElementById('pill-add-dosage').value;
+        const start = document.getElementById('pill-add-start-date').value;
+        const end = document.getElementById('pill-add-end-date').value;
+        const remOn = document.getElementById('pill-add-reminder-on').checked;
+        const notes = document.getElementById('pill-add-notes').value;
+
+        if(!name || !dosage) {
+            alert("Kripya Medication Name aur Dosage fields zaroor likhein!");
             return;
         }
 
         const res = await apiRequest('/user/doctor/pills/add', 'POST', {
-            medicineName,
+            medicineName: name,
             dosage,
-            times: [timeInput], 
-            frequency,
-            notes,
-            startDate: new Date()
+            frequency: MASTER_HK_STORE.addPillFrequency,
+            times: MASTER_HK_STORE.addPillTimes,
+            startDate: start,
+            endDate: end,
+            isReminderOn: remOn,
+            notes
         });
 
         if(res.success) {
-            alert("Medication scheduled successfully!");
-            document.getElementById('pill-name-input').value = "";
-            document.getElementById('pill-dosage-input').value = "";
-            document.getElementById('pill-time-input').value = "";
-            document.getElementById('pill-notes-input').value = "";
-            toggleAddPillForm();
-            syncPills(); 
+            alert("Medication reminder saved!");
+            switchPillsSubview('list');
         } else {
-            alert("Error scheduling pill: " + res.message);
+            alert(res.message || "Failed to add medication");
         }
     }
 
-    // --- 4. HEALTH METRICS & MEAL LOGS ---
-    function toggleQuickMetricForm() {
-        const form = document.getElementById('quick-metric-form-panel');
-        form.classList.toggle('hidden');
+    async function openPillProfile(pillId) {
+        MASTER_HK_STORE.selectedPillId = pillId;
+        const pill = MASTER_HK_STORE.activePills.find(p => p._id === pillId);
+        if(!pill) return;
+
+        document.getElementById('pills-detail-header-title').innerText = pill.medicineName;
+        document.getElementById('pills-detail-name').innerText = pill.medicineName;
+        document.getElementById('pills-detail-dosage').innerText = pill.dosage || "1 Tablet";
+        document.getElementById('pills-detail-frequency').innerText = pill.frequency;
+        
+        document.getElementById('pills-detail-times').innerHTML = pill.times.map(t => `
+            <span class="bg-gray-100 text-gray-800 font-bold text-[10px] px-3 py-1.5 rounded-lg border">${t.time}</span>
+        `).join('');
+
+        document.getElementById('pills-detail-start').innerText = moment(pill.startDate).format('DD MMM YYYY');
+        document.getElementById('pills-detail-end').innerText = pill.endDate ? moment(pill.endDate).format('DD MMM YYYY') : "No end date";
+        document.getElementById('pills-detail-reminder-toggle').checked = pill.isReminderOn;
+        document.getElementById('pills-detail-notes').innerText = pill.notes || "Take after food with a glass of water.";
+
+        switchPillsSubview('details');
     }
 
-    async function submitNewMetric() {
-        const type = document.getElementById('metric-type-input').value;
-        const value = document.getElementById('metric-value-input').value;
-        const notes = document.getElementById('metric-notes-input').value;
+    function editSelectedMedication() {
+        const pill = MASTER_HK_STORE.activePills.find(p => p._id === MASTER_HK_STORE.selectedPillId);
+        if(!pill) return;
 
-        if(!value) {
-            alert("Kripya parameter value enter karein");
-            return;
+        document.getElementById('pill-edit-name').value = pill.medicineName;
+        document.getElementById('pill-edit-dosage').value = pill.dosage;
+        document.getElementById('pill-edit-start-date').value = moment(pill.startDate).format('YYYY-MM-DD');
+        document.getElementById('pill-edit-end-date').value = pill.endDate ? moment(pill.endDate).format('YYYY-MM-DD') : "No end date";
+        document.getElementById('pill-edit-reminder-on').checked = pill.isReminderOn;
+        document.getElementById('pill-edit-notes').value = pill.notes || "";
+
+        MASTER_HK_STORE.editPillFrequency = pill.frequency;
+        MASTER_HK_STORE.editPillTimes = pill.times.map(t => t.time);
+
+        document.querySelectorAll('.edit-freq-btn').forEach(btn => {
+            if (btn.innerText === pill.frequency) {
+                btn.className = "edit-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-brand text-white shadow-md";
+            } else {
+                btn.className = "edit-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-gray-50 border text-gray-400";
+            }
+        });
+
+        renderEditTimesTags();
+        switchPillsSubview('edit');
+    }
+
+    function setPillEditFrequency(freq, btn) {
+        MASTER_HK_STORE.editPillFrequency = freq;
+        document.querySelectorAll('.edit-freq-btn').forEach(b => {
+            b.className = "edit-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-gray-50 border text-gray-400";
+        });
+        btn.className = "edit-freq-btn flex-1 py-3 font-black text-xs rounded-xl bg-brand text-white shadow-md";
+    }
+
+    function renderEditTimesTags() {
+        const container = document.getElementById('edit-pill-times-container');
+        container.innerHTML = MASTER_HK_STORE.editPillTimes.map((t, idx) => `
+            <div class="bg-brand-light text-brand font-black text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 border border-brand/10">
+                <span>${t}</span>
+                <span onclick="removeEditTime(${idx})" class="cursor-pointer font-bold text-gray-400 hover:text-brand">✕</span>
+            </div>
+        `).join('') + `
+            <button onclick="addNewEditTimeInput()" class="bg-gray-100 font-bold text-xs px-4 py-2 rounded-xl border border-dashed text-gray-500 hover:bg-gray-200">+ Add time</button>
+        `;
+    }
+
+    function removeEditTime(idx) {
+        MASTER_HK_STORE.editPillTimes.splice(idx, 1);
+        renderEditTimesTags();
+    }
+
+    function addNewEditTimeInput() {
+        const val = prompt("Enter Time (e.g. 09:00 AM):", "09:00 AM");
+        if(val) {
+            MASTER_HK_STORE.editPillTimes.push(val);
+            renderEditTimesTags();
         }
+    }
 
-        const res = await apiRequest('/user/health-records/add-metric', 'POST', {
-            type, value, notes, date: new Date()
+    async function saveMedicationEdit() {
+        const res = await apiRequest(`/user/doctor/pills/update-pill-settings/${MASTER_HK_STORE.selectedPillId}`, 'PUT', {
+            times: MASTER_HK_STORE.editPillTimes,
+            isReminderOn: document.getElementById('pill-edit-reminder-on').checked,
+            notes: document.getElementById('pill-edit-notes').value,
+            endDate: document.getElementById('pill-edit-end-date').value
         });
 
         if(res.success) {
-            alert("Parameter logged successfully!");
-            document.getElementById('metric-value-input').value = "";
-            document.getElementById('metric-notes-input').value = "";
-            toggleQuickMetricForm();
-            syncStats(); 
+            alert("Medication configurations updated!");
+            switchPillsSubview('list');
         } else {
-            alert("Error: " + res.message);
+            alert(res.message || "Edit profile failed");
         }
     }
 
-    async function submitNewMeal() {
-        const mealType = document.getElementById('meal-type-input').value;
-        const kcal = parseInt(document.getElementById('meal-kcal-input').value);
-        const name = document.getElementById('meal-item-name').value;
-
-        if(isNaN(kcal) || !name) {
-            alert("Kripya calorie aur meal input fill karein");
-            return;
+    async function deleteSelectedMedication() {
+        if(!confirm("Kripya confirm karein: Kya aap is medicine ko schedule se delete karna chahte hain?")) return;
+        const res = await apiRequest(`/user/doctor/pills/delete/${MASTER_HK_STORE.selectedPillId}`, 'DELETE');
+        
+        if(res.success) {
+            alert("Medication successfully deleted!");
+            switchPillsSubview('list');
+        } else {
+            alert(res.message || "Failed to delete medicine");
         }
+    }
 
-        const res = await apiRequest('/user/health-records/add-meal', 'POST', {
-            mealType,
-            items: [{ name, kcal, qty: 1 }]
+    let overlayModalActivePill = null;
+    let overlayModalActiveTime = null;
+
+    async function triggerPillNotificationModal() {
+        const clientDate = moment().format('YYYY-MM-DD');
+        const clientDay = moment().day();
+
+        const res = await apiRequest(`/user/doctor/pills/today?clientDate=${clientDate}&clientDay=${clientDay}`);
+        
+        if(res.success && res.data.length > 0) {
+            let foundUntaken = null;
+            let foundTimeSlot = null;
+
+            for(let p of res.data) {
+                for(let t of p.times) {
+                    if(!t.isTakenToday) {
+                        foundUntaken = p;
+                        foundTimeSlot = t.time;
+                        break;
+                    }
+                }
+                if(foundUntaken) break;
+            }
+
+            if(foundUntaken) {
+                overlayModalActivePill = foundUntaken;
+                overlayModalActiveTime = foundTimeSlot;
+
+                document.getElementById('pills-modal-title').innerText = foundUntaken.medicineName;
+                document.getElementById('pills-modal-desc').innerText = `${foundUntaken.dosage || '1 tablet'} - After meals`;
+                document.getElementById('pills-modal-date').innerText = moment().format('DD MMM YYYY');
+                
+                setTimeout(() => {
+                    document.getElementById('pills-reminder-modal').classList.remove('hidden');
+                    lucide.createIcons();
+                }, 1500); 
+            }
+        }
+    }
+
+    function closePillModal() {
+        document.getElementById('pills-reminder-modal').classList.add('hidden');
+    }
+
+    async function submitPillModalAction(action) {
+        if(!overlayModalActivePill) return;
+
+        const res = await apiRequest(`/user/doctor/pills/action/${overlayModalActivePill._id}`, 'PATCH', {
+            time: overlayModalActiveTime,
+            action: action
         });
 
         if(res.success) {
-            alert("Meal calories logged!");
-            document.getElementById('meal-kcal-input').value = "";
-            document.getElementById('meal-item-name').value = "";
-            toggleQuickMetricForm();
-            syncStats();
+            alert(`Pill marked as ${action}!`);
+            closePillModal();
+            syncPills();
         } else {
-            alert("Error: " + res.message);
+            alert(res.message || "Process failed");
         }
     }
 
-    async function syncStats() {
-        const [breakdownRes, historyRes, statsRes] = await Promise.all([
-            apiRequest('/user/health-records/calorie-breakdown'),
-            apiRequest('/user/health-records/history'),
-            apiRequest('/user/health-records/stats?type=Heart rate&period=weekly') 
-        ]);
 
-        if(statsRes.success) {
-            document.getElementById('stat-min').innerText = statsRes.min || "--";
-            document.getElementById('stat-avg').innerText = statsRes.avg || "--";
-            document.getElementById('stat-max').innerText = statsRes.max || "--";
+    // --- 4. PERIOD TRACKER ACTIONS ---
+    async function syncMenstrual() {
+        document.querySelectorAll('.m-sub-tab').forEach(el => el.classList.add('hidden'));
+        document.getElementById(`m-tab-${currentMenstrualTab}`).classList.remove('hidden');
+
+        document.querySelectorAll('.m-tab-trigger').forEach(b => {
+            b.className = 'm-tab-trigger pb-3 text-sm font-semibold text-gray-400 border-b-2 border-transparent transition';
+        });
+        const activeTrigger = document.getElementById(`m-trigger-${currentMenstrualTab}`);
+        if(activeTrigger) {
+            activeTrigger.className = 'm-tab-trigger pb-3 text-sm font-black text-pink-500 border-b-2 border-pink-500 transition';
         }
 
-        if(breakdownRes.success && breakdownRes.data) {
-            const d = breakdownRes.data;
-            document.getElementById('calorie-master-ui').innerHTML = `
-                <div class="figma-card p-6 bg-brand-light/30 border border-brand/10 space-y-4">
-                    <div class="flex justify-between items-center">
-                        <div>
-                            <p class="text-[10px] font-black text-gray-400 uppercase tracking-widest">Total Calorie Intake</p>
-                            <p class="text-3xl font-black text-brand">${d.totalBurned || d.totalConsumed || 0} / ${d.goal} kcal</p>
-                        </div>
-                        <div class="bg-brand text-white p-3 rounded-2xl font-black text-xs">${d.percentage}%</div>
-                    </div>
-                    <div class="w-full bg-gray-100 h-3 rounded-full overflow-hidden">
-                        <div class="bg-brand h-full" style="width: ${Math.min(d.percentage, 100)}%"></div>
-                    </div>
-                    <div class="grid grid-cols-4 gap-2 pt-2">
-                        ${Object.entries(d.breakdown).map(([meal, kcal]) => `
-                            <div class="bg-white p-3 rounded-xl border text-center">
-                                <p class="text-[8px] font-black text-gray-400 uppercase">${meal}</p>
-                                <p class="text-[11px] font-black text-gray-800 mt-1">${kcal} kcal</p>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-        }
+        document.getElementById('m-calendar-action-panel').classList.add('hidden');
+        mSelectedDate = null;
 
-        if(historyRes.success && historyRes.data) {
-            document.getElementById('hist-list-ui').innerHTML = `
-                <div class="space-y-4 mt-6">
-                    <h3 class="font-black text-gray-800 text-sm uppercase tracking-widest px-1">Logged History</h3>
-                    ${historyRes.data.map(h => `
-                        <div class="figma-card p-4 flex justify-between items-center">
-                            <div>
-                                <h4 class="font-black text-xs uppercase text-gray-800">${h.type}</h4>
-                                <p class="text-[9px] text-gray-400 mt-1">${moment(h.date).format('DD MMM, hh:mm A')}</p>
-                            </div>
-                            <div class="text-right">
-                                <p class="font-black text-brand text-sm">${h.value} <span class="text-[9px] text-gray-400 font-bold">${h.unit || ''}</span></p>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
+        if(currentMenstrualTab === 'overview') {
+            const res = await apiRequest('/user/doctor/menstrual/insights');
+            if(res.success && res.data) {
+                document.getElementById('cycle-length-header').innerText = `Cycle length: ${res.data.cycleLength} days`;
+                document.getElementById('m-days-left-val').innerText = res.data.daysUntilNext;
+                document.getElementById('m-next-expected-date').innerText = moment(res.data.nextPeriodDate).format('MMM DD, YYYY');
+                document.getElementById('m-last-period-date-lbl').innerText = `Last Period: ${moment(res.data.lastPeriodDate).format('MMM DD')}`;
+                document.getElementById('m-avg-cycle-tag').innerText = `Avg cycle: ${res.data.cycleLength} days`;
+                document.getElementById('m-regularity-tag').innerText = res.data.regularity || "Regular cycle";
+            }
+        } else if(currentMenstrualTab === 'calendar') {
+            await renderMenstrualCalendar();
+        } else if(currentMenstrualTab === 'history') {
+            await renderMenstrualHistory();
         }
         lucide.createIcons();
     }
 
-    // Default configuration
-    document.getElementById('m-start-date-picker').value = moment().format('YYYY-MM-DD');
+    function switchMenstrualTab(tabName) {
+        currentMenstrualTab = tabName;
+        syncMenstrual();
+    }
+
+    async function logPeriodFromOverview() {
+        const selectedDate = document.getElementById('m-start-date-picker').value;
+        if(!selectedDate) {
+            alert("Kripya log date select karein!");
+            return;
+        }
+
+        const res = await apiRequest('/user/doctor/menstrual/log-period', 'POST', {
+            startDate: selectedDate
+        });
+
+        if(res.success) {
+            alert("New cycle logged successfully!");
+            syncMenstrual();
+        } else {
+            alert(res.message || "Something went wrong.");
+        }
+    }
+
+    async function renderMenstrualCalendar() {
+        const res = await apiRequest(`/user/doctor/menstrual/calendar?month=${menstrualCalendarMonth}`);
+        if(res.success) {
+            document.getElementById('m-calendar-title').innerText = moment(menstrualCalendarMonth, 'YYYY-MM').format('MMMM YYYY');
+            
+            const recordedDays = res.recordedPeriodDays || [];
+            const predictedDays = res.predictedPeriodDays || [];
+
+            const startOfMonth = moment(menstrualCalendarMonth, 'YYYY-MM').startOf('month');
+            const daysInMonth = startOfMonth.daysInMonth();
+            
+            let rawDay = startOfMonth.day();
+            let paddingDays = rawDay === 0 ? 6 : rawDay - 1;
+
+            let gridHtml = '';
+
+            for(let i = 0; i < paddingDays; i++) {
+                gridHtml += `<div class="aspect-square"></div>`;
+            }
+
+            for(let day = 1; day <= daysInMonth; day++) {
+                const dateStr = moment(startOfMonth).date(day).format('YYYY-MM-DD');
+                
+                let isRecorded = recordedDays.includes(dateStr);
+                let isPredicted = predictedDays.includes(dateStr);
+                let highlightType = isRecorded ? 'recorded' : (isPredicted ? 'predicted' : 'none');
+
+                let dayClass = 'aspect-square flex flex-col items-center justify-center text-xs font-bold rounded-full w-9 h-9 mx-auto transition cursor-pointer ';
+
+                if(isRecorded) {
+                    dayClass += ' bg-pink-500 text-white shadow-md shadow-pink-100';
+                } else if(isPredicted) {
+                    dayClass += ' border-2 border-pink-500 text-pink-500';
+                } else {
+                    dayClass += ' text-gray-800 hover:bg-gray-100';
+                }
+
+                gridHtml += `
+                    <div class="flex items-center justify-center py-1">
+                        <div onclick="clickCalendarDay('${dateStr}', '${highlightType}')" class="${dayClass}">${day}</div>
+                    </div>
+                `;
+            }
+
+            document.getElementById('m-calendar-grid').innerHTML = gridHtml;
+        }
+    }
+
+    function prevMenstrualMonth() {
+        menstrualCalendarMonth = moment(menstrualCalendarMonth, 'YYYY-MM').subtract(1, 'months').format('YYYY-MM');
+        renderMenstrualCalendar();
+    }
+
+    function nextMenstrualMonth() {
+        menstrualCalendarMonth = moment(menstrualCalendarMonth, 'YYYY-MM').add(1, 'months').format('YYYY-MM');
+        renderMenstrualCalendar();
+    }
+
+    function clickCalendarDay(dateStr, highlightType) {
+        mSelectedDate = dateStr;
+        const panel = document.getElementById('m-calendar-action-panel');
+        const label = document.getElementById('m-selected-day-lbl');
+        const container = document.getElementById('m-calendar-actions-container');
+
+        panel.classList.remove('hidden');
+        label.innerText = moment(dateStr).format('DD MMM, YYYY');
+
+        if(highlightType === 'recorded') {
+            container.innerHTML = `
+                <p class="text-[10px] text-pink-600 font-bold uppercase tracking-wide">This day is logged as bleeding period. Choose operation:</p>
+                <div class="flex gap-2">
+                    <button onclick="deleteSelectedPeriodLog()" class="flex-1 py-3.5 bg-red-500 text-white font-bold text-xs rounded-2xl shadow-md">Delete Log</button>
+                    <button onclick="showCalendarEditForm()" class="flex-1 py-3.5 bg-gray-900 text-white font-bold text-xs rounded-2xl shadow-md">Edit Date</button>
+                </div>
+                <div id="m-calendar-edit-form" class="hidden space-y-3 pt-2">
+                    <label class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Select New Start Date</label>
+                    <input type="date" id="m-calendar-new-start-date" class="w-full p-3 border rounded-xl font-bold text-xs outline-none" value="${dateStr}">
+                    <button onclick="applyPeriodEdit()" class="btn-brand w-full py-3 text-xs">Save Changes</button>
+                </div>
+            `;
+        } else {
+            container.innerHTML = `
+                <p class="text-[10px] text-gray-400 font-bold uppercase tracking-wide">No period logged for this date. Create a new log starting here?</p>
+                <button onclick="logPeriodFromCalendar()" class="btn-brand w-full py-4 text-xs font-black">🌸 Log Period Start Here</button>
+            `;
+        }
+    }
+
+    function showCalendarEditForm() {
+        document.getElementById('m-calendar-edit-form').classList.remove('hidden');
+    }
+
+    async function deleteSelectedPeriodLog() {
+        if(!confirm("Kripya confirm karein: Kya aap is period entry ko delete karna chahte hain?")) return;
+        const res = await apiRequest('/user/doctor/menstrual/delete-period', 'DELETE', {
+            startDate: mSelectedDate
+        });
+
+        if(res.success) {
+            alert("Entry successfully deleted!");
+            document.getElementById('m-calendar-action-panel').classList.add('hidden');
+            syncMenstrual();
+        } else {
+            alert(res.message || "Failed to delete log");
+        }
+    }
+
+    async function applyPeriodEdit() {
+        const newStart = document.getElementById('m-calendar-new-start-date').value;
+        if(!newStart) {
+            alert("Kripya valid date choose karein");
+            return;
+        }
+
+        const res = await apiRequest('/user/doctor/menstrual/edit-period', 'PUT', {
+            oldStartDate: mSelectedDate,
+            newStartDate: newStart
+        });
+
+        if(res.success) {
+            alert("Log updated successfully!");
+            document.getElementById('m-calendar-action-panel').classList.add('hidden');
+            syncMenstrual();
+        } else {
+            alert(res.message || "Edit operation failed");
+        }
+    }
+
+    async function logPeriodFromCalendar() {
+        const res = await apiRequest('/user/doctor/menstrual/log-period', 'POST', {
+            startDate: mSelectedDate
+        });
+
+        if(res.success) {
+            alert("Period start date registered successfully!");
+            document.getElementById('m-calendar-action-panel').classList.add('hidden');
+            syncMenstrual();
+        } else {
+            alert(res.message || "Process failed");
+        }
+    }
+
+    async function renderMenstrualHistory() {
+        const res = await apiRequest('/user/doctor/menstrual/history');
+        if(res.success) {
+            const container = document.getElementById('m-history-list');
+            if(!res.data || res.data.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-10 bg-gray-50 rounded-3xl p-6">
+                        <p class="text-gray-400 font-bold text-xs uppercase">No logged history found</p>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = res.data.map(item => {
+                    const calculatedDuration = item.duration || (item.endDate ? moment(item.endDate).diff(moment(item.startDate), 'days') + 1 : 5);
+                    
+                    return `
+                        <div class="figma-card p-5 border border-pink-100 bg-pink-50/10 flex items-center gap-4 transition hover:shadow-lg">
+                            <div class="w-3.5 h-3.5 rounded-full bg-pink-500 flex-shrink-0 animate-pulse"></div>
+                            <div>
+                                <h4 class="font-black text-sm text-gray-800 uppercase tracking-tight">
+                                    ${moment(item.startDate).format('MMMM DD, YYYY')}
+                                </h4>
+                                <p class="text-[10px] text-pink-600 font-black uppercase tracking-wider mt-1">
+                                    ${calculatedDuration} days duration
+                                </p>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+    }
+
+    // --- 5. HEALTH METRICS & MEAL LOGS ENHANCED FLOW (Figma Screenshots 1-7) ---
+
+    function switchTrackerSubview(viewId) {
+        document.querySelectorAll('.tracker-view').forEach(view => view.classList.add('hidden'));
+        document.getElementById(`tracker-view-${viewId}`).classList.remove('hidden');
+        
+        if (viewId === 'main') {
+            syncStats();
+        } else if (viewId === 'heart-rate') {
+            renderHeartRateDetailProfile();
+        } else if (viewId === 'bp') {
+            renderBloodPressureDetailProfile();
+        } else if (viewId === 'add-bp') {
+            resetBPAddForm();
+        } else if (viewId === 'calories') {
+            renderCaloriesDetailProfile();
+        } else if (viewId === 'add-meal') {
+            resetAddMealForm();
+        } else if (viewId === 'add-data') {
+            resetGenericAddDataForm();
+        }
+        lucide.createIcons();
+    }
+
+    function changeTrackerPeriod(period, btn) {
+        trackerPeriodState = period;
+        document.querySelectorAll('.tracker-period-btn').forEach(b => {
+            b.className = "tracker-period-btn flex-1 py-2.5 font-black text-[10px] uppercase rounded-xl text-gray-400";
+        });
+        btn.className = "tracker-period-btn flex-1 py-2.5 font-black text-[10px] uppercase rounded-xl bg-white shadow-sm text-gray-800";
+        syncStats();
+    }
+
+    // A. Main Health Tracker Dashboard (Figma Screen 1)
+    async function syncStats() {
+        const res = await apiRequest('/user/health-records/summary');
+        if (res.success) {
+            // Header stats
+            document.getElementById('tracker-main-healthscore').innerText = `${res.healthScore}%`;
+            document.getElementById('tracker-main-weeklyprogress').innerText = `${res.weeklyProgress} vs last week`;
+
+            // Today's Activity Table card (Screenshot 1 Bottom)
+            const today = res.todayActivity || { stepsWalked: 0, caloriesBurned: 0, avgHeartRate: 0, activeMinutes: 0 };
+            document.getElementById('tracker-activity-steps').innerText = `${today.stepsWalked.toLocaleString()} steps`;
+            document.getElementById('tracker-activity-calories').innerText = `${today.caloriesBurned.toLocaleString()} kcal`;
+            document.getElementById('tracker-activity-heartrate').innerText = `${today.avgHeartRate} bpm`;
+            document.getElementById('tracker-activity-minutes').innerText = `${today.activeMinutes} min`;
+
+            // Key Metrics dynamic Cards Grid (Screenshot 1)
+            const summaryData = res.data || {};
+            const metricConfigs = {
+                'Heart rate': { icon: 'activity', colorClass: 'text-red-500 bg-rose-50 border-rose-100', statusText: 'Stable today', barColor: 'bg-red-500', route: 'heart-rate', defaultUnit: 'bpm' },
+                'Steps': { icon: 'footprints', colorClass: 'text-teal-500 bg-teal-50 border-teal-100', statusText: 'on track to goal', barColor: 'bg-teal-500', route: 'add-data', defaultUnit: 'steps' },
+                'Calories': { icon: 'flame', colorClass: 'text-orange-500 bg-orange-50 border-orange-100', statusText: 'Slightly above target', barColor: 'bg-orange-500', route: 'calories', defaultUnit: 'kcal' },
+                'Blood Pressure': { icon: 'heart', colorClass: 'text-rose-500 bg-red-50 border-red-100', statusText: 'Within normal range', barColor: 'bg-rose-500', route: 'bp', defaultUnit: 'mmHg' }
+            };
+
+            document.getElementById('tracker-main-metrics-grid').innerHTML = Object.entries(metricConfigs).map(([type, config]) => {
+                const record = summaryData[type];
+                const displayVal = record ? record.value : '--';
+                const displayUnit = record ? record.unit : config.defaultUnit;
+                
+                // Progress bar proportional width simulation
+                let barWidth = "30%";
+                if (type === 'Steps' && record) barWidth = `${Math.min(Math.round((record.numericValue / 10000) * 100), 100)}%`;
+                if (type === 'Calories' && record) barWidth = `${Math.min(Math.round((record.numericValue / 2000) * 100), 100)}%`;
+                if (type === 'Heart rate' && record) barWidth = `${Math.min(Math.round((record.numericValue / 120) * 100), 100)}%`;
+                if (type === 'Blood Pressure' && record) barWidth = "65%"; // BP standard layout width
+
+                return `
+                    <div onclick="switchTrackerSubview('${config.route}')" class="figma-card p-5 space-y-3.5 cursor-pointer hover:border-brand/20 transition">
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs font-bold text-gray-400 uppercase">${type}</span>
+                            <div class="p-2 rounded-xl ${config.colorClass}">
+                                <i data-lucide="${config.icon}" class="w-4 h-4"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <h4 class="font-black text-lg text-gray-800 tracking-tight leading-none">${displayVal} <span class="text-[9px] text-gray-400 font-black uppercase">${displayUnit}</span></h4>
+                            <p class="text-[8px] text-brand font-black uppercase mt-2 tracking-wider">${config.statusText}</p>
+                        </div>
+                        <!-- Key metric slider progress bar -->
+                        <div class="w-full bg-gray-100 h-2.5 rounded-full overflow-hidden">
+                            <div class="${config.barColor} h-full" style="width: ${barWidth}"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        lucide.createIcons();
+    }
+
+    // B. Heart Rate Detail Profile Screen (Figma Screenshot 2)
+    async function renderHeartRateDetailProfile() {
+        const res = await apiRequest(`/user/health-records/stats?type=Heart rate&period=${trackerPeriodState}`);
+        if (res.success) {
+            // Aggregate indicators
+            const avgHR = Math.round(res.avg) || 0;
+            document.getElementById('hr-detail-today-avg').innerText = avgHR;
+            document.getElementById('hr-detail-today-min').innerText = `Min ${res.min || 0}`;
+            document.getElementById('hr-detail-today-max').innerText = `Max ${res.max || 0}`;
+
+            const historyList = res.history || [];
+            if (historyList.length === 0) {
+                document.getElementById('hr-history-list').innerHTML = `
+                    <div class="text-center py-6 bg-gray-50 rounded-3xl p-6">
+                        <p class="text-gray-400 font-bold text-xs uppercase">No logged heart readings</p>
+                    </div>
+                `;
+            } else {
+                document.getElementById('hr-history-list').innerHTML = historyList.map(h => {
+                    const val = h.numericValue;
+                    
+                    // Categorise Heart Rate status (Screenshot 2 dynamic labels mapping)
+                    let statusLabel = "Within range";
+                    let statusColor = "bg-sky-50 text-sky-600 border-sky-100";
+                    if (val < 60) {
+                        statusLabel = "Resting";
+                        statusColor = "bg-emerald-50 text-emerald-600 border-emerald-100";
+                    } else if (val > 90) {
+                        statusLabel = "Slightly high";
+                        statusColor = "bg-yellow-50 text-yellow-600 border-yellow-100";
+                    } else if (val > 110) {
+                        statusLabel = "Exercise";
+                        statusColor = "bg-rose-50 text-rose-500 border-rose-100";
+                    }
+
+                    return `
+                        <div class="figma-card p-5 border flex justify-between items-center">
+                            <div>
+                                <h4 class="font-black text-sm text-gray-800 tracking-tight">${val} <span class="text-[9px] text-gray-400 font-black uppercase">bps</span></h4>
+                                <p class="text-[10px] text-gray-400 font-bold uppercase mt-1">
+                                    ${moment(h.date).calendar()} - ${h.note || 'Resting'}
+                                </p>
+                            </div>
+                            <span class="text-[8px] font-black uppercase px-2.5 py-1 rounded-lg border ${statusColor}">${statusLabel}</span>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+        lucide.createIcons();
+    }
+
+    // C. Blood Pressure Tracker Detail Page (Figma Screenshot 3)
+    async function renderBloodPressureDetailProfile() {
+        const res = await apiRequest(`/user/health-records/stats?type=Blood Pressure&period=${trackerPeriodState}`);
+        if (res.success) {
+            const historyList = res.history || [];
+            
+            // Render latest reading parameters in banner
+            if (historyList.length > 0) {
+                const latest = historyList[0];
+                document.getElementById('bp-detail-banner-value').innerHTML = `${latest.value} <span class="text-xs uppercase text-white/70 font-bold">mmHg</span>`;
+                
+                const systolic = parseInt(latest.value.split('/')[0]);
+                const diastolic = parseInt(latest.value.split('/')[1]) || 80;
+                
+                // Categorise status (Figma Screenshot 3 indicators)
+                let statusLabel = 'Normal';
+                if (systolic >= 130 || diastolic >= 85) statusLabel = 'High';
+                else if (systolic >= 120 || diastolic >= 80) statusLabel = 'Slightly High';
+
+                document.getElementById('bp-detail-banner-status').innerText = statusLabel;
+            } else {
+                document.getElementById('bp-detail-banner-value').innerHTML = `-- / -- <span class="text-xs uppercase text-white/70 font-bold">mmHg</span>`;
+                document.getElementById('bp-detail-banner-status').innerText = "No Records";
+            }
+
+            // Render Recent readings (Screenshot 3 Recently list)
+            if (historyList.length === 0) {
+                document.getElementById('bp-recent-readings').innerHTML = `
+                    <div class="text-center py-6 bg-gray-50 rounded-3xl p-6">
+                        <p class="text-gray-400 font-bold text-xs uppercase">No BP records logged</p>
+                    </div>
+                `;
+            } else {
+                document.getElementById('bp-recent-readings').innerHTML = historyList.map(h => `
+                    <div class="figma-card p-5 border flex justify-between items-center hover:shadow-md transition">
+                        <div>
+                            <h4 class="font-black text-sm text-gray-800 tracking-tight">${h.value} <span class="text-[9px] text-gray-400 font-black uppercase">mmHg</span></h4>
+                            <p class="text-[9px] text-gray-400 font-bold uppercase mt-1">Logged ${moment(h.date).calendar()}</p>
+                        </div>
+                        <i data-lucide="chevron-right" class="text-gray-200"></i>
+                    </div>
+                `).join('');
+            }
+        }
+        lucide.createIcons();
+    }
+
+    // D. DEDICATED ADD BP FORM (Figma Screenshot 4)
+    function resetBPAddForm() {
+        document.getElementById('bp-add-systolic').value = "118";
+        document.getElementById('bp-add-diastolic').value = "76";
+        document.getElementById('bp-add-heartrate').value = "72";
+        document.getElementById('bp-add-date').value = moment().format('YYYY-MM-DD');
+        document.getElementById('bp-add-time').value = moment().format('HH:mm');
+        document.getElementById('bp-add-notes').value = "feeling normal after walking walk";
+    }
+
+    async function saveNewBPReading() {
+        const sys = document.getElementById('bp-add-systolic').value;
+        const dia = document.getElementById('bp-add-diastolic').value;
+        const hr = document.getElementById('bp-add-heartrate').value;
+        const dt = document.getElementById('bp-add-date').value;
+        const tm = document.getElementById('bp-add-time').value;
+        const note = document.getElementById('bp-add-notes').value;
+
+        if(!sys || !dia) {
+            alert("Systolic aur Diastolic BP inputs verify karein!");
+            return;
+        }
+
+        const dateObj = moment(`${dt} ${tm}`, 'YYYY-MM-DD HH:mm').toDate();
+
+        const res = await apiRequest('/user/health-records/add-metric', 'POST', {
+            type: 'Blood Pressure',
+            value: `${sys}/${dia}`,
+            notes: note,
+            date: dateObj,
+            heartRate: hr 
+        });
+
+        if (res.success) {
+            alert("Blood pressure metrics saved!");
+            switchTrackerSubview('bp');
+        } else {
+            alert("Error: " + res.message);
+        }
+    }
+
+    // E. CALORIES TRACKER DETAIL VIEW (Figma Screenshot 5)
+    async function renderCaloriesDetailProfile() {
+        const res = await apiRequest('/user/health-records/calorie-breakdown');
+        if (res.success && res.data) {
+            const d = res.data;
+            document.getElementById('cal-detail-consumed-val').innerText = d.totalConsumed.toLocaleString();
+            document.getElementById('cal-detail-goal-val').innerText = d.goal.toLocaleString();
+            document.getElementById('cal-detail-pct-badge').innerText = `${d.percentage}%`;
+
+            // Breakdowns card populating (Screenshot 5 breakdown list)
+            document.getElementById('cal-breakdown-breakfast').innerText = `${d.breakdown.Breakfast || 0} kcal`;
+            document.getElementById('cal-breakdown-lunch').innerText = `${d.breakdown.Lunch || 0} kcal`;
+            document.getElementById('cal-breakdown-dinner').innerText = `${d.breakdown.Dinner || 0} kcal`;
+            document.getElementById('cal-breakdown-snacks').innerText = `${d.breakdown.Snacks || 0} kcal`;
+        }
+    }
+
+    // F. DEDICATED ADD MEAL FORM (Figma Screenshot 6)
+    function resetAddMealForm() {
+        MASTER_HK_STORE.availableFoods.forEach(f => f.qty = 0);
+        MASTER_HK_STORE.addMealType = "Breakfast";
+
+        document.querySelectorAll('.add-meal-type-btn').forEach(btn => {
+            if(btn.innerText === MASTER_HK_STORE.addMealType) {
+                btn.className = "add-meal-type-btn flex-1 py-3 rounded-xl font-black text-xs bg-orange-500 text-white shadow-md shadow-orange-100";
+            } else {
+                btn.className = "add-meal-type-btn flex-1 py-3 rounded-xl font-black text-xs text-gray-400";
+            }
+        });
+        
+        renderAddMealFoodsList();
+    }
+
+    function setAddMealType(type, btn) {
+        MASTER_HK_STORE.addMealType = type;
+        document.querySelectorAll('.add-meal-type-btn').forEach(b => {
+            b.className = "add-meal-type-btn flex-1 py-3 rounded-xl font-black text-xs text-gray-400";
+        });
+        btn.className = "add-meal-type-btn flex-1 py-3 rounded-xl font-black text-xs bg-orange-500 text-white shadow-md shadow-orange-100";
+    }
+
+    function renderAddMealFoodsList() {
+        document.getElementById('add-meal-items-list').innerHTML = MASTER_HK_STORE.availableFoods.map(f => `
+            <div class="figma-card p-5 border flex justify-between items-center transition hover:shadow-lg">
+                <div>
+                    <h4 class="font-black text-sm text-gray-800 uppercase">${f.name}</h4>
+                    <p class="text-[10px] text-orange-500 font-bold mt-1">${f.kcal} kcal</p>
+                </div>
+                <div class="flex items-center gap-4">
+                    <button onclick="changeFoodQty('${f.id}', -1)" class="w-10 h-10 border rounded-full flex items-center justify-center font-black text-gray-400 hover:bg-gray-100 transition">-</button>
+                    <span class="font-black text-sm text-gray-800" id="qty-lbl-${f.id}">${f.qty}</span>
+                    <button onclick="changeFoodQty('${f.id}', 1)" class="w-10 h-10 bg-orange-500 text-white rounded-full flex items-center justify-center font-black transition hover:bg-orange-600 shadow-md shadow-orange-100">+</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function changeFoodQty(foodId, delta) {
+        const food = MASTER_HK_STORE.availableFoods.find(f => f.id === foodId);
+        if(food) {
+            food.qty += delta;
+            if (food.qty < 0) food.qty = 0;
+            document.getElementById(`qty-lbl-${foodId}`).innerText = food.qty;
+        }
+    }
+
+    async function saveMealIntakeRecord() {
+        const loggedItems = MASTER_HK_STORE.availableFoods
+            .filter(f => f.qty > 0)
+            .map(f => ({ name: f.name, kcal: f.kcal, qty: f.qty }));
+
+        if(loggedItems.length === 0) {
+            alert("Kripya kam se kam ek food item ki quantity select karein!");
+            return;
+        }
+
+        const res = await apiRequest('/user/health-records/add-meal', 'POST', {
+            mealType: MASTER_HK_STORE.addMealType,
+            items: loggedItems
+        });
+
+        if (res.success) {
+            alert("Meal logs saved!");
+            switchTrackerSubview('calories');
+        } else {
+            alert("Failed to save meal data");
+        }
+    }
+
+    // G. GENERIC ADD HEALTH DATA (Figma Screenshot 7)
+    function resetGenericAddDataForm() {
+        document.getElementById('add-data-value-input').value = "";
+        document.getElementById('add-data-notes-input').value = "";
+        document.getElementById('add-data-date-input').value = moment().format('YYYY-MM-DD');
+        document.getElementById('add-data-time-input').value = moment().format('HH:mm');
+        setAddDataType('Heart rate', document.querySelector('.add-data-type-btn'));
+    }
+
+    function setAddDataType(type, btn) {
+        MASTER_HK_STORE.addDataType = type;
+        document.querySelectorAll('.add-data-type-btn').forEach(b => {
+            b.className = "add-data-type-btn py-3 font-bold text-xs rounded-xl bg-gray-50 border text-gray-500";
+        });
+        btn.className = "add-data-type-btn py-3 font-bold text-xs rounded-xl bg-brand text-white shadow-md";
+
+        const units = { 'Heart rate': 'bpm', 'Blood Pressure': 'mmHg', 'Weight': 'kg', 'Sugar': 'mg/dL' };
+        document.getElementById('add-data-unit-label').innerText = units[type] || 'units';
+    }
+
+    async function submitGenericHealthData() {
+        const val = document.getElementById('add-data-value-input').value;
+        const notes = document.getElementById('add-data-notes-input').value;
+        const dt = document.getElementById('add-data-date-input').value;
+        const tm = document.getElementById('add-data-time-input').value;
+
+        if(!val) {
+            alert("Kripya value field enter karein!");
+            return;
+        }
+
+        const dateObj = moment(`${dt} ${tm}`, 'YYYY-MM-DD HH:mm').toDate();
+
+        const res = await apiRequest('/user/health-records/add-metric', 'POST', {
+            type: MASTER_HK_STORE.addDataType,
+            value: val,
+            notes,
+            date: dateObj
+        });
+
+        if (res.success) {
+            alert("Parameters logged!");
+            switchTrackerSubview('main');
+        } else {
+            alert("Log parameters failed: " + res.message);
+        }
+    }
+
     lucide.createIcons();
 </script>
 </body>
