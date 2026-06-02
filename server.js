@@ -127,15 +127,20 @@ app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); //
 //-- admin others folder routes ---
 app.use('/api/admin/fire', require('./routes/admin/others/manageFireStationAndHeadquaterRoute')); // Fire Management Route
 // --- Admin pharmacy Routes ---
+app.use('/admin/pharmacy', require('./routes/admin/Pharmacy/PharmacyAdminRoute')); // Pharmacy Management Route
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
 // --- Admin Lab Routes ---
+app.use('/admin/lab', require('./routes/admin/Lab/LabAdminRoute')); // Lab Management Route
 app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // Master Lab Test Upload & List Route
 // --- Admin Nurse Routes ---
+app.use('/admin/nurse', require('./routes/admin/Nurse/NurseAdminRoute')); // Nurse Management Route
 app.use('/admin/nurse-csv', require('./routes/admin/Nurse/CategoryUploadRoute')); // Master Nurse Category Upload & List Route
 // --- Admin Hospital Routes ---
 app.use('/admin/hospital', require('./routes/admin/Hospital/HospitalAdminRoute')); // Hospital Management Route
 // --- Admin Doctor Routes ---
 app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // Doctor Management Route
+// --- Admin Ambulance Routes ---
+app.use('/admin/ambulance', require('./routes/admin/Ambulance/AmbulanceAdminRoute')); // Ambulance Management Route
 
 
 

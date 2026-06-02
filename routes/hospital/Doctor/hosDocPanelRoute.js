@@ -6,7 +6,7 @@ const {
     getPatientDetails, 
     processPrescription, 
     getHospitalColleagues, 
-    transferPatient, 
+    transferPatient, acceptTransfer,
     submitDischargeSummary, 
     updateDutyStatus,getMedicineList, updateClinicalSummary
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
@@ -21,6 +21,8 @@ router.post('/prescription/add', protect('hospital-doctor'), processPrescription
 
 router.get('/colleagues', protect('hospital-doctor'), getHospitalColleagues); // For transfer dropdown
 router.post('/case/transfer', protect('hospital-doctor'), transferPatient);
+router.post('/case/accept-transfer', protect('hospital-doctor'), acceptTransfer); // 👈 ADD THIS ROUTE
+
 
 router.post('/case/discharge-summary', protect('hospital-doctor'), submitDischargeSummary);
 

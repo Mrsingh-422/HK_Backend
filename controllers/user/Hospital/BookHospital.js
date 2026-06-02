@@ -423,6 +423,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
 
 // --- 3. FINAL RANGE BOOKING ---
 // 3. FINAL RANGE BOOKING (Fixed Ward available bed update and schema binding)
+// --- 3. FINAL RANGE BOOKING (Complete dynamic flow with strict overlap check & secure coupon array updates) ---
 const finalHospitalBooking = async (req, res) => {
     try {
         const {
@@ -431,7 +432,7 @@ const finalHospitalBooking = async (req, res) => {
             specialServices, couponId, couponCode
         } = req.body;
 
-        // Strict validation check for overlapping date ranges
+        // 1. RULE 1: Strict double-booking validation check for selected date range
         if (bedId && startDate && endDate) {
             const start = moment(startDate).startOf('day').toDate();
             const end = moment(endDate).endOf('day').toDate();
@@ -458,20 +459,22 @@ const finalHospitalBooking = async (req, res) => {
         let wardName = "";
         let bedNumber = "";
 
-        // Bed updates aur direct Ward reference decrement handling (FIXED beds._id bug)
+        // 2. Bed updates aur direct Ward reference decrement handling (FIXED beds._id bug)
         if (bedId) {
             const bed = await Bed.findById(bedId).populate('wardId');
             if (bed) {
                 bedNumber = bed.bedNumber;
                 if (bed.wardId) {
                     wardName = bed.wardId.name;
-                    // Direct correct Ward matching update
+                    // Ward ki total available count decrease karein
                     await Ward.findByIdAndUpdate(bed.wardId._id, { $inc: { availableBeds: -1 } });
                 }
             }
-            await Bed.findByIdAndUpdate(bedId, { status: 'Occupied' });
+            // FIX: Booking ke waqt bed strictly 'Reserved' hoga, 'Occupied' physical admission par badlega!
+            await Bed.findByIdAndUpdate(bedId, { status: 'Reserved' }); 
         }
 
+        // 3. Create Appointment using the mapped schemas keys
         const appointment = await Appointment.create({
             userId: req.user.id,
             hospitalId,
@@ -495,22 +498,34 @@ const finalHospitalBooking = async (req, res) => {
             couponDetails: couponId ? { couponId, couponCode, discountValue: pricing.discountAmount } : undefined,
             totalAmount: pricing.totalPayable,
             bookingId,
-            status: 'Hospital-Pending',
+            status: 'Hospital-Pending', // Strictly pending for hospital acceptance
             wardName,
             bedNumber
         });
 
+        // 4. SECURE COUPON TRACKING: Array push loophole dhoor kiya gaya hai
         if (couponId) {
-            await Coupon.findByIdAndUpdate(couponId, { $push: { usedBy: { userId: req.user.id, usageCount: 1 } } });
+            const existingUsage = await Coupon.findOne({ _id: couponId, "usedBy.userId": req.user.id });
+            if (existingUsage) {
+                // Agar user pehle use kar chuka hai, toh uski usageCount increment karenge
+                await Coupon.updateOne(
+                    { _id: couponId, "usedBy.userId": req.user.id },
+                    { $inc: { "usedBy.$.usageCount": 1 } }
+                );
+            } else {
+                // Pehli baar use karne par push karenge
+                await Coupon.findByIdAndUpdate(couponId, { 
+                    $push: { usedBy: { userId: req.user.id, usageCount: 1 } } 
+                });
+            }
         }
 
         res.status(201).json({ success: true, bookingId, data: appointment });
     } catch (error) { 
-        console.log(error);
+        console.error("Booking Error:", error);
         res.status(500).json({ message: error.message }); 
     }
 };
-
 
 const cancelBedBooking = async (req, res) => {
     try {

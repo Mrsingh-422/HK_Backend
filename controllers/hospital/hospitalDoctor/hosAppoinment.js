@@ -1,9 +1,11 @@
+// controllers/hospital/hospitalDoctor/hosAppoinment.js
+
 const Appointment = require('../../../models/Appointment');
 const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed');
 const mongoose = require('mongoose');
 
-// 1. GET ALL BOOKINGS (Bifurcated & Searchable)
+// 1. GET ALL BOOKINGS
 const getHospitalAllBookings = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -20,7 +22,7 @@ const getHospitalAllBookings = async (req, res) => {
             .populate({
                 path: 'bedId',
                 select: 'bedNumber pricePerDay',
-                populate: { path: 'wardId', select: 'name type' } // Detailed ward info
+                populate: { path: 'wardId', select: 'name type' } 
             })
             .populate('userId', 'name phone email profilePic age gender')
             .sort({ createdAt: -1 })
@@ -33,31 +35,29 @@ const getHospitalAllBookings = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. APPROVE & ASSIGN (Professional Flow - Screenshot 35)
-// Hospital admin patient ke liye doctor assign karke approve karega
+// 2. APPROVE & ASSIGN (Fixed: Bed status marked as 'Reserved' instead of premature 'Occupied')
 const approveHospitalBooking = async (req, res) => {
     try {
-        const { doctorId } = req.body; // Figma: Assign Doctor during approval
+        const { doctorId } = req.body; 
         const hospitalId = req.user.id;
 
         const appointment = await Appointment.findOne({ _id: req.params.id, hospitalId });
         if (!appointment) return res.status(404).json({ message: "Booking not found" });
 
-        // Update Appointment
-        appointment.status = 'Confirmed';
+        appointment.status = 'Confirmed'; // Awaiting physical arrival/admission
         if (doctorId) appointment.doctorId = doctorId;
         
-        // Bed logic: Reserved -> Occupied
+        // FIX: Bed is reserved during approval, not occupied yet (Occupied will trigger at physical admission)
         if (appointment.bookingType === 'Admission' && appointment.bedId) {
-             await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Occupied' } });
+             await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Reserved' } });
         }
 
         await appointment.save();
-        res.json({ success: true, message: "Admission Confirmed & Doctor Assigned", data: appointment });
+        res.json({ success: true, message: "Admission Confirmed & Bed Reserved", data: appointment });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. REJECT & RELEASE (Screenshot 34)
+// 3. REJECT & RELEASE
 const rejectHospitalBooking = async (req, res) => {
     try {
         const { reason } = req.body;
@@ -74,7 +74,6 @@ const rejectHospitalBooking = async (req, res) => {
             cancelledAt: new Date()
         };
 
-        // Bed logic: Reserved -> Available (Release bed if rejected)
         if (appointment.bedId) {
             const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             if (bed) {
@@ -83,11 +82,11 @@ const rejectHospitalBooking = async (req, res) => {
         }
 
         await appointment.save();
-        res.json({ success: true, message: "Booking Rejected & Bed Released for others" });
+        res.json({ success: true, message: "Booking Rejected & Bed Released successfully" });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 4. STATS (Screenshot 4)
+// 4. STATS (Fixed: Discharge counts track strictly clinically released 'Discharge-Pending' status)
 const getHospitalStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -98,7 +97,7 @@ const getHospitalStats = async (req, res) => {
                 _id: null,
                 emergency: { $sum: { $cond: [{ $eq: ["$triageLevel", "Emergency"] }, 1, 0] } },
                 admission: { $sum: { $cond: [{ $eq: ["$bookingType", "Admission"] }, 1, 0] } },
-                discharge: { $sum: { $cond: [{ $eq: ["$status", "Confirmed"] }, 1, 0] } } // Discharges Pending
+                discharge: { $sum: { $cond: [{ $eq: ["$status", "Discharge-Pending"] }, 1, 0] } } // 👈 FIXED
             }}
         ]);
 

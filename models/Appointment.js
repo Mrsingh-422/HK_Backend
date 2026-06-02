@@ -63,10 +63,9 @@ const appointmentSchema = new mongoose.Schema({
     // System Fields
     status: { 
         type: String, 
-        enum: ['Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'], 
+        enum: ['Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'], 
         default: 'Pending' 
     },
-    bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null },
     stayDuration: { type: Number, default: 0 }, // For Bed Booking (Number of days)
     bookingType: { type: String, enum: ['Appointment', 'Admission'], default: 'Appointment' },
        bookingId: { type: String, unique: true },
@@ -81,9 +80,37 @@ const appointmentSchema = new mongoose.Schema({
     // For Hospital Admissions
     startDate: { type: Date }, // Admission start
     endDate: { type: Date },   // Admission end
-    stayDuration: { type: Number },
     cancellationCount: { type: Number, default: 0 },
     rescheduleCount: { type: Number, default: 0 },
+
+    // for hospital transfer
+    pendingDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null }, // 👈 Handover target doctor
+    treatmentHistory: [{
+    fromDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
+    toDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
+    action: { 
+        type: String, 
+        enum: ['Initial-Assignment', 'Transfer-Initiated', 'Transfer-Accepted', 'Discharged'], 
+        default: 'Initial-Assignment' 
+    },
+
+    notes: { type: String, default: "" },
+    timestamp: { type: Date, default: Date.now },
+
+    }],
+    clinicalSummary: {
+        diagnosis: { type: String, default: "" },
+        investigation: { type: String, default: "" },
+        treatmentResult: { type: String, default: "" },
+        dischargeNote: { type: String, default: "" },
+        dischargedAt: { type: Date, default: null },
+        
+        // Supports updateClinicalSummary endpoint
+        chiefComplaint: { type: String, default: "" },
+        triagePriority: { type: String, default: "" },
+        admissionNote: { type: String, default: "" },
+        bloodGroup: { type: String, default: "" }
+    },
 
 }, { timestamps: true });
 

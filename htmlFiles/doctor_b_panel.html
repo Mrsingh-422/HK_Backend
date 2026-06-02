@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doctor Panel B - Handover System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+</head>
+<body class="bg-slate-900 p-8 min-h-screen flex justify-center items-center">
+
+    <div class="w-[450px] bg-slate-800 text-white rounded-[35px] border border-slate-700 overflow-hidden shadow-2xl p-6 space-y-6">
+        <header class="flex justify-between items-center border-b border-slate-700 pb-4">
+            <div>
+                <p class="text-[10px] text-amber-400 font-bold uppercase tracking-wider">Doctor Panel</p>
+                <h2 class="text-xl font-black">Incoming Handover (Dr. B)</h2>
+            </div>
+            <i data-lucide="git-pull-request" class="text-amber-400"></i>
+        </header>
+
+        <!-- Auth token section -->
+        <div class="space-y-2">
+            <label class="text-[9px] font-black uppercase text-slate-400">Enter Doctor B Token</label>
+            <input type="text" id="doc-token" placeholder="Paste h_token here..." class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-xs font-mono outline-none focus:border-amber-400 text-amber-400">
+            <button onclick="loadIncomingTransfers()" class="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 py-3 rounded-xl text-xs font-black uppercase tracking-wider">Load Incoming Handover requests</button>
+        </div>
+
+        <!-- Incoming requests list -->
+        <div class="space-y-3">
+            <h4 class="text-xs font-black uppercase text-slate-400">Pending Transfers to Me</h4>
+            <div id="incoming-transfers" class="space-y-2 max-h-[220px] overflow-y-auto"></div>
+        </div>
+
+        <!-- History/Audit Timeline for selected pending transfer -->
+        <div id="timeline-zone" class="hidden space-y-3 border-t border-slate-700 pt-4">
+            <h4 class="text-xs font-black uppercase text-slate-400">Patient Treatment Trail</h4>
+            <div id="audit-timeline" class="space-y-3 max-h-[150px] overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <script>
+        const API = "http://localhost:5002/hospital-doctor/panel";
+        const getHeaders = () => ({ "Authorization": `Bearer ${document.getElementById('doc-token').value}`, "Content-Type": "application/json" });
+
+        async function loadIncomingTransfers() {
+            const res = await fetch(`${API}/cases`, { headers: getHeaders() });
+            const json = await res.json();
+            if(json.success && json.data) {
+                // Filter only cases where pendingDoctorId matches current logged-in doctor
+                const pendingHandover = json.data.filter(c => c.pendingDoctorId);
+                
+                document.getElementById('incoming-transfers').innerHTML = pendingHandover.map(p => `
+                    <div class="bg-slate-900 p-4 rounded-2xl border border-slate-700 space-y-3">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="font-bold text-xs">${p.userId?.name || 'Patient'}</p>
+                                <p class="text-[9px] text-slate-500 uppercase font-black">${p.bookingId}</p>
+                            </div>
+                            <span class="bg-amber-500/10 text-amber-400 text-[8px] font-black uppercase px-2 py-1 rounded">Transfer Pending</span>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="viewHistory('${p._id}')" class="flex-1 bg-slate-800 text-slate-300 py-2.5 rounded-xl text-[10px] font-black uppercase border border-slate-700">View History</button>
+                            <button onclick="acceptCase('${p._id}')" class="flex-1 bg-green-500 hover:bg-green-600 text-slate-950 py-2.5 rounded-xl text-[10px] font-black uppercase">Accept Case</button>
+                        </div>
+                    </div>
+                `).join('');
+                if(pendingHandover.length === 0) document.getElementById('incoming-transfers').innerHTML = '<p class="text-xs text-slate-500">No incoming handover requests.</p>';
+            } else { alert(json.message); }
+        }
+
+        async function viewHistory(apptId) {
+            document.getElementById('timeline-zone').classList.remove('hidden');
+            const res = await fetch(`${API}/case-details/${apptId}`, { headers: getHeaders() });
+            const json = await res.json();
+            document.getElementById('audit-timeline').innerHTML = json.data.treatmentHistory.map(h => `
+                <div class="flex gap-2 text-[10px] border-l-2 border-slate-600 pl-3 py-1 relative">
+                    <div class="absolute w-2 h-2 rounded-full bg-green-500 -left-[5px] top-2"></div>
+                    <div>
+                        <span class="font-bold text-green-400 uppercase">[${h.action}]</span>
+                        <span class="text-slate-400">${moment(h.timestamp).format('HH:mm')}</span>
+                        <p class="text-slate-300 italic mt-0.5">"${h.notes}"</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function acceptCase(apptId) {
+            const res = await fetch(`${API}/case/accept-transfer`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ appointmentId: apptId })
+            });
+            const json = await res.json();
+            if(json.success) {
+                alert("Transfer Accepted! Patient is now active under your duty.");
+                document.getElementById('timeline-zone').classList.add('hidden');
+                loadIncomingTransfers();
+            } else { alert(json.message); }
+        }
+        lucide.createIcons();
+    </script>
+</body>
+</html>

@@ -48,33 +48,24 @@ const getDocDashboard = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 2. CASE LISTING ---
-const getAssignedCases = async (req, res) => {
-    try {
-        const { type, status } = req.query; 
-        let query = { doctorId: req.user.id };
 
-        if (type === 'Emergency') query.triageLevel = 'Emergency';
-        if (type === 'Admission') query.bookingType = 'Admission';
-        if (status) query.status = status;
-
-        const cases = await Appointment.find(query)
-            .populate('userId', 'name profilePic phone age gender')
-            .sort({ updatedAt: -1 });
-
-        res.json({ success: true, data: cases });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
 
 // --- 3. GET PATIENT DETAILS ---
 const getPatientDetails = async (req, res) => {
     try {
         const patient = await Appointment.findById(req.params.id)
             .populate('userId', 'name profilePic phone age gender bloodGroup')
-            .populate('bedId', 'bedNumber pricePerDay');
+            .populate('bedId', 'bedNumber pricePerDay')
+            .populate({
+                path: 'treatmentHistory.fromDoctorId',
+                select: 'name speciality profileImage'
+            })
+            .populate({
+                path: 'treatmentHistory.toDoctorId',
+                select: 'name speciality profileImage'
+            });
 
         if (!patient) return res.status(404).json({ message: "Patient not found" });
-
         res.json({ success: true, data: patient });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
@@ -103,15 +94,15 @@ const processPrescription = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 5. TRANSFER/ASSIGN OTHER DOCTOR (Fixed Security Role check) ---
+// 2. TRANSFER PATIENT HANDOVER (Doctor A Panel)
 const transferPatient = async (req, res) => {
     try {
-        const { appointmentId, toDoctorId, reason, condition, priority } = req.body;
+        const { appointmentId, toDoctorId, reason, priority } = req.body;
 
         const appointment = await Appointment.findById(appointmentId);
         if (!appointment) return res.status(404).json({ message: "Case not found" });
 
-        // FIX: Strictly verify target doctor is from the SAME hospital and is a 'hospital-doctor'
+        // Verify target doctor is from the same hospital and is active
         const targetDoctor = await Doctor.findOne({ 
             _id: toDoctorId, 
             hospitalId: req.user.hospitalId, 
@@ -120,19 +111,80 @@ const transferPatient = async (req, res) => {
         });
 
         if (!targetDoctor) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Transfer Failed: Target doctor aapke hospital se associated ya active nahi hai." 
-            });
+            return res.status(400).json({ success: false, message: "Target doctor not found in this hospital." });
         }
 
-        // Update Appointment with New Doctor Details
-        appointment.doctorId = toDoctorId;
+        // Set pending doctor and status
+        appointment.pendingDoctorId = toDoctorId;
         appointment.triageLevel = priority || appointment.triageLevel;
-        appointment.status = 'In-Progress'; 
+        
+        // Push handover action to treatment audit trail
+        appointment.treatmentHistory.push({
+            fromDoctorId: req.user.id,
+            toDoctorId: toDoctorId,
+            action: 'Transfer-Initiated',
+            notes: reason || "Shift Handover",
+            timestamp: new Date()
+        });
 
         await appointment.save();
-        res.json({ success: true, message: "Patient transferred successfully" });
+        res.json({ success: true, message: "Patient handover initiated. Pending acceptance." });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 3. ACCEPT PATIENT HANDOVER (Doctor B Panel - NEW API)
+const acceptTransfer = async (req, res) => {
+    try {
+        const { appointmentId } = req.body;
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, pendingDoctorId: req.user.id });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "No pending transfer request found for you." });
+        }
+
+        const oldDoctorId = appointment.doctorId;
+
+        // Make Doctor B the primary doctor
+        appointment.doctorId = req.user.id;
+        appointment.pendingDoctorId = null; // Clear pending state
+        appointment.status = 'In-Progress'; // Mark active
+
+        // Push acceptance audit trail
+        appointment.treatmentHistory.push({
+            fromDoctorId: oldDoctorId,
+            toDoctorId: req.user.id,
+            action: 'Transfer-Accepted',
+            notes: "Patient accepted on duty roster.",
+            timestamp: new Date()
+        });
+
+        await appointment.save();
+        res.json({ success: true, message: "Patient transfer accepted successfully.", data: appointment });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 4. GET ASSIGNED & PENDING INCOMING CASES (Updated)
+const getAssignedCases = async (req, res) => {
+    try {
+        const { type, status } = req.query; 
+        
+        // Find both active cases AND incoming pending transfers for this doctor
+        let query = {
+            $or: [
+                { doctorId: req.user.id, pendingDoctorId: null }, // Active cases
+                { pendingDoctorId: req.user.id } // Incoming pending transfers
+            ]
+        };
+
+        if (type === 'Emergency') query.triageLevel = 'Emergency';
+        if (type === 'Admission') query.bookingType = 'Admission';
+        if (status) query.status = status;
+
+        const cases = await Appointment.find(query)
+            .populate('userId', 'name profilePic phone age gender')
+            .sort({ updatedAt: -1 });
+
+        res.json({ success: true, data: cases });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -159,26 +211,42 @@ const getHospitalColleagues = async (req, res) => {
 };
 
 // --- 7. DISCHARGE SUMMARY ---
+// --- 7. DISCHARGE SUMMARY (Fixed: Setting status to 'Discharge-Pending' for billing sync) ---
 const submitDischargeSummary = async (req, res) => {
     try {
         const { appointmentId, diagnosis, investigation, treatmentResult, dischargeNote } = req.body;
 
-        const appointment = await Appointment.findById(appointmentId);
-        if (!appointment) return res.status(404).json({ message: "Case not found" });
-        
-        // Final Summary save logic
-        appointment.clinicalSummary = {
-            diagnosis,
-            investigation,
-            treatmentResult,
-            dischargeNote,
-            dischargedAt: new Date()
+        const updateData = {
+            status: 'Discharge-Pending', // 👈 FIXED: Clinical summary submitted, waiting for Admin bill closure
+            clinicalSummary: {
+                diagnosis: diagnosis || "",
+                investigation: investigation || "",
+                treatmentResult: treatmentResult || "",
+                dischargeNote: dischargeNote || "",
+                dischargedAt: new Date()
+            }
         };
-        appointment.status = 'Confirmed'; // Marked as ready for discharge (Admin will finalize bill)
 
-        await appointment.save();
-        res.json({ success: true, message: "Discharge summary submitted. Pending Admin billing." });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const appointment = await Appointment.findByIdAndUpdate(
+            appointmentId,
+            { $set: updateData },
+            { new: true, runValidators: true } 
+        );
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Discharge summary submitted. Pending Admin billing closure.", 
+            data: appointment 
+        });
+
+    } catch (error) { 
+        console.error("Discharge summary error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 8. DUTY STATUS TOGGLE ---
@@ -224,6 +292,7 @@ const updateClinicalSummary = async (req, res) => {
 module.exports = { 
     getSpecializations,
     getDocDashboard, getAssignedCases, getPatientDetails, 
-    processPrescription, transferPatient, getHospitalColleagues,
+    processPrescription, transferPatient, acceptTransfer,
+     getHospitalColleagues,
     submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary
 };

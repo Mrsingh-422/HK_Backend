@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doctor Panel A - Handover System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="bg-slate-900 p-8 min-h-screen flex justify-center items-center">
+
+    <div class="w-[450px] bg-slate-800 text-white rounded-[35px] border border-slate-700 overflow-hidden shadow-2xl p-6 space-y-6">
+        <header class="flex justify-between items-center border-b border-slate-700 pb-4">
+            <div>
+                <p class="text-[10px] text-green-400 font-bold uppercase tracking-wider">Doctor Panel</p>
+                <h2 class="text-xl font-black">Active Ward Duty (Dr. A)</h2>
+            </div>
+            <i data-lucide="shield" class="text-green-400"></i>
+        </header>
+
+        <!-- Auth token section -->
+        <div class="space-y-2">
+            <label class="text-[9px] font-black uppercase text-slate-400">Enter Doctor A Token</label>
+            <input type="text" id="doc-token" placeholder="Paste h_token here..." class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-xs font-mono outline-none focus:border-green-400 text-green-400">
+            <button onclick="loadMyPatients()" class="w-full bg-green-500 hover:bg-green-600 text-slate-950 py-3 rounded-xl text-xs font-black uppercase tracking-wider">Sync Patients</button>
+        </div>
+
+        <!-- Patients list -->
+        <div class="space-y-3">
+            <h4 class="text-xs font-black uppercase text-slate-400">My Active Patients</h4>
+            <div id="active-patients" class="space-y-2 max-h-[220px] overflow-y-auto"></div>
+        </div>
+
+        <!-- Transfer section -->
+        <div id="transfer-zone" class="hidden bg-slate-900/50 p-4 rounded-3xl border border-slate-700/50 space-y-4">
+            <h4 class="text-xs font-black uppercase text-slate-400">Initiate Patient Handover</h4>
+            <div class="space-y-3">
+                <input type="hidden" id="selected-appt-id">
+                <div class="space-y-1">
+                    <label class="text-[8px] font-black text-slate-500 uppercase">Select Colleague Doctor</label>
+                    <select id="colleague-select" class="w-full bg-slate-900 p-3 rounded-xl text-xs font-bold outline-none border border-slate-700"></select>
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[8px] font-black text-slate-500 uppercase">Handover Reason</label>
+                    <input type="text" id="transfer-reason" placeholder="e.g., Shift Handover, ICU duty change" class="w-full bg-slate-900 p-3 rounded-xl text-xs outline-none border border-slate-700">
+                </div>
+                <button onclick="executeHandover()" class="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 py-3 rounded-xl text-xs font-black uppercase tracking-widest">Send Handover Request</button>
+            </div>
+        </div>
+
+        <!-- Audit Trail Timeline -->
+        <div id="timeline-zone" class="hidden space-y-3 border-t border-slate-700 pt-4">
+            <h4 class="text-xs font-black uppercase text-slate-400">Treatment Timeline</h4>
+            <div id="audit-timeline" class="space-y-3 max-h-[150px] overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <script>
+        const API = "http://localhost:5002/hospital-doctor/panel";
+        const getHeaders = () => ({ "Authorization": `Bearer ${document.getElementById('doc-token').value}`, "Content-Type": "application/json" });
+
+        async function loadMyPatients() {
+            const res = await fetch(`${API}/cases`, { headers: getHeaders() });
+            const json = await res.json();
+            if(json.success && json.data) {
+                // Filter out cases that are pending for other doctors, only show currently held active patients
+                const heldPatients = json.data.filter(c => !c.pendingDoctorId);
+                document.getElementById('active-patients').innerHTML = heldPatients.map(p => `
+                    <div class="flex justify-between items-center bg-slate-900 p-3.5 rounded-xl border border-slate-700/60">
+                        <div>
+                            <p class="font-bold text-xs">${p.userId?.name || 'Patient'}</p>
+                            <p class="text-[9px] text-slate-500 uppercase tracking-widest font-black">${p.bookingId}</p>
+                        </div>
+                        <button onclick="openTransferScreen('${p._id}')" class="bg-green-500/20 text-green-400 hover:bg-green-500 hover:text-slate-950 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase">Handover</button>
+                    </div>
+                `).join('');
+                if(heldPatients.length === 0) document.getElementById('active-patients').innerHTML = '<p class="text-xs text-slate-500">No active cases.</p>';
+            } else { alert(json.message); }
+        }
+
+        async function openTransferScreen(apptId) {
+            document.getElementById('selected-appt-id').value = apptId;
+            document.getElementById('transfer-zone').classList.remove('hidden');
+            document.getElementById('timeline-zone').classList.remove('hidden');
+            
+            // 1. Fetch Colleagues
+            const res1 = await fetch(`${API}/colleagues`, { headers: getHeaders() });
+            const json1 = await res1.json();
+            document.getElementById('colleague-select').innerHTML = json1.data.map(d => `<option value="${d._id}">${d.name} (${d.speciality})</option>`).join('');
+
+            // 2. Fetch Audit Timeline
+            const res2 = await fetch(`${API}/case-details/${apptId}`, { headers: getHeaders() });
+            const json2 = await res2.json();
+            document.getElementById('audit-timeline').innerHTML = json2.data.treatmentHistory.map(h => `
+                <div class="flex gap-2 text-[10px] border-l-2 border-slate-600 pl-3 py-1 relative">
+                    <div class="absolute w-2 h-2 rounded-full bg-green-500 -left-[5px] top-2"></div>
+                    <div>
+                        <span class="font-bold text-green-400 uppercase">[${h.action}]</span>
+                        <span class="text-slate-400">${moment(h.timestamp).format('HH:mm')}</span>
+                        <p class="text-slate-300 italic mt-0.5">"${h.notes}"</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function executeHandover() {
+            const apptId = document.getElementById('selected-appt-id').value;
+            const toDoctorId = document.getElementById('colleague-select').value;
+            const reason = document.getElementById('transfer-reason').value;
+
+            const res = await fetch(`${API}/case/transfer`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ appointmentId: apptId, toDoctorId, reason, priority: 'Emergency' })
+            });
+            const json = await res.json();
+            if(json.success) {
+                alert("Handover Request Sent!");
+                document.getElementById('transfer-zone').classList.add('hidden');
+                loadMyPatients();
+            } else { alert(json.message); }
+        }
+        lucide.createIcons();
+    </script>
+</body>
+</html>

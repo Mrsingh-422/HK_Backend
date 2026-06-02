@@ -57,24 +57,24 @@ const getHospitalDashboardStats = async (req, res) => {
         const todayStart = moment().startOf('day').toDate();
         const todayEnd = moment().endOf('day').toDate();
 
-        // 1. Parallel collection queries execution for best performance
+        // Parallel collection execution
         const [
-            emergencyActive,       // Tab 1: Emergency Cases (Ambulance active cases)
-            directAdmissions,      // Tab 2: Direct Admission requests pending
-            emergencyDischarges,   // Tab 3: Emergency admissions ready to discharge (In-Progress)
-            hospitalDischarges,    // Tab 4: Direct admissions completed today
-            referralAmbulances,    // Tab 5: Live Transfer requests from Ambulance bookings
-            historyRecords         // Tab 6: Total completed cases history
+            emergencyActive,       
+            directAdmissions,      
+            emergencyDischarges,   // Tab 3: Emergency ready for discharge
+            hospitalDischarges,    // Tab 4: Direct ready for discharge
+            referralAmbulances,    
+            historyRecords         
         ] = await Promise.all([
             
-            // Tab 1: Emergency Case count (ambulanceId exists and status is active)
+            // Tab 1: Emergency Case count (status active and brought by ambulance)
             Appointment.countDocuments({
                 hospitalId,
                 ambulanceId: { $ne: null, $exists: true },
                 status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
             }),
 
-            // Tab 2: Hospital Admission count (ambulanceId null/missing and status is pending)
+            // Tab 2: Hospital Admission count (direct and status pending)
             Appointment.countDocuments({
                 hospitalId,
                 bookingType: 'Admission',
@@ -85,14 +85,14 @@ const getHospitalDashboardStats = async (req, res) => {
                 status: 'Hospital-Pending'
             }),
 
-            // Tab 3: Emergency Discharge (Brought by ambulance and currently occupying bed 'In-Progress')
+            // Tab 3: Emergency Discharge (Brought by ambulance and clinically ready: Discharge-Pending)
             Appointment.countDocuments({
                 hospitalId,
                 ambulanceId: { $ne: null, $exists: true },
-                status: 'In-Progress'
+                status: 'Discharge-Pending' // 👈 FIXED
             }),
 
-            // Tab 4: Hospital Discharge (Direct admission completed today)
+            // Tab 4: Hospital Discharge (Direct admissions clinically ready: Discharge-Pending)
             Appointment.countDocuments({
                 hospitalId,
                 bookingType: 'Admission',
@@ -100,45 +100,41 @@ const getHospitalDashboardStats = async (req, res) => {
                     { ambulanceId: null },
                     { ambulanceId: { $exists: false } }
                 ],
-                status: 'Completed',
-                endDate: { $gte: todayStart, $lte: todayEnd }
+                status: 'Discharge-Pending' // 👈 FIXED
             }),
 
-            // Tab 5: Referral Ambulance count (Active transfer trips headed to this hospital)
+            // Tab 5: Referral Ambulance count
             AmbulanceBooking.countDocuments({
                 hospitalId,
                 serviceType: 'Referral Ambulance',
                 status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
             }),
 
-            // Tab 6: History (Total complete patient records)
+            // Tab 6: History
             Appointment.countDocuments({
                 hospitalId,
                 status: 'Completed'
             })
         ]);
 
-        // Calculate High-level Top 3 Cards from the counts
         const topEmergency = emergencyActive; 
         const topAdmission = directAdmissions;
-        const topDischarge = emergencyDischarges + hospitalDischarges; // Total discharge pool
+        const topDischarge = emergencyDischarges + hospitalDischarges; // Dynamic discharge pool
 
         res.json({
             success: true,
             data: {
-                // --- TOP 3 MAIN CARDS ---
                 emergency: topEmergency,
                 admission: topAdmission,
                 discharge: topDischarge,
 
-                // --- BOTTOM 6 HOSPITAL SERVICES TABS ---
                 servicesTabs: {
-                    emergencyCase: emergencyActive,            // Tab 1: Emergency Case
-                    hospitalAdmission: directAdmissions,       // Tab 2: Hospital Admission
-                    emergencyDischarge: emergencyDischarges,   // Tab 3: Emergency Discharge
-                    hospitalDischarge: hospitalDischarges,     // Tab 4: Hospital Discharge
-                    referralAmbulance: referralAmbulances,     // Tab 5: Referral Ambulance
-                    history: historyRecords                    // Tab 6: History
+                    emergencyCase: emergencyActive,            
+                    hospitalAdmission: directAdmissions,       
+                    emergencyDischarge: emergencyDischarges,   
+                    hospitalDischarge: hospitalDischarges,     
+                    referralAmbulance: referralAmbulances,     
+                    history: historyRecords                    
                 }
             }
         });
@@ -224,39 +220,34 @@ const admitPatientToBed = async (req, res) => {
     try {
         const { appointmentId, bedId } = req.body;
 
-        // 1. VALIDATE BED
         const bed = await Bed.findById(bedId);
-        if (!bed || bed.status !== 'Available') {
+        
+        // FIX: Bed must be either 'Available' (for emergency cases) or 'Reserved' (for pre-bookings)
+        if (!bed || !['Available', 'Reserved'].includes(bed.status)) { 
             return res.status(400).json({ 
                 success: false, 
-                message: "This bed is already occupied or under maintenance." 
+                message: "Admit Failed: Selected bed is occupied, under maintenance, or not valid for admission." 
             });
         }
 
-        // 2. VALIDATE APPOINTMENT
-        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId: req.user.id });
-        if (!appointment) return res.status(404).json({ message: "Admission request not found" });
-
-        // 3. UPDATE BED STATUS TO OCCUPIED
+        // Admit hone par physically bed occupied ho jayega
         bed.status = 'Occupied';
         await bed.save();
 
-        // 4. SYNC APPOINTMENT RECORD
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId: req.user.id });
+        if (!appointment) return res.status(404).json({ message: "Admission request not found" });
+
         appointment.bedId = bedId;
         appointment.bedNumber = bed.bedNumber;
-        // Ward details fetch karein naming ke liye
         const ward = await Ward.findById(bed.wardId);
         appointment.wardName = ward.name;
         
-        appointment.status = 'In-Progress'; // Admission process active
+        appointment.status = 'In-Progress'; // Patient is now physically in the bed
         await appointment.save();
-
-        // 5. DECREASE WARD CAPACITY
-        await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
 
         res.json({ 
             success: true, 
-            message: `Patient admitted to ${ward.name} - ${bed.bedNumber}`, 
+            message: `Patient admitted successfully to ${ward.name} - ${bed.bedNumber}`, 
             data: appointment 
         });
 
@@ -1114,6 +1105,62 @@ const uploadHospitalTermsPdf = async (req, res) => {
     }
 };
 
+const getHospitalHistory = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { page = 1, limit = 10, search } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        let query = { 
+            hospitalId: hospitalId, 
+            status: 'Completed' // Strictly fetch only completed (discharged) cases
+        };
+
+        // Advanced Search handler
+        if (search) {
+            // Agar search keyword Booking ID se start hota hai
+            const isBookingId = search.toUpperCase().startsWith('HKH-') || search.toUpperCase().startsWith('HK-');
+            
+            if (isBookingId) {
+                query.bookingId = { $regex: search, $options: 'i' };
+            } else {
+                // Agar patient ke name se search kiya gaya hai
+                const matchedUsers = await User.find({
+                    name: { $regex: search, $options: 'i' }
+                }).select('_id');
+                const userIds = matchedUsers.map(u => u._id);
+                query.userId = { $in: userIds };
+            }
+        }
+
+        const totalRecords = await Appointment.countDocuments(query);
+
+        const history = await Appointment.find(query)
+            .populate('userId', 'name phone email profilePic age gender')
+            .populate('doctorId', 'name speciality qualification profileImage')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .sort({ updatedAt: -1 }) // Discharge date ke hisab se (Newest first)
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        res.json({
+            success: true,
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / parseInt(limit)),
+            currentPage: parseInt(page),
+            count: history.length,
+            data: history
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed, updateWardBeds,deleteSpecificBed, addHospitalService, updateHospitalService, 
@@ -1126,5 +1173,5 @@ module.exports = {
     getIncomingReferrals, getEmergencyCases, trackAllAmbulances,toggleAmbulanceStatus,
     updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings,
-    updateBedPrice, uploadHospitalTermsPdf
+    updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory
 };

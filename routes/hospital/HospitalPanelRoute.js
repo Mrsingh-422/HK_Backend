@@ -8,8 +8,8 @@ const {
     getHospitalServices, getWardStatus,updateBedStatus,assignDoctorToAdmission,getAvailableDrivers, assignDriverToCase,
     getIncomingReferrals,getEmergencyCases, trackAllAmbulances, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
     toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
-    getDailyOccupancy,finalizeDischarge, setHospitalShift ,getHospitalReferralBookings,
-    updateBedPrice, uploadHospitalTermsPdf
+    getDailyOccupancy,finalizeDischarge, setHospitalShift ,getHospitalReferralBookings, 
+    updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory
 
 } = require('../../controllers/hospital/HospitalPanel');
  
@@ -77,5 +77,7 @@ router.get('/referral-bookings', protect('hospital'), getHospitalReferralBooking
 router.put('/bed/update-price', protect('hospital'), updateBedPrice);
 // Terms and Conditions PDF Import route
 router.put('/terms/uploadfile', protect('hospital'), termsUpload, uploadHospitalTermsPdf);
+
+router.get('/history', protect('hospital'), getHospitalHistory);
 
 module.exports = router;

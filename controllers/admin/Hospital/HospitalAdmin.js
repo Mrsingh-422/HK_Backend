@@ -1,5 +1,6 @@
 // controllers/admin/Hospital/HospitalAdmin.js
 const BedRescheduleLimit = require("../../../models/BedRescheduleLimit"); // 👈 Import Global Limit Model
+const Appointment = require("../../../models/Appointment");
 
 // 1. UPDATE GLOBAL LIMIT (patch API)
 const updateHospitalRescheduleLimit = async (req, res) => {
@@ -52,7 +53,62 @@ const getHospitalRescheduleLimit = async (req, res) => {
     }
 };
 
+// --- 2. ADMIN: GET HOSPITAL ADMISSION BOOKINGS ---
+const adminGetHospitalBookings = async (req, res) => {
+    try {
+        const { tab, page = 1, status, userId } = req.query;
+        const limit = 20;
+        const skip = (parseInt(page) - 1) * limit;
+        
+        let query = { bookingType: 'Admission' };
+        if (userId) query.userId = userId;
+
+        if (status) {
+            query.status = status;
+        } else if (tab === 'Upcoming') {
+            query.status = 'Confirmed';
+        } else if (tab === 'Pending') {
+            query.status = { $in: ['Pending', 'Hospital-Pending'] };
+        } else if (tab === 'History') {
+            query.status = { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Hospital'] };
+        }
+
+        const totalCount = await Appointment.countDocuments(query);
+
+        const data = await Appointment.find(query)
+            .populate('userId', 'name phone email')
+            .populate('hospitalId', 'name address hospitalImage')
+            .populate('doctorId', 'name speciality profileImage')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
+                populate: {
+                    path: 'wardId',
+                    select: 'name type'
+                }
+            })
+            .sort({ appointmentDate: 1 })
+            .skip(skip)
+            .limit(limit);
+
+        res.json({ 
+            success: true, 
+            count: data.length,
+            pagination: {
+                totalCount,
+                totalPages: Math.ceil(totalCount / limit),
+                currentPage: parseInt(page),
+                limit
+            },
+            data 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
 module.exports = { 
     updateHospitalRescheduleLimit, 
-    getHospitalRescheduleLimit 
+    getHospitalRescheduleLimit ,
+    adminGetHospitalBookings
 };

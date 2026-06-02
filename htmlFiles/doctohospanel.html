@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radius Hospital - Doctor Master Workspace</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght=300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root { --brand: #00B377; --brand-light: #E6F7F1; --brand-dark: #008f6d; }
+        body { background-color: #0F172A; font-family: 'Plus Jakarta Sans', sans-serif; color: #F8FAFB; }
+        .figma-card { background: #1E293B; border-radius: 24px; border: 1px solid #334155; transition: 0.3s; }
+        .figma-card:hover { border-color: var(--brand); }
+        .btn-brand { background: var(--brand); color: #0F172A; font-weight: 800; border-radius: 16px; padding: 12px 24px; transition: 0.2s; cursor: pointer; border: none; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
+        .btn-brand:hover { background: var(--brand-dark); color: white; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .modal-backdrop { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(4px); }
+        .timeline-badge::before { content: ''; position: absolute; left: -6px; top: 8px; width: 10px; height: 10px; border-radius: 50px; background: var(--brand); border: 2px solid #0F172A; }
+    </style>
+</head>
+<body class="p-8 min-h-screen">
+
+    <div class="max-w-7xl mx-auto space-y-8">
+        
+        <!-- HEADER SECTION -->
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-slate-800 pb-6">
+            <div>
+                <p class="text-xs font-black text-green-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="shield-check" class="w-4 h-4"></i> Hospital Workspace Node</p>
+                <h1 class="text-3xl font-black tracking-tight" id="welcome-doc-name">Doctor Panel Workspace</h1>
+            </div>
+            
+            <div class="flex items-center gap-4 w-full md:w-auto justify-end">
+                <div id="status-badge" class="bg-red-500/10 text-red-400 border border-red-500/20 px-4 py-2.5 rounded-2xl text-xs font-black uppercase flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span> Disconnected
+                </div>
+                <select id="duty-status-selector" onchange="toggleDutyStatus(this.value)" class="bg-slate-800 border border-slate-700 px-4 py-3 rounded-2xl text-xs font-bold outline-none text-slate-300">
+                    <option value="On Duty">On Duty</option>
+                    <option value="Off Duty">Off Duty</option>
+                    <option value="Busy">Busy</option>
+                    <option value="On Leave">On Leave</option>
+                </select>
+            </div>
+        </header>
+
+        <!-- DASHBOARD STATS ROW -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="figma-card p-6 border-l-8 border-red-500 flex justify-between items-center">
+                <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Active Emergency Cases</p><h2 class="text-4xl font-black text-red-500 mt-1" id="stat-emg">0</h2></div>
+                <i data-lucide="alert-triangle" class="text-red-500 w-10 h-10 opacity-70"></i>
+            </div>
+            <div class="figma-card p-6 border-l-8 border-blue-500 flex justify-between items-center">
+                <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Direct Admissions</p><h2 class="text-4xl font-black text-blue-500 mt-1" id="stat-adm">0</h2></div>
+                <i data-lucide="folder-kanban" class="text-blue-500 w-10 h-10 opacity-70"></i>
+            </div>
+            <div class="figma-card p-6 border-l-8 border-amber-500 flex justify-between items-center">
+                <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Incoming Handover Requests</p><h2 class="text-4xl font-black text-amber-500 mt-1" id="stat-trans">0</h2></div>
+                <i data-lucide="git-pull-request" class="text-amber-500 w-10 h-10 opacity-70"></i>
+            </div>
+        </div>
+
+        <!-- WORKSPACE COLUMNS -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            
+            <!-- LEFT WORKSPACE: ACTIVE PATIENT QUEUE -->
+            <div class="lg:col-span-5 space-y-6">
+                
+                <!-- Pending Handover Requests Tray -->
+                <div class="figma-card p-6 space-y-4">
+                    <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="inbox" class="text-amber-500 w-4 h-4"></i> Incoming Handover Pending</h3>
+                    <div id="pending-transfers-tray" class="space-y-3 max-h-[250px] overflow-y-auto no-scrollbar">
+                        <p class="text-xs text-slate-500">Awaiting Auth Token Setup...</p>
+                    </div>
+                </div>
+
+                <!-- Active Cases Tray -->
+                <div class="figma-card p-6 space-y-4">
+                    <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="users" class="text-green-400 w-4 h-4"></i> Active In-Patient Tray</h3>
+                    <div id="active-cases-tray" class="space-y-3 max-h-[350px] overflow-y-auto no-scrollbar">
+                        <p class="text-xs text-slate-500">Awaiting Auth Token Setup...</p>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- RIGHT WORKSPACE: DYNAMIC CASE MANAGER -->
+            <div class="lg:col-span-7">
+                <div class="figma-card p-8 h-full space-y-8 min-h-[500px]" id="case-workspace">
+                    <div class="h-full flex flex-col justify-center items-center text-center text-slate-500 space-y-3">
+                        <i data-lucide="stethoscope" class="w-16 h-16 opacity-30"></i>
+                        <p class="text-sm font-black">Select any patient record to launch clinical workspace.</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- MODAL 1: WRITE PRESCRIPTION -->
+    <div id="prescription-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
+        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6">
+            <button onclick="closeModal('prescription-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
+            <div>
+                <h3 class="text-2xl font-black text-white tracking-tight">Write Prescription Summary</h3>
+                <p class="text-xs text-slate-400 font-bold uppercase">Patient ID: <span id="presc-appt-id" class="text-green-400 font-mono">N/A</span></p>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Diagnosis / Conditions (Comma Separated)</label>
+                    <input type="text" id="presc-diag" placeholder="e.g. Acute Bronchitis, Fever" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400">
+                </div>
+                
+                <div class="p-4 bg-slate-900/60 rounded-2xl border border-slate-700 space-y-3">
+                    <h5 class="text-[10px] font-black text-slate-400 uppercase">Add Medicine Details</h5>
+                    <div class="grid grid-cols-2 gap-3">
+                        <select id="presc-med-name" class="bg-slate-900 border border-slate-700 p-3.5 rounded-xl text-xs font-bold outline-none text-slate-300"></select>
+                        <input type="text" id="presc-med-dosage" placeholder="Dosage (e.g. 10 units / 500mg)" class="bg-slate-900 border border-slate-700 p-3.5 rounded-xl text-xs outline-none text-white">
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                        <input type="text" id="presc-med-freq" placeholder="Freq (e.g. 1-0-1)" class="bg-slate-900 border border-slate-700 p-3.5 rounded-xl text-xs outline-none text-white">
+                        <input type="text" id="presc-med-dur" placeholder="Dur (e.g. 10 days)" class="bg-slate-900 border border-slate-700 p-3.5 rounded-xl text-xs outline-none text-white">
+                        <input type="text" id="presc-med-inst" placeholder="Instructions" class="bg-slate-900 border border-slate-700 p-3.5 rounded-xl text-xs outline-none text-white">
+                    </div>
+                    <button onclick="addMedicineRow()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider">Append Medicine</button>
+                </div>
+
+                <div class="space-y-2">
+                    <h5 class="text-[9px] font-black text-slate-400 uppercase">Medicines Queue</h5>
+                    <div id="added-medicines-list" class="space-y-1.5 max-h-[80px] overflow-y-auto"></div>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Additional Notes / Advice</label>
+                    <input type="text" id="presc-advice" placeholder="e.g. Take complete bed rest" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white">
+                </div>
+
+                <button onclick="submitPrescriptionApi()" class="btn-brand w-full mt-2">Publish & Send Prescription</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: TRANSFER CASE -->
+    <div id="transfer-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
+        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6">
+            <button onclick="closeModal('transfer-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
+            <div>
+                <h3 class="text-2xl font-black text-white tracking-tight">Initiate Case Transfer</h3>
+                <p class="text-xs text-slate-400 font-bold uppercase">Patient ID: <span id="transfer-appt-id" class="text-amber-400 font-mono">N/A</span></p>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Select Colleague Doctor</label>
+                    <select id="transfer-colleague-id" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400"></select>
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Handover Reason</label>
+                    <input type="text" id="transfer-reason" placeholder="e.g. Shift ended, Patient needs ICU expert" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white">
+                </div>
+                <button onclick="submitHandoverApi()" class="btn-brand w-full mt-2 bg-amber-500 hover:bg-amber-600 text-slate-950">Send Handover Request</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: READY FOR DISCHARGE -->
+    <div id="discharge-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
+        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6">
+            <button onclick="closeModal('discharge-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
+            <div>
+                <h3 class="text-2xl font-black text-white tracking-tight">Submit Discharge Summary</h3>
+                <p class="text-xs text-slate-400 font-bold uppercase">Patient ID: <span id="discharge-appt-id" class="text-red-400 font-mono">N/A</span></p>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Final Diagnosis Summary</label>
+                    <input type="text" id="dis-diag" placeholder="e.g. Recovered from Gastroenteritis" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white">
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Investigations / Lab checkups summary</label>
+                    <input type="text" id="dis-invest" placeholder="e.g. ECG Normal, Standard blood counts standard" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white">
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Treatment Result description</label>
+                    <input type="text" id="dis-result" placeholder="e.g. Cured / Clinically Stable" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white">
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Discharge Note & Advice</label>
+                    <input type="text" id="dis-note" placeholder="e.g. Take liquid diet, follow up in 7 days" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white">
+                </div>
+                <button onclick="submitDischargeSummaryApi()" class="btn-brand w-full mt-2 bg-red-500 hover:bg-red-600 text-white">Submit Ready for Discharge</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 4: CLINICAL SUMMARY EDITOR (NEWLY INTEGRATED) -->
+    <div id="clinical-summary-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
+        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6">
+            <button onclick="closeModal('clinical-summary-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
+            <div>
+                <h3 class="text-2xl font-black text-white tracking-tight">Edit Clinical summary</h3>
+                <p class="text-xs text-slate-400 font-bold uppercase">Patient ID: <span id="summary-appt-id" class="text-green-400 font-mono">N/A</span></p>
+            </div>
+            
+            <form id="clinical-summary-form" onsubmit="submitClinicalSummaryApi(event)" class="space-y-4">
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Chief Complaint</label>
+                    <input type="text" id="sum-chief" required placeholder="e.g. Severe chest pain, respiratory distress" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-400 uppercase">Triage Priority</label>
+                        <select id="sum-priority" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-slate-300">
+                            <option value="Emergency">Emergency</option>
+                            <option value="Very Urgent">Very Urgent</option>
+                            <option value="Urgent">Urgent</option>
+                            <option value="Routine">Routine</option>
+                        </select>
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-400 uppercase">Blood Group</label>
+                        <select id="sum-blood" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-slate-300">
+                            <option value="A+">A+</option>
+                            <option value="A-">A-</option>
+                            <option value="B+">B+</option>
+                            <option value="B-">B-</option>
+                            <option value="AB+">AB+</option>
+                            <option value="AB-">AB-</option>
+                            <option value="O+">O+</option>
+                            <option value="O-">O-</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Admission / Clinical Description Note</label>
+                    <textarea id="sum-note" required rows="3" placeholder="Write clinical notes here..." class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400 resize-none"></textarea>
+                </div>
+                <button type="submit" class="btn-brand w-full mt-2">Save Clinical Summary</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // =========================================================================
+        // 🔒 Paste your Doctor h_token inside this variable:
+        const DOCTOR_AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhMTA0ZGU5MzM0Y2I1NjZkYTIzYTRjMyIsInJvbGUiOiJob3NwaXRhbC1kb2N0b3IiLCJpYXQiOjE3ODAzMDgzMjUsImV4cCI6MTc4MDkxMzEyNX0.5l3tVsgFej2FU0ApeRiCpV4NqMdxMRWMeb4qZaz8Ci0"; 
+        // const DOCTOR_AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhMDM4MjJmNDUxOGMyYWJhN2MzZmFlNyIsInJvbGUiOiJob3NwaXRhbC1kb2N0b3IiLCJpYXQiOjE3ODAzOTAzMjQsImV4cCI6MTc4MDk5NTEyNH0.r_k55dWzhDrY1DDSq4FJyE-BRueHfGtT6oIrfPLidfY"
+        // =========================================================================
+
+        const API_ROOT = "http://localhost:5002/hospital-doctor/panel";
+        const getHeaders = () => ({
+            "Authorization": `Bearer ${DOCTOR_AUTH_TOKEN}`,
+            "Content-Type": "application/json"
+        });
+
+        let PRESCRIBED_MEDICINES_ARRAY = [];
+        let CURRENT_APPOINTMENT_ID = null;
+
+        function navigateToModal(id) {
+            document.getElementById(id).classList.remove('hidden');
+        }
+
+        function closeModal(id) {
+            document.getElementById(id).classList.add('hidden');
+        }
+
+        // Automatic initialization on page load if token is configured
+        window.addEventListener("load", () => {
+            if(DOCTOR_AUTH_TOKEN && DOCTOR_AUTH_TOKEN !== "PASTE_YOUR_DOCTOR_TOKEN_HERE") {
+                // Connection status badge update
+                const badge = document.getElementById('status-badge');
+                badge.className = "bg-green-500/10 text-green-400 border border-green-500/20 px-4 py-2.5 rounded-2xl text-xs font-black uppercase flex items-center gap-2";
+                badge.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span> Connected`;
+                
+                syncDoctorPanel();
+            } else {
+                alert("Please configure 'DOCTOR_AUTH_TOKEN' variable inside the script tag of this HTML file.");
+            }
+        });
+
+        async function syncDoctorPanel() {
+            await fetchDashboardStats();
+            await fetchActiveAndPendingCases();
+        }
+
+        // FETCH DASHBOARD WIDGETS
+        async function fetchDashboardStats() {
+            try {
+                const res = await fetch(`${API_ROOT}/dashboard`, { headers: getHeaders() });
+                const json = await res.json();
+                if(json.success) {
+                    document.getElementById('welcome-doc-name').innerText = `Welcome, ${json.welcomeName || 'Doctor'}`;
+                    document.getElementById('duty-status-selector').value = json.dutyStatus || "On Duty";
+                    
+                    document.getElementById('stat-emg').innerText = json.grid.emergencyCount || 0;
+                    document.getElementById('stat-adm').innerText = json.grid.admissionCount || 0;
+                    document.getElementById('stat-trans').innerText = json.grid.transferCount || 0;
+                } else { alert(json.message); }
+            } catch(e) { console.error(e); }
+        }
+
+        // FETCH QUEUES (Splits into Active cases vs Incoming pending transfers)
+        async function fetchActiveAndPendingCases() {
+            try {
+                const res = await fetch(`${API_ROOT}/cases`, { headers: getHeaders() });
+                const json = await res.json();
+                if(json.success && json.data) {
+                    
+                    // Filter pending transfers (where pendingDoctorId exists)
+                    const pendingTransfers = json.data.filter(c => c.pendingDoctorId);
+                    
+                    // Filter active cases held by this doctor (where pendingDoctorId is null or doesn't exist)
+                    const activePatients = json.data.filter(c => !c.pendingDoctorId);
+
+                    // Render Pending Transfers Tray
+                    document.getElementById('pending-transfers-tray').innerHTML = pendingTransfers.map(p => `
+                        <div class="bg-slate-900 border border-amber-500/40 p-4 rounded-2xl flex justify-between items-center">
+                            <div>
+                                <p class="font-bold text-xs text-amber-400">${p.userId?.name || 'Incoming Case'}</p>
+                                <p class="text-[9px] text-slate-500 uppercase tracking-widest font-black">${p.bookingId}</p>
+                                <p class="text-[10px] text-slate-400 mt-1">Priority: ${p.triageLevel}</p>
+                            </div>
+                            <button onclick="executeAcceptTransfer('${p._id}')" class="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider">Accept</button>
+                        </div>
+                    `).join('');
+                    if(pendingTransfers.length === 0) {
+                        document.getElementById('pending-transfers-tray').innerHTML = `<p class="text-xs text-slate-500">No pending transfers.</p>`;
+                    }
+
+                    // Render Active Cases Tray
+                    document.getElementById('active-cases-tray').innerHTML = activePatients.map(p => `
+                        <button onclick="loadPatientWorkspace('${p._id}')" class="w-full text-left bg-slate-900 hover:bg-slate-900/60 p-4 rounded-2xl border border-slate-700 flex justify-between items-center transition">
+                            <div>
+                                <p class="font-bold text-sm text-slate-200">${p.userId?.name || 'Patient'}</p>
+                                <p class="text-[9px] text-slate-500 uppercase tracking-widest font-black">${p.bookingId}</p>
+                                <p class="text-xs text-slate-400 mt-1 flex items-center gap-1"><i data-lucide="activity" class="w-3.5 h-3.5 text-green-400"></i> ${p.triageLevel}</p>
+                            </div>
+                            <i data-lucide="chevron-right" class="text-slate-500"></i>
+                        </button>
+                    `).join('');
+                    if(activePatients.length === 0) {
+                        document.getElementById('active-cases-tray').innerHTML = `<p class="text-xs text-slate-500">No active patients.</p>`;
+                    }
+                    lucide.createIcons();
+
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        // ACCEPT TRANSFER
+        async function executeAcceptTransfer(apptId) {
+            try {
+                const res = await fetch(`${API_ROOT}/case/accept-transfer`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ appointmentId: apptId })
+                });
+                const json = await res.json();
+                if(json.success) {
+                    alert("Handover accepted! Patient added to your active list.");
+                    syncDoctorPanel();
+                } else { alert(json.message); }
+            } catch(e) { console.error(e); }
+        }
+
+        // LOAD SELECTED PATIENT WORKSPACE (Updated with dynamic clinicalSummary details checker)
+        async function loadPatientWorkspace(apptId) {
+            CURRENT_APPOINTMENT_ID = apptId;
+            try {
+                const res = await fetch(`${API_ROOT}/case-details/${apptId}`, { headers: getHeaders() });
+                const json = await res.json();
+                if(json.success && json.data) {
+                    const patient = json.data;
+                    
+                    // Clinical summary block logic template builder
+                    let clinicalSummaryHTML = '';
+                    if(patient.clinicalSummary && (patient.clinicalSummary.chiefComplaint || patient.clinicalSummary.diagnosis)) {
+                        clinicalSummaryHTML = `
+                            <div class="bg-slate-900/40 p-5 rounded-2xl border border-slate-700/50 space-y-2 text-xs">
+                                <h5 class="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5"><i data-lucide="clipboard-list" class="text-green-400 w-4 h-4"></i> Clinical Records Summary</h5>
+                                <div class="grid grid-cols-2 gap-3 mt-1.5">
+                                    <div><span class="text-[9px] text-slate-500 uppercase">Chief Complaint</span><p class="text-slate-300 font-bold">${patient.clinicalSummary.chiefComplaint || 'N/A'}</p></div>
+                                    <div><span class="text-[9px] text-slate-500 uppercase">Blood Group</span><p class="text-red-500 font-bold">${patient.clinicalSummary.bloodGroup || 'N/A'}</p></div>
+                                </div>
+                                <div class="pt-2 border-t border-slate-700/60 grid grid-cols-2 gap-3">
+                                    <div><span class="text-[9px] text-slate-500 uppercase">Admission Note</span><p class="text-slate-300">${patient.clinicalSummary.admissionNote || 'N/A'}</p></div>
+                                    <div><span class="text-[9px] text-slate-500 uppercase">Active Diagnosis</span><p class="text-slate-300 font-bold">${patient.clinicalSummary.diagnosis || 'N/A'}</p></div>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        clinicalSummaryHTML = `
+                            <div class="bg-slate-900/20 p-5 rounded-2xl border border-slate-800 border-dashed text-center text-xs text-slate-500">
+                                No active clinical summaries or triage records saved yet.
+                            </div>
+                        `;
+                    }
+
+                    document.getElementById('case-workspace').innerHTML = `
+                        <div class="flex justify-between items-start border-b border-slate-700 pb-5">
+                            <div>
+                                <h3 class="text-2xl font-black text-white">${patient.userId?.name || 'Patient Details'}</h3>
+                                <p class="text-xs text-slate-400 font-bold uppercase font-mono mt-1">Booking Ref: ${patient.bookingId}</p>
+                            </div>
+                            <span class="bg-red-500/10 text-red-400 text-xs font-black uppercase px-3.5 py-1.5 rounded-full">${patient.triageLevel}</span>
+                        </div>
+
+                        <!-- Bio Info Grid -->
+                        <div class="grid grid-cols-4 gap-4 text-xs font-black">
+                            <div class="bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+                                <span class="text-[8px] text-slate-500 uppercase">Age</span>
+                                <p class="text-slate-200 mt-1">${patient.userId?.age || 'N/A'} Years</p>
+                            </div>
+                            <div class="bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+                                <span class="text-[8px] text-slate-500 uppercase">Gender</span>
+                                <p class="text-slate-200 mt-1">${patient.userId?.gender || 'N/A'}</p>
+                            </div>
+                            <div class="bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+                                <span class="text-[8px] text-slate-500 uppercase">Blood Group</span>
+                                <p class="text-red-500 mt-1">${patient.userId?.bloodGroup || 'N/A'}</p>
+                            </div>
+                            <div class="bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+                                <span class="text-[8px] text-slate-500 uppercase">Allotted Bed</span>
+                                <p class="text-green-400 mt-1">${patient.bedId?.bedNumber || 'Not Assigned'}</p>
+                            </div>
+                        </div>
+
+                        <!-- Dynamic Clinical Summary Card -->
+                        ${clinicalSummaryHTML}
+
+                        <!-- Timeline History Map -->
+                        <div class="space-y-3">
+                            <h4 class="text-xs font-black uppercase text-slate-400 flex items-center gap-1.5"><i data-lucide="git-branch" class="w-4 h-4 text-green-400"></i> Audit Handover Timeline</h4>
+                            <div class="space-y-4 max-h-[150px] overflow-y-auto pr-2 no-scrollbar">
+                                ${patient.treatmentHistory.map(h => `
+                                    <div class="flex gap-3 text-[11px] border-l-2 border-slate-700 pl-4 py-1 relative">
+                                        <div class="absolute w-2.5 h-2.5 rounded-full bg-green-500 -left-[6px] top-2 timeline-badge"></div>
+                                        <div>
+                                            <div class="flex gap-2 items-center font-bold">
+                                                <span class="text-green-400 uppercase">[${h.action}]</span>
+                                                <span class="text-slate-500">${moment(h.timestamp).format('DD MMM, HH:mm')}</span>
+                                            </div>
+                                            <p class="text-slate-300 italic mt-0.5">Notes: "${h.notes || 'Action registered'}"</p>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <!-- Action workspace triggers -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 border-t border-slate-700 pt-6">
+                            <button onclick="openPrescriptionWindow()" class="bg-slate-900 border border-slate-700 hover:border-green-400 text-green-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Write Rx</button>
+                            <button onclick="openClinicalSummaryWindow()" class="bg-slate-900 border border-slate-700 hover:border-blue-400 text-blue-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Clinical Summary</button>
+                            <button onclick="openHandoverWindow()" class="bg-slate-900 border border-slate-700 hover:border-amber-400 text-amber-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Transfer Case</button>
+                            <button onclick="openDischargeWindow()" class="bg-red-500/10 hover:bg-red-500/20 text-red-500 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Ready for discharge</button>
+                        </div>
+                    `;
+                    lucide.createIcons();
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        // WRITE DIGITAL PRESCRIPTION SUMMARY
+        async function openPrescriptionWindow() {
+            document.getElementById('presc-appt-id').innerText = CURRENT_APPOINTMENT_ID;
+            PRESCRIBED_MEDICINES_ARRAY = [];
+            document.getElementById('added-medicines-list').innerHTML = '';
+            navigateToModal('prescription-modal');
+
+            const res = await fetch(`${API_ROOT}/medicines`, { headers: getHeaders() });
+            const json = await res.json();
+            document.getElementById('presc-med-name').innerHTML = json.data.map(m => `<option value="${m}">${m}</option>`).join('');
+        }
+
+        function addMedicineRow() {
+            const name = document.getElementById('presc-med-name').value;
+            const dosage = document.getElementById('presc-med-dosage').value;
+            const freq = document.getElementById('presc-med-freq').value;
+            const duration = document.getElementById('presc-med-dur').value;
+            const inst = document.getElementById('presc-med-inst').value;
+
+            if(!dosage || !freq) return alert("Kripya dosage aur frequency details enter karein");
+
+            PRESCRIBED_MEDICINES_ARRAY.push({ name, dosage, frequency: freq, duration, instructions: inst });
+            
+            // Clear temporary inputs
+            document.getElementById('presc-med-dosage').value = '';
+            document.getElementById('presc-med-freq').value = '';
+            document.getElementById('presc-med-dur').value = '';
+            document.getElementById('presc-med-inst').value = '';
+
+            renderAddedMedicines();
+        }
+
+        function renderAddedMedicines() {
+            document.getElementById('added-medicines-list').innerHTML = PRESCRIBED_MEDICINES_ARRAY.map(m => `
+                <div class="flex justify-between items-center text-[10px] bg-slate-900 p-2.5 rounded-lg border border-slate-700">
+                    <span class="font-bold text-slate-200">${m.name} (${m.dosage})</span>
+                    <span class="text-slate-400 font-bold">${m.frequency} | ${m.duration}</span>
+                </div>
+            `).join('');
+        }
+
+        async function submitPrescriptionApi() {
+            const diagInput = document.getElementById('presc-diag').value;
+            const advice = document.getElementById('presc-advice').value;
+
+            if(!diagInput || PRESCRIBED_MEDICINES_ARRAY.length === 0) return alert("Fill diagnosis & medicines");
+
+            const diagnosis = diagInput.split(',').map(d => d.trim());
+
+            const res = await fetch(`${API_ROOT}/prescription/add`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ appointmentId: CURRENT_APPOINTMENT_ID, diagnosis, medicines: PRESCRIBED_MEDICINES_ARRAY, advice })
+            });
+            const json = await res.json();
+            if(json.success) {
+                alert("Prescription submitted!");
+                closeModal('prescription-modal');
+                loadPatientWorkspace(CURRENT_APPOINTMENT_ID);
+            } else { alert(json.message); }
+        }
+
+        // CLINICAL SUMMARY WINDOW LOADER (NEW)
+        async function openClinicalSummaryWindow() {
+            document.getElementById('summary-appt-id').innerText = CURRENT_APPOINTMENT_ID;
+            
+            // Reset form
+            document.getElementById('clinical-summary-form').reset();
+            navigateToModal('clinical-summary-modal');
+
+            // Prefill if existing data exists
+            try {
+                const res = await fetch(`${API_ROOT}/case-details/${CURRENT_APPOINTMENT_ID}`, { headers: getHeaders() });
+                const json = await res.json();
+                if(json.success && json.data && json.data.clinicalSummary) {
+                    const cs = json.data.clinicalSummary;
+                    document.getElementById('sum-chief').value = cs.chiefComplaint || '';
+                    document.getElementById('sum-priority').value = cs.triagePriority || 'Routine';
+                    document.getElementById('sum-blood').value = cs.bloodGroup || 'A+';
+                    document.getElementById('sum-note').value = cs.admissionNote || '';
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        async function submitClinicalSummaryApi(e) {
+            e.preventDefault();
+            const chiefComplaint = document.getElementById('sum-chief').value;
+            const triagePriority = document.getElementById('sum-priority').value;
+            const bloodGroup = document.getElementById('sum-blood').value;
+            const admissionNote = document.getElementById('sum-note').value;
+
+            try {
+                const res = await fetch(`${API_ROOT}/case/clinical-summary/${CURRENT_APPOINTMENT_ID}`, {
+                    method: 'PUT',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ appointmentId: CURRENT_APPOINTMENT_ID, chiefComplaint, triagePriority, admissionNote, bloodGroup })
+                });
+                const json = await res.json();
+                if(json.success) {
+                    alert("Clinical Summary saved successfully!");
+                    closeModal('clinical-summary-modal');
+                    loadPatientWorkspace(CURRENT_APPOINTMENT_ID);
+                } else { alert(json.message); }
+            } catch(e) { console.error(e); }
+        }
+
+        // COLLEAGUES LOADER & CASE TRANSFER
+        async function openHandoverWindow() {
+            document.getElementById('transfer-appt-id').innerText = CURRENT_APPOINTMENT_ID;
+            navigateToModal('transfer-modal');
+
+            const res = await fetch(`${API_ROOT}/colleagues`, { headers: getHeaders() });
+            const json = await res.json();
+            if(json.success && json.data) {
+                document.getElementById('transfer-colleague-id').innerHTML = json.data.map(d => `
+                    <option value="${d._id}">${d.name} (${d.speciality}) - ${d.dutyStatus}</option>
+                `).join('');
+            }
+        }
+
+        async function submitHandoverApi() {
+            const toDoctorId = document.getElementById('transfer-colleague-id').value;
+            const reason = document.getElementById('transfer-reason').value;
+
+            if(!toDoctorId) return alert("Select Colleague Doctor");
+
+            const res = await fetch(`${API_ROOT}/case/transfer`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ appointmentId: CURRENT_APPOINTMENT_ID, toDoctorId, reason, priority: 'Emergency' })
+            });
+            const json = await res.json();
+            if(json.success) {
+                alert("Patient Handover initiated successfully!");
+                closeModal('transfer-modal');
+                syncDoctorPanel();
+                document.getElementById('case-workspace').innerHTML = `
+                    <div class="h-full flex flex-col justify-center items-center text-center text-slate-500 space-y-3">
+                        <i data-lucide="stethoscope" class="w-16 h-16 opacity-30"></i>
+                        <p class="text-sm font-black">Patient transfer initiated. Select another patient from active tray.</p>
+                    </div>
+                `;
+                lucide.createIcons();
+            } else { alert(json.message); }
+        }
+
+        // DISCHARGE SUMMARY
+        function openDischargeWindow() {
+            document.getElementById('discharge-appt-id').innerText = CURRENT_APPOINTMENT_ID;
+            navigateToModal('discharge-modal');
+        }
+
+        async function submitDischargeSummaryApi() {
+            const diagnosis = document.getElementById('dis-diag').value;
+            const investigation = document.getElementById('dis-invest').value;
+            const treatmentResult = document.getElementById('dis-result').value;
+            const dischargeNote = document.getElementById('dis-note').value;
+
+            if(!diagnosis || !dischargeNote) return alert("Kripya required fields (Diagnosis & Discharge Note) ko bharein.");
+
+            const res = await fetch(`${API_ROOT}/case/discharge-summary`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ appointmentId: CURRENT_APPOINTMENT_ID, diagnosis, investigation, treatmentResult, dischargeNote })
+            });
+            const json = await res.json();
+            if(json.success) {
+                alert("Summary submitted! Sent to Admin billing successfully.");
+                closeModal('discharge-modal');
+                syncDoctorPanel();
+                document.getElementById('case-workspace').innerHTML = `
+                    <div class="h-full flex flex-col justify-center items-center text-center text-slate-500 space-y-3">
+                        <i data-lucide="stethoscope" class="w-16 h-16 opacity-30"></i>
+                        <p class="text-sm font-black">Patient discharge note saved. Select another patient.</p>
+                    </div>
+                `;
+                lucide.createIcons();
+            } else { alert(json.message); }
+        }
+
+        // TOGGLE DUTY STATUS
+        async function toggleDutyStatus(status) {
+            try {
+                const res = await fetch(`${API_ROOT}/status/duty-toggle`, {
+                    method: 'PATCH',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ status })
+                });
+                const json = await res.json();
+                if(json.success) {
+                    alert(`Duty status set to: ${json.current}`);
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        lucide.createIcons();
+    </script>
+</body>
+</html>

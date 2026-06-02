@@ -1233,17 +1233,25 @@ const cancelMedicineOrder = async (req, res) => {
 
 const getOrderHistory = async (req, res) => {
     try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20; // Pagination strictly set to 20
+        const skip = (page - 1) * limit;
+
         const userId = req.user.id;
         
-        // Saari bookings nikalna jo is user ki hain
-        // Pharmacy ki details populate kar rahe hain taaki name aur image dikh sake
         const orders = await PharmacyBooking.find({ userId })
             .populate('pharmacyId', 'name profileImage city')
-            .sort({ createdAt: -1 }); // Newest orders first
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await PharmacyBooking.countDocuments({ userId });
 
         res.json({
             success: true,
             count: orders.length,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
             data: orders
         });
     } catch (error) {

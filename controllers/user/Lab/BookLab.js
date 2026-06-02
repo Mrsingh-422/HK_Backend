@@ -1162,16 +1162,32 @@ const uploadPrescriptionFlow = async (req, res) => {
 // 6. GET MY BOOKINGS
 const getMyBookings = async (req, res) => {
     try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20; // Pagination strictly set to 20
+        const skip = (page - 1) * limit;
+
         const { status } = req.query;
         let query = { userId: req.user.id };
         if (status) query.status = status;
 
         const bookings = await LabBooking.find(query)
             .populate('labId', 'name city profileImage')
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await LabBooking.countDocuments(query);
             
-        res.json({ success: true, data: bookings });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            count: bookings.length, 
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: bookings 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 7. GET BOOKING DETAILS (For Tracking Screen)

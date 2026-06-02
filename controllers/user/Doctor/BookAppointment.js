@@ -446,9 +446,12 @@ const verifyTrackingOTP = async (req, res) => {
 const getUserAppointments = async (req, res) => {
     try {
         const { status } = req.query; 
-        const query = { userId: req.user.id };
+        const query = { 
+            userId: req.user.id, 
+            bookingType: 'Appointment' 
+        };        
+        if (status) query.status = status; 
         
-        if (status) query.status = status;
 
         // Fetch Global Doctor Reschedule Limit dynamically
         const globalConfig = await DocRescheduleLimit.findOne();
