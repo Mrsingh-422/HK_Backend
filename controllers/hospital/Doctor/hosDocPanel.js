@@ -13,6 +13,23 @@ const moment = require('moment');
 const crypto = require('crypto');
 const Bed = require('../../../models/Bed'); 
 
+// Helper to calculate human readable duration display
+const calculateDurationDisplay = (start, end) => {
+    if (!start || !end) return "";
+    const s = moment(start);
+    const e = moment(end);
+    const diffMs = e.diff(s);
+    const duration = moment.duration(diffMs);
+    
+    const hours = Math.floor(duration.asHours());
+    const minutes = duration.minutes();
+    
+    if (hours > 0) {
+        return `${hours} hr ${minutes} mins`;
+    }
+    return `${minutes} mins`;
+};
+
 // 1. GET ALL SPECIALIZATIONS
 const getSpecializations = async (req, res) => {
     try {
@@ -100,9 +117,9 @@ const transferPatient = async (req, res) => {
         const { appointmentId, toDoctorId, reason, priority } = req.body;
 
         const appointment = await Appointment.findById(appointmentId);
-        if (!appointment) return res.status(404).json({ message: "Case not found" });
+        if (!appointment) return res.status(404).json({ success: false, message: "Case not found" });
 
-        // Verify target doctor is from the same hospital and is active
+        // Verify target colleague
         const targetDoctor = await Doctor.findOne({ 
             _id: toDoctorId, 
             hospitalId: req.user.hospitalId, 
@@ -111,24 +128,35 @@ const transferPatient = async (req, res) => {
         });
 
         if (!targetDoctor) {
-            return res.status(400).json({ success: false, message: "Target doctor not found in this hospital." });
+            return res.status(400).json({ success: false, message: "Target doctor not active in this hospital." });
         }
 
-        // Set pending doctor and status
+        const now = new Date();
+
+        // 1. Close Doctor A's (current doctor) active shift in history
+        const activeShift = appointment.treatmentHistory.find(h => 
+            h.toDoctorId && h.toDoctorId.toString() === req.user.id && !h.endTime
+        );
+        if (activeShift) {
+            activeShift.endTime = now;
+            activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
+        }
+
+        // 2. Set Pending status & targets
         appointment.pendingDoctorId = toDoctorId;
         appointment.triageLevel = priority || appointment.triageLevel;
         
-        // Push handover action to treatment audit trail
+        // 3. Push Transfer-Initiated log
         appointment.treatmentHistory.push({
             fromDoctorId: req.user.id,
             toDoctorId: toDoctorId,
             action: 'Transfer-Initiated',
             notes: reason || "Shift Handover",
-            timestamp: new Date()
+            timestamp: now
         });
 
         await appointment.save();
-        res.json({ success: true, message: "Patient handover initiated. Pending acceptance." });
+        res.json({ success: true, message: "Patient handover initiated. Pending colleague acceptance." });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -139,42 +167,77 @@ const acceptTransfer = async (req, res) => {
 
         const appointment = await Appointment.findOne({ _id: appointmentId, pendingDoctorId: req.user.id });
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "No pending transfer request found for you." });
+            return res.status(404).json({ success: false, message: "No pending transfer request found." });
         }
 
         const oldDoctorId = appointment.doctorId;
+        const now = new Date();
 
-        // Make Doctor B the primary doctor
+        // Make Doctor B primary
         appointment.doctorId = req.user.id;
-        appointment.pendingDoctorId = null; // Clear pending state
-        appointment.status = 'In-Progress'; // Mark active
+        appointment.pendingDoctorId = null;
+        appointment.status = 'In-Progress';
 
-        // Push acceptance audit trail
+        // 1. Push Acceptance audit and START Doctor B's shift
         appointment.treatmentHistory.push({
             fromDoctorId: oldDoctorId,
             toDoctorId: req.user.id,
             action: 'Transfer-Accepted',
-            notes: "Patient accepted on duty roster.",
-            timestamp: new Date()
+            notes: "Handover accepted on duty.",
+            timestamp: now,
+            startTime: now // 👈 Start of Doctor B's treatment shift
         });
 
         await appointment.save();
-        res.json({ success: true, message: "Patient transfer accepted successfully.", data: appointment });
+        res.json({ success: true, message: "Transfer accepted. Patient added to your active tray.", data: appointment });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // 4. GET ASSIGNED & PENDING INCOMING CASES (Updated)
 const getAssignedCases = async (req, res) => {
     try {
-        const { type, status } = req.query; 
-        
-        // Find both active cases AND incoming pending transfers for this doctor
-        let query = {
-            $or: [
-                { doctorId: req.user.id, pendingDoctorId: null }, // Active cases
-                { pendingDoctorId: req.user.id } // Incoming pending transfers
-            ]
-        };
+        const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'history', 'discharge'
+        let query = {};
+
+        // Case A: Active patients currently assigned to me (EXCLUDED Discharge-Pending!)
+        if (tab === 'active') {
+            query = { 
+                doctorId: req.user.id, 
+                pendingDoctorId: null,
+                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } // 👈 Ready to discharge wale beds active se hat gaye
+            };
+        } 
+        // Case B: Ready for Discharge patients (Waiting for Admin Billing)
+        else if (tab === 'discharge') {
+            query = {
+                doctorId: req.user.id,
+                pendingDoctorId: null,
+                status: 'Discharge-Pending' // 👈 Strictly Discharge-Pending beds only
+            };
+        }
+        // Case C: Incoming pending handover requests
+        else if (tab === 'pending') {
+            query = { pendingDoctorId: req.user.id };
+        } 
+        // Case D: History Patients (Treated in past)
+        else if (tab === 'history') {
+            query = {
+                $and: [
+                    { 
+                        $or: [
+                            { "treatmentHistory.fromDoctorId": req.user.id },
+                            { "treatmentHistory.toDoctorId": req.user.id }
+                        ] 
+                    },
+                    {
+                        $or: [
+                            { doctorId: { $ne: req.user.id } }, // currently with another doctor
+                            { status: 'Completed' }             // fully discharged
+                        ]
+                    }
+                ]
+            };
+        }
 
         if (type === 'Emergency') query.triageLevel = 'Emergency';
         if (type === 'Admission') query.bookingType = 'Admission';
@@ -184,7 +247,7 @@ const getAssignedCases = async (req, res) => {
             .populate('userId', 'name profilePic phone age gender')
             .sort({ updatedAt: -1 });
 
-        res.json({ success: true, data: cases });
+        res.json({ success: true, count: cases.length, data: cases });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -216,37 +279,53 @@ const submitDischargeSummary = async (req, res) => {
     try {
         const { appointmentId, diagnosis, investigation, treatmentResult, dischargeNote } = req.body;
 
+        const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) return res.status(404).json({ message: "Case not found" });
+
+        const now = new Date();
+
+        // 1. Close Active Doctor's shift
+        const activeShift = appointment.treatmentHistory.find(h => 
+            h.toDoctorId && h.toDoctorId.toString() === req.user.id && !h.endTime
+        );
+        if (activeShift) {
+            activeShift.endTime = now;
+            activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
+        }
+
+        // 2. Submit summary & push Discharged action
         const updateData = {
-            status: 'Discharge-Pending', // 👈 FIXED: Clinical summary submitted, waiting for Admin bill closure
+            status: 'Discharge-Pending',
             clinicalSummary: {
                 diagnosis: diagnosis || "",
                 investigation: investigation || "",
                 treatmentResult: treatmentResult || "",
                 dischargeNote: dischargeNote || "",
-                dischargedAt: new Date()
+                dischargedAt: now
             }
         };
 
-        const appointment = await Appointment.findByIdAndUpdate(
-            appointmentId,
-            { $set: updateData },
-            { new: true, runValidators: true } 
-        );
-
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Case not found" });
-        }
-
-        res.json({ 
-            success: true, 
-            message: "Discharge summary submitted. Pending Admin billing closure.", 
-            data: appointment 
+        // Push Discharged state to timeline
+        appointment.treatmentHistory.push({
+            fromDoctorId: req.user.id,
+            action: 'Discharged',
+            notes: "Clinical discharge summary submitted.",
+            timestamp: now
         });
 
-    } catch (error) { 
-        console.error("Discharge summary error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
-    }
+        // Safe DB atomic update
+        const updatedAppt = await Appointment.findByIdAndUpdate(
+            appointmentId,
+            { 
+                $set: updateData,
+                $push: { treatmentHistory: appointment.treatmentHistory[appointment.treatmentHistory.length - 1] } 
+            },
+            { new: true }
+        );
+
+        res.json({ success: true, message: "Discharge summary submitted.", data: updatedAppt });
+
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // --- 8. DUTY STATUS TOGGLE ---

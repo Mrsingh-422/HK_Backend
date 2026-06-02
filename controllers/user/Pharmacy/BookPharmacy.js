@@ -23,6 +23,8 @@ const { HarmCategory, HarmBlockThreshold } = require("@google/generative-ai");
 const fs = require('fs');
 const path = require('path');
 const LabCategory = require('../../../models/LabCategory');
+const PharmacyPrescriptionRequest = require('../../../models/PharmacyPrescriptionRequest');
+
 
 
 
@@ -1363,6 +1365,220 @@ const getLatestAddedMedicines = async (req, res) => {
     }
 };
 
+/////////////////////////////////////////
+//// ai scan prescription /////////////
+///////////////////////////////////////
+
+// 1. GET USER'S PRESCRIPTION REQUESTS LIST
+const getUserPrescriptionRequests = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        const requests = await PharmacyPrescriptionRequest.find({ userId })
+            .populate('pharmacyId', 'name profileImage city state')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await PharmacyPrescriptionRequest.countDocuments({ userId });
+
+        res.json({
+            success: true,
+            count: requests.length,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: requests
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+const estimateRxPrices = async (req, res) => {
+    try {
+        const { pharmacyId, medicines } = req.body; // medicines: [{ medicineId, name, durationDays }]
+
+        if (!pharmacyId || !medicines || !medicines.length) {
+            return res.status(400).json({ success: false, message: "Pharmacy ID and medicines list are required" });
+        }
+
+        let estimatedTotal = 0;
+        const pricedMedicines = [];
+
+        for (const med of medicines) {
+            let pricePerUnit = 0;
+            let matchedInInventory = false;
+
+            // इन्वेंट्री से इस वेंडर का प्राइस ढूंढें
+            const inventory = await MedicineInventory.findOne({
+                pharmacyId,
+                $or: [
+                    { medicineId: mongoose.isValidObjectId(med.medicineId) ? med.medicineId : new mongoose.Types.ObjectId() },
+                    { name: new RegExp(`^${med.name}$`, 'i') }
+                ],
+                is_available: true
+            });
+
+            if (inventory) {
+                pricePerUnit = inventory.vendor_price;
+                matchedInInventory = true;
+            } else {
+                // बैकअप के रूप में मास्टर मेडिसिन का बेस्ट प्राइस लें
+                const masterMed = await Medicine.findOne({ name: new RegExp(`^${med.name}$`, 'i') });
+                pricePerUnit = masterMed ? Number(masterMed.best_price || masterMed.mrp || 0) : 15; // fallback defaults
+            }
+
+            // मान लें कि 1 दिन की खुराक = 2 यूनिट्स (या खुराक के हिसाब से)
+            const calculatedQty = Math.max(1, (med.durationDays || 15));
+            const subtotal = pricePerUnit * calculatedQty;
+            estimatedTotal += subtotal;
+
+            pricedMedicines.push({
+                name: med.name,
+                durationDays: med.durationDays,
+                pricePerUnit,
+                totalPrice: subtotal,
+                available: matchedInInventory
+            });
+        }
+
+        res.json({
+            success: true,
+            estimatedTotal,
+            medicines: pricedMedicines
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. GET SINGLE REQUEST DETAILS (फिग्मा प्रोग्रेस बार और बिल देखने के लिए)
+const getUserPrescriptionRequestDetails = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const userId = req.user.id;
+
+        const request = await PharmacyPrescriptionRequest.findOne({ requestId, userId })
+            .populate('pharmacyId', 'name phone profileImage address location city');
+
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Prescription request not found" });
+        }
+
+        res.json({
+            success: true,
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// 1. CREATE PRESCRIPTION REQUEST (User submits uploaded RX, Pharmacy, Duration, and Address)
+const createPrescriptionRequest = async (req, res) => {
+    try {
+        const { pharmacyId, doctorName, prescriptionDate, durationType, requestedMedicines, address } = req.body;
+        const userId = req.user.id;
+
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: "Please upload prescription image file" });
+        }
+
+        const newRequest = await PharmacyPrescriptionRequest.create({
+            requestId: `REQ-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            userId,
+            pharmacyId,
+            doctorName,
+            prescriptionDate: prescriptionDate ? new Date(prescriptionDate) : new Date(),
+            prescriptionImage: req.file.path,
+            durationType,
+            requestedMedicines: typeof requestedMedicines === 'string' ? JSON.parse(requestedMedicines) : requestedMedicines,
+            address: typeof address === 'string' ? JSON.parse(address) : address,
+            status: 'Pending Review'
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Prescription review request submitted to vendor successfully",
+            data: newRequest
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3. PAY AND CONVERT REQUEST TO FINAL ORDER (Promotes Request to PharmacyBooking model)
+const payAndConfirmOrder = async (req, res) => {
+    try {
+        const { requestId, paymentMethod } = req.body;
+        const userId = req.user.id;
+
+        const request = await PharmacyPrescriptionRequest.findOne({ requestId, userId });
+        if (!request || request.status !== 'Bill Generated') {
+            return res.status(400).json({ success: false, message: "Valid reviewed request not found or bill is not generated yet" });
+        }
+
+        // Deduct inventory stock securely before booking
+        for (const billItem of request.verifiedBill.items) {
+            const inventory = await MedicineInventory.findOne({ 
+                pharmacyId: request.pharmacyId, 
+                medicineId: billItem.medicineId 
+            });
+            if (inventory) {
+                inventory.stock_quantity = Math.max(0, inventory.stock_quantity - billItem.quantity);
+                if (inventory.stock_quantity === 0) inventory.is_available = false;
+                await inventory.save();
+            }
+        }
+
+        // Convert the validated request to final permanent Booking Order
+        const finalOrder = await PharmacyBooking.create({
+            orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            userId,
+            pharmacyId: request.pharmacyId,
+            patients: [{ name: request.address.name, relation: 'Self' }],
+            items: request.verifiedBill.items.map(item => ({
+                medicineId: item.medicineId,
+                name: item.name,
+                price: item.pricePerUnit,
+                quantity: item.quantity,
+                duration: `${request.requestedMedicines.find(rm => rm.name === item.name)?.durationDays || 15} Days`
+            })),
+            collectionType: 'Home Delivery',
+            address: request.address,
+            appointmentDate: new Date(),
+            appointmentTime: 'Immediate',
+            billSummary: {
+                itemTotal: request.verifiedBill.itemTotal,
+                deliveryCharge: request.verifiedBill.deliveryCharge,
+                totalAmount: request.verifiedBill.totalAmount
+            },
+            paymentMethod: paymentMethod || 'Online',
+            paymentStatus: 'Paid',
+            orderType: 'Prescription',
+            prescriptionImages: [request.prescriptionImage],
+            status: 'Placed'
+        });
+
+        // Delete or mark the temporary request as accepted
+        request.status = 'Bill Generated'; // Can also change to a custom archive status
+        await request.save();
+
+        res.status(201).json({
+            success: true,
+            message: "Payment success! Request converted to order.",
+            orderId: finalOrder.orderId,
+            data: finalOrder
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder,
-getLatestAddedMedicines };
+getLatestAddedMedicines ,
+
+createPrescriptionRequest, payAndConfirmOrder,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices
+};

@@ -4,7 +4,10 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { pharmacyPrescriptionUploads } = require('../../../middleware/multer');
 const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
     getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder,
-getLatestAddedMedicines } = require('../../../controllers/user/Pharmacy/BookPharmacy');
+getLatestAddedMedicines,
+
+createPrescriptionRequest,payAndConfirmOrder, getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices
+} = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
 
@@ -52,5 +55,38 @@ router.get('/order-history',protect('user'),getOrderHistory);
 router.get('/track-order/:orderId',protect('user'),trackOrder);
 
 router.get('/latest-added-medicines',getLatestAddedMedicines);
+
+
+
+/// ai prescription request
+
+router.get(
+    '/prescription-request/list', 
+    protect('user'), 
+    getUserPrescriptionRequests
+);
+
+router.get(
+    '/prescription-request/details/:requestId', 
+    protect('user'), 
+    getUserPrescriptionRequestDetails
+);
+router.post(
+    '/prescription-request', 
+    protect('user'), 
+    pharmacyPrescriptionUploads.single('prescriptionImage'), 
+    createPrescriptionRequest
+);
+
+router.post(
+    '/prescription-request/pay-confirm', 
+    protect('user'), 
+    payAndConfirmOrder
+);
+router.post(
+    '/prescription-request/estimate-prices', 
+    protect('user'), 
+    estimateRxPrices
+);
 
 module.exports = router;

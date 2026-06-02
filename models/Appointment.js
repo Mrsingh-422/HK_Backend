@@ -37,6 +37,7 @@ const appointmentSchema = new mongoose.Schema({
 
     appointmentDate: { type: Date},
     appointmentTime: { type: String }, 
+    rescheduleReason: { type: String, default: "" }, // 👈 Dynamic reason for doctor rescheduling
     consultationType: { 
         type: String, 
         enum: ['Video Consult', 'Clinic Visit', 'Home Visit']
@@ -93,11 +94,14 @@ const appointmentSchema = new mongoose.Schema({
         enum: ['Initial-Assignment', 'Transfer-Initiated', 'Transfer-Accepted', 'Discharged'], 
         default: 'Initial-Assignment' 
     },
-
     notes: { type: String, default: "" },
     timestamp: { type: Date, default: Date.now },
-
-    }],
+    
+    // --- NEW: ADDMISSION SHIFT DURATION TRACKING ---
+    startTime: { type: Date, default: null },
+    endTime: { type: Date, default: null },
+    durationDisplay: { type: String, default: "" } // e.g. "2 hr 15 mins"
+}],
     clinicalSummary: {
         diagnosis: { type: String, default: "" },
         investigation: { type: String, default: "" },

@@ -1,5 +1,6 @@
 const PharmacyBooking = require('../../../models/PharmacyBooking');
 const Driver = require('../../../models/Driver');
+const PharmacyPrescriptionRequest = require("../../../models/PharmacyPrescriptionRequest");
 
 // 1. DASHBOARD LISTING (Figma Tabs: General | Prescription)
 // Endpoint: GET /provider/pharmacy/orders/list?orderType=General&status=Placed
@@ -150,4 +151,154 @@ const reassignDriverManual = async (req, res) => {
 };
 
 
-module.exports = { getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual };
+
+////// ai prescription requests ////////////
+////////////////////////////////////////////
+
+// 1. GET PENDING REQUESTS FOR CURRENT PHARMACY (फार्मासिस्ट डैशबोर्ड के लिए)
+const getProviderPrescriptionRequests = async (req, res) => {
+    try {
+        const pharmacyId = req.user.id; // Logged-in pharmacist/pharmacy
+        const { status } = req.query; // Filter option (e.g., 'Pending Review', 'Reviewing', etc.)
+
+        let query = { pharmacyId };
+        if (status) {
+            query.status = status;
+        }
+
+        const requests = await PharmacyPrescriptionRequest.find(query)
+            .populate('userId', 'name phone email')
+            .sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            count: requests.length,
+            data: requests
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. GET SPECIFIC PRESCRIPTION REQUEST DETAILS (समीक्षा करने के लिए)
+const getProviderPrescriptionRequestDetails = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const pharmacyId = req.user.id;
+
+        const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId })
+            .populate('userId', 'name phone email gender age');
+
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request not found" });
+        }
+
+        res.json({
+            success: true,
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3. START REVIEW (स्टेटस को 'Pending Review' से 'Reviewing' में बदलने के लिए)
+const startPrescriptionReview = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const pharmacyId = req.user.id;
+
+        const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request not found" });
+        }
+
+        if (request.status === 'Pending Review') {
+            request.status = 'Reviewing';
+            await request.save();
+        }
+
+        res.json({
+            success: true,
+            message: "Prescription review started successfully",
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// 2. PHARMACIST PORTAL: SUBMIT REVIEW & BILL (Vendor reviews, matches prices, and adds verifiedBill)
+const submitPharmacistReview = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { items, deliveryCharge } = req.body; // Array of verified medicines with calculated prices
+
+        const request = await PharmacyPrescriptionRequest.findOne({ requestId });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Review request not found" });
+        }
+
+        // Calculate pricing
+        let itemTotal = 0;
+        const verifiedItems = items.map(item => {
+            const subtotal = item.pricePerUnit * item.quantity;
+            itemTotal += subtotal;
+            return {
+                medicineId: item.medicineId,
+                name: item.name,
+                pricePerUnit: item.pricePerUnit,
+                quantity: item.quantity,
+                totalPrice: subtotal
+            };
+        });
+
+        const totalAmount = itemTotal + Number(deliveryCharge || 0);
+
+        request.verifiedBill = {
+            items: verifiedItems,
+            itemTotal,
+            deliveryCharge: Number(deliveryCharge || 0),
+            totalAmount
+        };
+        request.status = 'Bill Generated';
+        await request.save();
+
+        res.json({
+            success: true,
+            message: "Bill generated and sent back to user successfully",
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+const rejectPrescriptionRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { reason } = req.body;
+        const pharmacyId = req.user.id;
+
+        const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request not found" });
+        }
+
+        request.status = 'Rejected';
+        await request.save();
+
+        res.json({
+            success: true,
+            message: "Prescription request has been rejected",
+            rejectReason: reason || "Invalid Prescription Document",
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+module.exports = { getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,
+
+    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest
+ };

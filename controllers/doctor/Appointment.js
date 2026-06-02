@@ -170,7 +170,7 @@ const updateConsultationFees = async (req, res) => {
 // endpoint: PATCH /doctor/appointments/reschedule/:id
 const rescheduleAppointment = async (req, res) => {
     try {
-        const { newDate, newTime } = req.body;
+        const { newDate, newTime, reason } = req.body; // 👈 Mapped 'reason' from request body
         
         const appointment = await Appointment.findOneAndUpdate(
             { 
@@ -182,16 +182,26 @@ const rescheduleAppointment = async (req, res) => {
             { 
                 appointmentDate: new Date(newDate), 
                 appointmentTime: newTime,
-                status: 'Rescheduled' 
+                status: 'Rescheduled',
+                rescheduleReason: reason || "Rescheduled by Doctor" // 👈 Saves the reason directly in database
             },
             { new: true }
         );
 
-        if (!appointment) return res.status(404).json({ message: "Appointment not found or cannot be rescheduled" });
+        if (!appointment) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Appointment not found or cannot be rescheduled" 
+            });
+        }
 
-        res.json({ success: true, message: "Appointment rescheduled successfully", data: appointment });
+        res.json({ 
+            success: true, 
+            message: "Appointment rescheduled successfully", 
+            data: appointment 
+        });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 // ---------------------------------

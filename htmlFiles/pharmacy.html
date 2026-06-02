@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patient App - Upload Prescription</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f1f5f9;
+        }
+        .text-green { color: #0AC080; }
+        .bg-green { background-color: #0AC080; }
+        .bg-green-light { background-color: #e6faf2; }
+        .border-green { border-color: #0AC080; }
+        .mobile-frame {
+            max-width: 412px;
+            min-height: 844px;
+            border: 8px solid #1e293b;
+            border-radius: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            background-color: #ffffff;
+            position: relative;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen py-6">
+
+    <!-- Config Panel -->
+    <div class="mb-4 bg-slate-800 text-white p-4 rounded-2xl max-w-sm w-full text-xs space-y-2">
+        <div class="flex justify-between items-center">
+            <span class="font-bold text-emerald-400">PATIENT LOCAL STORAGE</span>
+            <span class="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-[10px]" id="auth-status">Offline Mock</span>
+        </div>
+        <p class="text-[11px] text-slate-400">Reads <strong>userToken</strong> from local storage for backend API calls.</p>
+        <div class="space-y-1">
+            <input type="text" id="cfg-url" value="http://localhost:3000" class="w-full bg-slate-900 border border-slate-700 px-2 py-1 rounded text-emerald-300 focus:outline-none">
+            <input type="text" id="cfg-token" placeholder="Set userToken in LocalStorage" class="w-full bg-slate-900 border border-slate-700 px-2 py-1 rounded text-slate-300 focus:outline-none" oninput="saveToken(this.value)">
+        </div>
+    </div>
+
+    <!-- Mobile Screen Frame -->
+    <div class="mobile-frame flex flex-col overflow-hidden shadow-2xl">
+        
+        <!-- Header status notch -->
+        <div class="h-11 flex justify-between items-center px-6 bg-white text-slate-900 text-xs font-semibold">
+            <span>9:41</span>
+            <div class="flex items-center space-x-1.5">
+                <i class="fa-solid fa-signal"></i>
+                <i class="fa-solid fa-wifi"></i>
+                <i class="fa-solid fa-battery-full text-sm"></i>
+            </div>
+        </div>
+
+        <!-- Scrollable app content -->
+        <div class="flex-1 overflow-y-auto pb-20 px-5 py-4" id="view-port">
+
+            <!-- SCREEN 1: UPLOAD PRESCRIPTION (Figma Screen 1) -->
+            <div id="scr-upload" class="space-y-6">
+                <div class="flex items-center justify-between">
+                    <button class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
+                    <h2 class="text-lg font-bold text-slate-900">Upload Prescription</h2>
+                    <button class="text-slate-600"><i class="fa-solid fa-circle-question text-lg"></i></button>
+                </div>
+                <div class="space-y-1">
+                    <h3 class="text-xl font-extrabold text-slate-900">Add Prescription</h3>
+                    <p class="text-xs text-slate-500">Upload a valid prescription to continue your order</p>
+                </div>
+                <!-- Upload selector card -->
+                <div onclick="simulateUpload()" class="border-2 border-dashed border-green bg-green-light/20 rounded-2xl p-6 text-center space-y-4 cursor-pointer hover:bg-green-light/30 transition">
+                    <div class="w-14 h-14 bg-green text-white rounded-full flex items-center justify-center text-2xl mx-auto shadow-sm">
+                        <i class="fa-solid fa-arrow-up-from-bracket"></i>
+                    </div>
+                    <div class="space-y-0.5">
+                        <h4 class="font-bold text-slate-800 text-base">Upload Prescription</h4>
+                        <p class="text-[11px] text-slate-400">Automatically read by AI</p>
+                    </div>
+                    <div class="border-t border-dashed border-green pt-3">
+                        <span class="text-green text-xs font-bold uppercase tracking-wider">AI Powered Rx Scanner</span>
+                    </div>
+                </div>
+                <p class="text-[10px] text-slate-400 text-center">Supports PDF, JPG, PNG - Up to 10 MB</p>
+                <!-- Prescription Guides -->
+                <div class="space-y-3">
+                    <h4 class="text-xs font-extrabold text-slate-900 uppercase">Guide to a valid prescription</h4>
+                    <div class="border border-slate-200 rounded-xl p-4 space-y-3 text-xs text-slate-600">
+                        <div class="flex items-start space-x-3">
+                            <i class="fa-regular fa-circle-check text-green mt-0.5 text-base"></i>
+                            <span>Ensure doctor's name, signature, and registration number are visible.</span>
+                        </div>
+                        <div class="flex items-start space-x-3">
+                            <i class="fa-regular fa-circle-check text-green mt-0.5 text-base"></i>
+                            <span>Patient name and date of visit should be clearly mentioned.</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="border border-dashed border-emerald-500/50 bg-emerald-500/5 rounded-xl p-3 text-center text-[10px] text-green font-medium">
+                    <i class="fa-solid fa-lock mr-1"></i> Your prescription is encrypted & safe with us.
+                </div>
+                <button onclick="goTo('detected')" class="w-full bg-green text-white font-bold py-3.5 rounded-xl text-sm shadow-md">Continue</button>
+            </div>
+
+            <!-- SCREEN 2: PRESCRIPTION UPLOADED / DETECTED INFO (Figma Screen 2) -->
+            <div id="scr-detected" class="space-y-5 hidden">
+                <div class="flex items-center justify-between">
+                    <button onclick="goTo('upload')" class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
+                    <h2 class="text-lg font-bold text-slate-900">Prescription Uploaded</h2>
+                    <div class="flex space-x-3 text-slate-700">
+                        <i class="fa-solid fa-share-nodes"></i>
+                        <i class="fa-solid fa-cart-shopping"></i>
+                    </div>
+                </div>
+                <div class="border border-emerald-100 bg-emerald-50/30 rounded-2xl p-4 text-center space-y-1">
+                    <div class="w-8 h-8 bg-emerald-500 text-white rounded-full flex items-center justify-center mx-auto text-sm"><i class="fa-solid fa-check"></i></div>
+                    <h4 class="font-bold text-slate-800 text-sm">Prescription Uploaded Successfully!</h4>
+                    <p class="text-[10px] text-slate-500">Our pharmacist will verify your prescription</p>
+                </div>
+                <!-- Thumbnail -->
+                <div class="border border-slate-200 rounded-2xl p-3 space-y-2">
+                    <span class="text-xs font-bold text-slate-500 flex items-center gap-1.5"><i class="fa-solid fa-file-medical text-slate-400"></i> Uploaded Prescription</span>
+                    <img src="https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&q=80&w=400" class="w-full h-24 object-cover rounded-lg" alt="Blister Pack">
+                </div>
+                <!-- AI details -->
+                <div class="border border-slate-200 rounded-2xl p-4 space-y-2 text-xs">
+                    <span class="font-bold text-slate-800">Auto-detected Information</span>
+                    <div class="flex items-center justify-between py-1.5 border-b border-slate-100">
+                        <span class="text-slate-400">Doctor Name</span>
+                        <strong class="text-slate-800" id="ai-doctor">Dr. Rajesh Sharma</strong>
+                    </div>
+                    <div class="flex items-center justify-between py-1.5">
+                        <span class="text-slate-400">Prescription Date</span>
+                        <strong class="text-slate-800" id="ai-date">22 Jan 2026</strong>
+                    </div>
+                </div>
+                <!-- Medicines found -->
+                <div class="space-y-3">
+                    <span class="text-xs font-bold text-slate-800">Detected Medicines (2 found)</span>
+                    <div class="border border-slate-200 rounded-2xl p-4 bg-white shadow-sm space-y-2">
+                        <div class="flex justify-between items-center">
+                            <span class="font-bold text-slate-900 text-xs">Telmisartan 40mg</span>
+                            <input type="checkbox" checked id="chk-med-1" class="accent-emerald-500">
+                        </div>
+                        <p class="text-[10px] text-slate-400">1 tablet &bull; Twice daily &bull; 15 days</p>
+                    </div>
+                    <div class="border border-slate-200 rounded-2xl p-4 bg-white shadow-sm space-y-2">
+                        <div class="flex justify-between items-center">
+                            <span class="font-bold text-slate-900 text-xs">Atorvastatin 20mg</span>
+                            <input type="checkbox" checked id="chk-med-2" class="accent-emerald-500">
+                        </div>
+                        <p class="text-[10px] text-slate-400">1 tablet &bull; Once daily &bull; 15 days</p>
+                    </div>
+                </div>
+                <button onclick="goTo('pharmacy')" class="w-full bg-green text-white font-bold py-3.5 rounded-xl text-sm shadow-md">Continue</button>
+            </div>
+
+            <!-- SCREEN 3: CHOOSE PHARMACY (Figma Screen 3) -->
+            <div id="scr-pharmacy" class="space-y-4 hidden">
+                <div class="flex items-center justify-between">
+                    <button onclick="goTo('detected')" class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
+                    <h2 class="text-lg font-bold text-slate-900">Choose Pharmacy</h2>
+                </div>
+                <div class="relative">
+                    <i class="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400 text-xs"></i>
+                    <input type="text" placeholder="Search pharmacy by name" class="w-full pl-9 pr-4 py-2.5 bg-slate-100 rounded-xl text-xs focus:outline-none">
+                </div>
+                <!-- Pharmacy Card list -->
+                <div class="border-2 border-green rounded-2xl overflow-hidden bg-white shadow-sm">
+                    <img src="https://images.unsplash.com/photo-1607619056574-7b8d304f3ced?auto=format&fit=crop&q=80&w=400" class="w-full h-32 object-cover" alt="Shop Photo">
+                    <div class="p-4 space-y-3">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h4 class="font-extrabold text-slate-900 text-sm">CityCare Medicos</h4>
+                                <p class="text-[11px] text-slate-400 mt-0.5"><i class="fa-solid fa-star text-amber-400"></i> 4.6 (128 reviews) &bull; 1.2 km</p>
+                            </div>
+                            <span class="text-[10px] bg-slate-100 font-bold px-2 py-0.5 rounded text-slate-600">1.2 km</span>
+                        </div>
+                        <div class="flex flex-wrap gap-1">
+                            <span class="text-[9px] bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded-full">Home Delivery</span>
+                            <span class="text-[9px] bg-amber-50 text-amber-700 font-bold px-2 py-0.5 rounded-full">Rapid Delivery</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3 pt-2">
+                            <button class="border border-slate-200 text-slate-700 text-xs font-bold py-2 rounded-xl">View Details</button>
+                            <button onclick="selectPharmacy('CityCare Medicos', '656f4d2f8e12ca0012bc551a')" class="bg-green text-white text-xs font-bold py-2 rounded-xl">Select</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SCREEN 4: MEDICINE DURATION (Figma Screen 4 & 5) -->
+            <div id="scr-duration" class="space-y-6 hidden">
+                <div class="flex items-center justify-between">
+                    <button onclick="goTo('pharmacy')" class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
+                    <h2 class="text-lg font-bold text-slate-900">Medicine Duration</h2>
+                </div>
+                <h3 class="text-sm font-extrabold text-slate-800">How long do you need medicines for?</h3>
+                
+                <!-- Card Option A -->
+                <div onclick="selectDurationMode('Full')" id="card-full" class="border-2 border-green bg-green-light/10 rounded-2xl p-4 cursor-pointer flex items-start space-x-3">
+                    <div class="text-green text-lg mt-0.5" id="opt-full-icon"><i class="fa-solid fa-circle-dot"></i></div>
+                    <div>
+                        <h4 class="font-bold text-slate-800 text-xs">Full course as per prescription</h4>
+                        <p class="text-[10px] text-slate-400 mt-1">Pharmacist will calculate the exact quantity</p>
+                    </div>
+                </div>
+
+                <!-- Card Option B -->
+                <div onclick="selectDurationMode('Custom')" id="card-custom" class="border border-slate-200 rounded-2xl p-4 cursor-pointer flex flex-col space-y-4">
+                    <div class="flex items-start space-x-3">
+                        <div class="text-slate-300 text-lg mt-0.5" id="opt-custom-icon"><i class="fa-regular fa-circle"></i></div>
+                        <div>
+                            <h4 class="font-bold text-slate-800 text-xs">Custom duration</h4>
+                            <p class="text-[10px] text-slate-400 mt-1">Select specific medicines or days</p>
+                        </div>
+                    </div>
+                    <!-- Nested editor with call to estimate API -->
+                    <div id="duration-editor" class="space-y-3 pt-3 border-t border-slate-100 hidden">
+                        <div class="flex justify-between items-center text-xs py-1">
+                            <span>Paracetamol 500mg</span>
+                            <div class="flex items-center space-x-1.5">
+                                <input type="number" id="days-med-1" value="5" onchange="runLiveEstimate()" class="w-10 border border-slate-200 text-center py-0.5 rounded text-xs">
+                                <span class="text-slate-400 text-[11px]">Days</span>
+                            </div>
+                        </div>
+                        <div class="flex justify-between items-center text-xs py-1">
+                            <span>Vitamin D</span>
+                            <div class="flex items-center space-x-1.5">
+                                <input type="number" id="days-med-2" value="5" onchange="runLiveEstimate()" class="w-10 border border-slate-200 text-center py-0.5 rounded text-xs">
+                                <span class="text-slate-400 text-[11px]">Days</span>
+                            </div>
+                        </div>
+                        <!-- Live Price Display -->
+                        <div class="bg-amber-50 border border-amber-200 p-2.5 rounded-lg flex justify-between text-xs text-amber-800 font-semibold">
+                            <span>Estimated Price:</span>
+                            <span>₹<span id="estimated-cost-label">250</span></span>
+                        </div>
+                    </div>
+                </div>
+                <button onclick="goTo('address')" class="w-full bg-green text-white font-bold py-3.5 rounded-xl text-sm shadow-md">Continue to Delivery Details</button>
+            </div>
+
+            <!-- SCREEN 5: SELECT DELIVERY ADDRESS (Figma Screen 6) -->
+            <div id="scr-address" class="space-y-6 hidden">
+                <div class="flex items-center justify-between">
+                    <button onclick="goTo('duration')" class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
+                    <h2 class="text-lg font-bold text-slate-900">Select Delivery Address</h2>
+                </div>
+                <h3 class="text-xs font-bold text-slate-700 uppercase">Where should we collect the sample?</h3>
+                <!-- List -->
+                <div class="space-y-3">
+                    <div onclick="selectAddr('Home', '123, Residency Road, Near Bangalore')" class="addr-card border-2 border-green bg-green-light/10 p-4 rounded-2xl flex items-start justify-between cursor-pointer">
+                        <div class="flex items-start space-x-3 text-xs">
+                            <div class="w-8 h-8 bg-green-light text-green rounded-full flex items-center justify-center"><i class="fa-solid fa-house"></i></div>
+                            <div>
+                                <span class="bg-slate-100 text-slate-600 text-[9px] font-bold px-2 py-0.5 rounded">Home</span>
+                                <p class="font-bold text-slate-800 mt-1">123, Residency Road, Near Bangalore</p>
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-circle-dot text-green text-base mt-1" id="icon-addr-Home"></i>
+                    </div>
+                    <div onclick="selectAddr('Office', '45, MG Road, 3rd Floor, Bangalore')" class="addr-card border border-slate-200 p-4 rounded-2xl flex items-start justify-between cursor-pointer">
+                        <div class="flex items-start space-x-3 text-xs">
+                            <div class="w-8 h-8 bg-orange-50 text-orange-600 rounded-full flex items-center justify-center"><i class="fa-solid fa-briefcase"></i></div>
+                            <div>
+                                <span class="bg-slate-100 text-slate-600 text-[9px] font-bold px-2 py-0.5 rounded">Office</span>
+                                <p class="font-bold text-slate-800 mt-1">45, MG Road, 3rd Floor, Bangalore</p>
+                            </div>
+                        </div>
+                        <i class="fa-regular fa-circle text-slate-300 text-base mt-1" id="icon-addr-Office"></i>
+                    </div>
+                </div>
+                <button onclick="goTo('summary')" class="w-full bg-green text-white font-bold py-3.5 rounded-xl text-sm shadow-md">Continue</button>
+            </div>
+
+            <!-- SCREEN 6: ORDER SUMMARY (Figma Screen 7) -->
+            <div id="scr-summary" class="space-y-6 hidden">
+                <div class="flex items-center justify-between">
+                    <button onclick="goTo('address')" class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
+                    <h2 class="text-lg font-bold text-slate-900">Order Summary</h2>
+                </div>
+                <!-- Thumbnail -->
+                <div class="border border-slate-200 rounded-2xl p-4 bg-white space-y-2">
+                    <span class="text-xs font-bold text-slate-500"><i class="fa-solid fa-receipt"></i> Uploaded Prescription</span>
+                    <img src="https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&q=80&w=400" class="w-full h-28 object-cover rounded-lg" alt="Rx">
+                </div>
+                <!-- Duration Details -->
+                <div class="border border-slate-200 rounded-2xl p-4 bg-white text-xs">
+                    <p class="font-bold text-slate-800">Medicine Duration</p>
+                    <span class="text-green font-bold block mt-1" id="sum-duration">Full course as per prescription</span>
+                </div>
+                <!-- Address Details -->
+                <div class="border border-slate-200 rounded-2xl p-4 bg-white text-xs space-y-1">
+                    <span class="bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded text-[9px]" id="sum-addr-tag">Home</span>
+                    <p class="font-bold mt-1 text-slate-900" id="sum-addr-text">123, Residency Road, Near Bangalore</p>
+                </div>
+                <!-- Verification disclaimer -->
+                <div class="border border-amber-200 bg-amber-50 p-4 rounded-xl text-xs text-amber-800 space-y-1">
+                    <span class="font-bold"><i class="fa-solid fa-circle-notch animate-spin"></i> Pending Verification</span>
+                    <p class="text-[10px] text-slate-600">Prices will be finalized after pharmacist verifies your prescription before processing.</p>
+                </div>
+                <button onclick="submitRequest()" class="w-full bg-green text-white font-bold py-3.5 rounded-xl text-sm shadow-md">Place Order Request</button>
+            </div>
+
+            <!-- SCREEN 7: TRACKING PROGRESS (Figma Screen 8 & 9) -->
+            <div id="scr-progress" class="space-y-6 hidden">
+                <div class="text-center py-6 space-y-3">
+                    <div class="relative w-28 h-28 mx-auto flex items-center justify-center">
+                        <div class="absolute inset-0 border-4 border-slate-100 rounded-full"></div>
+                        <div class="absolute inset-0 border-4 border-[#0AC080] border-t-transparent rounded-full animate-spin" id="prog-spinner"></div>
+                        <div class="absolute inset-0 bg-white rounded-full flex items-center justify-center hidden" id="prog-success-icon"><i class="fa-solid fa-circle-check text-5xl text-green"></i></div>
+                        <strong class="text-slate-800 text-sm font-extrabold" id="progress-percent">0%</strong>
+                    </div>
+                    <h3 class="text-lg font-extrabold text-slate-900" id="progress-title">Order Review in Progress</h3>
+                    <p class="text-xs text-slate-400">Order ID: <span class="font-mono text-slate-800 font-bold" id="tracking-req-id">ORD-</span></p>
+                </div>
+                <!-- Step checklist -->
+                <div class="space-y-2.5 text-xs">
+                    <div class="border border-slate-200 p-3.5 rounded-xl flex items-center gap-2 text-slate-400" id="step-1">
+                        <i class="fa-regular fa-circle" id="step-1-icon"></i><span>Prescription are check the details</span>
+                    </div>
+                    <div class="border border-slate-200 p-3.5 rounded-xl flex items-center gap-2 text-slate-400" id="step-2">
+                        <i class="fa-regular fa-circle" id="step-2-icon"></i><span>Medicine are verified</span>
+                    </div>
+                    <div class="border border-slate-200 p-3.5 rounded-xl flex items-center gap-2 text-slate-400" id="step-3">
+                        <i class="fa-regular fa-circle" id="step-3-icon"></i><span>Checked Quality & Prices</span>
+                    </div>
+                    <div class="border border-slate-200 p-3.5 rounded-xl flex items-center gap-2 text-slate-400" id="step-4">
+                        <i class="fa-regular fa-circle" id="step-4-icon"></i><span>Review Completed!</span>
+                    </div>
+                </div>
+                <!-- Verified bill component (visible only when Review Completed is 100%) -->
+                <div class="border border-slate-200 rounded-2xl p-4 bg-white space-y-3 hidden" id="payment-box">
+                    <h4 class="font-bold text-slate-800 text-sm border-b border-slate-100 pb-2">Verified Bill</h4>
+                    <div class="space-y-2 text-xs text-slate-600">
+                        <div class="flex justify-between"><span>Medicines total:</span><strong>₹250</strong></div>
+                        <div class="flex justify-between text-slate-900 font-bold"><span>Payable Amount:</span><strong>₹250</strong></div>
+                    </div>
+                    <button onclick="payAndCompleteOrder()" class="w-full bg-green text-white font-bold py-3 rounded-xl text-xs shadow-md">Pay Now & Confirm Order</button>
+                </div>
+            </div>
+
+            <!-- SUCCESS CONFIRMATION PAGE -->
+            <div id="scr-success" class="space-y-6 text-center py-12 hidden">
+                <div class="w-16 h-16 bg-green-light text-green rounded-full flex items-center justify-center text-3xl mx-auto"><i class="fa-solid fa-circle-check"></i></div>
+                <h3 class="text-xl font-extrabold text-slate-900">Order Confirmed!</h3>
+                <p class="text-xs text-slate-400 leading-relaxed">Your payment was successfully received. The order has been finalized and dispatched to the pharmacy vendor for quick delivery.</p>
+                <button onclick="goTo('upload')" class="w-full bg-slate-900 text-white font-bold py-3.5 rounded-xl text-sm transition">Return to Home</button>
+            </div>
+
+        </div>
+
+        <!-- iOS Bottom tab bar simulation -->
+        <div class="absolute bottom-0 left-0 right-0 h-16 bg-white border-t border-slate-100 flex justify-around items-center text-[10px] text-slate-400 z-30">
+            <div class="text-center text-green cursor-pointer" onclick="goTo('upload')">
+                <i class="fa-solid fa-house text-lg"></i><span class="block mt-0.5">Home</span>
+            </div>
+            <div class="text-center"><i class="fa-regular fa-file-lines text-lg"></i><span class="block mt-0.5">Article</span></div>
+            <div class="text-center"><i class="fa-regular fa-user text-lg"></i><span class="block mt-0.5">Profile</span></div>
+            <div class="text-center"><i class="fa-solid fa-box-archive text-lg"></i><span class="block mt-0.5">Locker</span></div>
+            <div class="text-center"><i class="fa-solid fa-gear text-lg"></i><span class="block mt-0.5">Setting</span></div>
+        </div>
+
+    </div>
+
+    <!-- Scripting Engine -->
+    <script>
+        let durationMode = "Full";
+        let selectedAddrType = "Home";
+        let selectedAddrDetail = "123, Residency Road, Near Bangalore";
+        let pharmacyId = "656f4d2f8e12ca0012bc551a";
+        let generatedRequestId = "";
+        let pollingTimer = null;
+
+        document.addEventListener("DOMContentLoaded", () => {
+            const token = localStorage.getItem('userToken');
+            if (token) {
+                document.getElementById("auth-status").innerText = "API Synchronized";
+                document.getElementById("auth-status").className = "bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-[10px]";
+                document.getElementById("cfg-token").value = token;
+            }
+        });
+
+        function saveToken(token) {
+            localStorage.setItem('userToken', token);
+            document.getElementById("auth-status").innerText = token ? "API Synchronized" : "Offline Mock";
+            document.getElementById("auth-status").className = token ? "bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-[10px]" : "bg-slate-500/20 text-slate-300 px-2 py-0.5 rounded text-[10px]";
+        }
+
+        function goTo(id) {
+            const screens = ['upload', 'detected', 'pharmacy', 'duration', 'address', 'summary', 'progress', 'success'];
+            screens.forEach(s => document.getElementById(`scr-${s}`).classList.add('hidden'));
+            document.getElementById(`scr-${id}`).classList.remove('hidden');
+        }
+
+        function simulateUpload() {
+            goTo('detected');
+        }
+
+        function selectPharmacy(name, id) {
+            pharmacyId = id;
+            runLiveEstimate();
+            goTo('duration');
+        }
+
+        function selectDurationMode(mode) {
+            durationMode = mode;
+            document.getElementById("card-full").className = mode === "Full" ? "border-2 border-green bg-green-light/10 rounded-2xl p-4 cursor-pointer flex items-start space-x-3" : "border border-slate-200 rounded-2xl p-4 cursor-pointer flex items-start space-x-3";
+            document.getElementById("card-custom").className = mode === "Custom" ? "border-2 border-green bg-green-light/10 rounded-2xl p-4 cursor-pointer flex flex-col space-y-4" : "border border-slate-200 rounded-2xl p-4 cursor-pointer flex flex-col space-y-4";
+            document.getElementById("opt-full-icon").innerHTML = mode === "Full" ? `<i class="fa-solid fa-circle-dot text-green"></i>` : `<i class="fa-regular fa-circle"></i>`;
+            document.getElementById("opt-custom-icon").innerHTML = mode === "Custom" ? `<i class="fa-solid fa-circle-dot text-green"></i>` : `<i class="fa-regular fa-circle"></i>`;
+            
+            if (mode === "Custom") {
+                document.getElementById("duration-editor").classList.remove('hidden');
+                runLiveEstimate();
+            } else {
+                document.getElementById("duration-editor").classList.add('hidden');
+            }
+        }
+
+        async function runLiveEstimate() {
+            const baseUrl = document.getElementById("cfg-url").value;
+            const token = localStorage.getItem('userToken');
+            const d1 = parseInt(document.getElementById("days-med-1").value) || 5;
+            const d2 = parseInt(document.getElementById("days-med-2").value) || 5;
+
+            // Offline fallback simulation
+            if (!token) {
+                document.getElementById("estimated-cost-label").innerText = (d1 * 25) + (d2 * 25);
+                return;
+            }
+
+            try {
+                const res = await fetch(`${baseUrl}/user/pharmacy/prescription-request/estimate-prices`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        pharmacyId: pharmacyId,
+                        medicines: [
+                            { name: "Paracetamol 500mg", durationDays: d1 },
+                            { name: "Vitamin D", durationDays: d2 }
+                        ]
+                    })
+                });
+                const out = await res.json();
+                if (out.success) {
+                    document.getElementById("estimated-cost-label").innerText = out.estimatedTotal;
+                }
+            } catch (err) {
+                console.error("Estimate API Error:", err);
+            }
+        }
+
+        function selectAddr(type, text) {
+            selectedAddrType = type;
+            selectedAddrDetail = text;
+            document.querySelectorAll(".addr-card").forEach(el => el.className = "addr-card border border-slate-200 p-4 rounded-2xl flex items-start justify-between cursor-pointer");
+            event.currentTarget.className = "addr-card border-2 border-green bg-green-light/10 p-4 rounded-2xl flex items-start justify-between cursor-pointer";
+            
+            document.getElementById("icon-addr-Home").className = type === "Home" ? "fa-solid fa-circle-dot text-green text-base mt-1" : "fa-regular fa-circle text-slate-300 text-base mt-1";
+            document.getElementById("icon-addr-Office").className = type === "Office" ? "fa-solid fa-circle-dot text-green text-base mt-1" : "fa-regular fa-circle text-slate-300 text-base mt-1";
+            
+            document.getElementById("sum-addr-tag").innerText = type;
+            document.getElementById("sum-addr-text").innerText = text;
+        }
+
+        async function submitRequest() {
+            const baseUrl = document.getElementById("cfg-url").value;
+            const token = localStorage.getItem('userToken');
+
+            if (!token) {
+                // Mock Request Creation
+                generatedRequestId = "REQ-MOCK" + Math.floor(100 + Math.random()*900);
+                document.getElementById("tracking-req-id").innerText = generatedRequestId;
+                goTo('progress');
+                startPollingMock();
+                return;
+            }
+
+            // Real creation
+            const formData = new FormData();
+            formData.append("pharmacyId", pharmacyId);
+            formData.append("doctorName", "Dr. Rajesh Sharma");
+            formData.append("durationType", durationMode);
+            formData.append("address", JSON.stringify({
+                addressType: selectedAddrType,
+                name: "Rahul Kumar",
+                phone: "9876543210",
+                houseNo: selectedAddrDetail.split(",")[0],
+                city: "Bangalore",
+                pincode: "560001"
+            }));
+            
+            const med1Days = parseInt(document.getElementById("days-med-1").value) || 15;
+            const med2Days = parseInt(document.getElementById("days-med-2").value) || 15;
+            formData.append("requestedMedicines", JSON.stringify([
+                { name: "Telmisartan 40mg", durationDays: med1Days, isSelected: true },
+                { name: "Atorvastatin 20mg", durationDays: med2Days, isSelected: true }
+            ]));
+
+            // Dummy tiny png file payload to pass file requirements
+            const dummyFile = new Blob([""], { type: "image/png" });
+            formData.append("prescriptionImage", dummyFile, "rx.png");
+
+            try {
+                const res = await fetch(`${baseUrl}/user/pharmacy/prescription-request`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: formData
+                });
+                const out = await res.json();
+                if (out.success) {
+                    generatedRequestId = out.data.requestId;
+                    document.getElementById("tracking-req-id").innerText = generatedRequestId;
+                    goTo('progress');
+                    startRealPolling();
+                } else {
+                    alert(out.message);
+                }
+            } catch (err) {
+                console.error("Submission Failure:", err);
+            }
+        }
+
+        // POLLING LOOP FOR REAL PRODUCTION FLOWS
+        function startRealPolling() {
+            if (pollingTimer) clearInterval(pollingTimer);
+            pollingTimer = setInterval(async () => {
+                const baseUrl = document.getElementById("cfg-url").value;
+                const token = localStorage.getItem('userToken');
+                try {
+                    const res = await fetch(`${baseUrl}/user/pharmacy/prescription-request/details/${generatedRequestId}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const out = await res.json();
+                    if (out.success) {
+                        updateProgressUI(out.data.status);
+                    }
+                } catch (err) {
+                    console.error("Polling error:", err);
+                }
+            }, 3000);
+        }
+
+        function startPollingMock() {
+            let progress = 0;
+            if (pollingTimer) clearInterval(pollingTimer);
+            pollingTimer = setInterval(() => {
+                progress += 25;
+                if (progress === 25) updateProgressUI("Reviewing");
+                if (progress === 100) {
+                    updateProgressUI("Bill Generated");
+                    clearInterval(pollingTimer);
+                }
+            }, 3000);
+        }
+
+        function updateProgressUI(status) {
+            const spinner = document.getElementById("prog-spinner");
+            const success = document.getElementById("prog-success-icon");
+            const percent = document.getElementById("progress-percent");
+            const title = document.getElementById("progress-title");
+            const payBox = document.getElementById("payment-box");
+
+            if (status === "Pending Review") {
+                percent.innerText = "0%";
+            } else if (status === "Reviewing") {
+                percent.innerText = "50%";
+                document.getElementById("step-1").className = "border border-emerald-200 bg-green-light/10 p-3.5 rounded-xl flex items-center gap-2 text-green font-bold";
+                document.getElementById("step-1-icon").className = "fa-solid fa-circle-check";
+                document.getElementById("step-2").className = "border border-emerald-200 bg-green-light/10 p-3.5 rounded-xl flex items-center gap-2 text-green font-bold";
+                document.getElementById("step-2-icon").className = "fa-solid fa-circle-check";
+            } else if (status === "Bill Generated") {
+                percent.innerText = "100%";
+                title.innerText = "Review Completed!";
+                spinner.classList.add('hidden');
+                success.classList.remove('hidden');
+                
+                // All steps turn green
+                ['step-1','step-2','step-3','step-4'].forEach(id => {
+                    document.getElementById(id).className = "border border-emerald-200 bg-green-light/10 p-3.5 rounded-xl flex items-center gap-2 text-green font-bold";
+                    document.getElementById(`${id}-icon`).className = "fa-solid fa-circle-check";
+                });
+                payBox.classList.remove('hidden');
+                if (pollingTimer) clearInterval(pollingTimer);
+            }
+        }
+
+        async function payAndCompleteOrder() {
+            const baseUrl = document.getElementById("cfg-url").value;
+            const token = localStorage.getItem('userToken');
+
+            if (!token) {
+                goTo('success');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${baseUrl}/user/pharmacy/prescription-request/pay-confirm`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        requestId: generatedRequestId,
+                        paymentMethod: 'Online'
+                    })
+                });
+                const out = await res.json();
+                if (out.success) {
+                    goTo('success');
+                }
+            } catch (err) {
+                console.error("Order payment execution error:", err);
+            }
+        }
+    </script>
+</body>
+</html>
