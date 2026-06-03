@@ -5,20 +5,18 @@ const prescriptionRequestSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     pharmacyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Pharmacy', required: true },
     
-    // AI Detected Info
     doctorName: { type: String },
     prescriptionDate: { type: Date },
-    prescriptionImage: { type: String, required: true }, // Uploaded path
+    prescriptionImage: { type: String, required: true },
     
-    // Duration preference
     durationType: { type: String, enum: ['Full Course', 'Custom'], default: 'Full Course' },
     
-    // Requested Medicines with Custom Durations
     requestedMedicines: [{
         name: { type: String, required: true },
-        dosage: { type: String },
+        dosage: { type: String, default: '1-0-1' },
         durationDays: { type: Number, default: 15 },
-        isSelected: { type: Boolean, default: true }
+        isSelected: { type: Boolean, default: true },
+        mrp: { type: Number, default: 0 } // Added Admin MRP backup
     }],
     
     address: {
@@ -26,27 +24,21 @@ const prescriptionRequestSchema = new mongoose.Schema({
         name: { type: String },
         phone: { type: String },
         houseNo: { type: String },
-        sector: { type: String },
         city: { type: String },
         pincode: { type: String }
     },
 
     status: {
         type: String,
-        enum: [
-            'Pending Review',       // User has submitted the prescription
-            'Reviewing',            // Pharmacist has opened the request
-            'Bill Generated',       // Pharmacist has matched items and added pricing
-            'Rejected'              // Prescription invalid / medicines out of stock
-        ],
+        enum: ['Pending Review', 'Reviewing', 'Bill Generated', 'Rejected'],
         default: 'Pending Review'
     },
 
-    // Verified bill added by Pharmacist during review
     verifiedBill: {
         items: [{
-            medicineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Medicine' },
+            medicineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Medicine', default: null }, // Null safe for manual entries
             name: { type: String },
+            mrp: { type: Number, default: 0 }, // Added verified MRP
             pricePerUnit: { type: Number },
             quantity: { type: Number },
             totalPrice: { type: Number }

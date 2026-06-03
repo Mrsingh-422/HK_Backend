@@ -1,6 +1,7 @@
 const PharmacyBooking = require('../../../models/PharmacyBooking');
 const Driver = require('../../../models/Driver');
 const PharmacyPrescriptionRequest = require("../../../models/PharmacyPrescriptionRequest");
+const mongoose = require('mongoose');
 
 // 1. DASHBOARD LISTING (Figma Tabs: General | Prescription)
 // Endpoint: GET /provider/pharmacy/orders/list?orderType=General&status=Placed
@@ -231,26 +232,36 @@ const startPrescriptionReview = async (req, res) => {
 const submitPharmacistReview = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const { items, deliveryCharge } = req.body; // Array of verified medicines with calculated prices
+        const { items, deliveryCharge } = req.body; 
 
         const request = await PharmacyPrescriptionRequest.findOne({ requestId });
         if (!request) {
             return res.status(404).json({ success: false, message: "Review request not found" });
         }
 
-        // Calculate pricing
         let itemTotal = 0;
-        const verifiedItems = items.map(item => {
-            const subtotal = item.pricePerUnit * item.quantity;
+        const verifiedItems = [];
+
+        for (const item of items) {
+            const subtotal = Number(item.pricePerUnit || 0) * Number(item.quantity || 1);
             itemTotal += subtotal;
-            return {
-                medicineId: item.medicineId,
+
+            // Safe database fallback check for true admin MRP
+            let verifiedMrp = Number(item.mrp || 0);
+            if (!verifiedMrp && mongoose.isValidObjectId(item.medicineId)) {
+                const dbMed = await Medicine.findById(item.medicineId).select('mrp').lean();
+                if (dbMed) verifiedMrp = Number(dbMed.mrp || 0);
+            }
+
+            verifiedItems.push({
+                medicineId: mongoose.isValidObjectId(item.medicineId) ? item.medicineId : null,
                 name: item.name,
-                pricePerUnit: item.pricePerUnit,
-                quantity: item.quantity,
+                mrp: verifiedMrp,
+                pricePerUnit: Number(item.pricePerUnit || 0),
+                quantity: Number(item.quantity || 1),
                 totalPrice: subtotal
-            };
-        });
+            });
+        }
 
         const totalAmount = itemTotal + Number(deliveryCharge || 0);
 
@@ -258,14 +269,14 @@ const submitPharmacistReview = async (req, res) => {
             items: verifiedItems,
             itemTotal,
             deliveryCharge: Number(deliveryCharge || 0),
-            totalAmount
+            totalAmount: Math.round(totalAmount)
         };
         request.status = 'Bill Generated';
         await request.save();
 
         res.json({
             success: true,
-            message: "Bill generated and sent back to user successfully",
+            message: "Invoice successfully sent to client",
             data: request
         });
     } catch (error) {

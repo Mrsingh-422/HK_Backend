@@ -19,6 +19,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
     items: [{
         medicineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Medicine' },
         name: String,
+        mrp: { type: Number, default: 0 },   // Added MRP storage field here
         price: Number,
         quantity: { type: Number, default: 1 },
         duration: String, // e.g., "5 Days"

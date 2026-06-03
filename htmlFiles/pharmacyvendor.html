@@ -3,93 +3,72 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pharmacist Dashboard - Live Reviews</title>
+    <title>Pharmacist Dashboard - Request Review Center</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col">
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
 
-    <!-- Navbar header -->
-    <header class="bg-slate-950 border-b border-slate-800 px-6 py-4 flex justify-between items-center">
+    <!-- Header Panel -->
+    <header class="bg-slate-950 border-b border-slate-800 px-6 py-4 flex flex-wrap justify-between items-center gap-4">
         <div class="flex items-center space-x-3">
-            <div class="bg-emerald-600 text-white p-2 rounded-xl text-lg"><i class="fa-solid fa-building-user"></i></div>
+            <div class="bg-emerald-600 text-white p-2.5 rounded-xl text-lg"><i class="fa-solid fa-cash-register"></i></div>
             <div>
-                <h1 class="text-base font-extrabold text-white">Pharmacist Vendor Desk</h1>
-                <p class="text-[10px] text-slate-400">Incoming Prescription Verification Desk</p>
+                <h1 class="text-base font-extrabold text-white">Pharmacist Vendor Portal</h1>
+                <p class="text-[10px] text-slate-400">Prescription Verification, Audit & Invoicing Console</p>
             </div>
         </div>
-        <!-- Settings -->
-        <div class="flex items-center space-x-4 bg-slate-900 p-2 border border-slate-800 rounded-lg text-xs">
-            <input type="text" id="cfg-url" value="http://localhost:3000" class="bg-slate-950 border border-slate-700 px-2 py-1 rounded text-emerald-400 focus:outline-none w-44">
-            <input type="text" id="cfg-token" placeholder="Set vendorToken in LocalStorage" class="bg-slate-950 border border-slate-700 px-2 py-1 rounded text-slate-300 focus:outline-none w-56" oninput="saveToken(this.value)">
-            <span class="bg-emerald-500/20 text-emerald-300 px-2 py-1 rounded font-bold" id="auth-label">Offline Demo</span>
+        <div class="flex flex-wrap items-center gap-4 bg-slate-900 p-2.5 border border-slate-800 rounded-xl text-xs">
+            <input type="text" id="cfg-url" value="http://localhost:5002" class="bg-slate-950 border border-slate-700 px-2.5 py-1 rounded text-emerald-400 focus:outline-none w-48 font-mono">
+            <input type="text" id="cfg-token" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YmQxNmE4MjAzODM5ZmZjOTk5YmQ5NSIsInJvbGUiOiJQaGFybWFjeSIsImlhdCI6MTc3Mzk5OTc4NCwiZXhwIjo0OTI3NTk5Nzg0fQ.hYjp9dGpYICmR_xlU7QZuHgPT3UXVi-sU16pHAzgi_M" class="bg-slate-950 border border-slate-700 px-2.5 py-1 rounded text-slate-300 focus:outline-none w-56 font-mono" oninput="updateVendorToken(this.value)">
+            <span class="bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded font-bold" id="auth-label">Token Active</span>
         </div>
     </header>
 
-    <!-- Workspace -->
+    <!-- Main Section -->
     <div class="flex flex-1 flex-col md:flex-row overflow-hidden">
         
-        <!-- Left Pane: Incoming Requests List -->
-        <aside class="w-full md:w-1/3 bg-slate-950 border-r border-slate-800 p-4 space-y-4 overflow-y-auto">
-            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Prescription Requests</h3>
-            <button onclick="fetchIncomingRequests()" class="w-full bg-slate-900 border border-slate-800 py-1.5 rounded text-xs font-semibold hover:bg-slate-800 transition"><i class="fa-solid fa-rotate mr-1"></i> Refresh Requests</button>
-            <div id="request-list-container" class="space-y-3">
-                <!-- Requests card layout injected here -->
+        <!-- Left Sidebar list -->
+        <aside class="w-full md:w-1/3 bg-slate-950 border-r border-slate-800 p-4 space-y-4 overflow-y-auto flex flex-col">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Rx Request List</h3>
+            <button onclick="fetchIncomingRequests()" class="w-full bg-slate-900 border border-slate-800 hover:bg-slate-800 py-2 rounded text-xs font-semibold transition"><i class="fa-solid fa-arrow-rotate-right mr-1"></i> Sync Fresh Requests</button>
+            <div id="requests-list-box" class="space-y-3 flex-1">
+                <!-- requests dynamically rendered -->
             </div>
         </aside>
 
-        <!-- Right Pane: Review workspace -->
+        <!-- Right Workspace -->
         <main class="flex-1 p-6 overflow-y-auto" id="workspace">
             <div class="h-full flex flex-col items-center justify-center text-slate-500 space-y-2">
-                <i class="fa-solid fa-prescription text-5xl"></i>
-                <p class="text-xs font-semibold uppercase">Select an uploaded prescription request from the left list to begin calculations.</p>
+                <i class="fa-solid fa-receipt text-5xl"></i>
+                <p class="text-xs font-semibold uppercase tracking-wider">Select a prescription request from the left list to begin auditing.</p>
             </div>
         </main>
 
     </div>
 
-    <!-- Scripting Engine -->
+    <!-- Core Pharmacist Panel Script -->
     <script>
-        let requestsData = [];
-        let activeRequest = null;
+        let requestsList = [];
+        let currentlySelectedRequest = null;
 
         document.addEventListener("DOMContentLoaded", () => {
-            const token = localStorage.getItem('vendorToken');
+            const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YmQxNmE4MjAzODM5ZmZjOTk5YmQ5NSIsInJvbGUiOiJQaGFybWFjeSIsImlhdCI6MTc3Mzk5OTc4NCwiZXhwIjo0OTI3NTk5Nzg0fQ.hYjp9dGpYICmR_xlU7QZuHgPT3UXVi-sU16pHAzgi_M"
             if (token) {
-                document.getElementById("auth-label").innerText = "API Synchronized";
-                document.getElementById("auth-label").className = "bg-emerald-500/20 text-emerald-300 px-2 py-1 rounded font-bold";
+                document.getElementById("auth-label").innerText = "Server Connected";
+                document.getElementById("auth-label").className = "bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded font-bold";
                 document.getElementById("cfg-token").value = token;
                 fetchIncomingRequests();
-            } else {
-                loadMockRequests();
             }
         });
 
-        function saveToken(token) {
+        function updateVendorToken(token) {
             localStorage.setItem('vendorToken', token);
-            document.getElementById("auth-label").innerText = token ? "API Synchronized" : "Offline Demo";
-            document.getElementById("auth-label").className = token ? "bg-emerald-500/20 text-emerald-300 px-2 py-1 rounded font-bold" : "bg-slate-500/20 text-slate-300 px-2 py-1 rounded font-bold";
+            document.getElementById("auth-label").innerText = token ? "Server Connected" : "No Token";
+            document.getElementById("auth-label").className = token ? "bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded font-bold" : "bg-slate-500/20 text-slate-300 px-3 py-1 rounded font-bold";
             if (token) fetchIncomingRequests();
-        }
-
-        // Mock requests list fallback
-        function loadMockRequests() {
-            requestsData = [{
-                requestId: "REQ-MOCK501",
-                status: "Pending Review",
-                doctorName: "Dr. Rajesh Sharma",
-                prescriptionDate: "2026-01-22",
-                durationType: "Custom",
-                prescriptionImage: "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&q=80&w=400",
-                requestedMedicines: [
-                    { name: "Telmisartan 40mg", durationDays: 15 },
-                    { name: "Atorvastatin 20mg", durationDays: 15 }
-                ],
-                address: { name: "Rahul Kumar", phone: "9876543210", houseNo: "123, Residency Road", city: "Bangalore" }
-            }];
-            renderRequestsList();
         }
 
         async function fetchIncomingRequests() {
@@ -98,140 +77,165 @@
             if (!token) return;
 
             try {
-                const res = await fetch(`${baseUrl}/provider/pharmacy/prescription-request/list`, {
+                const res = await fetch(`${baseUrl}/provider/pharmacy/orders/prescription-request/list`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 const out = await res.json();
                 if (out.success) {
-                    requestsData = out.data;
-                    renderRequestsList();
+                    requestsList = out.data;
+                    renderDashboardCards();
                 }
             } catch (err) {
-                console.error("Fetch requests failure:", err);
+                console.error("Failed to query list of incoming prescription requests:", err);
             }
         }
 
-        function renderRequestsList() {
-            const container = document.getElementById("request-list-container");
+        function renderDashboardCards() {
+            const container = document.getElementById("requests-list-box");
             container.innerHTML = "";
 
-            if (requestsData.length === 0) {
-                container.innerHTML = `<p class="text-xs text-slate-500 text-center italic py-6">No incoming orders found.</p>`;
+            if (requestsList.length === 0) {
+                container.innerHTML = `<p class="text-xs text-slate-500 text-center italic py-12">No pending audit files found.</p>`;
                 return;
             }
 
-            requestsData.forEach(req => {
+            requestsList.forEach(req => {
                 const card = document.createElement("div");
-                card.onclick = () => loadRequestWorkspace(req.requestId);
+                card.onclick = () => loadReviewWorkspace(req.requestId);
                 card.className = "p-3 bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl cursor-pointer transition space-y-2";
                 
-                let badgeClass = "bg-amber-500/20 text-amber-300";
-                if (req.status === "Reviewing") badgeClass = "bg-indigo-500/20 text-indigo-300";
-                if (req.status === "Bill Generated") badgeClass = "bg-emerald-500/20 text-emerald-300";
+                let badgeClass = "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+                if (req.status === "Reviewing") badgeClass = "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20";
+                if (req.status === "Bill Generated") badgeClass = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                if (req.status === "Rejected") badgeClass = "bg-rose-500/10 text-rose-400 border border-rose-500/20";
 
                 card.innerHTML = `
                     <div class="flex justify-between items-center text-[10px]">
                         <span class="font-mono text-slate-500 font-bold">${req.requestId}</span>
                         <span class="px-2 py-0.5 rounded font-extrabold ${badgeClass}">${req.status}</span>
                     </div>
-                    <p class="text-xs font-bold text-white">${req.address?.name || 'Patient RX'}</p>
-                    <p class="text-[10px] text-slate-400 truncate">${req.address?.houseNo || 'Home Address'}</p>
+                    <p class="text-xs font-bold text-white">${req.address?.name || 'Unstructured File'}</p>
+                    <p class="text-[10px] text-slate-400 truncate">${req.address?.houseNo || 'Address'}</p>
                 `;
                 container.appendChild(card);
             });
         }
 
-        async function loadRequestWorkspace(id) {
-            activeRequest = requestsData.find(r => r.requestId === id);
-            if (!activeRequest) return;
+        async function loadReviewWorkspace(id) {
+            currentlySelectedRequest = requestsList.find(r => r.requestId === id);
+            if (!currentlySelectedRequest) return;
 
             const workspace = document.getElementById("workspace");
-            workspace.innerHTML = "";
+            workspace.innerHTML = `<div class="h-full flex items-center justify-center text-xs"><i class="fa-solid fa-spinner animate-spin text-green mr-2"></i> Fetching details...</div>`;
 
-            // Call "Start Review" Status change API
             const token = localStorage.getItem('vendorToken');
             const baseUrl = document.getElementById("cfg-url").value;
-            if (token && activeRequest.status === "Pending Review") {
+
+            if (token && currentlySelectedRequest.status === "Pending Review") {
                 try {
-                    await fetch(`${baseUrl}/provider/pharmacy/prescription-request/start-review/${id}`, {
+                    await fetch(`${baseUrl}/provider/pharmacy/orders/prescription-request/start-review/${id}`, {
                         method: 'POST',
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
-                    activeRequest.status = "Reviewing";
-                    renderRequestsList();
+                    currentlySelectedRequest.status = "Reviewing";
+                    renderDashboardCards();
                 } catch (err) {
-                    console.error("Start Review API Failure:", err);
+                    console.error("Start review failed:", err);
                 }
             }
 
-            // Generate inputs for detected medicines in request list
-            let medListHTML = "";
-            activeRequest.requestedMedicines.forEach((med, idx) => {
-                medListHTML += `
-                    <div class="grid grid-cols-12 gap-3 items-center bg-slate-900 p-3 rounded-lg border border-slate-800 text-xs">
-                        <div class="col-span-5">
-                            <span class="font-bold text-slate-200">${med.name}</span>
-                            <p class="text-[10px] text-slate-400">Duration Days: ${med.durationDays || 15}</p>
-                        </div>
+            try {
+                const res = await fetch(`${baseUrl}/provider/pharmacy/orders/prescription-request/details/${id}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const out = await res.json();
+                if (out.success) {
+                    currentlySelectedRequest = out.data;
+                    renderWorkspaceForm();
+                }
+            } catch (err) {
+                console.error("Workspace details fetch failed:", err);
+                workspace.innerHTML = `<div class="h-full flex items-center justify-center text-xs text-rose-500">Failed to load request details.</div>`;
+            }
+        }
+
+        function renderWorkspaceForm() {
+            const workspace = document.getElementById("workspace");
+            const baseUrl = document.getElementById("cfg-url").value;
+
+            let medInvoiceInputs = "";
+            currentlySelectedRequest.requestedMedicines.forEach((med, idx) => {
+                // Safeguard against missing/0 MRPs
+                const backupMrp = med.mrp || 0;
+                medInvoiceInputs += `
+                    <div class="grid grid-cols-12 gap-3 items-center bg-slate-900 p-3 rounded-xl border border-slate-800 text-xs">
                         <div class="col-span-4">
-                            <label class="block text-[9px] text-slate-400">Inventory Med ID (ObjectId)</label>
-                            <input type="text" id="med-id-${idx}" value="656f4d2f8e12ca0012bc556e" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[10px]">
+                            <span class="font-bold text-slate-200 block">${med.name}</span>
+                            <span class="text-[10px] text-slate-500">Days: ${med.durationDays || 15}</span>
                         </div>
                         <div class="col-span-3">
-                            <label class="block text-[9px] text-slate-400">Price/Unit (₹)</label>
-                            <input type="number" id="med-price-${idx}" value="25" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 font-bold text-emerald-400">
+                            <label class="block text-[9px] text-slate-500 uppercase">Inventory Med ObjectId</label>
+                            <input type="text" id="med-id-${idx}" value="656f4d2f8e12ca0012bc556e" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[9px] font-mono">
+                        </div>
+                        <div class="col-span-3">
+                            <label class="block text-[9px] text-slate-500 uppercase">MRP (₹)</label>
+                            <input type="number" id="med-mrp-${idx}" value="${backupMrp}" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 font-semibold text-slate-300">
+                        </div>
+                        <div class="col-span-2">
+                            <label class="block text-[9px] text-slate-500 uppercase">Price/Unit (₹)</label>
+                            <input type="number" id="med-price-${idx}" value="${backupMrp > 0 ? backupMrp * 0.9 : 15}" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 font-bold text-emerald-400">
                         </div>
                     </div>
                 `;
             });
 
+            const rawPath = currentlySelectedRequest.prescriptionImage || '';
+            const normalizedPath = rawPath.replace(/^public[\\/]/, '');
+            const finalImageUrl = normalizedPath.startsWith('http') ? normalizedPath : `${baseUrl}/${normalizedPath}`;
+
             workspace.innerHTML = `
                 <div class="grid lg:grid-cols-12 gap-6 h-full">
                     
-                    <!-- Left Column: Prescription details & image -->
+                    <!-- Left Column: Rx view -->
                     <div class="lg:col-span-5 space-y-4">
-                        <div class="bg-slate-950 p-4 border border-slate-800 rounded-2xl space-y-3">
-                            <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Patient Prescription Image</h4>
-                            <img src="${activeRequest.prescriptionImage || 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&q=80&w=400'}" class="w-full h-80 object-contain rounded-lg border border-slate-800" alt="Rx image">
+                        <div class="bg-slate-950 p-4 border border-slate-800 rounded-2xl">
+                            <h4 class="text-xs font-bold text-slate-400 uppercase mb-3">User uploaded document</h4>
+                            <img src="${finalImageUrl}" class="w-full h-80 object-contain rounded-lg border border-slate-800 bg-slate-900" alt="Rx">
                         </div>
                     </div>
 
-                    <!-- Right Column: Bill inputs editor -->
-                    <div class="lg:col-span-7 bg-slate-950 p-6 border border-slate-800 rounded-2xl space-y-5 flex flex-col justify-between">
-                        <div class="space-y-4">
+                    <!-- Right Column: Auditing invoice builder -->
+                    <div class="lg:col-span-7 bg-slate-950 p-6 border border-slate-800 rounded-2xl flex flex-col justify-between">
+                        <div class="space-y-5">
                             <div class="flex justify-between items-center border-b border-slate-800 pb-3">
                                 <div>
-                                    <h3 class="text-sm font-extrabold text-white">Generate verified bill invoice</h3>
-                                    <p class="text-[10px] text-slate-400 mt-0.5">Evaluate prices according to active store stock inventories.</p>
+                                    <h3 class="text-sm font-extrabold text-white">Generate verified bill</h3>
+                                    <p class="text-[10px] text-slate-400 mt-0.5">Configure medicine details, real admin-defined MRP and unit price.</p>
                                 </div>
-                                <span class="bg-slate-800 px-3 py-1 rounded text-xs font-mono font-bold">${activeRequest.requestId}</span>
-                            </div>
-                            
-                            <!-- Medicines Inputs -->
-                            <div class="space-y-3">
-                                <h4 class="text-xs font-bold text-slate-400">Medicines Invoice List</h4>
-                                ${medListHTML}
+                                <span class="bg-slate-800 px-3 py-1 rounded text-xs font-mono font-bold">${currentlySelectedRequest.requestId}</span>
                             </div>
 
-                            <!-- Additional charges -->
+                            <div class="space-y-3">
+                                <h4 class="text-xs font-bold text-slate-400">Requested Medicines Matching</h4>
+                                ${medInvoiceInputs}
+                            </div>
+
                             <div class="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label class="block text-xs text-slate-400 mb-1">Standard Delivery Fee (₹)</label>
-                                    <input type="number" id="bill-delivery" value="40" class="w-full bg-slate-900 border border-slate-800 rounded p-2 text-xs">
+                                    <label class="block text-[10px] text-slate-400 mb-1 uppercase font-bold">Delivery Fee (₹)</label>
+                                    <input type="number" id="bill-delivery-charge" value="40" class="w-full bg-slate-900 border border-slate-800 rounded p-2 text-xs">
                                 </div>
                             </div>
 
-                            <!-- Reject option details -->
                             <div class="pt-4 border-t border-slate-800 space-y-2">
-                                <label class="block text-xs text-slate-400 uppercase font-bold text-rose-400">Prescription Rejection</label>
-                                <textarea id="reject-reason" placeholder="Write prescription cancellation/rejection reason..." class="w-full bg-slate-900 border border-slate-800 rounded p-2 text-xs h-14 focus:outline-none focus:border-rose-500 text-slate-300"></textarea>
+                                <label class="block text-xs text-rose-400 uppercase font-bold">Prescription Rejection Reason</label>
+                                <textarea id="reject-reason" placeholder="Explain the reason for rejecting..." class="w-full bg-slate-900 border border-slate-800 rounded p-2 text-xs h-14 focus:outline-none focus:border-rose-500 text-slate-300"></textarea>
                             </div>
                         </div>
 
-                        <!-- Action controls -->
                         <div class="grid grid-cols-2 gap-4 pt-4 border-t border-slate-800">
-                            <button onclick="rejectRequest()" class="bg-rose-950/40 hover:bg-rose-900 text-rose-300 text-xs font-bold py-2.5 rounded-xl border border-rose-900 transition">Reject Prescription</button>
-                            <button onclick="submitReviewBill()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2.5 rounded-xl transition shadow-md">Generate & Send Bill</button>
+                            <button onclick="postRejectionRequest()" class="bg-rose-950/40 hover:bg-rose-900 text-rose-300 text-xs font-bold py-2.5 rounded-xl border border-rose-900 transition">Reject Prescription</button>
+                            <button onclick="postBillInvoiceGeneration()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2.5 rounded-xl transition shadow-md">Generate & Send Bill</button>
                         </div>
                     </div>
 
@@ -239,33 +243,26 @@
             `;
         }
 
-        async function submitReviewBill() {
+        async function postBillInvoiceGeneration() {
             const baseUrl = document.getElementById("cfg-url").value;
             const token = localStorage.getItem('vendorToken');
 
-            const itemDeliver = parseFloat(document.getElementById("bill-delivery").value) || 0;
-            const items = activeRequest.requestedMedicines.map((med, idx) => {
-                const medIdVal = document.getElementById(`med-id-${idx}`).value;
-                const priceVal = parseFloat(document.getElementById(`med-price-${idx}`).value) || 0;
+            const deliveryFee = parseFloat(document.getElementById("bill-delivery-charge").value) || 0;
+            const items = currentlySelectedRequest.requestedMedicines.map((med, idx) => {
+                const medId = document.getElementById(`med-id-${idx}`).value;
+                const price = parseFloat(document.getElementById(`med-price-${idx}`).value) || 0;
+                const mrp = parseFloat(document.getElementById(`med-mrp-${idx}`).value) || 0;
                 return {
-                    medicineId: medIdVal,
+                    medicineId: medId,
                     name: med.name,
-                    pricePerUnit: priceVal,
+                    mrp: mrp,
+                    pricePerUnit: price,
                     quantity: med.durationDays || 15
                 };
             });
 
-            if (!token) {
-                // Mock transition
-                activeRequest.status = "Bill Generated";
-                renderRequestsList();
-                workspaceReset();
-                alert("Mock bill generated successfully!");
-                return;
-            }
-
             try {
-                const res = await fetch(`${baseUrl}/provider/pharmacy/prescription-request/review/${activeRequest.requestId}`, {
+                const res = await fetch(`${baseUrl}/provider/pharmacy/orders/prescription-request/review/${currentlySelectedRequest.requestId}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -273,35 +270,29 @@
                     },
                     body: JSON.stringify({
                         items,
-                        deliveryCharge: itemDeliver
+                        deliveryCharge: deliveryFee
                     })
                 });
                 const out = await res.json();
                 if (out.success) {
-                    alert("Bill generated and sent to patient successfully!");
+                    alert("Invoice created and sent to the patient!");
                     fetchIncomingRequests();
                     workspaceReset();
+                } else {
+                    alert(out.message);
                 }
             } catch (err) {
-                console.error("Submission Failure:", err);
+                console.error("Bill generation failed:", err);
             }
         }
 
-        async function rejectRequest() {
+        async function postRejectionRequest() {
             const baseUrl = document.getElementById("cfg-url").value;
             const token = localStorage.getItem('vendorToken');
-            const reason = document.getElementById("reject-reason").value.trim() || "Invalid prescription criteria";
-
-            if (!token) {
-                activeRequest.status = "Rejected";
-                renderRequestsList();
-                workspaceReset();
-                alert("Mock request rejected successfully.");
-                return;
-            }
+            const reason = document.getElementById("reject-reason").value.trim() || "Prescription verification check failed.";
 
             try {
-                const res = await fetch(`${baseUrl}/provider/pharmacy/prescription-request/reject/${activeRequest.requestId}`, {
+                const res = await fetch(`${baseUrl}/provider/pharmacy/orders/prescription-request/reject/${currentlySelectedRequest.requestId}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -311,12 +302,14 @@
                 });
                 const out = await res.json();
                 if (out.success) {
-                    alert("Prescription request rejected successfully!");
+                    alert("Prescription rejected!");
                     fetchIncomingRequests();
                     workspaceReset();
+                } else {
+                    alert(out.message);
                 }
             } catch (err) {
-                console.error("Rejection Error:", err);
+                console.error("Prescription rejection failed:", err);
             }
         }
 
@@ -324,8 +317,8 @@
             const workspace = document.getElementById("workspace");
             workspace.innerHTML = `
                 <div class="h-full flex flex-col items-center justify-center text-slate-500 space-y-2">
-                    <i class="fa-solid fa-prescription text-5xl"></i>
-                    <p class="text-xs font-semibold uppercase">Action completed. Select another request from the left list.</p>
+                    <i class="fa-solid fa-receipt text-5xl"></i>
+                    <p class="text-xs font-semibold uppercase tracking-wider">Audit completed. Select another request from the left list.</p>
                 </div>
             `;
         }

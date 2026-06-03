@@ -1128,7 +1128,7 @@ const placeOrder = async (req, res) => {
 
         const userId = req.user.id;
         
-        // Final verification before locking the order
+        // Final verification before locking the order (Populates master Medicine to read MRP)
         const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
         if (!cart || !cart.pharmacyCart.items.length) {
             return res.status(400).json({ message: "Transaction expired. Cart is empty." });
@@ -1158,13 +1158,28 @@ const placeOrder = async (req, res) => {
             pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime
         );
 
+        // --- UPDATED: Map Cart items dynamically to capture database MRPs safely ---
+        const mappedOrderItems = cart.pharmacyCart.items.map(item => {
+            // item.medicineId contains populated master medicine details from DB
+            const masterMedsMrp = item.medicineId ? Number(item.medicineId.mrp || 0) : 0;
+            return {
+                medicineId: item.medicineId._id,
+                name: item.name,
+                mrp: masterMedsMrp, // Capture standard admin MRP from master Medicine db
+                price: item.price,
+                quantity: item.quantity,
+                duration: item.duration,
+                startDate: item.startDate
+            };
+        });
+
         // 4. Create Order
         const order = await PharmacyBooking.create({
             orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
             pharmacyId,
             patients: await mapPatients(userId, selectedPatientIds || ['Self']),
-            items: cart.pharmacyCart.items,
+            items: mappedOrderItems, // Mapped array carrying MRP values
             collectionType,
             address: typeof address === 'string' ? JSON.parse(address) : address,
             appointmentDate,
@@ -1398,7 +1413,7 @@ const getUserPrescriptionRequests = async (req, res) => {
 };
 const estimateRxPrices = async (req, res) => {
     try {
-        const { pharmacyId, medicines } = req.body; // medicines: [{ medicineId, name, durationDays }]
+        const { pharmacyId, medicines } = req.body;
 
         if (!pharmacyId || !medicines || !medicines.length) {
             return res.status(400).json({ success: false, message: "Pharmacy ID and medicines list are required" });
@@ -1409,9 +1424,10 @@ const estimateRxPrices = async (req, res) => {
 
         for (const med of medicines) {
             let pricePerUnit = 0;
+            let mrp = 0;
             let matchedInInventory = false;
 
-            // इन्वेंट्री से इस वेंडर का प्राइस ढूंढें
+            // Search in inventory
             const inventory = await MedicineInventory.findOne({
                 pharmacyId,
                 $or: [
@@ -1419,18 +1435,24 @@ const estimateRxPrices = async (req, res) => {
                     { name: new RegExp(`^${med.name}$`, 'i') }
                 ],
                 is_available: true
-            });
+            }).populate('medicineId');
 
             if (inventory) {
                 pricePerUnit = inventory.vendor_price;
+                mrp = inventory.medicineId ? Number(inventory.medicineId.mrp || 0) : 0;
                 matchedInInventory = true;
             } else {
-                // बैकअप के रूप में मास्टर मेडिसिन का बेस्ट प्राइस लें
+                // Safe DB Fallback
                 const masterMed = await Medicine.findOne({ name: new RegExp(`^${med.name}$`, 'i') });
-                pricePerUnit = masterMed ? Number(masterMed.best_price || masterMed.mrp || 0) : 15; // fallback defaults
+                if (masterMed) {
+                    mrp = Number(masterMed.mrp || 0);
+                    pricePerUnit = Number(masterMed.best_price || masterMed.mrp || 0);
+                } else {
+                    mrp = Number(med.mrp || 0); // User/AI parsed fallback
+                    pricePerUnit = mrp > 0 ? mrp * 0.9 : 15; // default fallback 10% discount estimation
+                }
             }
 
-            // मान लें कि 1 दिन की खुराक = 2 यूनिट्स (या खुराक के हिसाब से)
             const calculatedQty = Math.max(1, (med.durationDays || 15));
             const subtotal = pricePerUnit * calculatedQty;
             estimatedTotal += subtotal;
@@ -1438,6 +1460,7 @@ const estimateRxPrices = async (req, res) => {
             pricedMedicines.push({
                 name: med.name,
                 durationDays: med.durationDays,
+                mrp,
                 pricePerUnit,
                 totalPrice: subtotal,
                 available: matchedInInventory
@@ -1446,7 +1469,7 @@ const estimateRxPrices = async (req, res) => {
 
         res.json({
             success: true,
-            estimatedTotal,
+            estimatedTotal: Math.round(estimatedTotal),
             medicines: pricedMedicines
         });
     } catch (error) {
@@ -1464,12 +1487,24 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
             .populate('pharmacyId', 'name phone profileImage address location city');
 
         if (!request) {
-            return res.status(404).json({ success: false, message: "Prescription request not found" });
+            return res.status(404).json({ success: false, message: "Inquiry details not found" });
+        }
+
+        // Safety fallback checks during serialization so GET APIs never crash
+        const responseData = request.toObject();
+        if (responseData.verifiedBill && responseData.verifiedBill.items) {
+            responseData.verifiedBill.items = responseData.verifiedBill.items.map(item => ({
+                ...item,
+                medicineId: item.medicineId || null,
+                mrp: item.mrp || 0,
+                pricePerUnit: item.pricePerUnit || 0,
+                totalPrice: item.totalPrice || 0
+            }));
         }
 
         res.json({
             success: true,
-            data: request
+            data: responseData
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -1485,22 +1520,37 @@ const createPrescriptionRequest = async (req, res) => {
             return res.status(400).json({ success: false, message: "Please upload prescription image file" });
         }
 
+        const parsedMedicines = typeof requestedMedicines === 'string' ? JSON.parse(requestedMedicines) : requestedMedicines;
+
+        // Populate baseline MRPs inside user request data safely
+        const verifiedRequestedMeds = [];
+        for (const med of parsedMedicines) {
+            const dbMed = await Medicine.findOne({ name: new RegExp(`^${med.name}$`, 'i') }).select('mrp').lean();
+            verifiedRequestedMeds.push({
+                name: med.name,
+                dosage: med.dosage || '1-0-1',
+                durationDays: Number(med.durationDays || 15),
+                isSelected: med.isSelected !== false,
+                mrp: dbMed ? Number(dbMed.mrp || 0) : Number(med.mrp || 0)
+            });
+        }
+
         const newRequest = await PharmacyPrescriptionRequest.create({
             requestId: `REQ-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
             pharmacyId,
-            doctorName,
+            doctorName: doctorName || 'Prescription Request',
             prescriptionDate: prescriptionDate ? new Date(prescriptionDate) : new Date(),
             prescriptionImage: req.file.path,
             durationType,
-            requestedMedicines: typeof requestedMedicines === 'string' ? JSON.parse(requestedMedicines) : requestedMedicines,
+            requestedMedicines: verifiedRequestedMeds,
             address: typeof address === 'string' ? JSON.parse(address) : address,
             status: 'Pending Review'
         });
 
         res.status(201).json({
             success: true,
-            message: "Prescription review request submitted to vendor successfully",
+            message: "Prescription request placed",
             data: newRequest
         });
     } catch (error) {
@@ -1509,6 +1559,7 @@ const createPrescriptionRequest = async (req, res) => {
 };
 
 // 3. PAY AND CONVERT REQUEST TO FINAL ORDER (Promotes Request to PharmacyBooking model)
+// POST /user/pharmacy/prescription-request/pay-confirm
 const payAndConfirmOrder = async (req, res) => {
     try {
         const { requestId, paymentMethod } = req.body;
@@ -1538,13 +1589,17 @@ const payAndConfirmOrder = async (req, res) => {
             userId,
             pharmacyId: request.pharmacyId,
             patients: [{ name: request.address.name, relation: 'Self' }],
+            
+            // --- UPDATED: Mapping mrp safely without changing previous logic ---
             items: request.verifiedBill.items.map(item => ({
                 medicineId: item.medicineId,
                 name: item.name,
+                mrp: Number(item.mrp || 0), // Dynamically captured verified bill MRP
                 price: item.pricePerUnit,
                 quantity: item.quantity,
                 duration: `${request.requestedMedicines.find(rm => rm.name === item.name)?.durationDays || 15} Days`
             })),
+            
             collectionType: 'Home Delivery',
             address: request.address,
             appointmentDate: new Date(),

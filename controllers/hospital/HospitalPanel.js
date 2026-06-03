@@ -1161,6 +1161,119 @@ const getHospitalHistory = async (req, res) => {
     }
 };
 
+// --- API: EMERGENCY PATIENT DISCHARGE & RESOURCE RELEASE (Full Implementation) ---
+const emergencyDischarge = async (req, res) => {
+    try {
+        const { appointmentId, billingItems } = req.body; 
+        const hospitalId = req.user.id; // Logged-in Hospital Admin
+
+        // 1. Find the target appointment and verify it belongs to this hospital and is an emergency case
+        const appointment = await Appointment.findOne({ 
+            _id: appointmentId, 
+            hospitalId,
+            $or: [
+                { ambulanceId: { $ne: null, $exists: true } },
+                { bedBookingType: 'Emergency-Bed' },
+                { triageLevel: 'Emergency' }
+            ]
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Active Emergency Admission Record Not Found or unauthorized." 
+            });
+        }
+
+        if (appointment.status === 'Completed') {
+            return res.status(400).json({ success: false, message: "Patient is already discharged." });
+        }
+
+        let overstayCharge = 0;
+        let actualEndDate = new Date();
+
+        // 2. Calculate dynamic overstay bed charges
+        if (appointment.startDate && appointment.endDate) {
+            const scheduledEnd = moment(appointment.endDate).startOf('day');
+            const actualEnd = moment(actualEndDate).startOf('day');
+            
+            const extraDays = actualEnd.diff(scheduledEnd, 'days');
+            if (extraDays > 0 && appointment.bedId) {
+                const bed = await Bed.findById(appointment.bedId);
+                const dailyRate = bed ? (bed.pricePerDay || 500) : 500;
+                overstayCharge = extraDays * dailyRate;
+            }
+        }
+
+        const items = Array.isArray(billingItems) ? billingItems : [];
+        const extraTotal = items.reduce((sum, item) => sum + Number(item.price), 0) + overstayCharge;
+        
+        // 3. Update Appointment status to Completed
+        appointment.status = 'Completed';
+        appointment.endDate = actualEndDate;
+        appointment.totalAmount = (appointment.totalAmount || 0) + extraTotal;
+        
+        // Safeguard pricingBreakdown object
+        if (!appointment.pricingBreakdown) {
+            appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
+        }
+        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + extraTotal;
+        
+        // Mapping billing items dynamically into specialServices array schema
+        appointment.specialServices = items.map(itm => ({
+            serviceName: itm.serviceName,
+            price: Number(itm.price)
+        }));
+
+        if (overstayCharge > 0) {
+            appointment.specialServices.push({ serviceName: `Overstay Bed Surcharge`, price: overstayCharge });
+        }
+
+        await appointment.save();
+
+        // 4. Safe Wallet Sync (Credit only the stays extra billing amount)
+        let wallet = await Wallet.findOne({ vendorId: hospitalId });
+        if (!wallet) {
+            wallet = await Wallet.create({ vendorId: hospitalId, balance: 0, transactions: [] });
+        }
+        
+        wallet.balance += extraTotal;
+        wallet.transactions.push({
+            type: 'Credit',
+            amount: extraTotal,
+            remark: `Emergency Discharge Bill Extra - ${appointment.bookingId}`,
+            orderId: appointment.bookingId
+        });
+        await wallet.save();
+
+        // 5. Release Bed & Update Ward capacity
+        if (appointment.bedId) {
+            const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
+            if (bed) {
+                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
+            }
+        }
+
+        // 6. 🚀 AUTOMATIC AMBULANCE RELEASE (Frees on-duty ambulance instantly)
+        if (appointment.ambulanceId) {
+            await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
+                $set: { availableForEmergency: true } 
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Emergency Patient Discharged. Bed & Ambulance released successfully.", 
+            billAmount: appointment.totalAmount 
+        });
+
+    } catch (error) { 
+        console.error("Emergency Discharge Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed, updateWardBeds,deleteSpecificBed, addHospitalService, updateHospitalService, 
@@ -1173,5 +1286,6 @@ module.exports = {
     getIncomingReferrals, getEmergencyCases, trackAllAmbulances,toggleAmbulanceStatus,
     updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings,
-    updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory
+    updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,
+    emergencyDischarge
 };
