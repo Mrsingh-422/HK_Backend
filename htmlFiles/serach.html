@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Homepage Medical Search & Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800 pb-24 relative">
+
+    <div class="max-w-6xl mx-auto px-4 py-8">
+        
+        <!-- Token Status Warning / Config -->
+        <div id="token-status-card" class="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg shadow-sm hidden">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                    <h3 class="text-yellow-800 font-semibold">Local Token Status: Not Configured</h3>
+                    <p class="text-sm text-yellow-600 mt-1">LocalStorage key <code class="bg-yellow-100 px-1 py-0.5 rounded font-mono text-xs">"user"</code> is empty. Chatbot and checkout APIs require active login token.</p>
+                </div>
+                <div class="flex gap-2 w-full sm:w-auto">
+                    <input id="test-token-input" type="text" placeholder="Paste user token here..." class="flex-1 sm:w-64 px-3 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500">
+                    <button onclick="saveTestToken()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded transition">Save</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Header -->
+        <header class="text-center mb-10">
+            <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-900 tracking-tight">Healthcare Portal Search</h1>
+            <p class="mt-2 text-gray-600">Find Doctors, Hospitals, Labs, Medicines, and Ambulances near you</p>
+        </header>
+
+        <!-- Main Search Section -->
+        <div class="max-w-2xl mx-auto mb-12 relative">
+            <div class="flex shadow-md rounded-lg overflow-hidden border border-gray-200">
+                <div class="relative flex-1">
+                    <input 
+                        id="search-input" 
+                        type="text" 
+                        autocomplete="off"
+                        placeholder="Search medicines, specialist, lab tests, hospitals..." 
+                        class="w-full px-5 py-4 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-l-lg"
+                    >
+                    <div id="search-spinner" class="absolute right-4 top-4 hidden">
+                        <svg class="animate-spin h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </div>
+                </div>
+                <button 
+                    onclick="triggerDeepSearch()" 
+                    class="px-8 py-4 bg-blue-600 text-white font-semibold hover:bg-blue-700 transition focus:outline-none rounded-r-lg"
+                >
+                    Search
+                </button>
+            </div>
+
+            <!-- Suggestions Overlay Dropdown -->
+            <div 
+                id="suggestions-dropdown" 
+                class="absolute left-0 right-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-xl max-h-96 overflow-y-auto z-40 hidden"
+            >
+                <div id="suggestions-list" class="divide-y divide-gray-100"></div>
+            </div>
+        </div>
+
+        <!-- Dynamic Deep Search Results Grid -->
+        <div id="results-container" class="space-y-12">
+            <div id="initial-state-view" class="text-center text-gray-500 py-12">
+                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+                <p class="mt-4 text-lg">Type at least 2 characters to see recommendations, or press Search to query.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ================= FLOATING AI CHATBOT COMPONENT ================= -->
+    <div class="fixed bottom-6 right-6 z-50 flex flex-col items-end">
+        <!-- Chat Bubble Button -->
+        <button 
+            onclick="toggleChatBot()" 
+            class="bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-2xl transition transform hover:scale-105 active:scale-95 focus:outline-none flex items-center justify-center relative"
+            id="chatbot-bubble-btn"
+        >
+            <!-- Chat Icon -->
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+        </button>
+
+        <!-- Chat Window -->
+        <div 
+            id="chatbot-window" 
+            class="hidden w-80 sm:w-96 h-[450px] bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden mb-4 transition duration-300 ease-in-out"
+        >
+            <!-- Header -->
+            <div class="bg-blue-600 text-white px-4 py-3 flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-ping"></span>
+                    <h3 class="font-bold text-sm">HealthBot AI Assistant</h3>
+                </div>
+                <button onclick="toggleChatBot()" class="text-white hover:text-gray-200 focus:outline-none">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Messages Stream Area -->
+            <div id="chat-messages-container" class="flex-1 p-4 overflow-y-auto space-y-4 bg-gray-50 text-xs">
+                <!-- Welcome greeting -->
+                <div class="flex items-start gap-2">
+                    <div class="bg-white border border-gray-200 text-gray-700 px-3 py-2 rounded-xl shadow-sm max-w-[80%]">
+                        Hello! I am your AI clinical assistant. How can I help you find doctors, tests, or medicines today?
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input area -->
+            <div class="p-3 bg-white border-t border-gray-100 flex gap-2 items-center">
+                <input 
+                    id="chatbot-input" 
+                    type="text" 
+                    placeholder="Type symptom or service..." 
+                    class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                <button 
+                    onclick="sendChatMessage()" 
+                    class="bg-blue-600 hover:bg-blue-700 text-white p-2.5 rounded-xl flex items-center justify-center transition"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript logic -->
+    <script>
+        // Setup local node server configurations (API BASE)
+        const API_BASE_URL = 'http://localhost:5002'; // 👈 Server domain change as per environment
+        
+        const searchInput = document.getElementById('search-input');
+        const suggestionsDropdown = document.getElementById('suggestions-dropdown');
+        const suggestionsList = document.getElementById('suggestions-list');
+        const searchSpinner = document.getElementById('search-spinner');
+        const resultsContainer = document.getElementById('results-container');
+        const tokenCard = document.getElementById('token-status-card');
+
+        // Chatbot UI links
+        const chatbotWindow = document.getElementById('chatbot-window');
+        const chatbotInput = document.getElementById('chatbot-input');
+        const chatMessagesContainer = document.getElementById('chat-messages-container');
+
+        // Verify key 'user' token in storage
+        let token = localStorage.getItem('user');
+
+        if (!token) {
+            tokenCard.classList.remove('hidden');
+        }
+
+        function saveTestToken() {
+            const val = document.getElementById('test-token-input').value.trim();
+            if (val) {
+                localStorage.setItem('user', val);
+                token = val;
+                tokenCard.classList.add('hidden');
+                alert("Token loaded in 'user' configuration key.");
+                window.location.reload();
+            }
+        }
+
+        function getHeaders() {
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            return headers;
+        }
+
+        function debounce(func, delay) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), delay);
+            };
+        }
+
+        searchInput.addEventListener('input', debounce((e) => {
+            const val = e.target.value.trim();
+            if (val.length >= 2) {
+                fetchSuggestions(val);
+            } else {
+                suggestionsDropdown.classList.add('hidden');
+            }
+        }, 300));
+
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                triggerDeepSearch();
+            }
+        });
+
+        // Chatbot Send Input triggers on Enter keypress
+        chatbotInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendChatMessage();
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#suggestions-dropdown') && e.target !== searchInput) {
+                suggestionsDropdown.classList.add('hidden');
+            }
+        });
+
+        // API 1: Fetch Search Suggestions
+        async function fetchSuggestions(query) {
+            searchSpinner.classList.remove('hidden');
+            try {
+                const response = await fetch(`${API_BASE_URL}/user/homepage/suggestions?query=${encodeURIComponent(query)}`, {
+                    method: 'GET',
+                    headers: getHeaders()
+                });
+                const result = await response.json();
+                
+                if (result.success && result.data.length > 0) {
+                    renderSuggestions(result.data);
+                } else {
+                    suggestionsDropdown.classList.add('hidden');
+                }
+            } catch (err) {
+                console.error("Suggestions API Error:", err);
+            } finally {
+                searchSpinner.classList.add('hidden');
+            }
+        }
+
+        function getTypeBadgeClass(type) {
+            const classes = {
+                "Doctor": "bg-emerald-100 text-emerald-800 border-emerald-200",
+                "Hospital": "bg-cyan-100 text-cyan-800 border-cyan-200",
+                "Lab": "bg-indigo-100 text-indigo-800 border-indigo-200",
+                "Lab Test": "bg-blue-100 text-blue-800 border-blue-200",
+                "Lab Package": "bg-sky-100 text-sky-800 border-sky-200",
+                "Medicine": "bg-purple-100 text-purple-800 border-purple-200",
+                "Nurse Service": "bg-pink-100 text-pink-800 border-pink-200",
+                "Ambulance": "bg-rose-100 text-rose-800 border-rose-200"
+            };
+            return classes[type] || "bg-gray-100 text-gray-800 border-gray-200";
+        }
+
+        function renderSuggestions(data) {
+            suggestionsList.innerHTML = '';
+            
+            data.forEach(item => {
+                const badgeStyle = getTypeBadgeClass(item.type);
+                const defaultImage = `https://placehold.co/40x40?text=${item.type.substring(0,2)}`;
+                const itemImg = item.image ? item.image : defaultImage;
+
+                const row = document.createElement('div');
+                row.className = "flex items-center justify-between p-3 hover:bg-gray-50 cursor-pointer transition";
+                row.onclick = () => {
+                    searchInput.value = item.title;
+                    suggestionsDropdown.classList.add('hidden');
+                    triggerDeepSearch();
+                };
+
+                row.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <img src="${itemImg}" alt="" class="w-10 h-10 rounded-full object-cover border border-gray-200">
+                        <div>
+                            <p class="font-medium text-gray-900">${item.title}</p>
+                            <p class="text-xs text-gray-500">${item.subtitle || ''}</p>
+                        </div>
+                    </div>
+                    <span class="text-xs font-semibold px-2.5 py-1 rounded-full border ${badgeStyle}">
+                        ${item.type}
+                    </span>
+                `;
+                suggestionsList.appendChild(row);
+            });
+
+            suggestionsDropdown.classList.remove('hidden');
+        }
+
+        function triggerDeepSearch() {
+            const query = searchInput.value.trim();
+            if (query.length >= 2) {
+                suggestionsDropdown.classList.add('hidden');
+                fetchDeepSearch(query);
+            }
+        }
+
+        // API 2: Fetch Structured Deep Search Results
+        async function fetchDeepSearch(query) {
+            searchSpinner.classList.remove('hidden');
+            resultsContainer.innerHTML = `
+                <div class="text-center py-12">
+                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
+                    <p class="text-gray-500">Searching all clinical directories...</p>
+                </div>
+            `;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/user/homepage/search?query=${encodeURIComponent(query)}`, {
+                    method: 'GET',
+                    headers: getHeaders()
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    renderSearchResults(result.data);
+                } else {
+                    resultsContainer.innerHTML = `
+                        <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-center">
+                            ${result.message || 'Something went wrong during deep search.'}
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                console.error("Deep Search API Error:", err);
+                resultsContainer.innerHTML = `
+                    <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-center">
+                        Unable to connect to the search server.
+                    </div>
+                `;
+            } finally {
+                searchSpinner.classList.add('hidden');
+            }
+        }
+
+        function renderSearchResults(data) {
+            resultsContainer.innerHTML = '';
+            
+            const sectionsMapping = [
+                { key: 'doctors', title: 'Specialist Doctors', renderer: renderDoctorCard },
+                { key: 'hospitals', title: 'Clinics & Hospitals', renderer: renderHospitalCard },
+                { key: 'labs', title: 'Diagnostics Labs', renderer: renderLabCard },
+                { key: 'labTests', title: 'Lab Tests & Packages', renderer: renderLabTestCard },
+                { key: 'medicines', title: 'Medicines & Wellness Products', renderer: renderMedicineCard },
+                { key: 'nurseServices', title: 'Nurse Care Services', renderer: renderNurseCard },
+                { key: 'ambulances', title: 'Ambulance Units', renderer: renderAmbulanceCard }
+            ];
+
+            let hasResults = false;
+
+            sectionsMapping.forEach(section => {
+                const items = data[section.key] || [];
+                if (items.length > 0) {
+                    hasResults = true;
+                    
+                    const secDiv = document.createElement('div');
+                    secDiv.className = "bg-white p-6 rounded-xl border border-gray-100 shadow-sm";
+                    
+                    secDiv.innerHTML = `
+                        <h2 class="text-xl font-bold text-gray-900 border-b border-gray-100 pb-3 mb-5 flex justify-between items-center">
+                            <span>${section.title}</span>
+                            <span class="bg-gray-100 text-gray-700 text-xs font-semibold px-2.5 py-1 rounded-full">${items.length} Found</span>
+                        </h2>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+                            ${items.map(item => section.renderer(item)).join('')}
+                        </div>
+                    `;
+                    resultsContainer.appendChild(secDiv);
+                }
+            });
+
+            if (!hasResults) {
+                resultsContainer.innerHTML = `
+                    <div class="text-center py-12 text-gray-500">
+                        <svg class="mx-auto h-12 w-12 text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <p class="text-lg font-medium">No direct matching results found.</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Render card templates
+        function renderDoctorCard(item) {
+            return `
+                <div class="border border-gray-100 hover:border-gray-200 hover:shadow-md rounded-xl p-4 transition flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center gap-3 mb-3">
+                            <img src="${item.profileImage || 'https://placehold.co/100x100?text=Doc'}" class="w-12 h-12 rounded-full object-cover">
+                            <div>
+                                <h4 class="font-bold text-gray-900">${item.name}</h4>
+                                <span class="text-xs text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded">${item.speciality || 'General Medicine'}</span>
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-500 line-clamp-2 mt-2">${item.about || 'Specialist Doctor available for consultation.'}</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-gray-50 flex justify-between items-center">
+                        <span class="text-xs font-semibold text-gray-600">Exp: ${item.experienceYears || 0} Years</span>
+                        <span class="text-sm font-bold text-emerald-600">₹${item.fees?.clinic || item.fees?.online || 0}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderHospitalCard(item) {
+            return `
+                <div class="border border-gray-100 hover:border-gray-200 hover:shadow-md rounded-xl p-4 transition flex flex-col justify-between">
+                    <div>
+                        <img src="${item.hospitalImage?.[0] || 'https://placehold.co/300x150?text=Hospital'}" class="w-full h-32 object-cover rounded-lg mb-3">
+                        <h4 class="font-bold text-gray-900">${item.name}</h4>
+                        <p class="text-xs text-gray-500 mt-1">${item.address || item.city}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ... (baki render methods unchanged) ...
+        function renderLabCard(item) {
+            return `
+                <div class="border border-gray-100 hover:border-gray-200 hover:shadow-md rounded-xl p-4 transition flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center gap-3 mb-3">
+                            <img src="${item.profileImage || 'https://placehold.co/100x100?text=Lab'}" class="w-12 h-12 rounded-full object-cover">
+                            <div>
+                                <h4 class="font-bold text-gray-900">${item.name}</h4>
+                                <p class="text-xs text-gray-500">${item.city}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderLabTestCard(item) {
+            const finalPrice = item.discountPrice || item.amount;
+            return `
+                <div class="border border-gray-100 hover:border-gray-200 hover:shadow-md rounded-xl p-4 transition flex flex-col justify-between">
+                    <div>
+                        <span class="text-[10px] text-indigo-600 bg-indigo-50 font-semibold px-2 py-0.5 rounded uppercase tracking-wider">${item.mainCategory || 'Pathology'}</span>
+                        <h4 class="font-bold text-gray-900 mt-2">${item.testName}</h4>
+                        <p class="text-xs text-gray-500 mt-1">Sample: ${item.sampleType || 'Blood'}</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-gray-50 flex justify-between items-center">
+                        <span class="text-base font-bold text-indigo-600">₹${finalPrice}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderMedicineCard(item) {
+            return `
+                <div class="border border-gray-100 hover:border-gray-200 hover:shadow-md rounded-xl p-4 transition flex flex-col justify-between">
+                    <div>
+                        <img src="${item.image_url?.[0] || 'https://placehold.co/300x150?text=Medicine'}" class="w-full h-28 object-contain rounded-lg mb-3 bg-gray-50 p-2">
+                        <h4 class="font-bold text-gray-900 line-clamp-1">${item.name}</h4>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-gray-50 flex justify-between items-center">
+                        <span class="text-sm font-bold text-purple-600">₹${item.best_price || item.mrp}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderNurseCard(item) {
+            return `
+                <div class="border border-gray-100 hover:border-gray-200 hover:shadow-md rounded-xl p-4 transition flex flex-col justify-between">
+                    <div>
+                        <h4 class="font-bold text-gray-900">${item.title}</h4>
+                        <p class="text-xs text-gray-500 mt-1 line-clamp-2">${item.description || 'Specialized nursing procedure'}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderAmbulanceCard(item) {
+            return `
+                <div class="border border-gray-100 hover:border-gray-200 hover:shadow-md rounded-xl p-4 transition flex flex-col justify-between">
+                    <div>
+                        <span class="text-[10px] text-rose-600 bg-rose-50 font-semibold px-2 py-0.5 rounded uppercase tracking-wider">${item.vehicleType || 'ICU Unit'}</span>
+                        <h4 class="font-bold text-gray-900 mt-2">${item.name}</h4>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ================= FLOATING AI CHATBOT TRIGGERS & CORE =================
+
+        // Markdown text parsing helper to convert bold tags and bullet points neatly
+        function parseMarkdown(text) {
+            // Convert bold **text** to <strong>text</strong>
+            let html = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            // Convert bullet points starting with * to beautiful list items
+            html = html.replace(/^\s*\*\s+(.*?)$/gm, '• $1');
+            return html;
+        }
+
+        // 1. Toggle Chat Window (Open / Close)
+        function toggleChatBot() {
+            chatbotWindow.classList.toggle('hidden');
+            // Open hone par input automatic focus ho jayega
+            if (!chatbotWindow.classList.contains('hidden')) {
+                chatbotInput.focus();
+            }
+        }
+
+        // 2. Chat Send function
+        async function sendChatMessage() {
+            const userMsgText = chatbotInput.value.trim();
+            if (!userMsgText) return;
+
+            // Immediate user message append karein screen pe
+            appendChatMessage(userMsgText, 'user');
+            chatbotInput.value = '';
+
+            // Render Loading bubble for Bot response
+            const botLoadingId = appendChatMessage("Thinking...", 'bot', true);
+
+            try {
+                if (!token) {
+                    updateSpecificMessage(botLoadingId, "Error: You are not authorized. Please configure a user token first.", true);
+                    return;
+                }
+
+                // Call the new chatbot endpoint on backend
+                const response = await fetch(`${API_BASE_URL}/user/homepage/chatbot`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ message: userMsgText })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    // Update AI's response text
+                    updateSpecificMessage(botLoadingId, result.reply, false);
+                } else {
+                    updateSpecificMessage(botLoadingId, "Error: " + result.message, true);
+                }
+
+            } catch (err) {
+                console.error("ChatBot Client API Error:", err);
+                updateSpecificMessage(botLoadingId, "Error: Server connection issue.", true);
+            }
+        }
+
+        // 3. Helper to append messages on Chat stream UI
+        function appendChatMessage(text, sender, isLoading = false) {
+            const messageId = "msg-" + Date.now();
+            const msgRow = document.createElement('div');
+            msgRow.id = messageId;
+
+            // Formatted parsed text for bot messages, keeping original for loading
+            const parsedText = sender === 'bot' && !isLoading ? parseMarkdown(text) : text;
+
+            if (sender === 'user') {
+                msgRow.className = "flex justify-end";
+                msgRow.innerHTML = `
+                    <div class="bg-blue-600 text-white px-3.5 py-2 rounded-xl rounded-tr-none shadow-sm max-w-[80%] whitespace-pre-line">
+                        ${parsedText}
+                    </div>
+                `;
+            } else {
+                msgRow.className = "flex justify-start";
+                msgRow.innerHTML = `
+                    <div class="bg-white border border-gray-200 text-gray-700 px-3.5 py-2 rounded-xl rounded-tl-none shadow-sm max-w-[80%] ${isLoading ? 'animate-pulse text-gray-400' : ''} whitespace-pre-line">
+                        ${parsedText}
+                    </div>
+                `;
+            }
+
+            chatMessagesContainer.appendChild(msgRow);
+            // Automatic scroll to bottom
+            chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+
+            return messageId;
+        }
+
+        // 4. Helper to replace/update loading messages with actual dynamic AI results
+        function updateSpecificMessage(id, newText, isError = false) {
+            const element = document.getElementById(id);
+            if (element) {
+                const textDiv = element.querySelector('div');
+                textDiv.classList.remove('animate-pulse', 'text-gray-400');
+                
+                // Use innerHTML to render parsed bold/lists
+                textDiv.innerHTML = isError ? newText : parseMarkdown(newText);
+                
+                if (isError) {
+                    textDiv.classList.add('text-red-600', 'bg-red-50');
+                }
+            }
+            chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+        }
+    </script>
+</body>
+</html>

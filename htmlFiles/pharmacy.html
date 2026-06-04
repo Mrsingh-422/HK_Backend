@@ -33,17 +33,19 @@
     <!-- Live Sync Control Panel -->
     <div class="mb-4 bg-slate-800 text-white p-4 rounded-2xl max-w-sm w-full text-xs space-y-2 shadow-md">
         <div class="flex justify-between items-center">
-            <span class="font-bold text-emerald-400">PATIENT SERVER CONFIG</span>
+            <span class="font-bold text-emerald-400">PATIENT SERVER CONFIG (LIVE)</span>
             <span class="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-[10px]" id="auth-status">Token Active</span>
         </div>
         <div class="space-y-1">
-            <input type="text" id="cfg-url" value="http://localhost:5002" class="w-full bg-slate-900 border border-slate-700 px-2 py-1 rounded text-emerald-300 focus:outline-none">
+            <label class="block text-[10px] text-slate-400">Server Endpoint Base URL</label>
+            <input type="text" id="cfg-url" value="http://localhost:5002" class="w-full bg-slate-900 border border-slate-700 px-2 py-1 rounded text-emerald-300 focus:outline-none font-mono">
+            <label class="block text-[10px] text-slate-400 mt-1">User Bearer Token</label>
             <input type="text" id="cfg-token" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5OTg0MDcxM2UzMzNhMzQyMjI3ZWRjOCIsImlhdCI6MTc4MDAyODgzNSwiZXhwIjoxNzgyNjIwODM1fQ.jO1b65_hKbD9_5AeCo4NzQsc-hIqD8InaGGv85Fdl4Y" class="w-full bg-slate-900 border border-slate-700 px-2 py-1 rounded text-slate-300 focus:outline-none font-mono" oninput="updateLocalToken(this.value)">
         </div>
     </div>
 
     <!-- Phone Simulator -->
-    <div class="mobile-frame flex flex-col overflow-hidden">
+    <div class="mobile-frame flex flex-col overflow-hidden shadow-2xl">
         
         <!-- Status Bar -->
         <div class="h-11 flex justify-between items-center px-6 bg-white text-slate-900 text-xs font-semibold">
@@ -93,14 +95,19 @@
                 <button onclick="goTo('detected')" id="btn-upload-continue" disabled class="w-full bg-slate-300 text-slate-500 font-bold py-3.5 rounded-xl text-sm shadow-sm cursor-not-allowed">Continue</button>
             </div>
 
-            <!-- SCREEN 2: DETECTED INFORMATION (With Manual Medicine Fallback) -->
+            <!-- SCREEN 2: DETECTED INFORMATION -->
             <div id="scr-detected" class="space-y-5 hidden">
                 <div class="flex items-center justify-between">
                     <button onclick="goTo('upload')" class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
-                    <h2 class="text-lg font-bold text-slate-900">Detected Medicines</h2>
+                    <h2 class="text-lg font-bold text-slate-900">Prescription Uploaded</h2>
+                </div>
+                
+                <div class="border border-emerald-100 bg-emerald-50/30 rounded-2xl p-4 text-center space-y-1">
+                    <div class="w-8 h-8 bg-emerald-500 text-white rounded-full flex items-center justify-center mx-auto text-xs"><i class="fa-solid fa-check"></i></div>
+                    <h4 class="font-bold text-slate-800 text-sm">Prescription Scanned Successfully!</h4>
+                    <p class="text-[10px] text-slate-500">Review medicines extracted by AI</p>
                 </div>
 
-                <!-- Custom Header Info -->
                 <div class="border border-slate-200 rounded-2xl p-4 space-y-2 text-xs">
                     <span class="font-bold text-slate-800">Auto-detected Information</span>
                     <div class="flex justify-between py-1 border-b border-slate-100">
@@ -113,35 +120,32 @@
                     </div>
                 </div>
 
-                <!-- Dynamic list or fallback manual addition container -->
                 <div class="space-y-3">
                     <div class="flex justify-between items-center">
                         <span class="text-xs font-bold text-slate-800">Medicines list</span>
                         <button onclick="addManualMedicineInputRow()" class="text-xs text-green font-bold"><i class="fa-solid fa-plus mr-1"></i> Add Manually</button>
                     </div>
 
-                    <!-- Scan status alert if empty -->
                     <div id="scan-fail-alert" class="bg-amber-500/10 border border-amber-500/20 text-amber-800 p-4 rounded-xl text-xs space-y-2 hidden">
                         <span class="font-bold"><i class="fa-solid fa-triangle-exclamation"></i> AI could not scan any medicines.</span>
-                        <p class="text-[10px]">Apne prescription ke anusar medicines niche manually add karein.</p>
                     </div>
 
                     <div id="detected-meds-box" class="space-y-3">
-                        <!-- Injected by API / Manual clicks -->
+                        <!-- dynamic items -->
                     </div>
                 </div>
 
                 <button onclick="fetchActivePharmacies()" class="w-full bg-green text-white font-bold py-3.5 rounded-xl text-sm shadow-md">Continue</button>
             </div>
 
-            <!-- SCREEN 3: CHOOSE PHARMACY -->
+            <!-- SCREEN 3: PHARMACY SELECTION -->
             <div id="scr-pharmacy" class="space-y-4 hidden">
                 <div class="flex items-center justify-between">
                     <button onclick="goTo('detected')" class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
                     <h2 class="text-lg font-bold text-slate-900">Choose Pharmacy</h2>
                 </div>
                 <div id="pharmacies-cards-box" class="space-y-4">
-                    <!-- Injected live pharmacy cards -->
+                    <!-- Dynamic pharmacy list -->
                 </div>
             </div>
 
@@ -151,12 +155,10 @@
                     <button onclick="goTo('pharmacy')" class="text-slate-600"><i class="fa-solid fa-chevron-left text-lg"></i></button>
                     <h2 class="text-lg font-bold text-slate-900">Medicine Duration</h2>
                 </div>
-                <!-- Duration options -->
                 <div onclick="toggleDurationType('Full Course')" id="card-full" class="border-2 border-green bg-green-light/10 rounded-2xl p-4 cursor-pointer flex items-start space-x-3">
                     <div class="text-green text-lg mt-0.5" id="full-icon"><i class="fa-solid fa-circle-dot"></i></div>
                     <div>
                         <h4 class="font-bold text-slate-800 text-xs">Full course as per prescription</h4>
-                        <p class="text-[10px] text-slate-400 mt-1">Pharmacist will calculate exact quantity</p>
                     </div>
                 </div>
                 <div onclick="toggleDurationType('Custom')" id="card-custom" class="border border-slate-200 rounded-2xl p-4 cursor-pointer flex flex-col space-y-4">
@@ -164,16 +166,14 @@
                         <div class="text-slate-300 text-lg mt-0.5" id="custom-icon"><i class="fa-regular fa-circle"></i></div>
                         <div>
                             <h4 class="font-bold text-slate-800 text-xs">Custom duration</h4>
-                            <p class="text-[10px] text-slate-400 mt-1">Configure days for each medication</p>
                         </div>
                     </div>
-                    <!-- Inline price estimator editor -->
                     <div id="custom-duration-container" class="space-y-3 pt-3 border-t border-slate-100 hidden">
                         <div id="custom-meds-duration-list" class="space-y-2.5">
-                            <!-- Injected inputs for Checked medicines -->
+                            <!-- custom medicines input rows -->
                         </div>
                         <div class="bg-amber-50 p-2.5 rounded-lg border border-amber-200 flex justify-between text-xs text-amber-800 font-bold">
-                            <span>Estimated Bill (Prices adjusted with inventory):</span>
+                            <span>Estimated Bill:</span>
                             <span>₹<span id="label-estimated-total">0</span></span>
                         </div>
                     </div>
@@ -222,10 +222,6 @@
                     <p class="font-bold text-slate-500">Selected Address</p>
                     <p class="text-slate-700 font-semibold" id="sum-address-label">--</p>
                 </div>
-                <div class="border border-amber-200 bg-amber-50 p-4 rounded-xl text-xs text-amber-800">
-                    <span class="font-bold"><i class="fa-solid fa-circle-notch animate-spin"></i> Price Verification Pending</span>
-                    <p class="text-[10px] text-slate-600 mt-1">Prices & dynamic admin MRP verified on pharmacists console.</p>
-                </div>
                 <button onclick="placePrescriptionRequest()" class="w-full bg-green text-white font-bold py-3.5 rounded-xl text-sm shadow-md">Place Order Request</button>
             </div>
 
@@ -257,17 +253,25 @@
                     </div>
                 </div>
 
-                <!-- Verified Bill Summary -->
                 <div class="border border-slate-200 rounded-2xl p-4 bg-white space-y-3 hidden" id="payment-card-box">
                     <h4 class="font-bold text-slate-800 text-sm border-b border-slate-100 pb-2">Verified Bill Summary</h4>
-                    <div class="space-y-2 text-xs text-slate-600" id="payment-items-summary-list">
-                        <!-- Injected dynamic lines with calculated units, admin MRP, and prices -->
-                    </div>
+                    <div class="space-y-2 text-xs text-slate-600" id="payment-items-summary-list"></div>
                     <div class="space-y-2 text-xs text-slate-600 border-t border-slate-100 pt-2">
                         <div class="flex justify-between"><span>Delivery Charge:</span><strong id="final-delivery-price">₹0</strong></div>
                         <div class="flex justify-between text-slate-900 font-extrabold text-sm"><span>Total Payable Amount:</span><strong id="final-payable-amount">₹0</strong></div>
                     </div>
                     <button onclick="payAndFinalize()" class="w-full bg-green text-white font-bold py-3 rounded-xl text-xs shadow-md">Pay Now & Confirm Order</button>
+                </div>
+            </div>
+
+            <!-- SCREEN 8: REQUESTS HISTORY (New Request History View) -->
+            <div id="scr-history" class="space-y-5 hidden">
+                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <h2 class="text-lg font-bold text-slate-900">My Prescription Requests</h2>
+                    <button onclick="loadUserRequestsHistory()" class="text-xs text-green font-bold"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                </div>
+                <div id="history-list-box" class="space-y-3.5">
+                    <!-- Injected request history cards -->
                 </div>
             </div>
 
@@ -281,6 +285,19 @@
 
         </div>
 
+        <!-- iOS Bottom Tab Bar Simulation -->
+        <div class="absolute bottom-0 left-0 right-0 h-16 bg-white border-t border-slate-100 flex justify-around items-center text-[10px] text-slate-400 z-30">
+            <div class="text-center cursor-pointer" id="nav-btn-home" onclick="goTo('upload'); resetNavIcons(); document.getElementById('nav-btn-home').classList.add('text-green');">
+                <i class="fa-solid fa-house text-lg"></i><span class="block mt-0.5">Home</span>
+            </div>
+            <div class="text-center"><i class="fa-regular fa-file-lines text-lg"></i><span class="block mt-0.5">Article</span></div>
+            <div class="text-center"><i class="fa-regular fa-user text-lg"></i><span class="block mt-0.5">Profile</span></div>
+            <div class="text-center cursor-pointer" id="nav-btn-history" onclick="loadUserRequestsHistory()">
+                <i class="fa-solid fa-box-archive text-lg"></i><span class="block mt-0.5">Requests</span>
+            </div>
+            <div class="text-center"><i class="fa-solid fa-gear text-lg"></i><span class="block mt-0.5">Setting</span></div>
+        </div>
+
     </div>
 
     <script>
@@ -291,22 +308,41 @@
         let pollingTimer = null;
         let detectedMedicinesList = [];
 
+        document.addEventListener("DOMContentLoaded", () => {
+            const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5OTg0MDcxM2UzMzNhMzQyMjI3ZWRjOCIsImlhdCI6MTc4MDAyODgzNSwiZXhwIjoxNzgyNjIwODM1fQ.jO1b65_hKbD9_5AeCo4NzQsc-hIqD8InaGGv85Fdl4Y"
+            if (token) {
+                document.getElementById("auth-status").innerText = "Token Active";
+                document.getElementById("auth-status").className = "bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-[10px]";
+                document.getElementById("cfg-token").value = token;
+                localStorage.setItem('userToken', token);
+            }
+            resetNavIcons();
+            document.getElementById('nav-btn-home').classList.add('text-green');
+        });
+
         function updateLocalToken(token) {
             localStorage.setItem('userToken', token);
             document.getElementById("auth-status").innerText = token ? "Token Active" : "No Token";
         }
 
+        function resetNavIcons() {
+            document.getElementById("nav-btn-home").className = "text-center cursor-pointer text-slate-400";
+            document.getElementById("nav-btn-history").className = "text-center cursor-pointer text-slate-400";
+        }
+
         function goTo(id) {
-            const screens = ['upload', 'detected', 'pharmacy', 'duration', 'address', 'summary', 'progress', 'success'];
+            const screens = ['upload', 'detected', 'pharmacy', 'duration', 'address', 'summary', 'progress', 'history', 'success'];
             screens.forEach(s => document.getElementById(`scr-${s}`).classList.add('hidden'));
             document.getElementById(`scr-${id}`).classList.remove('hidden');
+            if (id !== 'progress') {
+                if (pollingTimer) clearInterval(pollingTimer);
+            }
         }
 
         function triggerFileSelect() {
             document.getElementById("prescription-file-input").click();
         }
 
-        // Live API call: /user/pharmacy/scan-rx (Real Scan)
         async function uploadAndScanPrescription(input) {
             if (!input.files || !input.files[0]) return;
             uploadedFile = input.files[0];
@@ -314,7 +350,6 @@
             const baseUrl = document.getElementById("cfg-url").value;
             const token = localStorage.getItem('userToken');
 
-            // UI feedback loader
             document.getElementById("upload-icon").className = "fa-solid fa-spinner animate-spin text-white";
             document.getElementById("upload-text").innerText = "Uploading to Gemini AI...";
             document.getElementById("upload-subtext").innerText = "Analyzing prescription image...";
@@ -336,7 +371,6 @@
                     
                     renderDetectedMedicines();
 
-                    // Enable Continue button
                     const btn = document.getElementById("btn-upload-continue");
                     btn.disabled = false;
                     btn.className = "w-full bg-green text-white font-bold py-3.5 rounded-xl text-sm shadow-md cursor-pointer hover:bg-[#09a870] transition";
@@ -350,7 +384,6 @@
                 }
             } catch (err) {
                 console.error("Scan API connection failed:", err);
-                alert("Scan failed. Activating manual addition fallback mode.");
                 detectedMedicinesList = [];
                 renderDetectedMedicines();
                 
@@ -370,9 +403,9 @@
         function addManualMedicineInputRow() {
             const index = detectedMedicinesList.length;
             const newMed = {
-                medicineId: null, // manual
+                medicineId: null,
                 name: "Manual Medication " + (index + 1),
-                mrp: 100, // manual base MRP
+                mrp: 100,
                 packaging: "10 tablets"
             };
             detectedMedicinesList.push(newMed);
@@ -387,7 +420,7 @@
 
             if (!detectedMedicinesList.length) {
                 scanAlert.classList.remove('hidden');
-                addManualMedicineInputRow(); // Auto trigger first row for manual entry
+                addManualMedicineInputRow();
                 return;
             } else {
                 scanAlert.classList.add('hidden');
@@ -397,7 +430,6 @@
                 const div = document.createElement("div");
                 div.className = "border border-slate-200 rounded-2xl p-4 bg-white space-y-2.5 shadow-sm flex flex-col justify-between";
                 
-                // If it's a manual entry, render editable textbox
                 const isManual = med.medicineId === null;
                 const nameSection = isManual ? 
                     `<input type="text" value="${med.name}" onchange="updateManualMedName(${idx}, this.value)" class="border-b border-slate-200 font-bold text-slate-900 text-xs focus:outline-none focus:border-green pb-1 w-full" placeholder="Enter medicine name">` :
@@ -430,7 +462,6 @@
             buildCustomDurationList();
         }
 
-        // Live API call: /user/pharmacy/list
         async function fetchActivePharmacies() {
             const baseUrl = document.getElementById("cfg-url").value;
             const token = localStorage.getItem('userToken');
@@ -442,7 +473,7 @@
             navigator.geolocation.getCurrentPosition(async (pos) => {
                 await executeListQuery(pos.coords.latitude, pos.coords.longitude);
             }, async (err) => {
-                await executeListQuery(28.6139, 77.2090); // Fallback coordinates
+                await executeListQuery(28.6139, 77.2090);
             });
 
             async function executeListQuery(lat, lng) {
@@ -530,7 +561,6 @@
             });
         }
 
-        // Live API call: estimate prices
         async function executePriceEstimate() {
             const baseUrl = document.getElementById("cfg-url").value;
             const token = localStorage.getItem('userToken');
@@ -570,6 +600,11 @@
             }
         }
 
+        function selectAddress(type, detail) {
+            document.getElementById("sum-duration").innerText = durationMode;
+            document.getElementById("sum-address").innerText = detail;
+        }
+
         function saveAndGoToSummary() {
             const name = document.getElementById("addr-name").value;
             const phone = document.getElementById("addr-phone").value;
@@ -589,7 +624,6 @@
             goTo('summary');
         }
 
-        // Live API call: Place Request
         async function placePrescriptionRequest() {
             const baseUrl = document.getElementById("cfg-url").value;
             const token = localStorage.getItem('userToken');
@@ -680,8 +714,14 @@
 
             if (status === "Pending Review") {
                 percentLabel.innerText = "0%";
+                payBox.classList.add('hidden');
+                spinner.classList.remove('hidden');
+                successIcon.classList.add('hidden');
             } else if (status === "Reviewing") {
                 percentLabel.innerText = "50%";
+                payBox.classList.add('hidden');
+                spinner.classList.remove('hidden');
+                successIcon.classList.add('hidden');
                 document.getElementById("step-1").className = "border border-emerald-200 bg-green-light/10 p-3.5 rounded-xl flex items-center gap-2 text-green font-bold";
                 document.getElementById("step-1-icon").className = "fa-solid fa-circle-check";
                 document.getElementById("step-2").className = "border border-emerald-200 bg-green-light/10 p-3.5 rounded-xl flex items-center gap-2 text-green font-bold";
@@ -753,6 +793,94 @@
                 }
             } catch (err) {
                 console.error("Final payment confirm API failed:", err);
+            }
+        }
+
+        // --- NEW: USER REQUESTS HISTORY FLOW ---
+        async function loadUserRequestsHistory() {
+            goTo('history');
+            resetNavIcons();
+            document.getElementById("nav-btn-history").classList.add("text-green");
+
+            const container = document.getElementById("history-list-box");
+            container.innerHTML = `<div class="text-center text-xs py-10"><i class="fa-solid fa-spinner animate-spin text-green mr-2"></i> Loading request history...</div>`;
+
+            const baseUrl = document.getElementById("cfg-url").value;
+            const token = localStorage.getItem('userToken');
+
+            try {
+                const res = await fetch(`${baseUrl}/user/pharmacy/prescription-request/list`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const out = await res.json();
+                if (out.success) {
+                    renderHistoryCards(out.data);
+                } else {
+                    container.innerHTML = `<p class="text-xs text-rose-500 text-center py-10">${out.message}</p>`;
+                }
+            } catch (err) {
+                console.error("Failed to fetch history list:", err);
+                container.innerHTML = `<p class="text-xs text-rose-500 text-center py-10">Connection error. Check backend.</p>`;
+            }
+        }
+
+        function renderHistoryCards(data) {
+            const container = document.getElementById("history-list-box");
+            container.innerHTML = "";
+
+            if (!data || data.length === 0) {
+                container.innerHTML = `<p class="text-xs text-slate-400 text-center py-10">No prescription requests placed yet.</p>`;
+                return;
+            }
+
+            data.forEach(req => {
+                const dateStr = new Date(req.createdAt).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric'
+                });
+
+                let badgeClass = "bg-amber-500/10 text-amber-600 border border-amber-500/20";
+                if (req.status === "Reviewing") badgeClass = "bg-indigo-500/10 text-indigo-600 border border-indigo-500/20";
+                if (req.status === "Bill Generated") badgeClass = "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 animate-pulse";
+                if (req.status === "Rejected") badgeClass = "bg-rose-500/10 text-rose-600 border border-rose-500/20";
+
+                const card = document.createElement("div");
+                card.onclick = () => openHistoryRequestTracking(req);
+                card.className = "p-4 bg-white border border-slate-200 hover:border-green rounded-2xl cursor-pointer transition space-y-3 shadow-sm";
+                card.innerHTML = `
+                    <div class="flex justify-between items-center text-[10px]">
+                        <span class="font-mono text-slate-400 font-bold">${req.requestId}</span>
+                        <span class="px-2 py-0.5 rounded-full font-bold ${badgeClass}">${req.status}</span>
+                    </div>
+                    <div>
+                        <h4 class="font-bold text-slate-900 text-xs">${req.pharmacyId?.name || 'Pharmacy Partner'}</h4>
+                        <p class="text-[10px] text-slate-400 mt-0.5">Placed on: ${dateStr}</p>
+                    </div>
+                    ${req.status === 'Bill Generated' ? `
+                        <div class="border-t border-dashed border-slate-100 pt-2 flex justify-between items-center text-xs">
+                            <span class="text-slate-500">Bill Total: <strong class="text-slate-900 font-extrabold">₹${req.verifiedBill?.totalAmount || 0}</strong></span>
+                            <span class="text-green font-bold flex items-center gap-1">Pay Now <i class="fa-solid fa-arrow-right"></i></span>
+                        </div>
+                    ` : ''}
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function openHistoryRequestTracking(req) {
+            createdReqId = req.requestId;
+            document.getElementById("tracking-req-id").innerText = createdReqId;
+            
+            goTo('progress');
+            applyUIProgressChanges(req.status, req.verifiedBill);
+
+            // Start live updates polling only if request review is in progress
+            if (req.status !== "Bill Generated" && req.status !== "Rejected") {
+                const token = localStorage.getItem('userToken');
+                if (token) {
+                    runBackendPollingStatus();
+                }
             }
         }
     </script>

@@ -1380,6 +1380,113 @@ const getLatestAddedMedicines = async (req, res) => {
     }
 };
 
+// GET OTC / NON-PRESCRIPTION MEDICINES (PRESCRIPTION REQUIRED: NO)
+// GET OTC MEDICINES WITH OPTIONAL CATEGORY FILTER
+const getNonPrescriptionMedicines = async (req, res) => {
+    try {
+        const { category, subCategory, page = 1 } = req.query;
+        const limit = 20;
+        const skip = (parseInt(page) - 1) * limit;
+
+        // Base filter: Only fetch medicines where prescription is not required
+        const filter = {
+            prescription_required: { $regex: /^(no|false)$/i }
+        };
+
+        // If category query parameter is provided, add bread_crumb regex filter
+        if (category) {
+            const breadcrumbRegex = subCategory 
+                ? new RegExp(`^${category}\\s*>\\s*${subCategory}`, 'i')
+                : new RegExp(`^${category}\\s*>`, 'i');
+            filter.bread_crumb = breadcrumbRegex;
+        }
+
+        const pipeline = [
+            { $match: filter },
+            {
+                // Dynamic inventory check for lowest seller price
+                $lookup: {
+                    from: "medicineinventories",
+                    localField: "_id",
+                    foreignField: "medicineId",
+                    as: "inventory",
+                    pipeline: [
+                        { $match: { is_available: true, stock_quantity: { $gt: 0 } } },
+                        { $sort: { vendor_price: 1 } },
+                        { $limit: 1 }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
+                    numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
+                    numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
+                    isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
+                }
+            },
+            {
+                $addFields: {
+                    minimumPrice: {
+                        $cond: [
+                            "$isInventoryAvailable",
+                            "$numInventoryPrice",
+                            "$numDocBestPrice"
+                        ]
+                    },
+                    isAvailable: "$isInventoryAvailable"
+                }
+            },
+            {
+                $addFields: {
+                    // Dynamic discount calculation
+                    discountPercentage: {
+                        $cond: {
+                            if: { $gt: ["$numMRP", 0] },
+                            then: {
+                                $round: [
+                                    {
+                                        $multiply: [
+                                            { $divide: [{ $subtract: ["$numMRP", "$minimumPrice"] }, "$numMRP"] },
+                                            100
+                                        ]
+                                    },
+                                    0
+                                ]
+                            },
+                            else: 0
+                        }
+                    }
+                }
+            },
+            { 
+                $project: { 
+                    inventory: 0, numMRP: 0, numDocBestPrice: 0, numInventoryPrice: 0, isInventoryAvailable: 0 
+                } 
+            },
+            { $skip: skip },
+            { $limit: limit }
+        ];
+
+        // Parallel operations for pagination & aggregation
+        const [data, total] = await Promise.all([
+            Medicine.aggregate(pipeline),
+            Medicine.countDocuments(filter)
+        ]);
+
+        res.json({
+            success: true,
+            total,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / limit),
+            data
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 /////////////////////////////////////////
 //// ai scan prescription /////////////
 ///////////////////////////////////////
@@ -1565,75 +1672,107 @@ const payAndConfirmOrder = async (req, res) => {
         const { requestId, paymentMethod } = req.body;
         const userId = req.user.id;
 
+        // 1. Fetch the target prescription request and ensure it belongs to the logged-in user
         const request = await PharmacyPrescriptionRequest.findOne({ requestId, userId });
-        if (!request || request.status !== 'Bill Generated') {
-            return res.status(400).json({ success: false, message: "Valid reviewed request not found or bill is not generated yet" });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Prescription request not found" });
         }
 
-        // Deduct inventory stock securely before booking
-        for (const billItem of request.verifiedBill.items) {
-            const inventory = await MedicineInventory.findOne({ 
-                pharmacyId: request.pharmacyId, 
-                medicineId: billItem.medicineId 
+        // 2. Business validation: Enforce sequential state flow limits
+        if (request.status !== 'Bill Generated') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Request status is currently '${request.status}'. Payment can only be completed for 'Bill Generated' status.` 
             });
-            if (inventory) {
-                inventory.stock_quantity = Math.max(0, inventory.stock_quantity - billItem.quantity);
-                if (inventory.stock_quantity === 0) inventory.is_available = false;
-                await inventory.save();
+        }
+
+        // 3. Atomic stock deduction for mapped medicines
+        if (request.verifiedBill && request.verifiedBill.items && request.verifiedBill.items.length > 0) {
+            for (const billItem of request.verifiedBill.items) {
+                // Safeguard: Skip stock deduction if pharmacist couldn't map the manual drug to a DB ObjectId
+                if (!billItem.medicineId || !mongoose.isValidObjectId(billItem.medicineId)) {
+                    continue;
+                }
+
+                const inventory = await MedicineInventory.findOne({ 
+                    pharmacyId: request.pharmacyId, 
+                    medicineId: billItem.medicineId 
+                });
+                
+                if (inventory) {
+                    // Decrement and ensure stock never drops below 0
+                    inventory.stock_quantity = Math.max(0, inventory.stock_quantity - (billItem.quantity || 1));
+                    if (inventory.stock_quantity === 0) {
+                        inventory.is_available = false;
+                    }
+                    await inventory.save();
+                }
             }
         }
 
-        // Convert the validated request to final permanent Booking Order
+        // 4. Map verified bill items to the permanent Order scheme, carrying over the administrative MRPs
+        const orderItems = (request.verifiedBill.items || []).map(item => {
+            // Find corresponding custom duration matching on the medicine name string
+            const matchingRequestedMed = request.requestedMedicines.find(rm => 
+                rm.name.trim().toLowerCase() === item.name.trim().toLowerCase()
+            );
+            const durationDays = matchingRequestedMed ? Number(matchingRequestedMed.durationDays || 15) : 15;
+
+            return {
+                medicineId: item.medicineId || null, // Stores unmapped manual items safely as null
+                name: item.name,
+                mrp: Number(item.mrp || 0),         // Captures administrative MRP verified by pharmacist
+                price: Number(item.pricePerUnit || 0), // Final customer selling price
+                quantity: Number(item.quantity || 1),
+                duration: `${durationDays} Days`
+            };
+        });
+
+        // 5. Convert request data to a permanent order (PharmacyBooking) with Placed/Paid status metadata
         const finalOrder = await PharmacyBooking.create({
             orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
             pharmacyId: request.pharmacyId,
-            patients: [{ name: request.address.name, relation: 'Self' }],
-            
-            // --- UPDATED: Mapping mrp safely without changing previous logic ---
-            items: request.verifiedBill.items.map(item => ({
-                medicineId: item.medicineId,
-                name: item.name,
-                mrp: Number(item.mrp || 0), // Dynamically captured verified bill MRP
-                price: item.pricePerUnit,
-                quantity: item.quantity,
-                duration: `${request.requestedMedicines.find(rm => rm.name === item.name)?.durationDays || 15} Days`
-            })),
-            
+            patients: [{ 
+                name: request.address ? request.address.name : "Patient", 
+                relation: 'Self' 
+            }],
+            items: orderItems,
             collectionType: 'Home Delivery',
-            address: request.address,
+            address: request.address || {},
             appointmentDate: new Date(),
             appointmentTime: 'Immediate',
             billSummary: {
-                itemTotal: request.verifiedBill.itemTotal,
-                deliveryCharge: request.verifiedBill.deliveryCharge,
-                totalAmount: request.verifiedBill.totalAmount
+                itemTotal: request.verifiedBill.itemTotal || 0,
+                deliveryCharge: request.verifiedBill.deliveryCharge || 0,
+                totalAmount: request.verifiedBill.totalAmount || 0
             },
             paymentMethod: paymentMethod || 'Online',
             paymentStatus: 'Paid',
             orderType: 'Prescription',
-            prescriptionImages: [request.prescriptionImage],
+            prescriptionImages: request.prescriptionImage ? [request.prescriptionImage] : [],
             status: 'Placed'
         });
 
-        // Delete or mark the temporary request as accepted
-        request.status = 'Bill Generated'; // Can also change to a custom archive status
+        // 6. Transition prescription request status to 'Paid' to lock state
+        request.status = 'Paid';
         await request.save();
 
         res.status(201).json({
             success: true,
-            message: "Payment success! Request converted to order.",
+            message: "Payment successful! Request converted to order.",
             orderId: finalOrder.orderId,
             data: finalOrder
         });
     } catch (error) {
+        console.error("Payment Confirmation API Error:", error.message);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder,
-getLatestAddedMedicines ,
+getLatestAddedMedicines ,getNonPrescriptionMedicines,
 
 createPrescriptionRequest, payAndConfirmOrder,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices
 };

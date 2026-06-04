@@ -146,6 +146,8 @@ app.use('/admin/ambulance', require('./routes/admin/Ambulance/AmbulanceAdminRout
 
 
 /////////////  User Routes /////////////////////////
+app.use('/user/homepage', require('./routes/user/SearchRoutes'));
+
 app.use('/api/auth/user', require('./routes/user/authUser')); 
 app.use('/api/user/abha', require('./routes/user/others/AbhaCardRoute')); // ABHA Card Management Route
 app.use('/api/user/locker', require('./routes/user/others/HealthLockerRoute')); // Locker Management Route

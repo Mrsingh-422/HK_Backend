@@ -295,12 +295,13 @@ const rejectPrescriptionRequest = async (req, res) => {
         }
 
         request.status = 'Rejected';
+        request.rejectReason = reason || "Invalid Prescription Document"; // Now this will be saved successfully
         await request.save();
 
         res.json({
             success: true,
-            message: "Prescription request has been rejected",
-            rejectReason: reason || "Invalid Prescription Document",
+            message: "Prescription request has been rejected successfully",
+            rejectReason: request.rejectReason,
             data: request
         });
     } catch (error) {

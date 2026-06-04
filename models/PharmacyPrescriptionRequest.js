@@ -28,10 +28,14 @@ const prescriptionRequestSchema = new mongoose.Schema({
         pincode: { type: String }
     },
 
-    status: {
+     status: {
         type: String,
-        enum: ['Pending Review', 'Reviewing', 'Bill Generated', 'Rejected'],
+        enum: ['Pending Review', 'Reviewing', 'Bill Generated', 'Rejected', 'Paid'], // 'Paid' added here
         default: 'Pending Review'
+    },
+    rejectReason: { 
+        type: String, 
+        default: null 
     },
 
     verifiedBill: {
