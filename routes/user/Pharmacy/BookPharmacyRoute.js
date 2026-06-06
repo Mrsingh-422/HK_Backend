@@ -4,7 +4,7 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { pharmacyPrescriptionUploads } = require('../../../middleware/multer');
 const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
     getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder,
-getLatestAddedMedicines,getNonPrescriptionMedicines,
+getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 
 createPrescriptionRequest,payAndConfirmOrder, getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
@@ -56,6 +56,7 @@ router.get('/track-order/:orderId',protect('user'),trackOrder);
 
 router.get('/latest-added-medicines',getLatestAddedMedicines);
 router.get('/non-prescription-list', getNonPrescriptionMedicines);
+router.get('/highest-discount-medicines', getHighestDiscountMedicines);
 
 
 

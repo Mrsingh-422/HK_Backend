@@ -167,4 +167,39 @@ const completeAmbulanceProfile = async (req, res) => {
     }
 };
 
-module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile };
+
+const toggleDriverAvailability = async (req, res) => {
+    try {
+        const { available } = req.body; // expects true (Online) or false (Offline)
+
+        const ambulance = await Ambulance.findByIdAndUpdate(
+            req.user.id,
+            { $set: { availableForEmergency: available } },
+            { new: true }
+        );
+
+        if (!ambulance) return res.status(404).json({ success: false, message: "Driver profile not found." });
+
+        res.json({ 
+            success: true, 
+            message: `Driver status updated to ${available ? 'Online' : 'Offline'}`, 
+            available: ambulance.availableForEmergency 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+const getMyAmbulanceProfile = async (req, res) => {
+    try {
+        const ambulance = await Ambulance.findById(req.user.id).select('-password');
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Driver profile not found." });
+        }
+        res.json({ success: true, data: ambulance });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile };

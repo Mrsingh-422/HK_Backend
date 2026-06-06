@@ -1,6 +1,10 @@
 const router = require('express').Router();
 const { protect } = require('../../../middleware/authMiddleware');
+const { doctorDocUploads } = require('../../../middleware/multer');
 const { 
+    getMyDoctorProfile,
+        updateDoctorProfile,
+
     getDocDashboard, 
     getAssignedCases, 
     getPatientDetails, 
@@ -12,6 +16,12 @@ const {
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 
 // Base: /hospital-doctor/panel
+
+router.get('/profile', protect('hospital-doctor'), getMyDoctorProfile);
+router.put('/profile/update', protect('hospital-doctor'), doctorDocUploads, updateDoctorProfile);
+
+
+
 
 router.get('/dashboard', protect('hospital-doctor'), getDocDashboard);
 router.get('/cases', protect('hospital-doctor'), getAssignedCases);

@@ -6,7 +6,7 @@ const {
     getDocRescheduleLimit,
     getDoctors,
     approveDoctorStatus,
-    toggleDoctorActiveStatus, adminGetDoctorAppointments
+    toggleDoctorActiveStatus,adminGetApprovedDoctors, adminGetDoctorAppointments
 } = require('../../../controllers/admin/Doctor/DoctorAdmin');
 
 // Base URL: /admin/doctor
@@ -20,6 +20,8 @@ router.get('/list', protect('admin'), getDoctors); // Doctor list filters ke sat
 router.patch('/approve/:id', protect('admin'), approveDoctorStatus); // Approve/Reject status
 router.patch('/toggle-active/:id', protect('admin'), toggleDoctorActiveStatus); // Active/Inactive toggle
 
+// --- NEWLY ADDED DOCTOR APPROVED DOCTORS ROUTES ---
+router.get('/approved-list', protect('admin'), adminGetApprovedDoctors);
 // --- NEWLY ADDED DOCTOR APPOINTMENT ROUTES ---
 router.get('/appointments', protect('admin'), adminGetDoctorAppointments);
 

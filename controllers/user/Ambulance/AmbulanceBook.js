@@ -346,7 +346,7 @@ const confirmAmbulanceBooking = async (req, res) => {
         // 2. Calculate Fare & Validate Coupon
         const fare = await getFinalFare(body, req.user.id); 
 
-        // --- NEW: Parse staffType to store individual selection flags in DB ---
+        // Parse staffType
         let staffList = staffType ? (typeof staffType === 'string' ? staffType.split(',') : staffType) : [];
         staffList = staffList.map(s => s.trim());
         const supportStaffSelected = {
@@ -366,7 +366,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
-        // 5. Create Booking (Added supportStaffSelected key)
+        // 5. Create Booking (FIXED: Created in 'Searching' state to flow into driver's pending alerts)
         const booking = await Booking.create({
             bookingId: `HK-BOK-${Date.now().toString().slice(-6)}`,
             caseReference: generateCaseRef(serviceType),
@@ -378,8 +378,6 @@ const confirmAmbulanceBooking = async (req, res) => {
             triageLevel: serviceType === 'Accident emergency' ? 'Emergency' : (triageLevel || 'Routine'),
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
             scheduledTime: appointmentTime || null,
-
-            // 👇 New Data Addon
             supportStaffSelected: supportStaffSelected,
 
             patientDetails: {
@@ -405,12 +403,15 @@ const confirmAmbulanceBooking = async (req, res) => {
             isFreeCase: fare.isFree,
             paymentStatus: fare.isFree ? 'Paid' : (paymentId ? 'Paid' : 'Pending'),
             transactionId: paymentId || null,
-            status: 'Confirmed',
+            
+            // FIX: Initially marked 'Searching' so it shows in requests list. Accepted action will mark it 'Confirmed'
+            status: 'Searching', 
+            
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{ 
-                status: 'Confirmed', 
+                status: 'Searching', 
                 timestamp: new Date(),
-                note: `Booking confirmed for ${serviceType}` 
+                note: `Booking request sent, searching for driver.` 
             }]
         });
 
@@ -426,10 +427,9 @@ const confirmAmbulanceBooking = async (req, res) => {
             await coupon.save();
         }
 
-        await Ambulance.findByIdAndUpdate(ambulanceId, { availableForEmergency: false });
+        // FIX: REMOVED pre-emptive driver locking. Let driver accept first, acceptBooking will lock the fleet!
 
-        // RESPONSE: SAME AS ORIGINAL (Frontend requirement met)
-        res.status(201).json({ success: true, message: "Booking Confirmed", booking });
+        res.status(201).json({ success: true, message: "Booking Request Sent Successfully", booking });
 
     } catch (error) { 
         console.error("Booking Error:", error);

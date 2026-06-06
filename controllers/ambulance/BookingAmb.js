@@ -1,5 +1,23 @@
 const Booking = require('../../models/AmbulanceBooking');
 const Ambulance = require('../../models/Ambulance');
+const Appointment = require('../../models/Appointment'); // 👈 FIX 1: Added missing Appointment model import
+const crypto = require('crypto'); // 👈 FIX 2: Added missing crypto module import
+
+const getMyActiveTrip = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+
+        // Strictly fetches any active transit booking for this specific driver
+        const activeTrip = await Booking.findOne({
+            ambulanceId: driverId,
+            status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
+        }).populate('userId', 'name phone profilePic');
+
+        res.json({ success: true, data: activeTrip || null });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
 
 // 1. GET NEW REQUESTS (PAGINATED)
 const getIncomingRequests = async (req, res) => {
@@ -20,25 +38,39 @@ const getIncomingRequests = async (req, res) => {
 // 2. ACCEPT REQUEST (Figma Screen 35)
 const acceptBooking = async (req, res) => {
     try {
-        const { bookingId } = req.params;
+        const { bookingId } = req.params; // e.g., "HK-BOK-404336"
         const ambulanceId = req.user.id;
 
         // Check if driver is already on duty
         const driver = await Ambulance.findById(ambulanceId);
-        if (!driver.availableForEmergency) return res.status(400).json({ message: "You are already on a trip" });
+        if (!driver.availableForEmergency) {
+            return res.status(400).json({ message: "You are already on a trip" });
+        }
 
-        const booking = await Booking.findByIdAndUpdate(bookingId, {
-            ambulanceId: ambulanceId,
-            status: 'Confirmed',
-            $push: { trackingTimeline: { status: 'Driver Assigned', note: `${driver.name} is on the way` } }
-        }, { new: true });
+        // FIX: Replaced findByIdAndUpdate with findOneAndUpdate to search strictly by dynamic bookingId string
+        const booking = await Booking.findOneAndUpdate(
+            { bookingId: bookingId }, 
+            {
+                ambulanceId: ambulanceId,
+                status: 'Confirmed',
+                $push: { trackingTimeline: { status: 'Driver Assigned', note: `${driver.name} is on the way` } }
+            }, 
+            { new: true }
+        );
+
+        if (!booking) {
+            return res.status(404).json({ message: "Booking record not found in system." });
+        }
 
         // Mark driver busy
         driver.availableForEmergency = false;
         await driver.save();
 
         res.json({ success: true, message: "Trip Confirmed", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("Accept booking error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 3. UPDATE TRIP PROGRESS (Figma Screen 37 Timeline)
@@ -158,21 +190,133 @@ const finalizeTripHandoff = async (req, res) => {
 // --- 1. VERIFY OTP (Figma Screen 36) ---
 const verifyPickupOtp = async (req, res) => {
     try {
-        const { id } = req.params;
-        const { otp } = req.body;
+        const { id } = req.params; // Booking ObjectId
+        const { otp } = req.body; // Sent from driver panel
 
         const booking = await Booking.findById(id);
-        if (booking.otp !== otp) return res.status(400).json({ message: "Invalid OTP" });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
+
+        // --- DEVELOPMENT BYPASS CHECK ---
+        const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+        const isStaticOtpMatch = isDev && String(otp).trim() === '1111';
+
+        // Strict validation (Bypassed if development mode and static OTP '1111' is used)
+        if (!isStaticOtpMatch && String(booking.otp).trim() !== String(otp).trim()) {
+            return res.status(400).json({ success: false, message: "Invalid OTP. Please check with patient again." });
+        }
 
         booking.isOtpVerified = true;
         booking.status = 'Picked-Up';
-        booking.trackingTimeline.push({ status: 'Patient pickup confirmed', timestamp: new Date() });
+        
+        // Timeline tracking audit
+        booking.trackingTimeline.push({ 
+            status: 'Patient pickup confirmed', 
+            timestamp: new Date(),
+            note: isStaticOtpMatch ? "OTP verified via development master bypass code." : "OTP successfully verified by driver at pickup spot."
+        });
+        
         await booking.save();
 
-        res.json({ success: true, message: "OTP Verified. Start Navigation." });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, message: "OTP Verified. Start Navigation.", data: booking });
+    } catch (error) { 
+        console.error("OTP verification error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
-module.exports = { getIncomingRequests, acceptBooking, updateTripStatus, uploadIncidentPhoto,
-    finalizeTripHandoff,verifyPickupOtp
+const rejectBooking = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+        const { reason, comments } = req.body; // Figma Radio options: "Busy on another case", "Vehicle issue", etc.
+
+        // Booking remains in 'Searching' state so other nearby drivers can see and accept it
+        const booking = await Booking.findOneAndUpdate(
+            { bookingId },
+            {
+                $set: { cancelledBy: 'Driver', cancellationReason: reason },
+                $push: { 
+                    trackingTimeline: { 
+                        status: 'Rejected by Driver', 
+                        timestamp: new Date(), 
+                        note: `Driver rejected. Reason: ${reason}. Note: ${comments || ''}` 
+                    } 
+                }
+            },
+            { new: true }
+        );
+
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
+
+        // Restore driver's active availability state
+        await Ambulance.findByIdAndUpdate(req.user.id, { $set: { availableForEmergency: true } });
+
+        res.json({ success: true, message: "SOS Booking rejected successfully. Returned back to pool." });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+// --- API: RE-ROUTE TRANSIT AMBULANCE (Figma Screen: Re-Route Dialog) ---
+const reRouteAmbulance = async (req, res) => {
+    try {
+        const { id } = req.params; // Booking ObjectId (_id)
+        const { newHospitalId, reason, notes } = req.body; // Reason options: "Hospital Full", "No ICU Bed", etc.
+
+        const booking = await Booking.findById(id);
+        if (!booking) return res.status(404).json({ success: false, message: "Transit booking not found." });
+
+        const oldHospital = await Hospital.findById(booking.hospitalId);
+        const newHospital = await Hospital.findById(newHospitalId);
+
+        if (!newHospital) return res.status(404).json({ success: false, message: "New target hospital not found." });
+
+        // Update target destination hospital
+        booking.hospitalId = newHospitalId;
+        
+        // Push re-route event to tracking timeline
+        booking.trackingTimeline.push({
+            status: 'Re-Routed',
+            timestamp: new Date(),
+            note: `Re-routed from ${oldHospital ? oldHospital.name : 'Old Hospital'} to ${newHospital.name}. Reason: ${reason}. Note: ${notes || ''}`
+        });
+
+        await booking.save();
+        res.json({ success: true, message: `Transit successfully re-routed to ${newHospital.name}`, data: booking });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+// --- 7. GET DRIVER DASHBOARD COUNTS (NEW API - Figma Screen 1/2) ---
+const getDriverDashboardStats = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+
+        // Parallel counts execution directly from Mongoose collection (Searching SOS states)
+        const [emergencyCount, medicalCount, referralCount] = await Promise.all([
+            Booking.countDocuments({ triageLevel: 'Emergency', status: 'Searching' }),
+            Booking.countDocuments({ serviceType: 'Medical Ambulance', status: 'Searching' }),
+            Booking.countDocuments({ serviceType: 'Referral Ambulance', status: 'Searching' })
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                emergency: emergencyCount,
+                medical: medicalCount,
+                referral: referralCount
+            }
+        });
+    } catch (error) {
+        console.error("Dashboard stats error:", error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+module.exports = {getMyActiveTrip, getIncomingRequests, acceptBooking, updateTripStatus, uploadIncidentPhoto,
+    finalizeTripHandoff,verifyPickupOtp,
+    rejectBooking, reRouteAmbulance,getDriverDashboardStats
  };

@@ -162,17 +162,49 @@ const toggleDoctorActiveStatus = async (req, res) => {
     }
 };
 
-// --- 3. ADMIN: GET DOCTOR APPOINTMENTS ---
+// --- 4. ADMIN: GET APPROVED DOCTORS LIST (Limit: 25) ---
+// Endpoint: GET /admin/doctor/approved-list?page=1
+const adminGetApprovedDoctors = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 25;
+        const skip = (page - 1) * limit;
+
+        const query = { role: 'doctor', profileStatus: 'Approved' };
+
+        const doctors = await Doctor.find(query)
+            .select('name speciality qualification profileImage fees profileStatus isActive')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await Doctor.countDocuments(query);
+
+        res.json({
+            success: true,
+            count: doctors.length,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: doctors
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 5. ADMIN: GET DOCTOR APPOINTMENTS (Filter by doctorId & Limit: 25) ---
+// Endpoint: GET /admin/doctor/appointments?doctorId=ID&page=1
 const adminGetDoctorAppointments = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 20;
+        const limit = 25; // 👈 25 items limit
         const skip = (page - 1) * limit;
-        const { status, userId } = req.query; 
+        const { status, userId, doctorId } = req.query; // 👈 Added doctorId filter
 
         const query = { bookingType: 'Appointment' };        
         if (status) query.status = status; 
         if (userId) query.userId = userId;
+        if (doctorId) query.doctorId = doctorId; // 👈 Filter by specific Doctor
 
         const appointments = await Appointment.find(query)
             .populate('userId', 'name phone email')
@@ -202,5 +234,6 @@ module.exports = {
     getDoctors,
     approveDoctorStatus,
     toggleDoctorActiveStatus,
+    adminGetApprovedDoctors,
     adminGetDoctorAppointments
 };

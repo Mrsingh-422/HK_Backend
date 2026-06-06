@@ -1486,6 +1486,121 @@ const getNonPrescriptionMedicines = async (req, res) => {
     }
 };
 
+const getHighestDiscountMedicines = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        const pipeline = [
+            {
+                // Match only those medicines that have valid MRP values
+                $match: {
+                    mrp: { $exists: true, $ne: null, $ne: "" }
+                }
+            },
+            {
+                // Fetch dynamic lowest vendor price from inventory
+                $lookup: {
+                    from: "medicineinventories",
+                    localField: "_id",
+                    foreignField: "medicineId",
+                    as: "inventory",
+                    pipeline: [
+                        { $match: { is_available: true, stock_quantity: { $gt: 0 } } },
+                        { $sort: { vendor_price: 1 } },
+                        { $limit: 1 }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
+                    numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
+                    numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
+                    isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
+                }
+            },
+            {
+                $addFields: {
+                    // Choose seller price if available, otherwise master price
+                    minimumPrice: {
+                        $cond: [
+                            "$isInventoryAvailable",
+                            "$numInventoryPrice",
+                            "$numDocBestPrice"
+                        ]
+                    },
+                    isAvailable: "$isInventoryAvailable"
+                }
+            },
+            {
+                $addFields: {
+                    // Dynamic discount percentage calculation
+                    discountPercentage: {
+                        $cond: {
+                            if: { $gt: ["$numMRP", 0] },
+                            then: {
+                                $round: [
+                                    {
+                                        $multiply: [
+                                            { $divide: [{ $subtract: ["$numMRP", "$minimumPrice"] }, "$numMRP"] },
+                                            100
+                                        ]
+                                    },
+                                    0
+                                ]
+                            },
+                            else: 0
+                        }
+                    }
+                }
+            },
+            {
+                // Filter out items with 0% discount
+                $match: {
+                    discountPercentage: { $gt: 0 }
+                }
+            },
+            {
+                // Sort by highest discount percentage in decreasing order
+                $sort: {
+                    discountPercentage: -1,
+                    name: 1
+                }
+            },
+            { 
+                $project: { 
+                    inventory: 0, numMRP: 0, numDocBestPrice: 0, numInventoryPrice: 0, isInventoryAvailable: 0 
+                } 
+            },
+            {
+                // Dynamic Facet stage: Calculates total count & paginated records in parallel
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ];
+
+        const result = await Medicine.aggregate(pipeline);
+        
+        // Safety checks to handle empty database states gracefully
+        const total = result[0].metadata[0]?.total || 0;
+        const data = result[0].data || [];
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 /////////////////////////////////////////
 //// ai scan prescription /////////////
@@ -1770,9 +1885,10 @@ const payAndConfirmOrder = async (req, res) => {
     }
 };
 
+
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder,
-getLatestAddedMedicines ,getNonPrescriptionMedicines,
+getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 
 createPrescriptionRequest, payAndConfirmOrder,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices
 };

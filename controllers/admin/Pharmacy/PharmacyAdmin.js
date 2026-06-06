@@ -1,16 +1,49 @@
 const PharmacyBooking = require('../../../models/PharmacyBooking');
+const Pharmacy = require('../../../models/Pharmacy');
 
-// --- 6. ADMIN: GET PHARMACY BOOKINGS ---
+// --- 1. ADMIN: GET APPROVED PHARMACIES LIST (Limit: 25) ---
+// Endpoint: GET /admin/pharmacy/approved-list?page=1
+const adminGetApprovedPharmacies = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 25;
+        const skip = (page - 1) * limit;
+
+        const query = { profileStatus: 'Approved' };
+
+        const pharmacies = await Pharmacy.find(query)
+            .select('name email phone city profileImage profileStatus')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await Pharmacy.countDocuments(query);
+
+        res.json({
+            success: true,
+            count: pharmacies.length,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: pharmacies
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2. ADMIN: GET PHARMACY BOOKINGS (Filter by pharmacyId & Limit: 25) ---
+// Endpoint: GET /admin/pharmacy/bookings?pharmacyId=ID&page=1
 const adminGetPharmacyBookings = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 20;
+        const limit = 25; // 👈 25 items limit
         const skip = (page - 1) * limit;
-        const { status, userId } = req.query;
+        const { status, userId, pharmacyId } = req.query; // 👈 Added pharmacyId
 
         const query = {};
         if (status) query.status = status;
         if (userId) query.userId = userId;
+        if (pharmacyId) query.pharmacyId = pharmacyId; // 👈 Vendor wise filter
         
         const orders = await PharmacyBooking.find(query)
             .populate('userId', 'name phone email')
@@ -32,4 +65,4 @@ const adminGetPharmacyBookings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-module.exports = { adminGetPharmacyBookings };
+module.exports = { adminGetApprovedPharmacies,adminGetPharmacyBookings };

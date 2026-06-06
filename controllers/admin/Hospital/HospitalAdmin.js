@@ -1,6 +1,7 @@
 // controllers/admin/Hospital/HospitalAdmin.js
 const BedRescheduleLimit = require("../../../models/BedRescheduleLimit"); // 👈 Import Global Limit Model
 const Appointment = require("../../../models/Appointment");
+const Hospital = require("../../../models/Hospital");
 
 // 1. UPDATE GLOBAL LIMIT (patch API)
 const updateHospitalRescheduleLimit = async (req, res) => {
@@ -53,15 +54,47 @@ const getHospitalRescheduleLimit = async (req, res) => {
     }
 };
 
-// --- 2. ADMIN: GET HOSPITAL ADMISSION BOOKINGS ---
+// --- 1. ADMIN: GET APPROVED HOSPITALS LIST (Limit: 25) ---
+// Endpoint: GET /admin/hospital/approved-list?page=1
+const adminGetApprovedHospitals = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 25;
+        const skip = (page - 1) * limit;
+
+        const query = { profileStatus: 'Approved' };
+
+        const hospitals = await Hospital.find(query)
+            .select('name address city state hospitalImage type profileStatus')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await Hospital.countDocuments(query);
+
+        res.json({
+            success: true,
+            count: hospitals.length,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: hospitals
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2. ADMIN: GET HOSPITAL ADMISSION BOOKINGS (Filter by hospitalId & Limit: 25) ---
+// Endpoint: GET /admin/hospital/appointments?hospitalId=ID&page=1
 const adminGetHospitalBookings = async (req, res) => {
     try {
-        const { tab, page = 1, status, userId } = req.query;
-        const limit = 20;
+        const { tab, page = 1, status, userId, hospitalId } = req.query; // 👈 Added hospitalId
+        const limit = 25; // 👈 25 items limit
         const skip = (parseInt(page) - 1) * limit;
         
         let query = { bookingType: 'Admission' };
         if (userId) query.userId = userId;
+        if (hospitalId) query.hospitalId = hospitalId; // 👈 Vendor wise filter
 
         if (status) {
             query.status = status;
@@ -110,5 +143,6 @@ const adminGetHospitalBookings = async (req, res) => {
 module.exports = { 
     updateHospitalRescheduleLimit, 
     getHospitalRescheduleLimit ,
+    adminGetApprovedHospitals,
     adminGetHospitalBookings
 };
