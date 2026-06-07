@@ -379,6 +379,8 @@ const confirmAmbulanceBooking = async (req, res) => {
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
             scheduledTime: appointmentTime || null,
             supportStaffSelected: supportStaffSelected,
+            pickupLocation: req.body.pickupLocation ? (typeof req.body.pickupLocation === 'string' ? JSON.parse(req.body.pickupLocation) : req.body.pickupLocation) : { address: address || "", lat: 30.7046, lng: 76.7179 },
+
 
             patientDetails: {
                 ...parsedDetails,

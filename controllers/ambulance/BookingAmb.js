@@ -2,16 +2,19 @@ const Booking = require('../../models/AmbulanceBooking');
 const Ambulance = require('../../models/Ambulance');
 const Appointment = require('../../models/Appointment'); // 👈 FIX 1: Added missing Appointment model import
 const crypto = require('crypto'); // 👈 FIX 2: Added missing crypto module import
+const mongoose = require('mongoose');
 
 const getMyActiveTrip = async (req, res) => {
     try {
         const driverId = req.user.id;
 
-        // Strictly fetches any active transit booking for this specific driver
+        // Strictly fetches any active transit booking for this specific driver with full coordinates
         const activeTrip = await Booking.findOne({
             ambulanceId: driverId,
             status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
-        }).populate('userId', 'name phone profilePic');
+        })
+        .populate('userId', 'name phone profilePic')
+        .populate('hospitalId', 'name address location'); // 👈 Populates Hospital Location Coords
 
         res.json({ success: true, data: activeTrip || null });
     } catch (error) {
@@ -292,26 +295,26 @@ const reRouteAmbulance = async (req, res) => {
 // --- 7. GET DRIVER DASHBOARD COUNTS (NEW API - Figma Screen 1/2) ---
 const getDriverDashboardStats = async (req, res) => {
     try {
-        const driverId = req.user.id;
+        const driverId = req.user.id; // Logged-in Driver ID
 
-        // Parallel counts execution directly from Mongoose collection (Searching SOS states)
-        const [emergencyCount, medicalCount, referralCount] = await Promise.all([
-            Booking.countDocuments({ triageLevel: 'Emergency', status: 'Searching' }),
-            Booking.countDocuments({ serviceType: 'Medical Ambulance', status: 'Searching' }),
-            Booking.countDocuments({ serviceType: 'Referral Ambulance', status: 'Searching' })
+        // FIX: MongoDB aggregate strictly requires explicit ObjectId wrapping to match records
+        const stats = await Booking.aggregate([
+            { $match: { ambulanceId: new mongoose.Types.ObjectId(driverId) } },
+            { $group: {
+                _id: null,
+                emergency: { $sum: { $cond: [{ $in: ["$serviceType", ["Accident emergency", "Quick Response"]] }, 1, 0] } },
+                medical: { $sum: { $cond: [{ $eq: ["$serviceType", "Medical Ambulance"] }, 1, 0] } },
+                referral: { $sum: { $cond: [{ $eq: ["$serviceType", "Referral Ambulance"] }, 1, 0] } }
+            }}
         ]);
 
         res.json({
             success: true,
-            data: {
-                emergency: emergencyCount,
-                medical: medicalCount,
-                referral: referralCount
-            }
+            data: stats[0] || { emergency: 0, medical: 0, referral: 0 }
         });
     } catch (error) {
-        console.error("Dashboard stats error:", error);
-        res.status(500).json({ message: error.message });
+        console.error("Driver Stats Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

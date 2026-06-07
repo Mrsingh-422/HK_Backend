@@ -14,6 +14,11 @@ const ambulanceBookingSchema = new mongoose.Schema({
         required: true 
     },
     incidentType: { type: String }, // Road Accident, Trauma, Heart Attack
+     pickupLocation: {
+        address: { type: String, default: "" },
+        lat: { type: Number, default: 0 },
+        lng: { type: Number, default: 0 }
+    },
 
 
     // Screen 41: Triage Facility

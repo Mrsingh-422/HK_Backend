@@ -8,6 +8,11 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght=300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet Map CSS CDN -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <style>
         :root { --brand: #00B377; --brand-light: #E6F7F1; --brand-dark: #008f6d; --amber-brand: #F59E0B; }
         body { background-color: #0F172A; font-family: 'Plus Jakarta Sans', sans-serif; color: #F8FAFB; }
@@ -18,12 +23,13 @@
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .modal-backdrop { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(4px); }
         .timeline-badge::before { content: ''; position: absolute; left: -6px; top: 8px; width: 10px; height: 10px; border-radius: 50px; background: var(--brand); border: 2px solid #1E293B; }
+        #leaflet-map { border-radius: 24px; border: 2px solid #334155; }
     </style>
 </head>
-<body class="bg-slate-900 p-8 min-h-screen flex justify-center items-center">
+<body class="p-8">
 
-    <!-- SCREEN 1: LOGIN PORTAL -->
-    <div id="screen-login" class="w-[450px] bg-slate-800 border border-slate-700 rounded-[35px] p-10 space-y-6 shadow-2xl">
+    <!-- WEBSITE LOGIN SCREEN -->
+    <div id="screen-login" class="w-[450px] bg-slate-800 border border-slate-700 rounded-[35px] p-10 space-y-6 shadow-2xl mx-auto my-24">
         <div class="text-center space-y-2">
             <div class="w-14 h-14 bg-amber-500 rounded-2xl flex items-center justify-center mx-auto text-slate-950 shadow-lg">
                 <i data-lucide="ambulance" class="w-8 h-8"></i>
@@ -45,10 +51,10 @@
         </form>
     </div>
 
-    <!-- SCREEN 2: ACTIVE CONTROL DASHBOARD -->
-    <div id="screen-dashboard" class="hidden w-full max-w-7xl mx-auto space-y-8 animate-fadeIn">
+    <!-- WEBSITE DASHBOARD PANEL CONTAINER -->
+    <div class="max-w-7xl mx-auto space-y-8 hidden" id="main-panel-container">
         
-        <!-- DASHBOARD HEADER -->
+        <!-- WEBSITE DESKTOP HEADER -->
         <header class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-slate-800 pb-6">
             <div class="flex items-center gap-4">
                 <div class="w-12 h-12 bg-green-500 rounded-2xl flex items-center justify-center text-slate-950 shadow-lg">
@@ -72,32 +78,32 @@
 
         <!-- DASHBOARD COUNTER CARDS -->
         <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-            <div class="figma-card p-6 border-l-8 border-red-500 flex justify-between items-center">
+            <div class="figma-card p-6 border-l-8 border-red-500 flex justify-between items-center shadow-lg">
                 <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Triage Level: Emergency</p><h2 class="text-3xl font-black text-red-500 mt-1" id="stat-emg">0</h2></div>
                 <i data-lucide="alert-triangle" class="text-red-500 w-8 h-8 opacity-65"></i>
             </div>
-            <div class="figma-card p-6 border-l-8 border-blue-500 flex justify-between items-center">
+            <div class="figma-card p-6 border-l-8 border-blue-500 flex justify-between items-center shadow-lg">
                 <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Medical Bookings</p><h2 class="text-3xl font-black text-blue-500 mt-1" id="stat-med">0</h2></div>
                 <i data-lucide="shield-alert" class="text-blue-500 w-8 h-8 opacity-65"></i>
             </div>
-            <div class="figma-card p-6 border-l-8 border-amber-500 flex justify-between items-center">
+            <div class="figma-card p-6 border-l-8 border-amber-500 flex justify-between items-center shadow-lg">
                 <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Referral Cases</p><h2 class="text-4xl font-black text-amber-500 mt-1" id="stat-ref">0</h2></div>
                 <i data-lucide="git-pull-request" class="text-amber-500 w-8 h-8 opacity-65"></i>
             </div>
-            <div class="figma-card p-6 border-l-8 border-green-500 flex justify-between items-center">
+            <div class="figma-card p-6 border-l-8 border-green-500 flex justify-between items-center shadow-lg">
                 <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Fleet Identity</p><h3 class="text-sm font-black text-green-500 mt-2" id="role-badge">Role: ambulance</h3></div>
                 <i data-lucide="user-check" class="text-green-500 w-8 h-8 opacity-65"></i>
             </div>
         </div>
 
-        <!-- WORKSPACE LAYOUT -->
+        <!-- MAIN LAYOUT WORKSPACE -->
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             
-            <!-- LEFT WORKSPACE: ACTIVE PATIENT QUEUE & TRANSIT CONSOLE -->
+            <!-- LEFT WORKSPACE: INCOMING EMERGENCY SOS ALERTS & TRANSIT CONSOLE -->
             <div class="lg:col-span-7 space-y-6">
                 
                 <!-- Active Trip Console -->
-                <div class="figma-card p-6 border-t-8 border-amber-500 space-y-5 hidden" id="active-trip-console">
+                <div class="figma-card p-6 border-t-8 border-amber-500 space-y-5 hidden shadow-lg" id="active-trip-console">
                     <div class="flex justify-between items-start border-b border-slate-700/60 pb-4">
                         <div>
                             <span class="bg-amber-500/10 text-amber-500 text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded" id="ui-nav-milestone">Active Transit</span>
@@ -117,7 +123,7 @@
                         
                         <div class="grid grid-cols-1 gap-2">
                             <!-- Step 1: Arrive -->
-                            <button id="step-arrive-btn" onclick="executeMilestoneUpdate('Arrived', 'Ambulance arrived at pickup spot')" class="btn-brand bg-slate-900 border border-slate-700 hover:border-amber-500 text-slate-300 py-3.5 px-4 rounded-xl text-xs font-black uppercase text-left flex justify-between items-center transition">
+                            <button id="step-arrive-btn" onclick="executeMilestoneUpdate('Arrived', 'Ambulance arrived at pickup spot')" class="bg-slate-900 border border-slate-700 hover:border-amber-500 text-slate-300 py-3.5 px-4 rounded-xl text-xs font-black uppercase text-left flex justify-between items-center transition hidden">
                                 <span>1. Mark Arrived at Pickup</span>
                                 <i data-lucide="map-pin" class="w-4 h-4 text-slate-500"></i>
                             </button>
@@ -138,7 +144,7 @@
                             </button>
 
                             <!-- Step 4: Finalize Handoff -->
-                            <button id="step-handoff-btn" onclick="openHandoffModal()" class="bg-green-500/10 hover:bg-green-500/20 text-green-400 py-3.5 px-4 rounded-xl text-xs font-black uppercase text-left flex justify-between items-center transition hidden">
+                            <button id="step-handoff-btn" onclick="openHandoffModal()" class="btn-brand bg-green-500/10 hover:bg-green-500/20 text-green-400 py-3.5 px-4 rounded-xl text-xs font-black uppercase text-left flex justify-between items-center transition hidden">
                                 <span>4. Reach Hospital & Handover</span>
                                 <i data-lucide="check-square" class="w-4 h-4 text-green-500"></i>
                             </button>
@@ -150,19 +156,23 @@
                 <div class="figma-card p-6 space-y-4">
                     <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="bell" class="text-amber-500 animate-bounce"></i> Real-time Emergency Alerts</h3>
                     <div id="incoming-requests-list" class="space-y-3 max-h-[350px] overflow-y-auto no-scrollbar">
-                        <p class="text-xs text-slate-500">Searching for incoming SOS signals...</p>
+                        <p class="text-xs text-slate-400 text-center py-8">Searching for SOS signals...</p>
                     </div>
                 </div>
 
             </div>
 
-            <!-- RIGHT WORKSPACE: DYNAMIC GPS SIMULATOR & COORDINATES -->
+            <!-- RIGHT WORKSPACE: DYNAMIC GPS SIMULATOR & REAL MAP (WITH LIVE TELEMETRY PATHWAY) -->
             <div class="lg:col-span-5 space-y-6">
                 
+                <!-- REAL-TIME INTERACTIVE MAP -->
+                <div class="figma-card overflow-hidden">
+                    <div id="leaflet-map" class="w-full h-[300px] z-10"></div>
+                </div>
+
+                <!-- GPS Controller -->
                 <div class="figma-card p-8 space-y-6">
                     <h3 class="font-black text-slate-100 text-lg flex items-center gap-2 border-b border-slate-700 pb-4"><i data-lucide="globe" class="text-amber-500"></i> GPS Live Location Simulator</h3>
-                    <p class="text-xs text-slate-400 font-medium">Use this panel to simulate real-time driving coordinates. System & user tracking maps will automatically update with these values.</p>
-                    
                     <div class="grid grid-cols-2 gap-4">
                         <div class="space-y-1">
                             <label class="text-[9px] font-black text-slate-500 uppercase">Latitude</label>
@@ -180,6 +190,17 @@
                     </div>
                 </div>
 
+                <!-- Event logs console -->
+                <div class="figma-card p-6 bg-slate-950 border-slate-800 space-y-3">
+                    <div class="flex justify-between items-center border-b border-slate-800 pb-2">
+                        <h4 class="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><i data-lucide="terminal" class="text-green-400"></i> Event Debug Terminal</h4>
+                        <button onclick="clearTerminalLogs()" class="text-[9px] font-black uppercase text-slate-500 hover:text-white">Clear</button>
+                    </div>
+                    <div id="debug-log-console" class="terminal-log h-[120px] overflow-y-auto space-y-1 text-green-400 no-scrollbar">
+                        <p class="text-slate-500">[System] Awaiting workspace sync...</p>
+                    </div>
+                </div>
+
             </div>
 
         </div>
@@ -188,7 +209,7 @@
 
     <!-- MODAL: RE-ROUTE TRIP -->
     <div id="reroute-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
-        <div class="bg-slate-800 w-[450px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white">
+        <div class="bg-slate-800 w-[450px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white shadow-2xl">
             <button onclick="closeModal('reroute-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
             <div class="text-center space-y-2">
                 <i data-lucide="git-pull-request" class="text-red-500 w-12 h-12 mx-auto"></i>
@@ -214,7 +235,7 @@
 
     <!-- MODAL: HOSPITAL HANDOFF FORM -->
     <div id="handoff-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
-        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white">
+        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white shadow-2xl">
             <button onclick="closeModal('handoff-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
             <div>
                 <h3 class="text-2xl font-black text-white tracking-tight">Hospital Handoff Summary</h3>
@@ -249,7 +270,7 @@
 
     <!-- MODAL: REJECT TRIP REASON DIALOG -->
     <div id="reject-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
-        <div class="bg-slate-800 w-[450px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white">
+        <div class="bg-slate-800 w-[450px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white shadow-2xl">
             <button onclick="closeRejectModal()" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
             <div class="text-center space-y-2">
                 <i data-lucide="alert-triangle" class="text-red-500 w-12 h-12 mx-auto animate-bounce"></i>
@@ -272,7 +293,7 @@
 
     <!-- MODAL: DYNAMIC RECEIPT SUMMARY -->
     <div id="receipt-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
-        <div class="bg-slate-800 w-[450px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white text-center">
+        <div class="bg-slate-800 w-[450px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white text-center shadow-2xl">
             <div class="w-14 h-14 bg-green-500 rounded-full flex items-center justify-center mx-auto text-slate-950 shadow-lg">
                 <i data-lucide="check" class="w-8 h-8"></i>
             </div>
@@ -292,7 +313,7 @@
                 </div>
             </div>
 
-            <button onclick="finalizeAndReload()" class="btn-brand w-full py-4 text-xs font-black">Close & Return to Home</button>
+            <button onclick="finalizeAndReload()" class="btn-brand w-full py-4 text-xs font-black bg-green-500 hover:bg-green-600 text-slate-950">Close & Return to Home</button>
         </div>
     </div>
 
@@ -302,38 +323,144 @@
         const API_ROOT_BOOKING = "http://localhost:5002/ambulance/booking";
         const API_ROOT_HOSPITAL = "http://localhost:5002/hospital/panel";
         
-        // Dynamic fetch API wrapper helper to handle 401 redirect to login instantly
-        async function apiFetch(url, options = {}) {
-            const config = {
-                ...options,
-                headers: {
-                    "Authorization": `Bearer ${localStorage.getItem('driver_token')}`,
-                    "Content-Type": "application/json",
-                    ...(options.headers || {})
-                }
-            };
+        const getHeaders = () => ({
+            "Authorization": `Bearer ${localStorage.getItem('driver_token')}`,
+            "Content-Type": "application/json"
+        });
+
+        let CURRENT_ACTIVE_BOOKING = null;
+        let TARGET_REJECT_BOOKING_ID = null;
+        let DRIVER_AVAILABLE = true;
+
+        // Leaflet Global Map, Marker & Path Polyline States
+        let mapInstance = null;
+        let activeDriverMarker = null;
+        let pickupMarker = null;
+        let hospitalMarker = null;
+        let telemetryRouteLine = null; // Polyline layer
+
+        const safeSetUI = (id, value, property = 'innerText') => {
+            const el = document.getElementById(id);
+            if (el) el[property] = value;
+        };
+
+        function navigateToModal(id) { document.getElementById(id).classList.remove('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+        function openReRouteModal() {
+            navigateToModal('reroute-modal');
+            fetchReRouteHospitals();
+        }
+
+        function openHandoffModal() { navigateToModal('handoff-modal'); }
+        
+        function navigateToModal(id) { document.getElementById(id).classList.remove('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+        function openRejectModal(bookingId) {
+            TARGET_REJECT_BOOKING_ID = bookingId;
+            navigateToModal('reject-modal');
+        }
+        function closeRejectModal() {
+            closeModal('reject-modal');
+            TARGET_REJECT_BOOKING_ID = null;
+        }
+
+        // --- EVENT LOGGER TERMINAL UTILITY ---
+        function logEvent(text, type = "info") {
+            const consoleEl = document.getElementById('debug-log-console');
+            if(!consoleEl) return;
+            const time = moment().format('HH:mm:ss');
+            let color = "text-green-400";
+            if (type === "error") color = "text-red-400";
+            if (type === "warning") color = "text-amber-500";
             
-            const res = await fetch(url, config);
+            consoleEl.innerHTML += `<p class="${color}">[${time}] ${text}</p>`;
+            consoleEl.scrollTop = consoleEl.scrollHeight; 
+        }
+
+        function clearTerminalLogs() {
+            safeSetUI('debug-log-console', `<p class="text-slate-500">[System] Terminal logs cleared.</p>`, 'innerHTML');
+        }
+
+        // --- INITIALIZE LEAFLET MAP NATIVELY ---
+        function initLeafletMap(lat, lng) {
+            if (mapInstance) return; // Prevent duplicate maps
+
+            logEvent(`Initializing Leaflet interactive map at coordinates: (${lat}, ${lng})`);
+            mapInstance = L.map('leaflet-map').setView([lat, lng], 13);
             
-            // SESSION EXPIRED / UNAUTHORIZED CHECK
-            if (res.status === 401) {
-                console.warn("Session Expired (401). Bouncing back to login portal...");
-                localStorage.removeItem('driver_token');
-                
-                // Toggle Views
-                document.getElementById('screen-dashboard').classList.add('hidden');
-                document.getElementById('screen-dashboard').classList.remove('active');
-                
-                document.getElementById('screen-login').classList.remove('hidden');
-                document.getElementById('screen-login').classList.add('active');
-                
-                // Center body alignment style
-                document.body.className = "bg-slate-900 p-8 min-h-screen flex justify-center items-center";
-                
-                throw new Error("Session expired. Please login again.");
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '© OpenStreetMap'
+            }).addTo(mapInstance);
+
+            // Ambulance icon configuration
+            const ambulanceIcon = L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/512/1048/1048315.png',
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
+            });
+
+            activeDriverMarker = L.marker([lat, lng], { icon: ambulanceIcon }).addTo(mapInstance);
+        }
+
+        // --- DYNAMIC TELEMETRY MAP PLOTTER (Render Driver ➔ Pickup ➔ Hospital) ---
+        function updateLiveTelemetryMap(driverLat, driverLng, pickupLat, pickupLng, hospitalLat, hospitalLng) {
+            if (!mapInstance) return;
+
+            // 1. Clear old temporary markers & lines
+            if (pickupMarker) mapInstance.removeLayer(pickupMarker);
+            if (hospitalMarker) mapInstance.removeLayer(hospitalMarker);
+            if (telemetryRouteLine) mapInstance.removeLayer(telemetryRouteLine);
+
+            // Custom icon indicators
+            const patientIcon = L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/512/2813/2813753.png', // Patient Pin icon
+                iconSize: [36, 36],
+                iconAnchor: [18, 18]
+            });
+
+            const hospitalIcon = L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/512/1048/1048301.png', // Hospital Pin icon
+                iconSize: [36, 36],
+                iconAnchor: [18, 18]
+            });
+
+            // 2. Plot new dynamic markers if valid coordinates are present
+            if(pickupLat && pickupLng) {
+                pickupMarker = L.marker([pickupLat, pickupLng], { icon: patientIcon })
+                    .addTo(mapInstance)
+                    .bindPopup("<b>Passenger Pickup Spot</b>")
+                    .openPopup();
             }
+
+            if(hospitalLat && hospitalLng) {
+                hospitalMarker = L.marker([hospitalLat, hospitalLng], { icon: hospitalIcon })
+                    .addTo(mapInstance)
+                    .bindPopup("<b>Destination Hospital</b>");
+            }
+
+            // 3. Draw colored transit route path line
+            const pathCoordinates = [];
+            pathCoordinates.push([parseFloat(driverLat), parseFloat(driverLng)]);
             
-            return res;
+            if(pickupLat && pickupLng) pathCoordinates.push([parseFloat(pickupLat), parseFloat(pickupLng)]);
+            if(hospitalLat && hospitalLng) pathCoordinates.push([parseFloat(hospitalLat), parseFloat(hospitalLng)]);
+
+            telemetryRouteLine = L.polyline(pathCoordinates, {
+                color: '#F59E0B', // Transit Amber
+                weight: 4,
+                opacity: 0.85,
+                dashArray: '5, 10', // Dotted visual path
+                lineJoin: 'round'
+            }).addTo(mapInstance);
+
+            // 4. Auto-center map bounds to fit all active markers on the screen
+            const bounds = L.latLngBounds(pathCoordinates);
+            mapInstance.fitBounds(bounds, { padding: [50, 50] });
+
+            logEvent("Telemetry map path line refreshed with updated coordinates.");
         }
 
         // --- 1. DYNAMIC AUTHENTICATION FLOW (POST /login) ---
@@ -343,6 +470,7 @@
             const password = document.getElementById('login-password').value;
 
             const payload = identifier.includes('@') ? { email: identifier, password } : { phone: identifier, password };
+            logEvent(`Attempting login for identifier: ${identifier}...`);
 
             try {
                 const res = await fetch(`${API_ROOT_AUTH}/login`, {
@@ -354,27 +482,30 @@
                 
                 if (json.success && json.token) {
                     localStorage.setItem('driver_token', json.token);
+                    logEvent(`Login Success. Token saved securely.`, "info");
                     
-                    document.getElementById('screen-login').classList.remove('active');
                     document.getElementById('screen-login').classList.add('hidden');
-                    document.getElementById('screen-dashboard').classList.remove('hidden');
-                    document.getElementById('screen-dashboard').classList.add('active');
-                    
-                    // Reset normal non-centered padding
-                    document.body.className = "p-8 min-h-screen"; 
+                    document.getElementById('main-panel-container').classList.remove('hidden');
+
+                    safeSetUI('header-driver-name', json.data.name || 'Driver');
+                    safeSetUI('role-badge', `Role: ${json.role || 'ambulance'}`);
+
+                    DRIVER_AVAILABLE = json.data.availableForEmergency;
+                    updateOnlineBadgeUI(DRIVER_AVAILABLE);
 
                     syncDriverWorkspace();
                 } else {
+                    logEvent(`Login Failed: ${json.message || "Invalid credentials"}`, "error");
                     alert(json.message || "Login failed");
                 }
             } catch(error) {
-                console.error(error);
-                alert("Server Connection Error");
+                logEvent(`Auth Server Error: ${error.message}`, "error");
             }
         }
 
         function handleDriverLogout() {
             localStorage.removeItem('driver_token');
+            logEvent("Driver logged out. Session cleared.");
             location.reload();
         }
 
@@ -382,41 +513,45 @@
         window.addEventListener("load", () => {
             const token = localStorage.getItem('driver_token');
             if (token) {
-                document.getElementById('screen-login').classList.remove('active');
                 document.getElementById('screen-login').classList.add('hidden');
-                document.getElementById('screen-dashboard').classList.remove('hidden');
-                document.getElementById('screen-dashboard').classList.add('active');
-                document.body.className = "p-8 min-h-screen"; 
+                document.getElementById('main-panel-container').classList.remove('hidden');
                 syncDriverWorkspace();
-            } else {
-                document.getElementById('screen-login').classList.remove('hidden');
-                document.getElementById('screen-login').classList.add('active');
-                document.getElementById('screen-dashboard').classList.add('hidden');
-                document.body.className = "bg-slate-900 p-8 min-h-screen flex justify-center items-center";
             }
         });
 
-        // Dynamic active-trip checker on startup (FIXED: Handles 401 security redirect)
+        // Dynamic active-trip checker on startup (FIXED: Supports live telemetry rendering on initialization)
         async function syncDriverWorkspace() {
+            logEvent("Initializing fleet console workspace...");
             try {
-                // 1. Fetch Driver Profile First
-                const profileRes = await apiFetch(`${API_ROOT_AUTH}/profile`);
+                // FETCH THE REAL DYNAMIC DRIVER STATS DIRECTLY
+                await fetchDriverStats();
+
+                let driverLat = 30.7046;
+                let driverLng = 76.7179;
+
+                // FETCH DRIVER PROFILE FIRST TO PREVENT CRASH AND POPULATE INFO
+                const profileRes = await fetch(`${API_ROOT_AUTH}/profile`, { headers: getHeaders() });
                 const profileJson = await profileRes.json();
-                
                 if (profileJson.success && profileJson.data) {
                     const driver = profileJson.data;
-                    const nameEl = document.getElementById('header-driver-name');
-                    if (nameEl) nameEl.innerText = driver.driverInfo?.fullName || driver.name || 'Driver';
-
-                    const roleEl = document.getElementById('role-badge');
-                    if (roleEl) roleEl.innerText = `Role: ${driver.role || 'ambulance'}`;
+                    
+                    safeSetUI('header-driver-name', driver.name || 'Driver');
+                    safeSetUI('role-badge', `Role: ${driver.role || 'ambulance'}`);
 
                     DRIVER_AVAILABLE = driver.availableForEmergency;
                     updateOnlineBadgeUI(DRIVER_AVAILABLE);
+
+                    // Map auto-loader
+                    driverLat = driver.location?.lat || 30.7046;
+                    driverLng = driver.location?.lng || 76.7179;
+                    document.getElementById('gps-lat').value = driverLat;
+                    document.getElementById('gps-lng').value = driverLng;
+
+                    initLeafletMap(driverLat, driverLng);
+                    logEvent(`Profile recovered: Dr. ${driver.name}. Duty status: ${DRIVER_AVAILABLE ? 'Online' : 'Offline'}`);
                 }
 
-                // 2. Fetch Active Trip status
-                const res = await apiFetch(`${API_ROOT_BOOKING}/active-trip`);
+                const res = await fetch(`${API_ROOT_BOOKING}/active-trip`, { headers: getHeaders() });
                 const json = await res.json();
                 
                 // Connection status badge update
@@ -429,16 +564,43 @@
                 if (json.success && json.data) {
                     CURRENT_ACTIVE_BOOKING = json.data;
                     document.getElementById('active-trip-console').classList.remove('hidden');
-                    document.getElementById('active-patient-name').innerText = json.data.userId?.name || 'Patient';
-                    document.getElementById('active-booking-id').innerText = json.data.bookingId;
-                    document.getElementById('active-service-type').innerText = json.data.serviceType;
+                    safeSetUI('active-patient-name', json.data.userId?.name || 'Patient');
+                    safeSetUI('active-booking-id', json.data.bookingId);
+                    safeSetUI('active-service-type', json.data.serviceType);
 
                     setupTransitUI(json.data.status);
+                    logEvent(`Recovered active trip session. ID: ${json.data.bookingId}. Status: ${json.data.status}`, "warning");
+                    
+                    // Render multi-points live telemetry map path natively
+                    const pLat = json.data.pickupLocation?.lat || null;
+                    const pLng = json.data.pickupLocation?.lng || null;
+                    const hLat = json.data.hospitalId?.location?.lat || null;
+                    const hLng = json.data.hospitalId?.location?.lng || null;
+
+                    updateLiveTelemetryMap(driverLat, driverLng, pLat, pLng, hLat, hLng);
+
                 } else {
-                    document.getElementById('active-trip-console').classList.add('hidden');
+                    logEvent("No active transit trip found. Launching incoming alert listeners.");
                     loadIncomingSOSAlerts();
                 }
-            } catch(e) { console.error("Workspace sync error:", e); }
+            } catch(e) { 
+                logEvent(`Workspace Sync Error: ${e.message}`, "error"); 
+            }
+        }
+
+        // STANDALONE STATS LOADER
+        async function fetchDriverStats() {
+            try {
+                const statsRes = await fetch(`${API_ROOT_BOOKING}/dashboard-stats`, { headers: getHeaders() });
+                const statsJson = await statsRes.json();
+                if (statsJson.success && statsJson.data) {
+                    safeSetUI('stat-emg', statsJson.data.emergency || 0);
+                    safeSetUI('stat-med', statsJson.data.medical || 0);
+                    safeSetUI('stat-ref', statsJson.data.referral || 0);
+                }
+            } catch(e) {
+                logEvent(`Stats Fetch Error: ${e.message}`, "error");
+            }
         }
 
         function setupTransitUI(tripStatus) {
@@ -447,7 +609,7 @@
             document.getElementById('step-transit-btn').classList.add('hidden');
             document.getElementById('step-handoff-btn').classList.add('hidden');
 
-            document.getElementById('ui-nav-milestone').innerText = tripStatus;
+            safeSetUI('ui-nav-milestone', tripStatus);
 
             if (tripStatus === 'Confirmed') {
                 document.getElementById('step-arrive-btn').classList.remove('hidden');
@@ -462,15 +624,11 @@
 
         // 1. SOS REQUEST ALERTS
         async function loadIncomingSOSAlerts() {
+            logEvent("Listening for incoming SOS signals...");
             try {
-                const res = await apiFetch(`${API_ROOT_BOOKING}/requests`);
+                const res = await fetch(`${API_ROOT_BOOKING}/requests`, { headers: getHeaders() });
                 const json = await res.json();
                 if(json.success && json.data) {
-                    // Update dynamic counts
-                    document.getElementById('stat-emg').innerText = json.data.filter(r => r.triageLevel === 'Emergency').length;
-                    document.getElementById('stat-med').innerText = json.data.filter(r => r.serviceType === 'Medical Ambulance').length;
-                    document.getElementById('stat-ref').innerText = json.data.filter(r => r.serviceType === 'Referral Ambulance').length;
-
                     document.getElementById('incoming-requests-list').innerHTML = json.data.map(req => `
                         <div class="bg-slate-900 p-5 rounded-3xl border border-slate-700 shadow-sm space-y-4">
                             <div class="flex justify-between items-start">
@@ -494,22 +652,39 @@
         }
 
         async function executeAcceptRide(bookingId, patientName, serviceType) {
+            logEvent(`Accepting ride request: ${bookingId}...`);
             try {
-                const res = await apiFetch(`${API_ROOT_BOOKING}/accept/${bookingId}`, {
-                    method: 'PATCH'
+                const res = await fetch(`${API_ROOT_BOOKING}/accept/${bookingId}`, {
+                    method: 'PATCH',
+                    headers: getHeaders()
                 });
                 const json = await res.json();
                 if(json.success) {
-                    alert("SOS request accepted!");
+                    logEvent(`Ride Accepted. Booking locked. Console active.`, "info");
+                    
                     CURRENT_ACTIVE_BOOKING = json.data;
                     document.getElementById('active-trip-console').classList.remove('hidden');
-                    document.getElementById('active-patient-name').innerText = patientName || 'Patient';
-                    document.getElementById('active-booking-id').innerText = bookingId;
-                    document.getElementById('active-service-type').innerText = serviceType;
+                    safeSetUI('active-patient-name', patientName || 'Patient');
+                    safeSetUI('active-booking-id', bookingId);
+                    safeSetUI('active-service-type', serviceType);
 
                     setupTransitUI('Confirmed');
+                    
+                    // Render live mapping telemetry instantly on acceptance
+                    const pLat = json.data.pickupLocation?.lat || null;
+                    const pLng = json.data.pickupLocation?.lng || null;
+                    const hLat = json.data.hospitalId?.location?.lat || null;
+                    const hLng = json.data.hospitalId?.location?.lng || null;
+                    
+                    const dLat = document.getElementById('gps-lat').value;
+                    const dLng = document.getElementById('gps-lng').value;
+
+                    updateLiveTelemetryMap(dLat, dLng, pLat, pLng, hLat, hLng);
                     loadIncomingSOSAlerts();
-                } else { alert(json.message); }
+                } else { 
+                    logEvent(`Decline/Accept Error: ${json.message}`, "error");
+                    alert(json.message); 
+                }
             } catch(e) { console.error(e); }
         }
 
@@ -519,61 +694,56 @@
             const reason = selectedRadio ? selectedRadio.value : "Busy on another case";
             const comments = document.getElementById('reject-comments').value;
 
+            logEvent(`Rejecting trip: ${TARGET_REJECT_BOOKING_ID}. Reason: ${reason}`);
             try {
-                const res = await apiFetch(`${API_ROOT_BOOKING}/reject/${TARGET_REJECT_BOOKING_ID}`, {
+                const res = await fetch(`${API_ROOT_BOOKING}/reject/${TARGET_REJECT_BOOKING_ID}`, {
                     method: 'PATCH',
+                    headers: getHeaders(),
                     body: JSON.stringify({ reason, comments })
                 });
                 const json = await res.json();
                 if(json.success) {
-                    alert("SOS request rejected.");
+                    logEvent("SOS request successfully rejected & returned to network pool.", "warning");
                     closeRejectModal();
                     syncDriverWorkspace();
                 } else { alert(json.message); }
             } catch(e) { console.error(e); }
         }
 
-        // --- DYNAMIC ONLINE/OFFLINE TOGGLER ---
+        // --- 1. DYNAMIC ONLINE/OFFLINE TOGGLER (Hits /status/toggle) ---
         async function executeOnlineToggle() {
             DRIVER_AVAILABLE = !DRIVER_AVAILABLE;
             await toggleOnlineStatus(DRIVER_AVAILABLE);
         }
 
         async function toggleOnlineStatus(available) {
+            logEvent(`Toggling duty status to: ${available ? 'Online' : 'Offline'}...`);
             try {
-                const res = await apiFetch(`${API_ROOT_AUTH}/status/toggle`, {
+                const res = await fetch(`${API_ROOT_AUTH}/status/toggle`, {
                     method: 'PATCH',
+                    headers: getHeaders(),
                     body: JSON.stringify({ available })
                 });
                 const json = await res.json();
                 if(json.success) {
-                    alert(json.message);
+                    logEvent(`Status synchronized: Driver is now ${available ? 'Online' : 'Offline'}`, "info");
                     updateOnlineBadgeUI(available);
                 }
             } catch(e) { console.error(e); }
         }
 
-        // FIX: Removed any leftover classList calls on 'ui-switch-circle' elements to prevent crash!
         function updateOnlineBadgeUI(available) {
             const btn = document.getElementById('online-toggle-btn');
-            if (!btn) return;
-            
-            if (available) {
-                btn.innerText = "Set Offline";
-                btn.className = "px-5 py-3 bg-red-500 hover:bg-red-600 text-white text-xs font-black uppercase rounded-2xl transition";
-                
-                // Update header status badge dynamically
-                const badge = document.getElementById('status-badge');
-                if (badge) {
+            const badge = document.getElementById('status-badge');
+            if (btn && badge) {
+                if (available) {
+                    btn.innerText = "Set Offline";
+                    btn.className = "px-5 py-3 bg-red-500 hover:bg-red-600 text-white text-xs font-black uppercase rounded-2xl transition";
                     badge.className = "bg-green-500/10 text-green-400 border border-green-500/20 px-4 py-2.5 rounded-2xl text-xs font-black uppercase flex items-center gap-2";
                     badge.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span> Online`;
-                }
-            } else {
-                btn.innerText = "Set Online";
-                btn.className = "px-5 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-black uppercase rounded-2xl transition";
-                
-                const badge = document.getElementById('status-badge');
-                if (badge) {
+                } else {
+                    btn.innerText = "Set Online";
+                    btn.className = "px-5 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-black uppercase rounded-2xl transition";
                     badge.className = "bg-red-500/10 text-red-400 border border-red-500/20 px-4 py-2.5 rounded-2xl text-xs font-black uppercase flex items-center gap-2";
                     badge.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span> Offline`;
                 }
@@ -582,41 +752,48 @@
 
         async function executeMilestoneUpdate(nextStatus, noteText) {
             if(!CURRENT_ACTIVE_BOOKING) return;
+            logEvent(`Updating transit milestone: ${nextStatus}...`);
             try {
-                const res = await apiFetch(`${API_ROOT_BOOKING}/update-trip/${CURRENT_ACTIVE_BOOKING._id}`, {
+                const res = await fetch(`${API_ROOT_BOOKING}/update-trip/${CURRENT_ACTIVE_BOOKING._id}`, {
                     method: 'PATCH',
+                    headers: getHeaders(),
                     body: JSON.stringify({ status: nextStatus, note: noteText })
                 });
                 const json = await res.json();
                 if(json.success) {
-                    alert(`Journey milestone: ${nextStatus}`);
+                    logEvent(`Milestone Success: ${nextStatus}`, "info");
                     setupTransitUI(nextStatus);
                 } else { alert(json.message); }
             } catch(e) { console.error(e); }
         }
 
-        // FIXED: String Casting & Sandbox Bypass OTP verification
+        // FIXED: String Casting & Sandbox Bypass OTP verification (Supports static 1111)
         async function executeOtpVerification() {
             const otpInput = document.getElementById('passenger-otp').value;
             if(!otpInput) return alert("Kripya OTP fill karein");
 
+            logEvent(`Verifying Passenger OTP: ${otpInput}...`);
             try {
-                const res = await apiFetch(`${API_ROOT_BOOKING}/verify-otp/${CURRENT_ACTIVE_BOOKING._id}`, {
+                const res = await fetch(`${API_ROOT_BOOKING}/verify-otp/${CURRENT_ACTIVE_BOOKING._id}`, {
                     method: 'PATCH',
+                    headers: getHeaders(),
                     body: JSON.stringify({ otp: otpInput })
                 });
                 const json = await res.json();
                 if(json.success) {
-                    alert("OTP verified! Load Transit Navigation.");
+                    logEvent("OTP Verification Success! Transit screen unlocked.", "info");
                     setupTransitUI('Picked-Up');
-                } else { alert(json.message || "OTP verification failed"); }
+                } else { 
+                    logEvent(`Verification Failed: ${json.message}`, "error");
+                    alert(json.message || "OTP verification failed"); 
+                }
             } catch(e) { console.error(e); }
         }
 
         // FETCH RE-ROUTE HOSPITALS LIST DIRECTLY
         async function fetchReRouteHospitals() {
             try {
-                const res = await apiFetch(`${API_ROOT_HOSPITAL}/get-enums`);
+                const res = await fetch(`${API_ROOT_HOSPITAL}/get-enums`, { headers: getHeaders() });
                 const json = await res.json();
                 const dummyHospitals = [
                     { id: "699d881dfabe095ff8304f52", name: "Radius Hospital, Mohali" },
@@ -631,13 +808,16 @@
             const selectedRadio = document.querySelector('input[name="rr-reason"]:checked');
             const reason = selectedRadio ? selectedRadio.value : "Hospital Full";
 
+            logEvent(`Re-Routing Trip. Target Hospital ID: ${newHospId}. Reason: ${reason}`);
             try {
-                const res = await apiFetch(`${API_ROOT_BOOKING}/re-route/${CURRENT_ACTIVE_BOOKING._id}`, {
+                const res = await fetch(`${API_ROOT_BOOKING}/re-route/${CURRENT_ACTIVE_BOOKING._id}`, {
                     method: 'PATCH',
+                    headers: getHeaders(),
                     body: JSON.stringify({ newHospitalId: newHospId, reason })
                 });
                 const json = await res.json();
                 if(json.success) {
+                    logEvent("Rerouting completed successfully.", "info");
                     alert("Ambulance journey successfully Re-Routed!");
                     closeModal('reroute-modal');
                     syncDriverWorkspace();
@@ -653,18 +833,19 @@
             const reason = document.getElementById('ho-reason').value;
 
             try {
-                const res = await apiFetch(`${API_ROOT_BOOKING}/finalize-handoff/${CURRENT_ACTIVE_BOOKING._id}`, {
+                const res = await fetch(`${API_ROOT_BOOKING}/finalize-handoff/${CURRENT_ACTIVE_BOOKING._id}`, {
                     method: 'PATCH',
+                    headers: getHeaders(),
                     body: JSON.stringify({ doctorName, wardName, duration, reason })
                 });
                 const json = await res.json();
                 if(json.success) {
                     // Populate Final Receipt details beautifully
-                    document.getElementById('receipt-hosp-name').innerText = wardName;
-                    document.getElementById('receipt-total-fare').innerText = `₹${json.data.pricing?.total || 0}`;
-                    document.getElementById('receipt-pt-name').innerText = json.data.patientDetails?.name || 'Sanjay Sharma';
-                    document.getElementById('receipt-ward-name').innerText = wardName;
-                    document.getElementById('receipt-doc-name').innerText = doctorName;
+                    safeSetUI('receipt-hosp-name', wardName);
+                    safeSetUI('receipt-total-fare', `₹${json.data.pricing?.total || 0}`);
+                    safeSetUI('receipt-pt-name', json.data.patientDetails?.name || 'Sanjay Sharma');
+                    safeSetUI('receipt-ward-name', wardName);
+                    safeSetUI('receipt-doc-name', doctorName);
 
                     closeModal('handoff-modal');
                     document.getElementById('handoff-form').reset();
@@ -674,7 +855,7 @@
         }
 
         function finalizeAndReload() {
-            alert("Payment processed! Returned back to Active dashboard.");
+            logEvent("Closing session. Returning back to Dashboard.");
             CURRENT_ACTIVE_BOOKING = null;
             location.reload();
         }
@@ -699,14 +880,32 @@
                 payload.appointmentId = CURRENT_ACTIVE_BOOKING._id;
             }
 
+            logEvent(`Syncing GPS Coordinates: (${lat}, ${lng})...`);
             try {
-                const res = await apiFetch(`${API_ROOT_DRIVER}/update-location`, {
+                const res = await fetch(`${API_ROOT_DRIVER}/update-location`, {
                     method: 'PATCH',
+                    headers: getHeaders(),
                     body: JSON.stringify(payload)
                 });
                 const json = await res.json();
                 if(json.success) {
-                    console.log("GPS Location Sync Success!");
+                    logEvent("GPS synced successfully with servers.", "info");
+                    
+                    // Update dynamic marker position on Leaflet Map
+                    if (activeDriverMarker && mapInstance) {
+                        activeDriverMarker.setLatLng([parseFloat(lat), parseFloat(lng)]);
+                        
+                        // If trip is active, redraw the path line dynamically to update simulated driving progress
+                        if(CURRENT_ACTIVE_BOOKING) {
+                            const pLat = CURRENT_ACTIVE_BOOKING.pickupLocation?.lat || null;
+                            const pLng = CURRENT_ACTIVE_BOOKING.pickupLocation?.lng || null;
+                            const hLat = CURRENT_ACTIVE_BOOKING.hospitalId?.location?.lat || null;
+                            const hLng = CURRENT_ACTIVE_BOOKING.hospitalId?.location?.lng || null;
+                            updateLiveTelemetryMap(lat, lng, pLat, pLng, hLat, hLng);
+                        } else {
+                            mapInstance.panTo([parseFloat(lat), parseFloat(lng)]);
+                        }
+                    }
                 }
             } catch(e) { console.error(e); }
         }
