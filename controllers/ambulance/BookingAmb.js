@@ -108,15 +108,25 @@ const updateTripStatus = async (req, res) => {
 // 4. CAPTURE INCIDENT PHOTO (Figma Screen 33)
 const uploadIncidentPhoto = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "No photo uploaded" });
+        const files = req.files || {};
+        
+        // FIX: Replaced req.file with req.files structure as ambulanceDocUploads is a fields uploader
+        const photoPath = files.incidentPhoto ? `/uploads/ambulances/${files.incidentPhoto[0].filename}` : null;
+
+        if (!photoPath) {
+            return res.status(400).json({ success: false, message: "No photo uploaded or wrong field name" });
+        }
         
         const booking = await Booking.findByIdAndUpdate(req.params.id, {
-            'patientDetails.incidentPhoto': `/uploads/incidents/${req.file.filename}`
+            $set: { 'patientDetails.incidentPhoto': photoPath }
         }, { new: true });
 
-        res.json({ success: true, message: "Photo uploaded", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, message: "Incident photo uploaded successfully", data: booking });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 // 5. FINALIZE TRIP HANDOFF & AUTO-REGISTER HOSPITAL EMERGENCY ADMISSION
 const finalizeTripHandoff = async (req, res) => {
@@ -318,8 +328,45 @@ const getDriverDashboardStats = async (req, res) => {
     }
 };
 
+// --- 7. GET DRIVER COMPLETE TRIPS HISTORY (NEW API) ---
+const getDriverTripHistory = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 10;
+
+        const history = await Booking.find({
+            ambulanceId: driverId,
+            status: { $in: ['Delivered', 'Cancelled'] } // Strictly completed/cancelled trips
+        })
+        .populate('userId', 'name phone profilePic')
+        .populate('hospitalId', 'name address')
+        .sort({ updatedAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit);
+
+        const total = await Booking.countDocuments({
+            ambulanceId: driverId,
+            status: { $in: ['Delivered', 'Cancelled'] }
+        });
+
+        res.json({
+            success: true,
+            totalRecords: total,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            count: history.length,
+            data: history
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
 
 module.exports = {getMyActiveTrip, getIncomingRequests, acceptBooking, updateTripStatus, uploadIncidentPhoto,
     finalizeTripHandoff,verifyPickupOtp,
-    rejectBooking, reRouteAmbulance,getDriverDashboardStats
+    rejectBooking, reRouteAmbulance,getDriverDashboardStats,
+    getDriverTripHistory
  };

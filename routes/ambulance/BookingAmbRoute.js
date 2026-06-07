@@ -19,7 +19,9 @@ router.patch('/reject/:bookingId', protect(['ambulance', 'hospital-ambulance']),
 
 // FIX: Replaced 'patch' with 'router.patch' to prevent router crash
 router.patch('/re-route/:id', protect(['ambulance', 'hospital-ambulance']), controller.reRouteAmbulance); 
-router.get('/dashboard-stats', protect(['ambulance', 'hospital-ambulance']), controller.getDriverDashboardStats); // 👈 ADD THIS ROUTE
+router.get('/dashboard-stats', protect(['ambulance', 'hospital-ambulance']), controller.getDriverDashboardStats); 
+
+router.get('/history', protect(['ambulance', 'hospital-ambulance']), controller.getDriverTripHistory); 
 
 
 module.exports = router;
