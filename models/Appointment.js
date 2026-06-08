@@ -116,6 +116,27 @@ const appointmentSchema = new mongoose.Schema({
         bloodGroup: { type: String, default: "" }
     },
 
+    // --- NEW: DYNAMIC BEDSIDE CARE TEAM CO-DOCTORS ARRAY ---
+    bedsideCareTeam: [{
+        doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', required: true },
+        status: { type: String, enum: ['Pending', 'Accepted', 'Rejected'], default: 'Pending' },
+        requestReason: { type: String, default: "" },
+        patientConditionAtRequest: { type: String, default: "" },
+        priority: { type: String, enum: ['Most Urgent', 'Urgent', 'Routine'], default: 'Routine' },
+        rejectionReason: { type: String, default: "" },
+        
+        // Co-Doctor Clinical feedback notes
+        specialistFeedback: {
+            observation: { type: String, default: "" },
+            patientCondition: { type: String, default: "" },
+            priorityRating: { type: String, default: "" },
+            submittedAt: { type: Date, default: null }
+        },
+        requestedAt: { type: Date, default: Date.now },
+        respondedAt: { type: Date, default: null }
+    }]
+
+
 }, { timestamps: true });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);

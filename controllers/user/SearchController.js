@@ -12,7 +12,7 @@ const ChatSession = require('../../models/ChatSession');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // --- GROQ SDK IMPORT ---
-const Groq = require('groq-sdk'); // 👈 Import Groq SDK
+const Groq = require('groq-sdk');
 
 // --- OTHER LOGISTICS & TRANSACTION MODELS ---
 const AmbulanceBooking = require('../../models/AmbulanceBooking');
@@ -25,13 +25,13 @@ const Ward = require('../../models/Ward');
 const Bed = require('../../models/Bed');
 const Review = require('../../models/Review');
 
-// --- HELPER FUNCTION: CONTEXT INJECTOR ENGINE (With Deep Transaction Sync) ---
+// --- HELPER FUNCTION: CONTEXT INJECTOR ENGINE (Token & Cost Highly Optimized) ---
 const getLocalDatabaseContext = async (message, userId) => {
     const text = message.toLowerCase();
     let context = "";
 
-    // dynamic keywords extract karein search query ke liye
-    const words = text.split(/\s+/).filter(w => w.length > 2 && !['list', 'show', 'find', 'search', 'give', 'some', 'any', 'the', 'for', 'with', 'please', 'hospital', 'doctor', 'medicine', 'lab', 'test', 'ambulance', 'nurse', 'of', 'in', 'near', 'price', 'rate', 'cost', 'track', 'my', 'status', 'ward', 'bed'].includes(w));
+    // Dynamic keyword extraction (Short stop-words list)
+    const words = text.split(/\s+/).filter(w => w.length > 2 && !['list', 'show', 'find', 'search', 'give', 'some', 'any', 'the', 'for', 'with', 'please', 'hospital', 'doctor', 'medicine', 'lab', 'test', 'ambulance', 'nurse', 'of', 'in', 'near', 'price', 'rate', 'cost', 'track', 'my', 'status', 'ward', 'bed', 'review', 'rating', 'star', 'feedback', 'comment'].includes(w));
     const searchRegex = words.length > 0 ? new RegExp(words.join('|'), 'i') : new RegExp(text, 'i');
 
     const citiesList = ['mohali', 'chandigarh', 'delhi', 'noida', 'mumbai', 'panchkula', 'gurugram'];
@@ -43,209 +43,162 @@ const getLocalDatabaseContext = async (message, userId) => {
         }
     }
 
-    // FLOW A: USER'S OWN PERSONAL TRANSACTION TRACKING (Appointments & Bookings)
+    // =========================================================================
+    // OPTIMIZATION: STRICT SINGLE-INTENT ROUTING (Prevents multiple category token bloat)
+    // =========================================================================
+    
+    // 1. User Bookings & Orders check
     if (text.includes('my') || text.includes('track') || text.includes('order') || text.includes('booking') || text.includes('appointment') || text.includes('status')) {
-        context += `\n[DATABASE CONTEXT - USER ACTIVE BOOKINGS & HISTORY]:\n`;
-
-        const [appointments, labBookings, ambulanceBookings, nurseBookings] = await Promise.all([
-            Appointment.find({ userId })
-                .populate('doctorId', 'name speciality')
-                .populate('hospitalId', 'name')
-                .sort({ createdAt: -1 }).limit(3).lean(),
-            LabBooking.find({ userId })
-                .populate('labId', 'name')
-                .sort({ createdAt: -1 }).limit(3).lean(),
-            AmbulanceBooking.find({ userId })
-                .populate('ambulanceId', 'name vehicleNumber')
-                .populate('hospitalId', 'name')
-                .sort({ createdAt: -1 }).limit(3).lean(),
-            NurseBooking.find({ userId })
-                .populate('nurseId', 'name')
-                .sort({ createdAt: -1 }).limit(3).lean()
+        context += `\n[DB_USER_BOOKINGS]:\n`;
+        // Limit search strictly to 1 latest document per category to save massive token payload
+        const [appointment, lab, ambulance, nurse] = await Promise.all([
+            Appointment.findOne({ userId }).populate('doctorId', 'name').sort({ createdAt: -1 }).lean(),
+            LabBooking.findOne({ userId }).populate('labId', 'name').sort({ createdAt: -1 }).lean(),
+            AmbulanceBooking.findOne({ userId }).populate('ambulanceId', 'name').sort({ createdAt: -1 }).lean(),
+            NurseBooking.findOne({ userId }).populate('nurseId', 'name').sort({ createdAt: -1 }).lean()
         ]);
 
         let hasBookings = false;
-
-        if (appointments.length > 0) {
+        if (appointment) {
             hasBookings = true;
-            context += `* **Doctor Appointments / Admissions:**\n` + 
-                appointments.map(a => `  - ID: ${a.bookingId || 'N/A'}, Type: ${a.bookingType}, Status: **${a.status}**, Provider: ${a.doctorId?.name || a.hospitalId?.name || 'Clinic'}, Date: ${a.appointmentDate ? new Date(a.appointmentDate).toDateString() : 'N/A'}, Total: ₹${a.totalAmount || 0}`).join('\n') + "\n";
+            context += `- Appt: ID ${appointment.bookingId || 'N/A'}, Status: ${appointment.status}, Dr: ${appointment.doctorId?.name || 'Clinic'}\n`;
         }
-        if (labBookings.length > 0) {
+        if (lab) {
             hasBookings = true;
-            context += `* **Lab Diagnostics Bookings:**\n` + 
-                labBookings.map(l => `  - ID: ${l.bookingId}, Status: **${l.status}**, Lab: ${l.labId?.name}, Total Amount: ₹${l.billSummary?.totalAmount || 0}`).join('\n') + "\n";
+            context += `- Lab: ID ${lab.bookingId}, Status: ${lab.status}, Lab: ${lab.labId?.name}\n`;
         }
-        if (ambulanceBookings.length > 0) {
+        if (ambulance) {
             hasBookings = true;
-            context += `* **Ambulance Bookings:**\n` + 
-                ambulanceBookings.map(ab => `  - ID: ${ab.bookingId}, Service: ${ab.serviceType}, Status: **${ab.status}**, Vehicle No: ${ab.ambulanceId?.vehicleNumber || 'Searching'}, Total Fee: ₹${ab.pricing?.total || 0}`).join('\n') + "\n";
+            context += `- Amb: ID ${ambulance.bookingId}, Status: ${ambulance.status}\n`;
         }
-        if (nurseBookings.length > 0) {
+        if (nurse) {
             hasBookings = true;
-            context += `* **Nurse Care Bookings:**\n` + 
-                nurseBookings.map(nb => `  - ID: ${nb.bookingId || 'N/A'}, Service: ${nb.serviceDetails?.title || 'Home Nurse'}, Status: **${nb.status}**, Nurse Provider: ${nb.nurseId?.name}, Price: ₹${nb.totalPrice || 0}`).join('\n') + "\n";
+            context += `- Nurse: ID ${nurse.bookingId || 'N/A'}, Status: ${nurse.status}, Nurse: ${nurse.nurseId?.name}\n`;
         }
-
         if (!hasBookings) {
-            context += `  - You do not have any active bookings or order history registered under your account.\n`;
+            context += `- No bookings found in history.\n`;
         }
     }
+    // 2. Reviews & Ratings
+    else if (text.includes('review') || text.includes('rating') || text.includes('star') || text.includes('feedback') || text.includes('comment')) {
+        context += `\n[DB_REVIEWS]:\n`;
+        const [targetDoc, targetHosp] = await Promise.all([
+            Doctor.findOne({ isActive: true, profileStatus: 'Approved', name: searchRegex }).select('_id name').lean(),
+            Hospital.findOne({ isActive: true, profileStatus: 'Approved', name: searchRegex }).select('_id name').lean()
+        ]);
 
-    // FLOW B: VENDOR-WISE MEDICINE PRICING & STOCK CHECK (e.g. Dolo in Mohali)
-    if (text.includes('medicine') || text.includes('pharmacy') || text.includes('price') || text.includes('rate') || text.includes('stock') || text.includes('dolo') || text.includes('tablet') || text.includes('syrup')) {
-        context += `\n[DATABASE CONTEXT - MEDICINES & VENDOR PRICES]:\n`;
+        const targetId = targetDoc?._id || targetHosp?._id;
+        const targetType = targetDoc ? 'Doctor' : (targetHosp ? 'Hospital' : null);
+        const targetName = targetDoc ? targetDoc.name : (targetHosp ? targetHosp.name : "");
 
-        const medMatches = await Medicine.find({
-            $or: [
-                { name: searchRegex },
-                { salt_composition: searchRegex }
-            ]
-        }).select('_id name packaging mrp').limit(5).lean();
-
-        if (medMatches.length > 0) {
-            const medIds = medMatches.map(m => m._id);
-            const pharmacyQuery = { profileStatus: 'Approved', isActive: true };
-            if (targetLocation) {
-                pharmacyQuery.city = new RegExp(targetLocation, 'i');
+        if (targetId) {
+            const reviews = await Review.find({ targetId, targetType }).select('userName rating comment').sort({ createdAt: -1 }).limit(2).lean();
+            if (reviews.length > 0) {
+                context += `Reviews for ${targetName}:\n` + 
+                    reviews.map(r => `- ${r.rating}/5 by ${r.userName || 'User'}: "${r.comment || 'No comment'}"`).join('\n') + "\n";
+            } else {
+                context += `- No reviews found.\n`;
             }
-
-            const pharmacies = await Pharmacy.find(pharmacyQuery).select('_id name city address').limit(5).lean();
+        }
+    }
+    // 3. Pharmacy Medicines & Pricing
+    else if (text.includes('medicine') || text.includes('pharmacy') || text.includes('price') || text.includes('rate') || text.includes('stock') || text.includes('dolo') || text.includes('tablet') || text.includes('syrup')) {
+        context += `\n[DB_MEDICINES]:\n`;
+        const meds = await Medicine.find({ $or: [{ name: searchRegex }, { salt_composition: searchRegex }] }).select('_id name packaging').limit(2).lean();
+        
+        if (meds.length > 0) {
+            const medIds = meds.map(m => m._id);
+            const pharmQuery = { profileStatus: 'Approved', isActive: true };
+            if (targetLocation) pharmQuery.city = new RegExp(targetLocation, 'i');
+            
+            const pharmacies = await Pharmacy.find(pharmQuery).select('_id name city').limit(2).lean();
 
             if (pharmacies.length > 0) {
                 const pharmacyIds = pharmacies.map(p => p._id);
-
                 const inventories = await MedicineInventory.find({
                     medicineId: { $in: medIds },
                     pharmacyId: { $in: pharmacyIds },
                     is_available: true,
                     stock_quantity: { $gt: 0 }
-                }).populate('pharmacyId', 'name city address').populate('medicineId', 'name packaging mrp').lean();
+                }).populate('pharmacyId', 'name city').populate('medicineId', 'name').limit(2).lean();
 
                 if (inventories.length > 0) {
-                    context += inventories.map(inv => `* **${inv.medicineId?.name}** (${inv.medicineId?.packaging || 'Tablet'})
-  - Pharmacy Vendor: **${inv.pharmacyId?.name}** (${inv.pharmacyId?.city})
-  - Vendor Selling Price: **₹${inv.vendor_price}** (MRP: ₹${inv.medicineId?.mrp || 'N/A'})
-  - Current Available Stock: ${inv.stock_quantity} units
-  - Pharmacy Address: ${inv.pharmacyId?.address || 'N/A'}`).join('\n') + "\n";
+                    context += inventories.map(inv => `- ${inv.medicineId?.name}: ${inv.pharmacyId?.name} (₹${inv.vendor_price}, Stock: ${inv.stock_quantity})`).join('\n') + "\n";
                 } else {
-                    context += `  - Medicine match found, but currently out of stock at registered pharmacies in ${targetLocation || 'your area'}.\n`;
+                    context += `- Out of stock at local pharmacies in ${targetLocation || 'your area'}.\n`;
                 }
-            } else {
-                context += `  - Pharmacies found in master directories, but none are active or approved in ${targetLocation || 'your area'}.\n`;
             }
-        } else {
-            context += `  - No medicine named "${words.join(' ')}" found in our medical directories.\n`;
         }
     }
-
-    // FLOW C: HOSPITAL BEDS & ICU WARD AVAILABILITY
-    if (text.includes('hospital') || text.includes('bed') || text.includes('ward') || text.includes('icu') || text.includes('ventilator') || text.includes('admission')) {
-        context += `\n[DATABASE CONTEXT - HOSPITAL BEDS & WARD STATUS]:\n`;
-
+    // 4. Hospital Beds & Ward status
+    else if (text.includes('hospital') || text.includes('bed') || text.includes('ward') || text.includes('icu') || text.includes('ventilator') || text.includes('admission')) {
+        context += `\n[DB_BEDS]:\n`;
         const hospQuery = { profileStatus: 'Approved', isActive: true };
-        if (targetLocation) {
-            hospQuery.city = new RegExp(targetLocation, 'i');
-        }
+        if (targetLocation) hospQuery.city = new RegExp(targetLocation, 'i');
 
-        const hospitals = await Hospital.find(hospQuery).select('_id name city type').limit(3).lean();
+        const hospitals = await Hospital.find(hospQuery).select('_id name city').limit(1).lean();
 
         if (hospitals.length > 0) {
-            const hospitalIds = hospitals.map(h => h._id);
-
+            const hospId = hospitals[0]._id;
             const [wards, beds] = await Promise.all([
-                Ward.find({ hospitalId: { $in: hospitalIds }, isActive: true }).lean(),
-                Bed.find({ hospitalId: { $in: hospitalIds } }).populate('wardId', 'name').lean()
+                Ward.find({ hospitalId: hospId, isActive: true }).select('name availableBeds type').lean(),
+                Bed.find({ hospitalId: hospId, status: 'Available', isVentilatorAvailable: true }).select('bedNumber').limit(2).lean()
             ]);
 
-            hospitals.forEach(hosp => {
-                context += `* **${hosp.name}** (${hosp.type || 'Private'} - ${hosp.city})\n`;
-                const hospWards = wards.filter(w => w.hospitalId.toString() === hosp._id.toString());
-                const hospBeds = beds.filter(b => b.hospitalId.toString() === hosp._id.toString());
-
-                if (hospWards.length > 0) {
-                    hospWards.forEach(ward => {
-                        const totalWardBeds = hospBeds.filter(b => b.wardId?._id.toString() === ward._id.toString());
-                        const availableBeds = totalWardBeds.filter(b => b.status === 'Available');
-                        const ventBeds = availableBeds.filter(b => b.isVentilatorAvailable === true);
-
-                        context += `  - **Ward: ${ward.name}** (${ward.type})
-    - Total Ward Beds: ${ward.totalBeds} (Available to book: **${ward.availableBeds}**)
-    - Beds with Ventilator: **${ventBeds.length}** available\n`;
-                    });
-                } else {
-                    context += `  - No active ward/bed structures currently configured for this hospital in directory.\n`;
-                }
-            });
-        } else {
-            context += `  - No hospitals found in matching city/location directory.\n`;
+            context += `- Hosp: ${hospitals[0].name}\n`;
+            context += wards.map(w => `  * Ward: ${w.name} (${w.type}) Available Beds: ${w.availableBeds}`).join('\n') + "\n";
+            context += `  * Available Ventilator Beds: ${beds.length}\n`;
         }
     }
-
-    // FLOW D: CLINICAL DOCTORS & DIRECT SERVICES
-    if (text.includes('doctor') || text.includes('appointment') || text.includes('consult') || text.includes('specialist') || text.includes('dr')) {
-        context += `\n[DATABASE CONTEXT - ACTIVE DOCTORS]:\n`;
-        
+    // 5. Clinical Doctors
+    else if (text.includes('doctor') || text.includes('appointment') || text.includes('consult') || text.includes('specialist') || text.includes('dr')) {
+        context += `\n[DB_DOCTORS]:\n`;
         const docQuery = { isActive: true, profileStatus: 'Approved' };
-        if (targetLocation) {
-            docQuery.city = new RegExp(targetLocation, 'i');
-        }
+        if (targetLocation) docQuery.city = new RegExp(targetLocation, 'i');
 
-        const matches = await Doctor.find(docQuery)
-            .select('name speciality experienceYears fees city consultationStatus averageRating')
-            .limit(5).lean();
+        const matches = await Doctor.find(docQuery).select('name speciality fees city').limit(2).lean();
 
         if (matches.length > 0) {
-            context += matches.map(m => `* **${m.name}**
-  - Speciality: ${m.speciality}
-  - Experience: ${m.experienceYears} Years (Rating: ${m.averageRating || '4.5'}/5)
-  - Consultation Charges: Clinic Visit: ₹${m.fees?.clinic || 0} | Online Video: ₹${m.fees?.online || 0}
-  - Available In: ${m.city || 'Punjab'}`).join('\n') + "\n";
-        } else {
-            context += `  - No active approved doctors matching query found in directory.\n`;
+            context += matches.map(m => `- ${m.name} (${m.speciality}): Clinic Fee: ₹${m.fees?.clinic || 0} (In: ${m.city || 'Punjab'})`).join('\n') + "\n";
         }
     }
+    // 6. Nurse Services
+    else if (text.includes('nurse') || text.includes('elderly care') || text.includes('nursing') || text.includes('care service') || text.includes('home care')) {
+        context += `\n[DB_NURSES]:\n`;
+        const nurseQuery = { isActive: true, profileStatus: 'Approved' };
+        if (targetLocation) nurseQuery.city = new RegExp(targetLocation, 'i');
 
-    // FLOW E: LAB DIAGNOSTICS TESTS & PACKAGES
-    if (text.includes('lab') || text.includes('test') || text.includes('package') || text.includes('pathology') || text.includes('radiology')) {
-        context += `\n[DATABASE CONTEXT - LAB TESTS & DIAGNOSTICS]:\n`;
+        const nurses = await Nurse.find(nurseQuery).select('name city speciality').limit(2).lean();
+
+        if (nurses.length > 0) {
+            const nurseIds = nurses.map(n => n._id);
+            const services = await NurseService.find({ nurseId: { $in: nurseIds }, status: 'Approved' }).select('title pricing nurseId').limit(2).lean();
+
+            nurses.forEach(nurse => {
+                const sList = services.filter(s => s.nurseId.toString() === nurse._id.toString());
+                context += `- Nurse: ${nurse.name} (${nurse.city})\n` + (sList.length > 0 ? `  * Services: ` + sList.map(s => `${s.title} (₹${s.pricing?.oneDay?.final || 0})`).join(', ') : '') + "\n";
+            });
+        }
+    }
+    // 7. Lab Tests
+    else if (text.includes('lab') || text.includes('test') || text.includes('package')) {
+        context += `\n[DB_LAB_TESTS]:\n`;
+        const testMatches = await LabTest.find({ isActive: true, testName: searchRegex }).populate('labId', 'name').limit(2).lean();
         
-        const testMatches = await LabTest.find({ isActive: true, testName: searchRegex })
-            .populate('labId', 'name city')
-            .limit(5).lean();
-
         if (testMatches.length > 0) {
-            context += testMatches.map(m => `* **${m.testName}**
-  - Lab Service Provider: **${m.labId?.name}** (${m.labId?.city || 'N/A'})
-  - Total Cost: **₹${m.discountPrice || m.amount}** (MRP: ₹${m.amount})
-  - Reporting TAT: ${m.reportTime || '12 Hours'}
-  - Sample Type: ${m.sampleType || 'Blood'}`).join('\n') + "\n";
-        } else {
-            context += `  - No active pathology or radiology tests found matching this search in directory.\n`;
+            context += testMatches.map(m => `- ${m.testName} (${m.labId?.name}): Cost: ₹${m.discountPrice || m.amount}`).join('\n') + "\n";
         }
     }
-
-    // FLOW F: AMBULANCE EMERGENCY FLEETS
-    if (text.includes('ambulance') || text.includes('vehicle') || text.includes('emergency') || text.includes('van')) {
-        context += `\n[DATABASE CONTEXT - EMERGENCY AMBULANCE DIRECTORY]:\n`;
-
+    // 8. Ambulances
+    else if (text.includes('ambulance') || text.includes('vehicle') || text.includes('emergency')) {
+        context += `\n[DB_AMBULANCES]:\n`;
         const ambQuery = { profileStatus: 'Approved' };
-        if (targetLocation) {
-            ambQuery.city = new RegExp(targetLocation, 'i');
-        }
+        if (targetLocation) ambQuery.city = new RegExp(targetLocation, 'i');
 
-        const matches = await Ambulance.find(ambQuery)
-            .select('name vehicleType vehicleNumber pricing city availableForEmergency')
-            .limit(4).lean();
+        const matches = await Ambulance.find(ambQuery).select('name vehicleType pricing').limit(2).lean();
 
         if (matches.length > 0) {
-            context += matches.map(m => `* **${m.name}**
-  - Vehicle Type: ${m.vehicleType} (Plate: ${m.vehicleNumber || 'N/A'})
-  - Base Standard Fare: **₹${m.pricing?.fixedPrice || 0}** (Fare/KM: ₹${m.pricing?.pricePerKM || 0})
-  - Status: ${m.availableForEmergency ? '🟢 On Call Duty' : '🔴 Busy/Off Duty'}
-  - Service City: ${m.city}`).join('\n') + "\n";
-        } else {
-            context += `  - No emergency ambulance carriers currently available or approved under this location directory.\n`;
+            context += matches.map(m => `- ${m.name} (${m.vehicleType}): Fare: ₹${m.pricing?.fixedPrice || 0}`).join('\n') + "\n";
         }
     }
 
@@ -352,7 +305,7 @@ const searchHomepage = async (req, res) => {
     }
 };
 
-// --- DUAL-AI CLINICAL CHATBOT CONTROLLER (With Advanced Context Injection) ---
+// --- DUAL-AI CLINICAL CHATBOT CONTROLLER (With Cost-Optimized Context & History) ---
 const handleChatBotMessage = async (req, res) => {
     try {
         const { message } = req.body;
@@ -360,38 +313,58 @@ const handleChatBotMessage = async (req, res) => {
 
         if (!message) return res.status(400).json({ success: false, message: "Message cannot be empty." });
 
-        // A. Real-time contextual data extract (RAG System)
-        const dbContext = await getLocalDatabaseContext(message, userId);
-
         let session = await ChatSession.findOne({ userId });
         if (!session) {
             session = await ChatSession.create({ userId, messages: [] });
         }
 
+        // =====================================================================
+        // CHAT LIMIT LOCK: STRICT 30 CHATS/DAY IN PRODUCTION, UNLIMITED IN DEV
+        // =====================================================================
+        if (process.env.NODE_ENV === 'production') {
+            const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            
+            // Count user messages sent in the last 24 hours
+            const dailyUserMsgCount = session.messages.filter(msg => 
+                msg.sender === 'user' && 
+                new Date(msg.timestamp) > twentyFourHoursAgo
+            ).length;
+
+            if (dailyUserMsgCount >= 30) {
+                return res.status(429).json({ 
+                    success: false, 
+                    message: "You have reached your limit of 30 queries per day on our free tier. Please try again tomorrow or upgrade your account." 
+                });
+            }
+        }
+
+        // A. Token Optimization: Real-time concise context generation (RAG)
+        const dbContext = await getLocalDatabaseContext(message, userId);
+
         let botResponse = "";
 
-        const systemInstructionText = `You are an empathetic, highly expert clinical AI assistant named HealthBot for HealthApp.
-        Your purpose is to answer users based strictly on data present in our local database.
-        If database context is injected, restrict your recommendations ONLY to that specific context.
-        Always present list items as clean bullet points for neat rendering.
-        Always append this exact disclaimer at the very end of medical or service consultations: "Disclaimer: This is an AI assistant clinical recommendation. Please consult a qualified practitioner for physical diagnosis."`;
+        const systemInstructionText = `You are HealthBot, an empathetic clinical AI assistant.
+        Strict Rules:
+        1. Rely ONLY on the provided [DATABASE CONTEXT]. If empty or no match, politely state no providers are registered.
+        2. Present lists as clean bullet points.
+        3. Append disclaimer: "Disclaimer: This is an AI assistant clinical recommendation. Please consult a qualified practitioner for physical diagnosis."`;
 
         // =====================================================================
         // OPTION 1: CHATBOT RUNS VIA GROQ CLOUD (If GROQ_API_KEY is configured)
         // =====================================================================
         if (process.env.GROQ_API_KEY) {
-            console.log("Using GROQ Llama-3.3 chatbot engine (Free 14,400 RPD)...");
+            console.log("Using GROQ Llama-3.1-8b-instant chatbot engine...");
 
             const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-            // Prepare prompt context
             let promptContent = message;
             if (dbContext) {
-                promptContent = `${dbContext}\n\n[USER INQUIRY]: ${message}\n\n[ASSISTANT INSTRUCTIONS]: Use the above database context. Present list items with bullet points. Empathize with the user.`;
+                promptContent = `${dbContext}\n\n[USER INQUIRY]: ${message}`;
             }
 
-            // Map DB history to Groq (standard openai format)
-            const groqHistory = session.messages.map(msg => ({
+            // TOKEN OPTIMIZATION: Only take last 3 messages to keep prompt window small
+            const recentHistory = session.messages.slice(-3);
+            const groqHistory = recentHistory.map(msg => ({
                 role: msg.sender === 'user' ? 'user' : 'assistant',
                 content: msg.text
             }));
@@ -402,7 +375,7 @@ const handleChatBotMessage = async (req, res) => {
                     ...groqHistory,
                     { role: "user", content: promptContent }
                 ],
-                model: "llama-3.1-8b-instant", // 👈 Highly intelligent free 70B model
+                model: "llama-3.1-8b-instant", // 👈 Highly cost-effective model with high token limits
                 temperature: 0.2
             });
 
@@ -416,10 +389,12 @@ const handleChatBotMessage = async (req, res) => {
 
             let promptContent = message;
             if (dbContext) {
-                promptContent = `${dbContext}\n\n[USER INQUIRY]: ${message}\n\n[ASSISTANT INSTRUCTIONS]: Use the above database context.`;
+                promptContent = `${dbContext}\n\n[USER INQUIRY]: ${message}`;
             }
 
-            const chatHistory = session.messages.map(msg => ({
+            // TOKEN OPTIMIZATION: Only take last 3 messages for Gemini
+            const recentHistory = session.messages.slice(-3);
+            const chatHistory = recentHistory.map(msg => ({
                 role: msg.sender === 'user' ? 'user' : 'model',
                 parts: [{ text: msg.text }]
             }));

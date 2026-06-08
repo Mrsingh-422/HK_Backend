@@ -8,13 +8,13 @@ const getMyActiveTrip = async (req, res) => {
     try {
         const driverId = req.user.id;
 
-        // Strictly fetches any active transit booking for this specific driver with full coordinates
+        // FIX: Populating hospitalId is mandatory to retrieve destination coordinates and address on the frontend!
         const activeTrip = await Booking.findOne({
             ambulanceId: driverId,
             status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
         })
         .populate('userId', 'name phone profilePic')
-        .populate('hospitalId', 'name address location'); // 👈 Populates Hospital Location Coords
+        .populate('hospitalId', 'name address location'); // 👈 FIXED: Mapped with complete Hospital details!
 
         res.json({ success: true, data: activeTrip || null });
     } catch (error) {

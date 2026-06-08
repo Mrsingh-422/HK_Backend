@@ -117,6 +117,24 @@
                         </div>
                     </div>
 
+                    <!-- Dynamic Route Card (Figma Syncing) -->
+                    <div class="bg-slate-900/40 p-5 rounded-2xl border border-slate-700/50 text-xs space-y-2.5">
+                        <div class="flex items-start gap-2.5">
+                            <span class="text-amber-500 font-black uppercase text-[10px] tracking-wider w-16">Pickup:</span>
+                            <span id="active-pickup-address" class="text-slate-300 font-medium">Loading pickup spot...</span>
+                        </div>
+                        <div class="flex items-start gap-2.5 pt-2.5 border-t border-slate-800">
+                            <span class="text-red-500 font-black uppercase text-[10px] tracking-wider w-16">Dropoff:</span>
+                            <span id="active-dropoff-address" class="text-slate-300 font-medium">Loading hospital address...</span>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Nearest Hospitals list selector inside workspace (Figma Mapped) -->
+                    <div id="navigation-hospitals-section" class="bg-slate-900/30 p-5 rounded-2xl border border-slate-700/50 space-y-3 hidden">
+                        <h4 class="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><i data-lucide="hospital" class="text-green-500 w-4 h-4"></i> Nearest Hospitals Directory</h4>
+                        <div id="nav-hospitals-list" class="grid grid-cols-1 gap-2 max-h-[140px] overflow-y-auto pr-1 no-scrollbar"></div>
+                    </div>
+
                     <!-- Transit Steps Actions Controller -->
                     <div class="space-y-3 pt-2">
                         <h4 class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Journey Milestones Tracker</h4>
@@ -156,18 +174,26 @@
                 <div class="figma-card p-6 space-y-4">
                     <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="bell" class="text-amber-500 animate-bounce"></i> Real-time Emergency Alerts</h3>
                     <div id="incoming-requests-list" class="space-y-3 max-h-[350px] overflow-y-auto no-scrollbar">
-                        <p class="text-xs text-slate-400 text-center py-8">Searching for SOS signals...</p>
+                        <p class="text-xs text-slate-500">Searching for incoming SOS signals...</p>
                     </div>
                 </div>
 
             </div>
 
-            <!-- RIGHT WORKSPACE: DYNAMIC GPS SIMULATOR & REAL MAP (WITH LIVE TELEMETRY PATHWAY) -->
+            <!-- RIGHT WORKSPACE: DYNAMIC GPS SIMULATOR & REAL MAP -->
             <div class="lg:col-span-5 space-y-6">
                 
                 <!-- REAL-TIME INTERACTIVE MAP -->
                 <div class="figma-card overflow-hidden">
-                    <div id="leaflet-map" class="w-full h-[300px] z-10"></div>
+                    <div id="leaflet-map" class="w-full h-[250px] z-10"></div>
+                </div>
+
+                <!-- Driver Completed Trips History -->
+                <div class="figma-card p-6 space-y-4">
+                    <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="history" class="text-blue-400"></i> Completed Trips History</h3>
+                    <div id="history-cases-tray" class="space-y-3 max-h-[150px] overflow-y-auto no-scrollbar">
+                        <p class="text-xs text-slate-500">Loading history records...</p>
+                    </div>
                 </div>
 
                 <!-- GPS Controller -->
@@ -519,7 +545,7 @@
             }
         });
 
-        // Dynamic active-trip checker on startup (FIXED: Supports live telemetry rendering on initialization)
+        // Dynamic active-trip checker on startup
         async function syncDriverWorkspace() {
             logEvent("Initializing fleet console workspace...");
             try {
@@ -551,6 +577,10 @@
                     logEvent(`Profile recovered: Dr. ${driver.name}. Duty status: ${DRIVER_AVAILABLE ? 'Online' : 'Offline'}`);
                 }
 
+                // ALWAYS FETCH INCOMING SOS REQUESTS (So they show up even during an active trip!)
+                await loadIncomingSOSAlerts();
+                await loadDriverTripHistory(); // 👈 Load dynamic driver's completed trips history list
+
                 const res = await fetch(`${API_ROOT_BOOKING}/active-trip`, { headers: getHeaders() });
                 const json = await res.json();
                 
@@ -568,6 +598,10 @@
                     safeSetUI('active-booking-id', json.data.bookingId);
                     safeSetUI('active-service-type', json.data.serviceType);
 
+                    // FIXED: Auto-populate pickup and hospital drop-off address text dynamic mappings!
+                    safeSetUI('active-pickup-address', json.data.pickupLocation?.address || 'N/A');
+                    safeSetUI('active-dropoff-address', json.data.hospitalId?.address || 'N/A');
+
                     setupTransitUI(json.data.status);
                     logEvent(`Recovered active trip session. ID: ${json.data.bookingId}. Status: ${json.data.status}`, "warning");
                     
@@ -578,28 +612,54 @@
                     const hLng = json.data.hospitalId?.location?.lng || null;
 
                     updateLiveTelemetryMap(driverLat, driverLng, pLat, pLng, hLat, hLng);
-
-                } else {
-                    logEvent("No active transit trip found. Launching incoming alert listeners.");
-                    loadIncomingSOSAlerts();
                 }
             } catch(e) { 
                 logEvent(`Workspace Sync Error: ${e.message}`, "error"); 
             }
         }
 
-        // STANDALONE STATS LOADER
+        // STANDALONE STATS LOADER (Updated dynamically with /dashboard-stats key updates)
         async function fetchDriverStats() {
             try {
                 const statsRes = await fetch(`${API_ROOT_BOOKING}/dashboard-stats`, { headers: getHeaders() });
                 const statsJson = await statsRes.json();
                 if (statsJson.success && statsJson.data) {
+                    // Update top cards using the newly registered dynamic /dashboard-stats endpoint
                     safeSetUI('stat-emg', statsJson.data.emergency || 0);
                     safeSetUI('stat-med', statsJson.data.medical || 0);
                     safeSetUI('stat-ref', statsJson.data.referral || 0);
+                    logEvent(`Driver Stats synced. Emergency: ${statsJson.data.emergency}, Medical: ${statsJson.data.medical}, Referral: ${statsJson.data.referral}`);
                 }
             } catch(e) {
                 logEvent(`Stats Fetch Error: ${e.message}`, "error");
+            }
+        }
+
+        // FETCH DRIVER COMPLETED TRIPS HISTORY
+        async function loadDriverTripHistory() {
+            try {
+                const res = await fetch(`${API_ROOT_BOOKING}/history`, { headers: getHeaders() });
+                const json = await res.json();
+                if (json.success && json.data) {
+                    document.getElementById('history-cases-tray').innerHTML = json.data.map(p => {
+                        const completedAt = p.handoffDetails?.completedAt ? moment(p.handoffDetails.completedAt).format('DD MMM, HH:mm') : moment(p.updatedAt).format('DD MMM, HH:mm');
+                        return `
+                            <div class="bg-slate-900/60 p-4 rounded-2xl border border-slate-700/50 flex justify-between items-center opacity-85">
+                                <div>
+                                    <p class="font-bold text-xs text-slate-300">${p.userId?.name || 'Patient'}</p>
+                                    <p class="text-[9px] text-slate-500 uppercase tracking-widest font-black">${p.bookingId}</p>
+                                    <p class="text-[9px] text-slate-400 mt-1">Completed: ${completedAt}</p>
+                                </div>
+                                <span class="bg-green-500/10 text-green-400 text-[8px] font-black uppercase px-2 py-1 rounded-md">Completed</span>
+                            </div>
+                        `;
+                    }).join('');
+                    if (json.data.length === 0) {
+                        document.getElementById('history-cases-tray').innerHTML = `<p class="text-xs text-slate-500">No completed trips found.</p>`;
+                    }
+                }
+            } catch(e) {
+                console.error(e);
             }
         }
 
@@ -630,7 +690,7 @@
                 const json = await res.json();
                 if(json.success && json.data) {
                     document.getElementById('incoming-requests-list').innerHTML = json.data.map(req => `
-                        <div class="bg-slate-900 p-5 rounded-3xl border border-slate-700 shadow-sm space-y-4">
+                        <div class="figma-card p-5 border border-slate-700 shadow-sm space-y-4">
                             <div class="flex justify-between items-start">
                                 <div>
                                     <p class="font-black text-slate-200 text-sm">${req.userId?.name || 'Emergency SOS'}</p>
@@ -638,6 +698,9 @@
                                 </div>
                                 <span class="bg-red-500/10 text-red-500 text-[8px] font-black uppercase px-2.5 py-1 rounded-md tracking-wider">${req.triageLevel}</span>
                             </div>
+                            <!-- Figma incoming pickup address rendering -->
+                            <p class="text-xs text-slate-400 mt-2 flex items-center gap-1.5"><i data-lucide="map-pin" class="w-3.5 h-3.5 text-amber-500"></i> Pickup: ${req.pickupLocation?.address || 'Mohali, Punjab'}</p>
+                            
                             <div class="flex gap-2">
                                 <button onclick="openRejectModal('${req.bookingId}')" class="flex-1 bg-red-500/15 hover:bg-red-500/30 text-red-500 py-3 rounded-xl text-[10px] font-black uppercase tracking-wider transition">Reject</button>
                                 <button onclick="executeAcceptRide('${req.bookingId}', '${req.userId?.name}', '${req.serviceType}')" class="flex-1 btn-brand py-3 rounded-xl text-[10px] font-black uppercase tracking-wider">Accept</button>
@@ -667,6 +730,10 @@
                     safeSetUI('active-patient-name', patientName || 'Patient');
                     safeSetUI('active-booking-id', bookingId);
                     safeSetUI('active-service-type', serviceType);
+
+                    // Render dynamic addresses instantly on accept
+                    safeSetUI('active-pickup-address', json.data.pickupLocation?.address || 'N/A');
+                    safeSetUI('active-dropoff-address', json.data.hospitalId?.address || 'N/A');
 
                     setupTransitUI('Confirmed');
                     
@@ -761,7 +828,7 @@
                 });
                 const json = await res.json();
                 if(json.success) {
-                    logEvent(`Milestone Success: ${nextStatus}`, "info");
+                    logEvent("Milestone Success: " + nextStatus, "info");
                     setupTransitUI(nextStatus);
                 } else { alert(json.message); }
             } catch(e) { console.error(e); }

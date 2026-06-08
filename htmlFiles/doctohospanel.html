@@ -46,15 +46,15 @@
 
         <!-- DASHBOARD STATS ROW -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div class="figma-card p-6 border-l-8 border-red-500 flex justify-between items-center">
+            <div class="figma-card p-6 border-l-8 border-red-500 flex justify-between items-center shadow-lg">
                 <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Active Emergency Cases</p><h2 class="text-4xl font-black text-red-500 mt-1" id="stat-emg">0</h2></div>
-                <i data-lucide="alert-triangle" class="text-red-500 w-10 h-10 opacity-70"></i>
+                <i data-lucide="alert-triangle" class="text-red-500 w-10 h-10 opacity-70 animate-pulse"></i>
             </div>
-            <div class="figma-card p-6 border-l-8 border-blue-500 flex justify-between items-center">
+            <div class="figma-card p-6 border-l-8 border-blue-500 flex justify-between items-center shadow-lg">
                 <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Direct Admissions</p><h2 class="text-4xl font-black text-blue-500 mt-1" id="stat-adm">0</h2></div>
                 <i data-lucide="folder-kanban" class="text-blue-500 w-10 h-10 opacity-70"></i>
             </div>
-            <div class="figma-card p-6 border-l-8 border-amber-500 flex justify-between items-center">
+            <div class="figma-card p-6 border-l-8 border-amber-500 flex justify-between items-center shadow-lg">
                 <div><p class="text-[10px] font-black text-slate-400 uppercase tracking-wider">Incoming Handover Requests</p><h2 class="text-4xl font-black text-amber-500 mt-1" id="stat-trans">0</h2></div>
                 <i data-lucide="git-pull-request" class="text-amber-500 w-10 h-10 opacity-70"></i>
             </div>
@@ -69,7 +69,15 @@
                 <!-- Pending Handover Requests Tray -->
                 <div class="figma-card p-6 space-y-4">
                     <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="inbox" class="text-amber-500 w-4 h-4"></i> Incoming Handover Pending</h3>
-                    <div id="pending-transfers-tray" class="space-y-3 max-h-[220px] overflow-y-auto no-scrollbar">
+                    <div id="pending-transfers-tray" class="space-y-3 max-h-[180px] overflow-y-auto no-scrollbar">
+                        <p class="text-xs text-slate-500">Awaiting Auth Token Setup...</p>
+                    </div>
+                </div>
+
+                <!-- NEW: Pending Bedside Invites Tray -->
+                <div class="figma-card p-6 space-y-4 border border-amber-500/30">
+                    <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="git-branch" class="text-amber-500 w-4 h-4"></i> Pending Bedside Invites</h3>
+                    <div id="pending-bedside-tray" class="space-y-3 max-h-[180px] overflow-y-auto no-scrollbar">
                         <p class="text-xs text-slate-500">Awaiting Auth Token Setup...</p>
                     </div>
                 </div>
@@ -77,15 +85,23 @@
                 <!-- Active Cases Tray -->
                 <div class="figma-card p-6 space-y-4">
                     <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="users" class="text-green-400 w-4 h-4"></i> Active In-Patient Tray</h3>
-                    <div id="active-cases-tray" class="space-y-3 max-h-[250px] overflow-y-auto no-scrollbar">
+                    <div id="active-cases-tray" class="space-y-3 max-h-[200px] overflow-y-auto no-scrollbar">
                         <p class="text-xs text-slate-500">Awaiting Auth Token Setup...</p>
                     </div>
                 </div>
 
-                <!-- Ready For Discharge Tray (NEW: Clinically Discharged / Awaiting billing) -->
+                <!-- NEW: Bedside Care Cases (Active Specialist) -->
+                <div class="figma-card p-6 space-y-4 border border-blue-500/20">
+                    <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="activity" class="text-blue-400 w-4 h-4"></i> Bedside Care Cases (Specialist)</h3>
+                    <div id="bedside-cases-tray" class="space-y-3 max-h-[180px] overflow-y-auto no-scrollbar">
+                        <p class="text-xs text-slate-500">Awaiting Auth Token Setup...</p>
+                    </div>
+                </div>
+
+                <!-- Ready For Discharge Tray -->
                 <div class="figma-card p-6 space-y-4">
-                    <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="clipboard-check" class="text-red-400 w-4 h-4"></i> Clinically Discharged (Awaiting Bill)</h3>
-                    <div id="discharge-pending-tray" class="space-y-3 max-h-[250px] overflow-y-auto no-scrollbar">
+                    <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="clipboard-check" class="text-red-400 w-4 h-4"></i> Clinically Discharged</h3>
+                    <div id="discharge-pending-tray" class="space-y-3 max-h-[180px] overflow-y-auto no-scrollbar">
                         <p class="text-xs text-slate-500">Awaiting Auth Token Setup...</p>
                     </div>
                 </div>
@@ -93,7 +109,7 @@
                 <!-- History Case Tray -->
                 <div class="figma-card p-6 space-y-4">
                     <h3 class="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2"><i data-lucide="history" class="text-blue-400 w-4 h-4"></i> My Treated History</h3>
-                    <div id="history-cases-tray" class="space-y-3 max-h-[250px] overflow-y-auto no-scrollbar">
+                    <div id="history-cases-tray" class="space-y-3 max-h-[180px] overflow-y-auto no-scrollbar">
                         <p class="text-xs text-slate-500">Awaiting Auth Token Setup...</p>
                     </div>
                 </div>
@@ -125,7 +141,7 @@
             
             <div class="space-y-4">
                 <div class="space-y-1">
-                    <label class="text-[9px] font-black text-slate-400 uppercase">Diagnosis / Conditions (Comma Separated)</label>
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Diagnosis Summary</label>
                     <input type="text" id="presc-diag" placeholder="e.g. Acute Bronchitis, Fever" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400">
                 </div>
                 
@@ -158,25 +174,53 @@
         </div>
     </div>
 
-    <!-- MODAL 2: TRANSFER CASE -->
+    <!-- MODAL 2: CO-DOCTORS ASSIGNMENT SWITCHER (Figma Screen: Bed Side vs Patient Transfer) -->
     <div id="transfer-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
-        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6">
+        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white">
             <button onclick="closeModal('transfer-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
             <div>
-                <h3 class="text-2xl font-black text-white tracking-tight">Initiate Case Transfer</h3>
-                <p class="text-xs text-slate-400 font-bold uppercase">Patient ID: <span id="transfer-appt-id" class="text-amber-400 font-mono">N/A</span></p>
+                <h3 class="text-2xl font-black tracking-tight">Assign Other Doctor</h3>
+                <p class="text-xs text-slate-400">Choose assignment type and request colleague help</p>
             </div>
             
             <div class="space-y-4">
-                <div class="space-y-1">
-                    <label class="text-[9px] font-black text-slate-400 uppercase">Select Colleague Doctor</label>
-                    <select id="transfer-colleague-id" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400"></select>
+                <!-- Figma Selection state: Bed Side vs Patient Transfer -->
+                <div class="grid grid-cols-2 gap-3 text-xs font-black text-center">
+                    <button id="assign-type-bedside" onclick="toggleAssignMode('Bedside')" class="bg-green-500/10 border border-green-500 text-green-400 p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition">
+                        <i data-lucide="bed" class="w-5 h-5"></i>
+                        <span>Bed Side Help</span>
+                    </button>
+                    <button id="assign-type-transfer" onclick="toggleAssignMode('Transfer')" class="bg-slate-900 border border-slate-700 text-slate-400 p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition">
+                        <i data-lucide="git-pull-request" class="w-5 h-5"></i>
+                        <span>Patient Transfer</span>
+                    </button>
                 </div>
-                <div class="space-y-1">
-                    <label class="text-[9px] font-black text-slate-400 uppercase">Handover Reason</label>
-                    <input type="text" id="transfer-reason" placeholder="e.g. Shift ended, Patient needs ICU expert" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white">
+
+                <div class="space-y-3">
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-400 uppercase">Select Colleague Doctor</label>
+                        <select id="transfer-colleague-id" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400"></select>
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-400 uppercase">Reason for Assignment</label>
+                        <input type="text" id="transfer-reason" placeholder="e.g. Critical monitoring needed, shift ended" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4" id="bedside-form-fields">
+                        <div class="space-y-1">
+                            <label class="text-[9px] font-black text-slate-400 uppercase">Patient Condition</label>
+                            <input type="text" id="transfer-condition" placeholder="e.g. Stable / Critical" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-[9px] font-black text-slate-400 uppercase">Triage Priority</label>
+                            <select id="transfer-priority" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-slate-300">
+                                <option value="Routine">Routine</option>
+                                <option value="Urgent">Urgent</option>
+                                <option value="Most Urgent">Most Urgent</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
-                <button onclick="submitHandoverApi()" class="btn-brand w-full mt-2 bg-amber-500 hover:bg-amber-600 text-slate-950">Send Handover Request</button>
+                <button onclick="executeDoctorAssignment()" class="btn-brand w-full mt-2">Add Doctor Request</button>
             </div>
         </div>
     </div>
@@ -259,12 +303,62 @@
         </div>
     </div>
 
+    <!-- MODAL 5: REJECT BEDSIDE INVITE REASON DIALOG (NEW FIGMA ALIGNED) -->
+    <div id="reject-bedside-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
+        <div class="bg-slate-800 w-[450px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white shadow-2xl">
+            <button onclick="closeModal('reject-bedside-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
+            <div class="text-center space-y-2">
+                <i data-lucide="alert-triangle" class="text-red-500 w-12 h-12 mx-auto animate-bounce"></i>
+                <h3 class="text-xl font-black">Reject Bedside Invitation?</h3>
+                <p class="text-xs text-slate-400">Please enter a reason for rejecting this bedside specialist help request</p>
+            </div>
+            <div class="space-y-4">
+                <input type="text" id="rej-bedside-reason" placeholder="e.g., Busy in another operation room / On Leave" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs outline-none text-white focus:border-red-500">
+                <div class="flex gap-2">
+                    <button onclick="closeModal('reject-bedside-modal')" class="flex-1 bg-slate-700 py-3 rounded-xl font-black uppercase">Cancel</button>
+                    <button onclick="submitBedsideRejectApi()" class="flex-1 bg-red-500 hover:bg-red-600 py-3 rounded-xl font-black uppercase">Decline Request</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 6: SPECIALIST FEEDBACK OBSERVATION (NEW FIGMA ALIGNED) -->
+    <div id="specialist-feedback-modal" class="fixed inset-0 modal-backdrop hidden z-[1000] flex items-center justify-center">
+        <div class="bg-slate-800 w-[500px] border border-slate-700 rounded-[35px] p-10 relative space-y-6 text-white shadow-2xl">
+            <button onclick="closeModal('specialist-feedback-modal')" class="absolute top-6 right-6 p-2 hover:bg-slate-700 rounded-full text-slate-400"><i data-lucide="x"></i></button>
+            <div>
+                <h3 class="text-2xl font-black tracking-tight">Submit Specialist Observations</h3>
+                <p class="text-xs text-slate-400">Enter your clinical notes as a supporting bedside consultant</p>
+            </div>
+            
+            <form onsubmit="submitSpecialistFeedbackApi(event)" class="space-y-4">
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-400 uppercase">Specialist Clinical Observation Note</label>
+                    <textarea id="fb-observation" required rows="3" placeholder="e.g., Patient displays stable pulse, recommend mild MRI evaluation" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400 resize-none"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-400 uppercase">Observed Patient Condition</label>
+                        <input type="text" id="fb-condition" required placeholder="e.g., Stable / Recovering" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-white focus:border-green-400">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-400 uppercase">Observation Priority Rating</label>
+                        <select id="fb-priority" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-bold outline-none text-slate-300">
+                            <option value="Routine">Routine</option>
+                            <option value="Urgent">Urgent</option>
+                            <option value="Most Urgent">Most Urgent</option>
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" class="btn-brand w-full mt-2">Publish Observation Notes</button>
+            </form>
+        </div>
+    </div>
+
     <script>
         // =========================================================================
         // 🔒 Paste your Doctor h_token inside this variable:
-        // const DOCTOR_AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhMDM4MjJmNDUxOGMyYWJhN2MzZmFlNyIsInJvbGUiOiJob3NwaXRhbC1kb2N0b3IiLCJpYXQiOjE3ODAzOTAzMjQsImV4cCI6MTc4MDk5NTEyNH0.r_k55dWzhDrY1DDSq4FJyE-BRueHfGtT6oIrfPLidfY";
-                const DOCTOR_AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhMTA0ZGU5MzM0Y2I1NjZkYTIzYTRjMyIsInJvbGUiOiJob3NwaXRhbC1kb2N0b3IiLCJpYXQiOjE3ODAzMDgzMjUsImV4cCI6MTc4MDkxMzEyNX0.5l3tVsgFej2FU0ApeRiCpV4NqMdxMRWMeb4qZaz8Ci0"; 
-
+        const DOCTOR_AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhMDM4MjJmNDUxOGMyYWJhN2MzZmFlNyIsInJvbGUiOiJob3NwaXRhbC1kb2N0b3IiLCJpYXQiOjE3ODAzOTAzMjQsImV4cCI6MTc4MDk5NTEyNH0.r_k55dWzhDrY1DDSq4FJyE-BRueHfGtT6oIrfPLidfY";
         // =========================================================================
 
         const API_ROOT = "http://localhost:5002/hospital-doctor/panel";
@@ -275,6 +369,8 @@
 
         let PRESCRIBED_MEDICINES_ARRAY = [];
         let CURRENT_APPOINTMENT_ID = null;
+        let ASSIGNMENT_MODE = "Bedside"; // Defaults to 'Bedside' during Add Doctor form
+        let TARGET_REJECT_BEDSIDE_APPOINTMENT_ID = null;
 
         function navigateToModal(id) {
             document.getElementById(id).classList.remove('hidden');
@@ -287,7 +383,6 @@
         // Automatic initialization on page load if token is configured
         window.addEventListener("load", () => {
             if(DOCTOR_AUTH_TOKEN && DOCTOR_AUTH_TOKEN !== "PASTE_YOUR_DOCTOR_TOKEN_HERE") {
-                // Connection status badge update
                 const badge = document.getElementById('status-badge');
                 badge.className = "bg-green-500/10 text-green-400 border border-green-500/20 px-4 py-2.5 rounded-2xl text-xs font-black uppercase flex items-center gap-2";
                 badge.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span> Connected`;
@@ -302,7 +397,9 @@
             await fetchDashboardStats();
             await fetchActiveAndPendingCases();
             await fetchHistoryCases(); 
-            await fetchDischargePendingCases(); // 👈 NEW: Load dynamic clinically discharged list
+            await fetchDischargePendingCases();
+            await fetchBedsideCareCases(); // 👈 NEW: Load dynamic active bedside care cases
+            await fetchPendingBedsideInvites(); // 👈 NEW: Load incoming pending bedside help invites
         }
 
         // FETCH DASHBOARD WIDGETS
@@ -321,7 +418,7 @@
             } catch(e) { console.error(e); }
         }
 
-        // FETCH ACTIVE & PENDING CASES (Strictly filters out active vs pending transfer states)
+        // FETCH ACTIVE & PENDING CASES (Splits into Active cases vs Incoming pending transfers)
         async function fetchActiveAndPendingCases() {
             try {
                 const res = await fetch(`${API_ROOT}/cases?tab=active`, { headers: getHeaders() });
@@ -392,6 +489,63 @@
             } catch(e) { console.error(e); }
         }
 
+        // FETCH ACTIVE BEDSIDE CARE CASES (Specialist is active member)
+        async function fetchBedsideCareCases() {
+            try {
+                const res = await fetch(`${API_ROOT}/cases?tab=bedside`, { headers: getHeaders() });
+                const json = await res.json();
+                if(json.success && json.data) {
+                    const bedsidePatients = json.data;
+                    document.getElementById('bedside-cases-tray').innerHTML = bedsidePatients.map(p => `
+                        <button onclick="loadPatientWorkspace('${p._id}', 'bedside')" class="w-full text-left bg-slate-900 hover:bg-slate-900/60 p-4 rounded-2xl border border-blue-500/40 flex justify-between items-center transition">
+                            <div>
+                                <p class="font-bold text-sm text-blue-400">${p.userId?.name || 'Patient'}</p>
+                                <p class="text-[9px] text-slate-500 uppercase tracking-widest font-black">${p.bookingId}</p>
+                                <p class="text-xs text-slate-400 mt-1 flex items-center gap-1"><i data-lucide="activity" class="w-3.5 h-3.5 text-blue-400"></i> Bedside specialist Active</p>
+                            </div>
+                            <i data-lucide="chevron-right" class="text-slate-500"></i>
+                        </button>
+                    `).join('');
+                    if(bedsidePatients.length === 0) {
+                        document.getElementById('bedside-cases-tray').innerHTML = `<p class="text-xs text-slate-500">No active bedside care cases.</p>`;
+                    }
+                    lucide.createIcons();
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        // FETCH INCOMING BEDSIDE INVITES (Pending bedside specialist requests)
+        async function fetchPendingBedsideInvites() {
+            try {
+                const res = await fetch(`${API_ROOT}/cases?tab=pending-bedside`, { headers: getHeaders() });
+                const json = await res.json();
+                if(json.success && json.data) {
+                    const pendingInvites = json.data;
+                    document.getElementById('pending-bedside-tray').innerHTML = pendingInvites.map(p => {
+                        // Find current doctor's invitation object in bedsideCareTeam array
+                        return `
+                            <div class="bg-slate-900 border border-blue-500/30 p-4 rounded-2xl space-y-3">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <p class="font-bold text-xs text-blue-400">${p.userId?.name || 'SOS Bedside'}</p>
+                                        <p class="text-[9px] text-slate-500 uppercase tracking-widest font-black">${p.bookingId}</p>
+                                    </div>
+                                    <span class="bg-blue-500/10 text-blue-400 text-[8px] font-black uppercase px-2 py-0.5 rounded">Specialist SOS</span>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button onclick="openBedsideRejectWindow('${p._id}')" class="flex-1 bg-red-500/10 hover:bg-red-500/20 text-red-500 py-2 rounded-xl text-[10px] font-black uppercase border border-red-500/20">Decline</button>
+                                    <button onclick="executeBedsideRespondApi('${p._id}', 'Accepted')" class="flex-1 bg-green-500 hover:bg-green-600 text-slate-950 py-2 rounded-xl text-[10px] font-black uppercase">Accept</button>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                    if(pendingInvites.length === 0) {
+                        document.getElementById('pending-bedside-tray').innerHTML = `<p class="text-xs text-slate-500">No pending bedside invites.</p>`;
+                    }
+                }
+            } catch(e) { console.error(e); }
+        }
+
         // FETCH HISTORY CASES (Treated in past but now transferred to other doctors or completed)
         async function fetchHistoryCases() {
             try {
@@ -417,7 +571,7 @@
             } catch(e) { console.error(e); }
         }
 
-        // ACCEPT TRANSFER
+        // ACCEPT HANDOVER TRANSFER
         async function executeAcceptTransfer(apptId) {
             try {
                 const res = await fetch(`${API_ROOT}/case/accept-transfer`, {
@@ -431,6 +585,34 @@
                     syncDoctorPanel();
                 } else { alert(json.message); }
             } catch(e) { console.error(e); }
+        }
+
+        // RESPOND TO BEDSIDE SPECIALIST INVITE
+        async function executeBedsideRespondApi(apptId, action, rejectionReason = "") {
+            try {
+                const res = await fetch(`${API_ROOT}/case/bedside-respond`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ appointmentId: apptId, action, rejectionReason })
+                });
+                const json = await res.json();
+                if(json.success) {
+                    alert(`Bedside request successfully ${action}!`);
+                    closeModal('reject-bedside-modal');
+                    syncDoctorPanel();
+                } else { alert(json.message); }
+            } catch(e) { console.error(e); }
+        }
+
+        function openBedsideRejectWindow(apptId) {
+            TARGET_REJECT_BEDSIDE_APPOINTMENT_ID = apptId;
+            navigateToModal('reject-bedside-modal');
+        }
+
+        function submitBedsideRejectApi() {
+            const reason = document.getElementById('rej-bedside-reason').value;
+            if(!reason) return alert("Kripya decline reason enter karein");
+            executeBedsideRespondApi(TARGET_REJECT_BEDSIDE_APPOINTMENT_ID, 'Rejected', reason);
         }
 
         // LOAD SELECTED PATIENT WORKSPACE (Updated with dynamic clinicalSummary and shift Duration Logs)
@@ -466,9 +648,62 @@
                         `;
                     }
 
+                    // Render dynamic bedside care team roster with specialists observations & rejection statuses
+                    let bedsideRosterHTML = '';
+                    if (patient.bedsideCareTeam && patient.bedsideCareTeam.length > 0) {
+                        bedsideRosterHTML = `
+                            <div class="bg-slate-900/40 p-5 rounded-2xl border border-slate-700/50 space-y-3 text-xs">
+                                <h5 class="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5"><i data-lucide="heart" class="text-blue-400 w-4 h-4"></i> Active Bedside Care Specialist Team</h5>
+                                <div class="space-y-3.5 max-h-[150px] overflow-y-auto pr-2 no-scrollbar">
+                                    ${patient.bedsideCareTeam.map(t => {
+                                        const badgeColor = t.status === 'Accepted' ? 'bg-green-500/10 text-green-400' : (t.status === 'Rejected' ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-500');
+                                        const fbLog = t.specialistFeedback && t.specialistFeedback.observation ? `
+                                            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80 mt-1.5 text-[10px] font-medium text-slate-300">
+                                                <span class="text-blue-400 font-bold uppercase text-[8px]">[Observation Feedback]</span>
+                                                <p class="italic mt-0.5">"${t.specialistFeedback.observation}"</p>
+                                                <p class="text-[9px] text-slate-500 mt-1 flex justify-between"><span>Condition: ${t.specialistFeedback.patientCondition}</span><span>Priority: ${t.specialistFeedback.priorityRating}</span></p>
+                                            </div>
+                                        ` : (t.rejectionReason ? `<p class="text-[10px] text-red-400/80 italic mt-1">Rejection Reason: "${t.rejectionReason}"</p>` : '');
+
+                                        return `
+                                            <div class="border-b border-slate-800/60 pb-3 last:border-0 last:pb-0">
+                                                <div class="flex justify-between items-center">
+                                                    <span class="font-bold text-slate-200">${t.doctorId?.name || 'Specialist'} (${t.doctorId?.speciality || 'N/A'})</span>
+                                                    <span class="${badgeColor} text-[8px] font-black uppercase px-2 py-0.5 rounded">${t.status}</span>
+                                                </div>
+                                                ${fbLog}
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
+
                     // Disable action buttons if viewing from history or discharged (cannot edit someone else's active patient)
                     const isHistoryMode = (currentTabType === 'history' || currentTabType === 'discharge');
                     const disabledAttr = isHistoryMode ? 'disabled style="opacity: 0.4; cursor: not-allowed;"' : '';
+
+                    // Display specialist action trigger buttons differently
+                    let actionsGridHTML = '';
+                    if (currentTabType === 'bedside') {
+                        // Specialist can only submit feedback
+                        actionsGridHTML = `
+                            <div class="grid grid-cols-1 border-t border-slate-700 pt-6">
+                                <button onclick="openSpecialistFeedbackWindow()" class="bg-blue-600 hover:bg-blue-700 text-slate-950 p-4 rounded-2xl text-xs font-black uppercase tracking-wider text-center">Submit Specialist Observation Notes</button>
+                            </div>
+                        `;
+                    } else {
+                        // Main Doctor has full care-routing access
+                        actionsGridHTML = `
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 border-t border-slate-700 pt-6">
+                                <button onclick="openPrescriptionWindow()" ${disabledAttr} class="bg-slate-900 border border-slate-700 hover:border-green-400 text-green-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Write Rx</button>
+                                <button onclick="openClinicalSummaryWindow()" ${disabledAttr} class="bg-slate-900 border border-slate-700 hover:border-blue-400 text-blue-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Clinical Summary</button>
+                                <button onclick="openHandoverWindow()" ${disabledAttr} class="bg-slate-900 border border-slate-700 hover:border-amber-400 text-amber-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Add Doctor</button>
+                                <button onclick="openDischargeWindow()" ${disabledAttr} class="bg-red-500/10 hover:bg-red-500/20 text-red-500 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Ready for discharge</button>
+                            </div>
+                        `;
+                    }
 
                     document.getElementById('case-workspace').innerHTML = `
                         <div class="flex justify-between items-start border-b border-slate-700 pb-5">
@@ -502,6 +737,9 @@
                         <!-- Dynamic Clinical Summary Card -->
                         ${clinicalSummaryHTML}
 
+                        <!-- Dynamic Bedside Co-Doctors Care Team Roster -->
+                        ${bedsideRosterHTML}
+
                         <!-- Timeline History Map (Rendered with precise duration logs) -->
                         <div class="space-y-3">
                             <h4 class="text-xs font-black uppercase text-slate-400 flex items-center gap-1.5"><i data-lucide="git-branch" class="w-4 h-4 text-green-400"></i> Audit Handover Timeline</h4>
@@ -525,13 +763,8 @@
                             </div>
                         </div>
 
-                        <!-- Action workspace triggers -->
-                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 border-t border-slate-700 pt-6">
-                            <button onclick="openPrescriptionWindow()" ${disabledAttr} class="bg-slate-900 border border-slate-700 hover:border-green-400 text-green-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Write Rx</button>
-                            <button onclick="openClinicalSummaryWindow()" ${disabledAttr} class="bg-slate-900 border border-slate-700 hover:border-blue-400 text-blue-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Clinical Summary</button>
-                            <button onclick="openHandoverWindow()" ${disabledAttr} class="bg-slate-900 border border-slate-700 hover:border-amber-400 text-amber-400 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Transfer Case</button>
-                            <button onclick="openDischargeWindow()" ${disabledAttr} class="bg-red-500/10 hover:bg-red-500/20 text-red-500 p-4 rounded-2xl text-xs font-black uppercase tracking-wider">Ready for discharge</button>
-                        </div>
+                        <!-- Actions Grid (Discharged or Active) -->
+                        ${actionsGridHTML}
                     `;
                     lucide.createIcons();
                 }
@@ -600,7 +833,7 @@
             } else { alert(json.message); }
         }
 
-        // CLINICAL SUMMARY WINDOW LOADER (NEW)
+        // CLINICAL SUMMARY WINDOW LOADER
         async function openClinicalSummaryWindow() {
             document.getElementById('summary-appt-id').innerText = CURRENT_APPOINTMENT_ID;
             
@@ -644,11 +877,13 @@
             } catch(e) { console.error(e); }
         }
 
-        // COLLEAGUES LOADER & CASE TRANSFER
+        // COLLEAGUES LOADER & CASE TRANSFER / BEDSIDE REQUEST (Figma Screen Aligned)
         async function openHandoverWindow() {
             document.getElementById('transfer-appt-id').innerText = CURRENT_APPOINTMENT_ID;
             navigateToModal('transfer-modal');
+            toggleAssignMode('Bedside'); // Default to bedside
 
+            // Fetch dynamic colleagues
             const res = await fetch(`${API_ROOT}/colleagues`, { headers: getHeaders() });
             const json = await res.json();
             if(json.success && json.data) {
@@ -658,30 +893,95 @@
             }
         }
 
-        async function submitHandoverApi() {
-            const toDoctorId = document.getElementById('transfer-colleague-id').value;
+        function toggleAssignMode(mode) {
+            ASSIGNMENT_MODE = mode;
+            const bedsideBtn = document.getElementById('assign-type-bedside');
+            const transferBtn = document.getElementById('assign-type-transfer');
+            const bedsideFields = document.getElementById('bedside-form-fields');
+
+            if(mode === 'Bedside') {
+                bedsideBtn.className = "bg-green-500/10 border border-green-500 text-green-400 p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition";
+                transferBtn.className = "bg-slate-900 border border-slate-700 text-slate-400 p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition";
+                bedsideFields.classList.remove('hidden');
+            } else {
+                transferBtn.className = "bg-green-500/10 border border-green-500 text-green-400 p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition";
+                bedsideBtn.className = "bg-slate-900 border border-slate-700 text-slate-400 p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition";
+                bedsideFields.classList.add('hidden');
+            }
+        }
+
+        async function executeDoctorAssignment() {
+            const colleagueId = document.getElementById('transfer-colleague-id').value;
             const reason = document.getElementById('transfer-reason').value;
 
-            if(!toDoctorId) return alert("Select Colleague Doctor");
+            if(!colleagueId) return alert("Kripya Colleague Doctor select karein.");
 
-            const res = await fetch(`${API_ROOT}/case/transfer`, {
-                method: 'POST',
-                headers: getHeaders(),
-                body: JSON.stringify({ appointmentId: CURRENT_APPOINTMENT_ID, toDoctorId, reason, priority: 'Emergency' })
-            });
-            const json = await res.json();
-            if(json.success) {
-                alert("Patient Handover initiated successfully!");
-                closeModal('transfer-modal');
-                syncDoctorPanel();
-                document.getElementById('case-workspace').innerHTML = `
-                    <div class="h-full flex flex-col justify-center items-center text-center text-slate-500 space-y-3">
-                        <i data-lucide="stethoscope" class="w-16 h-16 opacity-30"></i>
-                        <p class="text-sm font-black">Patient transfer initiated. Select another patient from active tray.</p>
-                    </div>
-                `;
-                lucide.createIcons();
-            } else { alert(json.message); }
+            if(ASSIGNMENT_MODE === 'Bedside') {
+                // Hits /case/bedside-request (Invite Specialist)
+                const condition = document.getElementById('transfer-condition').value;
+                const priority = document.getElementById('transfer-priority').value;
+
+                try {
+                    const res = await fetch(`${API_ROOT}/case/bedside-request`, {
+                        method: 'POST',
+                        headers: getHeaders(),
+                        body: JSON.stringify({ appointmentId: CURRENT_APPOINTMENT_ID, specialistDoctorId: colleagueId, reason, patientCondition: condition, priority })
+                    });
+                    const json = await res.json();
+                    if(json.success) {
+                        alert(json.message);
+                        closeModal('transfer-modal');
+                        loadPatientWorkspace(CURRENT_APPOINTMENT_ID, 'active');
+                    } else { alert(json.message); }
+                } catch(e) { console.error(e); }
+            } else {
+                // Hits /case/transfer (Initiate Permanent Handover)
+                try {
+                    const res = await fetch(`${API_ROOT}/case/transfer`, {
+                        method: 'POST',
+                        headers: getHeaders(),
+                        body: JSON.stringify({ appointmentId: CURRENT_ACTIVE_BOOKING, toDoctorId: colleagueId, reason, priority: 'Emergency' })
+                    });
+                    const json = await res.json();
+                    if(json.success) {
+                        alert("Patient Handover initiated successfully!");
+                        closeModal('transfer-modal');
+                        syncDoctorPanel();
+                        document.getElementById('case-workspace').innerHTML = `
+                            <div class="h-full flex flex-col justify-center items-center text-center text-slate-500 space-y-3">
+                                <i data-lucide="stethoscope" class="w-16 h-16 opacity-30"></i>
+                                <p class="text-sm font-black">Patient transfer initiated. Select another patient from active tray.</p>
+                            </div>
+                        `;
+                    } else { alert(json.message); }
+                } catch(e) { console.error(e); }
+            }
+        }
+
+        // --- NEW: CO-DOCTOR BEDSIDE OBSERVATION MODAL TRIGGERS ---
+        function openSpecialistFeedbackWindow() {
+            navigateToModal('specialist-feedback-modal');
+        }
+
+        async function submitSpecialistFeedbackApi(e) {
+            e.preventDefault();
+            const observation = document.getElementById('fb-observation').value;
+            const condition = document.getElementById('fb-condition').value;
+            const priorityRating = document.getElementById('fb-priority').value;
+
+            try {
+                const res = await fetch(`${API_ROOT}/case/bedside-feedback`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ appointmentId: CURRENT_APPOINTMENT_ID, observation, patientCondition: condition, priorityRating })
+                });
+                const json = await res.json();
+                if(json.success) {
+                    alert(json.message);
+                    closeModal('specialist-feedback-modal');
+                    loadPatientWorkspace(CURRENT_APPOINTMENT_ID, 'bedside');
+                } else { alert(json.message); }
+            } catch(e) { console.error(e); }
         }
 
         // DISCHARGE SUMMARY

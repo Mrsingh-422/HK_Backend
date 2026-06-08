@@ -323,7 +323,7 @@ const calculateAmbulanceFare = async (req, res) => {
 
 const confirmAmbulanceBooking = async (req, res) => {
     try {
-        // 1. Flutter/Form-data Parsing
+        // 1. Flutter/Form-data Parsing (Handles stringified objects from mobile client)
         let body = { ...req.body };
         
         if (typeof body.pricing === 'string') {
@@ -343,10 +343,10 @@ const confirmAmbulanceBooking = async (req, res) => {
             scheduledDate, appointmentTime, reason, incidentDescription, referralReason 
         } = body;
 
-        // 2. Calculate Fare & Validate Coupon
+        // 2. Calculate Fare & Validate Coupon (Shared Helper Logic)
         const fare = await getFinalFare(body, req.user.id); 
 
-        // Parse staffType
+        // Parse staffType to store individual selection flags in DB
         let staffList = staffType ? (typeof staffType === 'string' ? staffType.split(',') : staffType) : [];
         staffList = staffList.map(s => s.trim());
         const supportStaffSelected = {
@@ -360,13 +360,45 @@ const confirmAmbulanceBooking = async (req, res) => {
             try { parsedDetails = JSON.parse(patientDetails || '{}'); } catch (e) { parsedDetails = {}; }
         } else { parsedDetails = patientDetails || {}; }
 
-        // 4. Handle Images
+        // 4. Handle Images (referralCard & incidentPhoto)
         let referralCardPath = req.files?.referralCard ? `/uploads/ambulances/${req.files.referralCard[0].filename}` : null;
         let incidentPhotoPath = req.files?.incidentPhoto ? `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
 
         const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
-        // 5. Create Booking (FIXED: Created in 'Searching' state to flow into driver's pending alerts)
+        // 5. FIX: Try-Catch Protected dynamic location parser to prevent plain string crashes
+        let finalPickupLocation = { address: "Pickup Location", lat: 30.7046, lng: 76.7179 };
+        
+        if (body.pickupLocation) {
+            if (typeof body.pickupLocation === 'string') {
+                try {
+                    // Try parsing as JSON object
+                    const parsed = JSON.parse(body.pickupLocation);
+                    if (parsed && typeof parsed === 'object') {
+                        finalPickupLocation = {
+                            address: parsed.address || "Pickup Location",
+                            lat: Number(parsed.lat || 30.7046),
+                            lng: Number(parsed.lng || 76.7179)
+                        };
+                    }
+                } catch (e) {
+                    // If parsing fails (Plain string address like Nijjar Road), save as-it-is safely
+                    finalPickupLocation = {
+                        address: body.pickupLocation, 
+                        lat: 30.7046,
+                        lng: 76.7179
+                    };
+                }
+            } else if (typeof body.pickupLocation === 'object') {
+                finalPickupLocation = {
+                    address: body.pickupLocation.address || "Pickup Location",
+                    lat: Number(body.pickupLocation.lat || 30.7046),
+                    lng: Number(body.pickupLocation.lng || 76.7179)
+                };
+            }
+        }
+
+        // 6. Create Booking in database
         const booking = await Booking.create({
             bookingId: `HK-BOK-${Date.now().toString().slice(-6)}`,
             caseReference: generateCaseRef(serviceType),
@@ -379,8 +411,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
             scheduledTime: appointmentTime || null,
             supportStaffSelected: supportStaffSelected,
-            pickupLocation: req.body.pickupLocation ? (typeof req.body.pickupLocation === 'string' ? JSON.parse(req.body.pickupLocation) : req.body.pickupLocation) : { address: address || "", lat: 30.7046, lng: 76.7179 },
-
+            pickupLocation: finalPickupLocation, // Uses safely parsed location node
 
             patientDetails: {
                 ...parsedDetails,
@@ -405,10 +436,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             isFreeCase: fare.isFree,
             paymentStatus: fare.isFree ? 'Paid' : (paymentId ? 'Paid' : 'Pending'),
             transactionId: paymentId || null,
-            
-            // FIX: Initially marked 'Searching' so it shows in requests list. Accepted action will mark it 'Confirmed'
             status: 'Searching', 
-            
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{ 
                 status: 'Searching', 
@@ -417,7 +445,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             }]
         });
 
-        // 6. Update Coupon Usage History
+        // 7. Update Coupon Usage History (Secure array mapping)
         if (fare.couponId) {
             const coupon = await Coupon.findById(fare.couponId);
             const userIndex = coupon.usedBy.findIndex(u => u.userId && u.userId.toString() === req.user.id.toString());
@@ -429,8 +457,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             await coupon.save();
         }
 
-        // FIX: REMOVED pre-emptive driver locking. Let driver accept first, acceptBooking will lock the fleet!
-
+        // Response format is 100% same as original to keep frontend active
         res.status(201).json({ success: true, message: "Booking Request Sent Successfully", booking });
 
     } catch (error) { 

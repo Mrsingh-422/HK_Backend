@@ -156,24 +156,24 @@ const getDocDashboard = async (req, res) => {
 
 
 // --- 3. GET PATIENT DETAILS ---
-const getPatientDetails = async (req, res) => {
-    try {
-        const patient = await Appointment.findById(req.params.id)
-            .populate('userId', 'name profilePic phone age gender bloodGroup')
-            .populate('bedId', 'bedNumber pricePerDay')
-            .populate({
-                path: 'treatmentHistory.fromDoctorId',
-                select: 'name speciality profileImage'
-            })
-            .populate({
-                path: 'treatmentHistory.toDoctorId',
-                select: 'name speciality profileImage'
-            });
+// const getPatientDetails = async (req, res) => {
+//     try {
+//         const patient = await Appointment.findById(req.params.id)
+//             .populate('userId', 'name profilePic phone age gender bloodGroup')
+//             .populate('bedId', 'bedNumber pricePerDay')
+//             .populate({
+//                 path: 'treatmentHistory.fromDoctorId',
+//                 select: 'name speciality profileImage'
+//             })
+//             .populate({
+//                 path: 'treatmentHistory.toDoctorId',
+//                 select: 'name speciality profileImage'
+//             });
 
-        if (!patient) return res.status(404).json({ message: "Patient not found" });
-        res.json({ success: true, data: patient });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+//         if (!patient) return res.status(404).json({ message: "Patient not found" });
+//         res.json({ success: true, data: patient });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
 
 // --- 4. CREATE PRESCRIPTION (Fixed Array Safe Map Logic) ---
 const processPrescription = async (req, res) => {
@@ -282,62 +282,62 @@ const acceptTransfer = async (req, res) => {
 };
 
 // 4. GET ASSIGNED & PENDING INCOMING CASES (Updated)
-const getAssignedCases = async (req, res) => {
-    try {
-        const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'history', 'discharge'
-        let query = {};
+// const getAssignedCases = async (req, res) => {
+//     try {
+//         const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'history', 'discharge'
+//         let query = {};
 
-        // Case A: Active patients currently assigned to me (EXCLUDED Discharge-Pending!)
-        if (tab === 'active') {
-            query = { 
-                doctorId: req.user.id, 
-                pendingDoctorId: null,
-                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } // 👈 Ready to discharge wale beds active se hat gaye
-            };
-        } 
-        // Case B: Ready for Discharge patients (Waiting for Admin Billing)
-        else if (tab === 'discharge') {
-            query = {
-                doctorId: req.user.id,
-                pendingDoctorId: null,
-                status: 'Discharge-Pending' // 👈 Strictly Discharge-Pending beds only
-            };
-        }
-        // Case C: Incoming pending handover requests
-        else if (tab === 'pending') {
-            query = { pendingDoctorId: req.user.id };
-        } 
-        // Case D: History Patients (Treated in past)
-        else if (tab === 'history') {
-            query = {
-                $and: [
-                    { 
-                        $or: [
-                            { "treatmentHistory.fromDoctorId": req.user.id },
-                            { "treatmentHistory.toDoctorId": req.user.id }
-                        ] 
-                    },
-                    {
-                        $or: [
-                            { doctorId: { $ne: req.user.id } }, // currently with another doctor
-                            { status: 'Completed' }             // fully discharged
-                        ]
-                    }
-                ]
-            };
-        }
+//         // Case A: Active patients currently assigned to me (EXCLUDED Discharge-Pending!)
+//         if (tab === 'active') {
+//             query = { 
+//                 doctorId: req.user.id, 
+//                 pendingDoctorId: null,
+//                 status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } // 👈 Ready to discharge wale beds active se hat gaye
+//             };
+//         } 
+//         // Case B: Ready for Discharge patients (Waiting for Admin Billing)
+//         else if (tab === 'discharge') {
+//             query = {
+//                 doctorId: req.user.id,
+//                 pendingDoctorId: null,
+//                 status: 'Discharge-Pending' // 👈 Strictly Discharge-Pending beds only
+//             };
+//         }
+//         // Case C: Incoming pending handover requests
+//         else if (tab === 'pending') {
+//             query = { pendingDoctorId: req.user.id };
+//         } 
+//         // Case D: History Patients (Treated in past)
+//         else if (tab === 'history') {
+//             query = {
+//                 $and: [
+//                     { 
+//                         $or: [
+//                             { "treatmentHistory.fromDoctorId": req.user.id },
+//                             { "treatmentHistory.toDoctorId": req.user.id }
+//                         ] 
+//                     },
+//                     {
+//                         $or: [
+//                             { doctorId: { $ne: req.user.id } }, // currently with another doctor
+//                             { status: 'Completed' }             // fully discharged
+//                         ]
+//                     }
+//                 ]
+//             };
+//         }
 
-        if (type === 'Emergency') query.triageLevel = 'Emergency';
-        if (type === 'Admission') query.bookingType = 'Admission';
-        if (status) query.status = status;
+//         if (type === 'Emergency') query.triageLevel = 'Emergency';
+//         if (type === 'Admission') query.bookingType = 'Admission';
+//         if (status) query.status = status;
 
-        const cases = await Appointment.find(query)
-            .populate('userId', 'name profilePic phone age gender')
-            .sort({ updatedAt: -1 });
+//         const cases = await Appointment.find(query)
+//             .populate('userId', 'name profilePic phone age gender')
+//             .sort({ updatedAt: -1 });
 
-        res.json({ success: true, count: cases.length, data: cases });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+//         res.json({ success: true, count: cases.length, data: cases });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
 
 // --- 6. GET COLLEAGUES (Fixed Privacy data leak) ---
 const getHospitalColleagues = async (req, res) => {
@@ -456,6 +456,214 @@ const updateClinicalSummary = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+
+
+// =========================================================================
+// 🚀 NEW BEDSIDE TEAM WORKFLOW CONTROLLERS
+// =========================================================================
+
+// 1. REQUEST CO-DOCTOR BEDSIDE HELP (Primary Doctor Action)
+const requestBedsideSpecialist = async (req, res) => {
+    try {
+        const { appointmentId, specialistDoctorId, reason, patientCondition, priority } = req.body;
+        const mainDoctorId = req.user.id;
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, doctorId: mainDoctorId });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Unauthorized: Aap is patient ke main doctor nahi hain." });
+        }
+
+        // Check if specialist already requested
+        const exists = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistDoctorId);
+        if (exists) {
+            return res.status(400).json({ success: false, message: "This specialist is already requested or active on the care team." });
+        }
+
+        // Push new bedside request
+        appointment.bedsideCareTeam.push({
+            doctorId: specialistDoctorId,
+            status: 'Pending',
+            requestReason: reason,
+            patientConditionAtRequest: patientCondition,
+            priority: priority || 'Routine'
+        });
+
+        await appointment.save();
+        res.status(201).json({ success: true, message: "Bedside help request sent to specialist successfully!" });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. RESPOND TO BEDSIDE REQUEST (Specialist Doctor Action: Accept or Reject with Reason)
+const respondToBedsideRequest = async (req, res) => {
+    try {
+        const { appointmentId, action, rejectionReason } = req.body; // action: 'Accepted' ya 'Rejected'
+        const specialistId = req.user.id;
+
+        const appointment = await Appointment.findOne({ 
+            _id: appointmentId, 
+            "bedsideCareTeam.doctorId": specialistId,
+            "bedsideCareTeam.status": "Pending"
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "No pending bedside request found for you on this case." });
+        }
+
+        // Find specialist object in array and update
+        const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
+        careTeamObj.status = action;
+        careTeamObj.respondedAt = new Date();
+
+        if (action === 'Rejected') {
+            careTeamObj.rejectionReason = rejectionReason || "Busy on another case";
+        }
+
+        await appointment.save();
+        res.json({ success: true, message: `Bedside request successfully ${action}!`, data: appointment });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3. SUBMIT CO-DOCTOR CLINICAL FEEDBACK (Specialist Doctor Action)
+const submitSpecialistFeedback = async (req, res) => {
+    try {
+        const { appointmentId, observation, patientCondition, priorityRating } = req.body;
+        const specialistId = req.user.id;
+
+        const appointment = await Appointment.findOne({ 
+            _id: appointmentId, 
+            "bedsideCareTeam.doctorId": specialistId,
+            "bedsideCareTeam.status": "Accepted"
+        });
+
+        if (!appointment) {
+            return res.status(403).json({ success: false, message: "Unauthorized: Aap is care team ke active member nahi hain." });
+        }
+
+        // Update feedback subdocument
+        const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
+        careTeamObj.specialistFeedback = {
+            observation,
+            patientCondition,
+            priorityRating: priorityRating || 'Routine',
+            submittedAt: new Date()
+        };
+
+        await appointment.save();
+        res.json({ success: true, message: "Clinical observation feedback submitted successfully!" });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- GET DYNAMIC CASE LISTINGS (Updated with Bedside & Pending Bedside tab filters) ---
+const getAssignedCases = async (req, res) => {
+    try {
+        const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'discharge', 'history', 'bedside', 'pending-bedside'
+        let query = {};
+
+        // A. Primary active patients on my duty
+        if (tab === 'active') {
+            query = { 
+                doctorId: req.user.id, 
+                pendingDoctorId: null,
+                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
+            };
+        } 
+        // B. Dynamic ready for discharge patients
+        else if (tab === 'discharge') {
+            query = {
+                doctorId: req.user.id,
+                pendingDoctorId: null,
+                status: 'Discharge-Pending'
+            };
+        }
+        // C. Incoming permanent handover requests waiting for my acceptance
+        else if (tab === 'pending') {
+            query = { pendingDoctorId: req.user.id };
+        } 
+        // D. Active bedside cases where I am added as specialist & accepted
+        else if (tab === 'bedside') {
+            query = {
+                "bedsideCareTeam.doctorId": req.user.id,
+                "bedsideCareTeam.status": "Accepted",
+                status: { $ne: "Completed" }
+            };
+        }
+        // E. Incoming pending bedside help requests waiting for my response
+        else if (tab === 'pending-bedside') {
+            query = {
+                "bedsideCareTeam.doctorId": req.user.id,
+                "bedsideCareTeam.status": "Pending"
+            };
+        }
+        // F. My Complete treated history (Both main doctor and ever involved specialists)
+        else if (tab === 'history') {
+            query = {
+                $and: [
+                    {
+                        $or: [
+                            { "treatmentHistory.fromDoctorId": req.user.id },
+                            { "treatmentHistory.toDoctorId": req.user.id },
+                            { "bedsideCareTeam.doctorId": req.user.id }
+                        ]
+                    },
+                    {
+                        $or: [
+                            { doctorId: { $ne: req.user.id } },
+                            { status: 'Completed' }
+                        ]
+                    }
+                ]
+            };
+        }
+
+        if (type === 'Emergency') query.triageLevel = 'Emergency';
+        if (type === 'Admission') query.bookingType = 'Admission';
+        if (status) query.status = status;
+
+        const cases = await Appointment.find(query)
+            .populate('userId', 'name profilePic phone age gender')
+            .sort({ updatedAt: -1 });
+
+        res.json({ success: true, count: cases.length, data: cases });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// --- GET PATIENT DETAILS (Updated with populated Bedside team profiles) ---
+const getPatientDetails = async (req, res) => {
+    try {
+        const patient = await Appointment.findById(req.params.id)
+            .populate('userId', 'name profilePic phone age gender bloodGroup')
+            .populate('bedId', 'bedNumber pricePerDay')
+            .populate({
+                path: 'treatmentHistory.fromDoctorId',
+                select: 'name speciality profileImage'
+            })
+            .populate({
+                path: 'treatmentHistory.toDoctorId',
+                select: 'name speciality profileImage'
+            })
+            // Populate Bedside team doctor info dynamically
+            .populate({
+                path: 'bedsideCareTeam.doctorId',
+                select: 'name speciality profileImage dutyStatus'
+            });
+
+        if (!patient) return res.status(404).json({ message: "Patient not found" });
+        res.json({ success: true, data: patient });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+
 module.exports = { 
     getMyDoctorProfile,
     updateDoctorProfile,
@@ -464,5 +672,7 @@ module.exports = {
     getDocDashboard, getAssignedCases, getPatientDetails, 
     processPrescription, transferPatient, acceptTransfer,
      getHospitalColleagues,
-    submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary
+    submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary,
+
+    requestBedsideSpecialist,respondToBedsideRequest,submitSpecialistFeedback
 };

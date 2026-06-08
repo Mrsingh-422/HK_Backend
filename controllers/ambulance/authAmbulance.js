@@ -202,4 +202,64 @@ const getMyAmbulanceProfile = async (req, res) => {
     }
 };
 
-module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile };
+
+// testing only
+// --- 4. RESET PASSWORD (Testing Bypass - No Old Password Required) ---
+// Endpoint: PUT /api/auth/ambulance/reset-password-test
+const resetPasswordTest = async (req, res) => {
+    try {
+        const { email, phone, id, newPassword } = req.body;
+
+        if (!newPassword) {
+            return res.status(400).json({ success: false, message: 'newPassword is required' });
+        }
+
+        // Target identify karne ke liye alag-alag options check karenge
+        let query = {};
+        if (id) {
+            query = { _id: id };
+        } else if (email) {
+            query = { email: email.toLowerCase() };
+        } else if (phone) {
+            query = { phone };
+        } else if (req.user && req.user.id) {
+            // Agar token provided hai toh logged-in user ko use karega
+            query = { _id: req.user.id };
+        } else {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Provide email, phone, id in body, or send Authorization token' 
+            });
+        }
+
+        // New password hash karein (bcrypt ke sath)
+        const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+
+        const ambulance = await Ambulance.findOneAndUpdate(
+            query,
+            { $set: { password: hashedPassword } },
+            { new: true }
+        );
+
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: 'Ambulance profile not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Password updated successfully (Testing Bypass)',
+            data: {
+                id: ambulance._id,
+                name: ambulance.name,
+                email: ambulance.email,
+                phone: ambulance.phone
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest };
