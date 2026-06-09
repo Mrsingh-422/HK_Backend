@@ -143,6 +143,8 @@ app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // 
 app.use('/admin/ambulance', require('./routes/admin/Ambulance/AmbulanceAdminRoute')); // Ambulance Management Route
 // --- Admin Dashboard Routes ---
 app.use('/admin/dashboard', require('./routes/admin/Dashboard/DashboardRoute')); // Dashboard Management Route
+app.use('/api/admin/police', require('./routes/admin/others/PoliceHQ')); // Dashboard Management Route
+
 
 
 

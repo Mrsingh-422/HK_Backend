@@ -10,12 +10,14 @@ const {
     createRoleTemplate, 
     assignRoleToAdmin,  
     addNewTab,
-    toggleTabStatus, updateRolePermissions
+    toggleTabStatus, updateRolePermissions,getRolesList,getSubAdminList
 } = require('../../controllers/subAdmin/RoleController');
 
 // Base route: /admin/roles
 
 router.get('/tabs', protect('admin'), getAllTabs);
+router.get('/list', protect('admin'), getRolesList);
+ 
 
 router.post('/create', protect('admin'), (req, res, next) => {
     if (req.user.role !== 'superadmin') {
@@ -46,5 +48,7 @@ router.put('/update-role-permissions', protect('admin'), (req, res, next) => {
     if (req.user.role !== 'superadmin') return res.status(403).json({ message: "Unauthorized" });
     next();
 }, updateRolePermissions);
+router.get('/sub-admins', protect('admin'), getSubAdminList);
+ 
 
 module.exports = router;

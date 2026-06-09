@@ -171,7 +171,51 @@ const updateAdminProfile = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+const getAdminsList = async (req, res) => {
+    try {
+        const loggedInAdminId = req.user.id; // Login admin ki ID
+        const loggedInRole = req.user.role; // Login admin ka role (superadmin/subadmin)
+ 
+        let query = {};
+ 
+        // ROLE BASED LOGIC
+        if (loggedInRole === 'superadmin') {
+            // 1. Superadmin sabko dekh sakta hai (All Admins)
+            query = {};
+           
+            // Optional: Agar superadmin kisi specific role ko search karna chahe
+            if (req.query.role) query.role = req.query.role;
+           
+        } else if (loggedInRole === 'subadmin') {
+            // 2. Subadmin sirf khud ko dekh sakta hai
+            query = { _id: loggedInAdminId };
+        }
+ 
+        // Search Logic (Agar search query bheji hai)
+        if (req.query.search && loggedInRole === 'superadmin') {
+            query.$or = [
+                { name: { $regex: req.query.search, $options: 'i' } },
+                { email: { $regex: req.query.search, $options: 'i' } }
+            ];
+        }
+ 
+        const admins = await Admin.find(query)
+            .populate('roleType') // Permissions aur Role Title ke liye
+            .sort({ createdAt: -1 });
+ 
+        res.json({
+            success: true,
+            roleDetected: loggedInRole,
+            count: admins.length,
+            data: admins
+        });
+ 
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
 
 
 
-module.exports = { registerSuperAdmin, loginAdmin, createSubAdmin, updateAdminProfile };
+module.exports = { registerSuperAdmin, loginAdmin, createSubAdmin, updateAdminProfile ,getAdminsList};

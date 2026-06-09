@@ -21,6 +21,8 @@ const policeCaseSchema = new mongoose.Schema({
         required: true
     },
     assignedStaff: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStaff' }],
+    supportingStaff: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStaff' }],
+
     supportingStations: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'PoliceStation'
@@ -60,11 +62,11 @@ const policeCaseSchema = new mongoose.Schema({
     responseTime: { type: String },
  
     // 6. Status Tracking
-    status: {
-        type: String,
-        enum: ['Fresh', 'Pending', 'Under Investigation', 'Critical', 'Closed', 'Archived'],
-        default: 'Fresh'
-    },
+   status: {
+    type: String,
+    enum: ['Fresh', 'Pending', 'Accepted', 'Under Investigation', 'Critical', 'Closed', 'Archived'],
+    default: 'Fresh'
+},
  
     // 7. Media & Evidence (Matches Attachments Screen)
     evidence: [{

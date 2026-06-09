@@ -107,6 +107,83 @@ const updateRolePermissions = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+// endpoint GET /admin/roles/list
+const getRolesList = async (req, res) => {
+    try {
+        // 1. Saare Roles fetch karein
+        const roles = await Role.find().sort({ createdAt: -1 });
+ 
+        // 2. Saare Tabs fetch karein (taaki IDs se names match kar saken)
+        const allTabs = await Tab.find({ isActive: true });
+ 
+        // 3. Data ko process karein (Role loop ke andar Tabs ko find karein)
+        const enrichedRoles = await Promise.all(roles.map(async (role) => {
+           
+            // tabIds [1, 4, 39] ko map karke objects [{tabId: 1, name: "Users"}, ...] banayein
+            const detailedTabs = role.tabIds.map(id => {
+                const tabFound = allTabs.find(t => t.tabId === id);
+                return {
+                    tabId: id,
+                    name: tabFound ? tabFound.name : "Unknown Tab"
+                };
+            });
+ 
+            // Is role ke sath kitne admins linked hain wo bhi count karein
+            const adminCount = await Admin.countDocuments({ roleType: role._id });
+ 
+            return {
+                ...role._doc,
+                detailedTabs, // Nayi field jisme tab names honge
+                adminCount
+            };
+        }));
+ 
+        res.json({
+            success: true,
+            count: enrichedRoles.length,
+            data: enrichedRoles
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+const getSubAdminList = async (req, res) => {
+    try {
+        const { search } = req.query;
+       
+        // Base Query: Sirf subadmin role filter karna hai
+        let query = { role: 'subadmin' };
+ 
+        // Agar search query di gayi hai (Name ya Email par)
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { phone: { $regex: search, $options: 'i' } }
+            ];
+        }
+ 
+        const subAdmins = await Admin.find(query)
+            .populate('roleType', 'name description') // Role model se sirf name aur description uthayega
+            .sort({ createdAt: -1 }) // Newest first
+            .select('-token'); // Security ke liye token hide rakhein
+ 
+        res.status(200).json({
+            success: true,
+            count: subAdmins.length,
+            data: subAdmins
+        });
+ 
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Error fetching sub-admins",
+            error: error.message
+        });
+    }
+};
+ 
+ 
 
 
-module.exports = { getAllTabs, createRoleTemplate, assignRoleToAdmin, addNewTab, toggleTabStatus, updateRolePermissions };
+module.exports = { getAllTabs, createRoleTemplate, assignRoleToAdmin, addNewTab, toggleTabStatus, updateRolePermissions ,getRolesList,getSubAdminList};

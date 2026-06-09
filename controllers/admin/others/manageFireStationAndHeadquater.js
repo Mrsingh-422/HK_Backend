@@ -79,3 +79,62 @@ exports.deleteFireHQ = async (req, res) => {
         res.json({ success: true, message: "HQ Deleted" });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
+
+ 
+// --- GET ALL FIRE STATIONS (With HQ Name) ---
+exports.getAllFireStations = async (req, res) => {
+    try {
+        const { hqId, search } = req.query;
+        let query = {};
+ 
+        // 1. Filter by HQ if provided
+        if (hqId) query.hqId = hqId;
+ 
+        // 2. Search logic (Station Name or Code)
+        if (search) {
+            query.$or = [
+                { stationName: { $regex: search, $options: 'i' } },
+                { stationCode: { $regex: search, $options: 'i' } }
+            ];
+        }
+ 
+        // 3. Fetch Stations with HQ Details
+        // .populate('hqId', 'stationName') se sirf HQ ka naam aur ID aayegi
+        const stations = await FireStation.find(query)
+            .populate('hqId', 'stationName')
+            .sort({ createdAt: -1 });
+ 
+        res.json({
+            success: true,
+            count: stations.length,
+            data: stations
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
+exports.getAllFireStaff = async (req, res) => {
+    try {
+        const { stationId, search } = req.query;
+        let query = {};
+ 
+        if (stationId) query.stationId = stationId;
+        if (search) {
+            query.$or = [
+                { fullName: { $regex: search, $options: 'i' } },
+                { badgeId: { $regex: search, $options: 'i' } }
+            ];
+        }
+ 
+        // Station ID se Station Name populate kar rahe hain
+        const staff = await FireStaff.find(query)
+            .populate('stationId', 'stationName')
+            .sort({ createdAt: -1 });
+ 
+        res.json({ success: true, count: staff.length, data: staff });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
