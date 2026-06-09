@@ -108,6 +108,9 @@ const appointmentSchema = new mongoose.Schema({
         treatmentResult: { type: String, default: "" },
         dischargeNote: { type: String, default: "" },
         dischargedAt: { type: Date, default: null },
+
+        uploadedReports: [{ type: String }], 
+
         
         // Supports updateClinicalSummary endpoint
         chiefComplaint: { type: String, default: "" },
@@ -119,7 +122,7 @@ const appointmentSchema = new mongoose.Schema({
     // --- NEW: DYNAMIC BEDSIDE CARE TEAM CO-DOCTORS ARRAY ---
     bedsideCareTeam: [{
         doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', required: true },
-        status: { type: String, enum: ['Pending', 'Accepted', 'Rejected'], default: 'Pending' },
+        status: { type: String, enum: ['Pending', 'Accepted', 'In-Progress', 'Completed', 'Rejected'], default: 'Pending' },
         requestReason: { type: String, default: "" },
         patientConditionAtRequest: { type: String, default: "" },
         priority: { type: String, enum: ['Most Urgent', 'Urgent', 'Routine'], default: 'Routine' },

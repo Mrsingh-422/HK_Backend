@@ -12,6 +12,8 @@ const { getDistance } = require('../../../utils/helpers');
 const moment = require('moment');
 const crypto = require('crypto');
 const Bed = require('../../../models/Bed'); 
+const Medicine = require('../../../models/Medicine'); // 👈 ADD THIS AT THE TOP OF IMPORTS
+
 
 // --- 11. GET MY DOCTOR PROFILE DETAILS (GET API) ---
 const getMyDoctorProfile = async (req, res) => {
@@ -363,17 +365,18 @@ const getHospitalColleagues = async (req, res) => {
 
 // --- 7. DISCHARGE SUMMARY ---
 // --- 7. DISCHARGE SUMMARY (Fixed: Setting status to 'Discharge-Pending' for billing sync) ---
+// --- 7. DISCHARGE SUMMARY (Updated with safe atomic $set and Multiple file uploads) ---
 const submitDischargeSummary = async (req, res) => {
     try {
         const { appointmentId, diagnosis, investigation, treatmentResult, dischargeNote } = req.body;
 
-        const appointment = await Appointment.findById(appointmentId);
-        if (!appointment) return res.status(404).json({ message: "Case not found" });
-
         const now = new Date();
 
         // 1. Close Active Doctor's shift
-        const activeShift = appointment.treatmentHistory.find(h => 
+        const appointmentObj = await Appointment.findById(appointmentId);
+        if (!appointmentObj) return res.status(404).json({ success: false, message: "Case not found" });
+
+        const activeShift = appointmentObj.treatmentHistory.find(h => 
             h.toDoctorId && h.toDoctorId.toString() === req.user.id && !h.endTime
         );
         if (activeShift) {
@@ -381,7 +384,10 @@ const submitDischargeSummary = async (req, res) => {
             activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
         }
 
-        // 2. Submit summary & push Discharged action
+        // 2. Fetch uploaded multiple files paths from multer
+        const files = req.files || [];
+        const reportPaths = files.map(f => `/uploads/doctor_reports/${f.filename}`);
+
         const updateData = {
             status: 'Discharge-Pending',
             clinicalSummary: {
@@ -389,31 +395,39 @@ const submitDischargeSummary = async (req, res) => {
                 investigation: investigation || "",
                 treatmentResult: treatmentResult || "",
                 dischargeNote: dischargeNote || "",
-                dischargedAt: now
+                dischargedAt: now,
+                uploadedReports: reportPaths // 👈 Saved multiple files paths array securely!
             }
         };
 
         // Push Discharged state to timeline
-        appointment.treatmentHistory.push({
+        appointmentObj.treatmentHistory.push({
             fromDoctorId: req.user.id,
             action: 'Discharged',
-            notes: "Clinical discharge summary submitted.",
+            notes: "Clinical discharge summary and medical reports submitted.",
             timestamp: now
         });
 
-        // Safe DB atomic update
+        // 3. Safe DB atomic update
         const updatedAppt = await Appointment.findByIdAndUpdate(
             appointmentId,
             { 
                 $set: updateData,
-                $push: { treatmentHistory: appointment.treatmentHistory[appointment.treatmentHistory.length - 1] } 
+                $push: { treatmentHistory: appointmentObj.treatmentHistory[appointmentObj.treatmentHistory.length - 1] } 
             },
-            { new: true }
+            { new: true, runValidators: true }
         );
 
-        res.json({ success: true, message: "Discharge summary submitted.", data: updatedAppt });
+        res.json({ 
+            success: true, 
+            message: "Discharge summary & medical reports submitted successfully.", 
+            data: updatedAppt 
+        });
 
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("Discharge summary error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 8. DUTY STATUS TOGGLE ---
@@ -432,11 +446,34 @@ const updateDutyStatus = async (req, res) => {
 };
 
 // 9. GET MEDICINE TEMPLATES
+// 9. GET MEDICINE TEMPLATES (Updated: Fetching dynamically from real Medicine Database collection)
 const getMedicineList = async (req, res) => {
     try {
-        const medicines = ["Insulin 40IU/ml", "Paracetamol 500mg", "Telmisartan 40mg"];
-        res.json({ success: true, data: medicines });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const { search, page = 1, limit = 20 } = req.query; // Paginated and searchable
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        let query = {};
+
+        // Case-insensitive regex matching for medicine names in the database
+        if (search) {
+            query.name = { $regex: search, $options: 'i' };
+        }
+
+        // Fetching lightweight fields first to keep API response speed extremely fast
+        const medicines = await Medicine.find(query)
+            .select('name manufacturers salt_composition mrp best_price prescription_required')
+            .sort({ name: 1 }) // Alphabetic sorting
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        res.json({ 
+            success: true, 
+            count: medicines.length, 
+            data: medicines 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 10. UPDATE ADMISSION CLINICAL SUMMARY
@@ -539,15 +576,25 @@ const submitSpecialistFeedback = async (req, res) => {
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             "bedsideCareTeam.doctorId": specialistId,
-            "bedsideCareTeam.status": "Accepted"
+            // Can submit feedback if either Accepted (Initiating first) or already In-Progress
+            "bedsideCareTeam.status": { $in: ["Accepted", "In-Progress"] }
         });
 
         if (!appointment) {
             return res.status(403).json({ success: false, message: "Unauthorized: Aap is care team ke active member nahi hain." });
         }
 
-        // Update feedback subdocument
+        if (['Discharge-Pending', 'Completed'].includes(appointment.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Clinical Block: Patient ka treatment officially end ho chuka hai." 
+            });
+        }
+
+        // Find specialist object in array
         const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
+        
+        // Save feedback details
         careTeamObj.specialistFeedback = {
             observation,
             patientCondition,
@@ -555,8 +602,46 @@ const submitSpecialistFeedback = async (req, res) => {
             submittedAt: new Date()
         };
 
+        // 🚀 AUTO-STATE TRANSITION: Accepted ➔ In-Progress (First feedback submitted)
+        if (careTeamObj.status === 'Accepted') {
+            careTeamObj.status = 'In-Progress';
+            logEvent(`Specialist shift status changed to In-Progress.`);
+        }
+
         await appointment.save();
-        res.json({ success: true, message: "Clinical observation feedback submitted successfully!" });
+        res.json({ success: true, message: "Clinical observation feedback submitted successfully. Status set to In-Progress!" });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 13. CLOSE SPECIALIST CARE TREATMENT (Specialist Action - NEW API) ---
+const completeSpecialistCare = async (req, res) => {
+    try {
+        const { appointmentId } = req.body;
+        const specialistId = req.user.id;
+
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            "bedsideCareTeam.doctorId": specialistId,
+            "bedsideCareTeam.status": "In-Progress" // Treatment must be currently active (In-Progress) to complete
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Active In-Progress bedside treatment record not found or unauthorized." 
+            });
+        }
+
+        // Find specialist and transition status: In-Progress ➔ Completed
+        const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
+        careTeamObj.status = 'Completed';
+        careTeamObj.respondedAt = new Date(); // Work completion timestamp
+
+        await appointment.save();
+        res.json({ success: true, message: "Your bedside treatment phase has been successfully marked as Completed!" });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -674,5 +759,5 @@ module.exports = {
      getHospitalColleagues,
     submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary,
 
-    requestBedsideSpecialist,respondToBedsideRequest,submitSpecialistFeedback
+    requestBedsideSpecialist,respondToBedsideRequest,submitSpecialistFeedback,completeSpecialistCare
 };

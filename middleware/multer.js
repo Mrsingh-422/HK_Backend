@@ -642,6 +642,21 @@ const termsUpload = multer({
 }).single('termsPdf'); // Postman key: 'termsPdf'
 
 
+// ==========================================
+// 35. DOCTOR DISCHARGE MEDICAL REPORTS UPLOADS (Figma Screen: Upload Reports)
+// ==========================================
+const doctorReportDir = 'public/uploads/doctor_reports';
+ensureDir(doctorReportDir);
+
+const doctorReportUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, doctorReportDir),
+        filename: (req, file, cb) => cb(null, `report-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter, // Images and PDF allowed
+    limits: { fileSize: 10 * 1024 * 1024 } // Max 10MB per file
+}).array('clinicalReports', 10); // 👈 Allows uploading up to 10 files at once! Postman key: 'clinicalReports'
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -679,6 +694,7 @@ module.exports = {
     fireLeaveUploads, // Screen: New Request
     nursePackageUploads, // Screen: New Package
     serviceUpload, // Screen: Add Service
-    termsUpload
+    termsUpload,
+    doctorReportUploads
 
 };  

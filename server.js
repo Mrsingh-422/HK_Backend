@@ -126,6 +126,7 @@ app.use('/api/footer', require('./routes/admin/user/home/footerRoutes')); // Foo
 app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); // List Management Route (Doctors, Hospitals, etc.)
 //-- admin others folder routes ---
 app.use('/api/admin/fire', require('./routes/admin/others/manageFireStationAndHeadquaterRoute')); // Fire Management Route
+app.use('/api/admin/police', require('./routes/admin/others/PoliceHQ')); // Dashboard Management Route
 // --- Admin pharmacy Routes ---
 app.use('/admin/pharmacy', require('./routes/admin/Pharmacy/PharmacyAdminRoute')); // Pharmacy Management Route
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
@@ -143,7 +144,6 @@ app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // 
 app.use('/admin/ambulance', require('./routes/admin/Ambulance/AmbulanceAdminRoute')); // Ambulance Management Route
 // --- Admin Dashboard Routes ---
 app.use('/admin/dashboard', require('./routes/admin/Dashboard/DashboardRoute')); // Dashboard Management Route
-app.use('/api/admin/police', require('./routes/admin/others/PoliceHQ')); // Dashboard Management Route
 
 
 

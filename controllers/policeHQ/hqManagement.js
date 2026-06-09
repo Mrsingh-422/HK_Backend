@@ -288,6 +288,169 @@ const assignCase = async (req, res) => {
         res.status(400).json({ success: false, message: error.message });
     }
 };
+
+/**
+ * GET HQ CASE HISTORY
+ * Police HQ scope ke under closed aur archived cases ki complete list fetch karta hai
+ */
+const getHQCaseHistory = async (req, res) => {
+    try {
+        const hqId = req.user.id;
+        
+        // History cases ka matlab status 'Closed' ya 'Archived' hona
+        const query = {
+            hqId,
+            status: { $in: ['Closed', 'Archived'] }
+        };
+
+        const history = await PoliceCase.find(query)
+            .populate('stationId', 'stationName shoName stationCode')
+            .populate('assignedStaff', 'fullName rank badgeId')
+            .sort({ resolvedAt: -1, updatedAt: -1 }); // Newest resolved cases first
+
+        res.json({
+            success: true,
+            count: history.length,
+            data: history
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --------------------------------------------------
+/**
+ * GET PENDING / ACTIVE CASES
+ * Status: 'Pending', 'Under Investigation', 'Critical'
+ */
+const getPendingCases = async (req, res) => {
+    try {
+        const hqId = req.user.id;
+        const { search, page = 1, limit = 10 } = req.query;
+ 
+        // Fetching all active cases that are not fresh and not closed
+        let query = {
+            hqId,
+            status: { $in: ['Pending', 'Under Investigation', 'Critical'] }
+        };
+ 
+        // Search by Case Number, Victim Name or Address
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { victimName: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+ 
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const pendingCases = await PoliceCase.find(query)
+            .populate('stationId', 'stationName shoName stationCode')
+            .sort({ updatedAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+ 
+        const total = await PoliceCase.countDocuments(query);
+ 
+        res.json({
+            success: true,
+            message: "Pending cases fetched successfully",
+            data: pendingCases,
+            pagination: {
+                totalRecords: total,
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / parseInt(limit)),
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+ 
+/**
+ * GET CLOSED CASES
+ * Status: 'Closed'
+ */
+const getClosedCases = async (req, res) => {
+    try {
+        const hqId = req.user.id;
+        const { search, page = 1, limit = 10 } = req.query;
+ 
+        let query = { hqId, status: 'Closed' };
+ 
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { victimName: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+ 
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const closedCases = await PoliceCase.find(query)
+            .populate('stationId', 'stationName shoName stationCode')
+            .sort({ resolvedAt: -1, updatedAt: -1 }) // Sorted by resolution time
+            .skip(skip)
+            .limit(parseInt(limit));
+ 
+        const total = await PoliceCase.countDocuments(query);
+ 
+        res.json({
+            success: true,
+            message: "Closed cases fetched successfully",
+            data: closedCases,
+            pagination: {
+                totalRecords: total,
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / parseInt(limit)),
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+ 
+/**
+ * GET ARCHIVED CASES
+ * Status: 'Archived'
+ */
+const getArchivedCases = async (req, res) => {
+    try {
+        const hqId = req.user.id;
+        const { search, page = 1, limit = 10 } = req.query;
+ 
+        let query = { hqId, status: 'Archived' };
+ 
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { victimName: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+ 
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const archivedCases = await PoliceCase.find(query)
+            .populate('stationId', 'stationName shoName stationCode')
+            .sort({ updatedAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+ 
+        const total = await PoliceCase.countDocuments(query);
+ 
+        res.json({
+            success: true,
+            message: "Archived cases fetched successfully",
+            data: archivedCases,
+            pagination: {
+                totalRecords: total,
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / parseInt(limit)),
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+ 
+ 
  
  
 module.exports = {
@@ -305,6 +468,9 @@ module.exports = {
     createCase,
     updateCase,
     deleteCase,
-    assignCase,
+    assignCase,getHQCaseHistory,getPendingCases,
+    getClosedCases,
+    getArchivedCases,
+ 
 };
  

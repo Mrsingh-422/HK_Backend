@@ -21,6 +21,8 @@ const {
     getCaseHistory
 
 } = require('../../../controllers/policeHQ/policeStation/stationController');
+
+// Base URL: /policeStation/station
  
 // All routes require 'police-station' role
 router.use(protect('police-station'));

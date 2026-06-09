@@ -6,7 +6,7 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { 
     getDashboardOrderStats, 
     getLiveOrdersFeed ,
-    getOrderDetail
+    getOrderDetail,getAdminDashboardStats
 } = require('../../../controllers/admin/Dashboard/Dashboard');
 
 // Base URL: /admin/dashboard
@@ -19,6 +19,8 @@ router.get('/live-feed', protect('admin'), getLiveOrdersFeed);
 
 // --- NAYA DYNAMIC DETAIL ROUTE ---
 router.get('/order-details/:id', protect('admin'), getOrderDetail);
+
+router.get('/stats', protect('admin'), getAdminDashboardStats);
 
 
 module.exports = router;

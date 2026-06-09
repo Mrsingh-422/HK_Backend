@@ -18,8 +18,10 @@ const {
     createCase,
     updateCase,
     deleteCase,
-    assignCase,
+    assignCase,getHQCaseHistory,getPendingCases,getClosedCases,getArchivedCases
 } = require('../../controllers/policeHQ/hqManagement');
+
+// Base URL: /policeHQ/management
  
 // All routes are protected by Police HQ Auth
 router.use(protect('police-hq'));
@@ -57,6 +59,14 @@ router.delete('/cases/:id', deleteCase);
  
 // Assign a case to a specific Police Station and Staff
 router.post('/cases/assign/:id', assignCase);
+
+router.get('/case-history', getHQCaseHistory);
+// SPECIFIC STATUS APIs (Adding our new APIs here)
+router.get('/cases/pending', getPendingCases);    // Active/Pending Cases
+router.get('/cases/closed', getClosedCases);      // Completed/Closed Cases
+router.get('/cases/archived', getArchivedCases);  // Archived Cases
+ 
+ 
  
  
 module.exports = router;
