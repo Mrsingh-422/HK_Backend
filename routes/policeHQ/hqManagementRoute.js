@@ -25,7 +25,19 @@ const {
     closeCaseHQ,
     reassignCaseHQ,
 
-    sendSupportRequest
+    sendSupportRequest,
+    getCaseSummary,
+    updateLegalProgress,
+    markAllNotificationsRead,
+    getNearbyPoliceStations,
+    getOnHoldCases,
+    getPoliceContent,
+    updatePoliceContent
+
+
+
+
+
 } = require('../../controllers/policeHQ/hqManagement');
 
 // Base URL: /policeHQ/management
@@ -80,6 +92,27 @@ router.post('/cases/:id/reassign', reassignCaseHQ); // Screen 4/29 - Re-assign A
 
 // Send emergency reinforcement support request to other stations
 router.post('/cases/:id/support-request', sendSupportRequest);
+
+
+router.get('/cases/:id/summary', getCaseSummary);
+
+// Legal details / Court updates panel 
+router.put('/cases/:id/legal-progress', updateLegalProgress);
+
+// Screen 1 & 2: Mark all read action button
+router.put('/notifications/mark-all-read', markAllNotificationsRead);
+
+// Screen 29 & 30: Load nearby police stations using query ?lat=X&lng=Y
+router.get('/stations/nearby', getNearbyPoliceStations);
+
+// Screen 25: Load On Hold Cases tab explicitly
+router.get('/cases/on-hold', getOnHoldCases);
+
+// Settings content fetch route (Any verified role can read)
+router.get('/content/:type', getPoliceContent);
+
+// Settings content update route (Only Police-HQ edit access)
+router.put('/content/:type', updatePoliceContent);
  
  
 module.exports = router;

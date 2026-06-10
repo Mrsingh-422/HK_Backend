@@ -1,39 +1,29 @@
+// models/PoliceCase.js (Production Version)
 const mongoose = require('mongoose');
- 
+
 const policeCaseSchema = new mongoose.Schema({
-    // 1. Case Identity
     caseNo: {
         type: String,
         unique: true,
         required: true,
-        default: () => `POLICE-${Math.floor(100000 + Math.random() * 900000)}` // POLICE-123456
+        default: () => `POLICE-${Math.floor(100000 + Math.random() * 900000)}`
     },
- 
-    // 2. Relations
-    hqId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'PoliceHQ',
-        required: true
-    },
-    stationId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'PoliceStation',
-        required: true
-    },
+    hqId: { type: mongoose.Schema.Types.ObjectId, ref: 'PoliceHQ', required: true },
+    stationId: { type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStation', required: true },
     assignedStaff: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStaff' }],
     supportingStaff: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStaff' }],
-
-    supportingStations: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'PoliceStation'
-    }],
+    supportingStations: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStation' }],
     emergencyOverride: { type: Boolean, default: false },
- 
-    // 3. Complainant / Victim Details
+
+    // Complainant / Victim Details (Figma Screen 34)
     victimName: { type: String, required: true },
     victimPhone: { type: String, required: true },
-    
-    // 4. Incident Details
+    complainantName: { type: String, default: null }, // 👈 Added for Complainant Name
+
+    // Accused & IPC Legal Mapping (Figma Screen 34)
+    accusedName: { type: String, default: null }, // 👈 Added for Accused tracking
+    ipcSections: [{ type: String }],             // 👈 Added (e.g. ["420", "506"])
+
     incidentType: {
         type: String,
         enum: ['Theft', 'Assault', 'Robbery', 'Road Accident', 'Murder', 'Kidnapping', 'Drug Related', 'Cyber Crime', 'Domestic Violence', 'Other'],
@@ -49,26 +39,40 @@ const policeCaseSchema = new mongoose.Schema({
         enum: ['Under Investigation', 'Evidence Collection', 'Witness Statement', 'Suspect Apprehended', 'Under Control'],
         default: 'Under Investigation'
     },
- 
     severityLevel: { type: String, default: 'Level 1' },
     description: { type: String },
- 
-    // 5. Location Details (Maps Support)
+
+    // Location
     address: { type: String, required: true },
     location: {
         lat: { type: Number, required: true },
         lng: { type: Number, required: true }
     },
     responseTime: { type: String },
- 
-    // 6. Status Tracking
-   status: {
-    type: String,
-    enum: ['Fresh', 'Pending', 'Under Investigation', 'On Hold', 'Critical', 'Closed', 'Archived'], // 👈 'On Hold' status add kiya gaya hai
-    default: 'Fresh'
-},
- 
-    // 7. Media & Evidence (Matches Attachments Screen)
+
+    status: {
+        type: String,
+        enum: ['Fresh', 'Pending', 'Under Investigation', 'On Hold', 'Critical', 'Closed', 'Archived'],
+        default: 'Fresh'
+    },
+
+    // 🚨 Figma Screen 4 & 5 Integration: Transport Details (Linked with Ambulance & Hospital)
+    transportDetails: {
+        ambulanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance', default: null },
+        ambulanceNumber: { type: String, default: null }, // e.g. "PB65AM0001"
+        driverName: { type: String, default: null },      // e.g. "Kunal"
+        hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital', default: null },
+        hospitalName: { type: String, default: null }     // e.g. "Radius Hospital"
+    },
+
+    // 🚨 Figma Screen 34 Integration: Legal Progress tracking
+    legalProgress: {
+        arrestStatus: { type: String, enum: ['Arrested', 'Not Arrested', 'Fled'], default: 'Not Arrested' },
+        bailStatus: { type: String, enum: ['Pending', 'Approved', 'Denied', 'N/A'], default: 'Pending' },
+        courtDate: { type: Date, default: null },
+        isChargeSheetFiled: { type: Boolean, default: false }
+    },
+
     evidence: [{
         fileName: String,
         fileUrl: String,
@@ -76,41 +80,37 @@ const policeCaseSchema = new mongoose.Schema({
         fileSize: String,
         uploadedAt: { type: Date, default: Date.now }
     }],
-    cctvUrl: { type: String }, // Specifically for CCTV clips
- 
-    // 8. Timestamps for History
+    cctvUrl: { type: String },
+
+    // Timestamps
     reportedAt: { type: Date, default: Date.now },
+    incidentDateTime: { type: Date, default: null }, // 👈 Actual event timestamp (Figma Screen 34)
     dispatchedAt: { type: Date },
     resolvedAt: { type: Date },
- 
-    // 9. Case Progress Tracking (Screen 11 logic)
+
     progress: {
         isAccepted: { type: Boolean, default: false },
         isSiteVisited: { type: Boolean, default: false },
         isEvidenceCollected: { type: Boolean, default: false },
         isReportSubmitted: { type: Boolean, default: false }
     },
- 
-    // 10. Incident Report Additional Fields
+
     resourcesUsed: {
         pcrVansAssigned: { type: Number, default: 0 },
         personnelCount: { type: Number, default: 0 },
         forensicTeamCalled: { type: Boolean, default: false },
-        equipmentList: [String], // e.g., ["Fingerprint Kit", "Body Cams", "Breathalyzer"]
+        equipmentList: [String]
     },
     damageImpact: {
-        propertyDamageValue: { type: Number, default: 0 }, // Value in Rupees as seen in Figma
+        propertyDamageValue: { type: Number, default: 0 },
         injuries: { type: Number, default: 0 },
         casualties: { type: Number, default: 0 },
         impactLevel: { type: String, enum: ['Minor', 'Major', 'Total', 'Critical Structural Damage'] }
     },
- 
-    remarks: { type: String }, // Officer-in-charge final notes
- 
+    remarks: { type: String }
+
 }, { timestamps: true });
- 
-// Geo-spatial index for location-based searching
+
 policeCaseSchema.index({ location: "2dsphere" });
- 
+
 module.exports = mongoose.model('PoliceCase', policeCaseSchema);
- 

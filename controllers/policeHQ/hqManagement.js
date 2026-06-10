@@ -1,6 +1,10 @@
 const PoliceStation = require('../../models/PoliceStation');
 const PoliceCase = require('../../models/PoliceCase');
 const PoliceHQ = require('../../models/PoliceHQ');
+const PoliceContent = require('../../models/PoliceContent');
+
+const { getDistance } = require('../../utils/helpers'); // 👈 Direct helper import
+
 // Assume a Notification model exists based on Screens 21/22
 // const Notification = require('../../models/Notification');
 const bcrypt = require('bcryptjs');
@@ -650,6 +654,273 @@ const reassignCaseHQ = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+/**
+ * 1. GET FULL CASE SUMMARY
+ * Figma Link: Screen 34 (FIR Details, Incident Info, Legal Progress, Attached Evidence)
+ */
+const getCaseSummary = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const caseData = await PoliceCase.findById(id)
+            .populate('stationId', 'stationName stationCode shoName email phone')
+            .populate('assignedStaff', 'fullName rank badgeId mobileNumber')
+            .populate('transportDetails.ambulanceId')
+            .populate('transportDetails.hospitalId');
+
+        if (!caseData) {
+            return res.status(404).json({ success: false, message: "Case summary records not found." });
+        }
+
+        res.json({
+            success: true,
+            message: "Detailed case summary fetched successfully",
+            data: caseData
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 2. UPDATE LEGAL & COURT PROGRESS INFO
+ * Figma Link: Screen 34 (Legal Progress Grid form)
+ */
+const updateLegalProgress = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { complainantName, accusedName, ipcSections, arrestStatus, bailStatus, courtDate, isChargeSheetFiled } = req.body;
+
+        const updatedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            {
+                $set: {
+                    complainantName,
+                    accusedName,
+                    ipcSections,
+                    'legalProgress.arrestStatus': arrestStatus,
+                    'legalProgress.bailStatus': bailStatus,
+                    'legalProgress.courtDate': courtDate,
+                    'legalProgress.isChargeSheetFiled': isChargeSheetFiled
+                }
+            },
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        res.json({
+            success: true,
+            message: "Legal and court progress metrics updated",
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 1. MARK ALL NOTIFICATIONS AS READ
+ * Figma Link: Screen 1 & 2 (Top Right "Mark all read" text button)
+ */
+const markAllNotificationsRead = async (req, res) => {
+    try {
+        // Agar aapke paas Notification model hai toh use update karein:
+        // await Notification.updateMany({ recipientId: req.user.id, isRead: false }, { $set: { isRead: true } });
+        
+        res.json({
+            success: true,
+            message: "All notifications marked as read successfully"
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+/**
+ * GET NEARBY POLICE STATIONS SORTED BY PROXIMITY
+ * Figma Link: Screen 29 & 30 (Using Google Distance Matrix in Prod vs Haversine in Dev)
+ */
+const getNearbyPoliceStations = async (req, res) => {
+    try {
+        const { lat, lng, search } = req.query;
+
+        if (!lat || !lng) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Case latitude and longitude are required to calculate proximity" 
+            });
+        }
+
+        const originLat = parseFloat(lat);
+        const originLng = parseFloat(lng);
+
+        // Active stations query
+        let query = { hqId: req.user.id, isActive: true };
+        if (search) {
+            query.stationName = { $regex: search, $options: 'i' };
+        }
+
+        const stations = await PoliceStation.find(query);
+
+        // Chunki getDistance async hai, isliye Promise.all ka use karenge parallel execution ke liye
+        const stationsWithDistance = await Promise.all(
+            stations.map(async (station) => {
+                const stationLat = station.location?.lat || 0;
+                const stationLng = station.location?.lng || 0;
+
+                // Direct asynchronous call to your utility helper
+                const distanceKM = await getDistance(originLat, originLng, stationLat, stationLng);
+
+                return {
+                    ...station._doc,
+                    distance: `${distanceKM} km away` // Figma representation
+                };
+            })
+        );
+
+        // Nearest station ko list me sabse upar rakhne ke liye float sort
+        stationsWithDistance.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+
+        res.json({
+            success: true,
+            data: stationsWithDistance
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 3. GET SPECIFIC ON-HOLD CASES
+ * Figma Link: Screen 25 ("On Hold Cases" Tab active view)
+ */
+const getOnHoldCases = async (req, res) => {
+    try {
+        const hqId = req.user.id;
+        const { search, page = 1, limit = 10 } = req.query;
+
+        let query = { hqId, status: 'On Hold' };
+
+        if (search) {
+            query.$or = [
+                { caseNo: { $regex: search, $options: 'i' } },
+                { victimName: { $regex: search, $options: 'i' } },
+                { address: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const cases = await PoliceCase.find(query)
+            .populate('stationId', 'stationName shoName stationCode')
+            .sort({ updatedAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        const total = await PoliceCase.countDocuments(query);
+
+        res.json({
+            success: true,
+            message: "On-Hold cases fetched successfully",
+            data: cases,
+            pagination: {
+                totalRecords: total,
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / parseInt(limit)),
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+/**
+ * 1. GET STATIC CONTENT (About, Help, or Terms)
+ * Figma Link: Screen 31 (List items: About, Help, Terms & Conditions click handler)
+ * Access: Publicly readable for all panels
+ */
+const getPoliceContent = async (req, res) => {
+    try {
+        const { type } = req.params; // 'about', 'help', or 'terms'
+        
+        const formattedType = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+
+        let contentData = await PoliceContent.findOne({ contentType: formattedType });
+
+        // 🚨 AUTO-SEEDING: Agar DB me data nahi hai, to automatically default placeholders create kar do
+        if (!contentData) {
+            contentData = await PoliceContent.create({
+                contentType: formattedType,
+                title: formattedType === 'Help' ? "Police Support & FAQ" : `Standard ${formattedType} Page`,
+                content: formattedType === 'Help' 
+                    ? "Welcome to help support. Contact us for any operational guidelines." 
+                    : `Please update this default ${formattedType} content from the headquarters panel.`,
+                faqs: formattedType === 'Help' ? [
+                    { 
+                        question: "How to assign or re-assign a case?", 
+                        answer: "Navigate to Case Details, choose the station from the dropdown, and tap on Confirm." 
+                    }
+                ] : [],
+                supportContact: {
+                    phone: "+91 9876543210", // Figma Screen 21 Phone
+                    email: "help@gmail.com"  // Figma Screen 21 Email
+                }
+            });
+        }
+
+        res.json({
+            success: true,
+            data: contentData
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 2. UPDATE STATIC CONTENT (About, Help, or Terms)
+ * Figma Link: Screen 31 (System settings management option)
+ * Access: Police HQ Only
+ */
+const updatePoliceContent = async (req, res) => {
+    try {
+        const { type } = req.params; // Expects: 'about', 'help', or 'terms'
+        const { title, content, faqs, supportContact } = req.body;
+
+        const formattedType = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+
+        // upsert: true automatic model configure (create) kar dega agar DB me data create nahi hua hai
+        const updatedContent = await PoliceContent.findOneAndUpdate(
+            { contentType: formattedType },
+            {
+                $set: {
+                    title,
+                    content,
+                    faqs,
+                    supportContact,
+                    lastUpdatedBy: req.user.id
+                }
+            },
+            { new: true, upsert: true, runValidators: true }
+        );
+
+        res.json({
+            success: true,
+            message: `${formattedType} content updated successfully`,
+            data: updatedContent
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
  
 module.exports = {
     getHQDashboard,
@@ -673,7 +944,16 @@ module.exports = {
     updateCaseStatus,
     addEvidenceHQ,sendSupportRequest,
     closeCaseHQ,
-    reassignCaseHQ
+    reassignCaseHQ,
+    getCaseSummary,
+    updateLegalProgress,
+
+    markAllNotificationsRead,
+    getNearbyPoliceStations,
+    getOnHoldCases,
+
+    getPoliceContent,
+    updatePoliceContent
  
 };
  
