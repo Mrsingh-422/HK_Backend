@@ -183,9 +183,22 @@ const processPrescription = async (req, res) => {
         const { appointmentId, diagnosis, medicines, advice } = req.body;
 
         const appointment = await Appointment.findById(appointmentId);
-        if (!appointment) return res.status(404).json({ message: "Appointment record not found" });
+        if (!appointment) return res.status(404).json({ success: false, message: "Appointment record not found" });
+
+        // 🚀 SECURE ACCESS VALIDATION: Only primary doctor or accepted bedside specialists can prescribe
+        const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === req.user.id;
+        const isCareTeamMember = appointment.bedsideCareTeam.some(d => 
+            d.doctorId.toString() === req.user.id && ['Accepted', 'In-Progress'].includes(d.status)
+        );
+
+        if (!isPrimaryDoc && !isCareTeamMember) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "Access Denied: Aap is patient ke active treating physician ya bedside team member nahi hain. Prescription blocked." 
+            });
+        }
         
-        // FIX: Safe array converter if diagnosis comes as a string from frontend
+        // Safe array converter if diagnosis comes as a string from frontend
         const diagnosisArray = Array.isArray(diagnosis) ? diagnosis : (diagnosis ? [diagnosis] : []);
 
         const prescription = await Prescription.create({
@@ -197,8 +210,10 @@ const processPrescription = async (req, res) => {
             additionalNotes: advice
         });
 
-        res.status(201).json({ success: true, message: "Prescription added", data: prescription });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(201).json({ success: true, message: "Prescription added successfully", data: prescription });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 2. TRANSFER PATIENT HANDOVER (Doctor A Panel)
@@ -567,56 +582,84 @@ const respondToBedsideRequest = async (req, res) => {
     }
 };
 
-// 3. SUBMIT CO-DOCTOR CLINICAL FEEDBACK (Specialist Doctor Action)
+// --- 14. START SPECIALIST TREATMENT SHIFT (Specialist Action - NEW API) ---
+const startSpecialistCare = async (req, res) => {
+    try {
+        const { appointmentId } = req.body;
+        const specialistId = req.user.id;
+
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            "bedsideCareTeam.doctorId": specialistId,
+            "bedsideCareTeam.status": "Accepted" // Must be accepted first to start
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Accepted bedside request not found or unauthorized." });
+        }
+
+        // Find specialist and transition status: Accepted ➔ In-Progress
+        const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
+        careTeamObj.status = 'In-Progress';
+        careTeamObj.startTime = new Date(); // 👈 Start of treatment shift timing!
+
+        await appointment.save();
+        res.json({ success: true, message: "Bedside specialist treatment started successfully. Status: In-Progress!", data: appointment });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 3. SUBMIT CO-DOCTOR CLINICAL FEEDBACK (Fixed: Allows MULTIPLE feedbacks while In-Progress) ---
 const submitSpecialistFeedback = async (req, res) => {
     try {
         const { appointmentId, observation, patientCondition, priorityRating } = req.body;
         const specialistId = req.user.id;
 
+        // Can strictly submit feedback ONLY if treatment is currently active ('In-Progress')
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             "bedsideCareTeam.doctorId": specialistId,
-            // Can submit feedback if either Accepted (Initiating first) or already In-Progress
-            "bedsideCareTeam.status": { $in: ["Accepted", "In-Progress"] }
+            "bedsideCareTeam.status": "In-Progress" 
         });
 
         if (!appointment) {
-            return res.status(403).json({ success: false, message: "Unauthorized: Aap is care team ke active member nahi hain." });
+            return res.status(403).json({ success: false, message: "Unauthorized: Aapka treatment shift active (In-Progress) nahi hai." });
         }
 
+        // Block modifications if treatment already ended
         if (['Discharge-Pending', 'Completed'].includes(appointment.status)) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Clinical Block: Patient ka treatment officially end ho chuka hai." 
+                message: "Clinical Block: Patient ka treatment officially end ho chuka hai. Ab aap record change nahi kar sakte." 
             });
         }
 
         // Find specialist object in array
         const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
         
-        // Save feedback details
-        careTeamObj.specialistFeedback = {
-            observation,
-            patientCondition,
-            priorityRating: priorityRating || 'Routine',
-            submittedAt: new Date()
-        };
-
-        // 🚀 AUTO-STATE TRANSITION: Accepted ➔ In-Progress (First feedback submitted)
-        if (careTeamObj.status === 'Accepted') {
-            careTeamObj.status = 'In-Progress';
-            logEvent(`Specialist shift status changed to In-Progress.`);
+        // Safeguard array initialization to prevent undefined errors
+        if (!careTeamObj.specialistFeedback) {
+            careTeamObj.specialistFeedback = [];
         }
 
+        // 🚀 FIX: Appending (Pushing) new feedback instead of overwriting existing object
+        careTeamObj.specialistFeedback.push({
+            observation: observation || "",
+            patientCondition: patientCondition || "",
+            priorityRating: priorityRating || 'Routine',
+            submittedAt: new Date()
+        });
+
         await appointment.save();
-        res.json({ success: true, message: "Clinical observation feedback submitted successfully. Status set to In-Progress!" });
+        res.json({ success: true, message: "Clinical observation feedback appended successfully. Status remains In-Progress!" });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 13. CLOSE SPECIALIST CARE TREATMENT (Specialist Action - NEW API) ---
+// --- 13. CLOSE SPECIALIST CARE TREATMENT (Specialist Action) ---
 const completeSpecialistCare = async (req, res) => {
     try {
         const { appointmentId } = req.body;
@@ -625,7 +668,7 @@ const completeSpecialistCare = async (req, res) => {
         const appointment = await Appointment.findOne({
             _id: appointmentId,
             "bedsideCareTeam.doctorId": specialistId,
-            "bedsideCareTeam.status": "In-Progress" // Treatment must be currently active (In-Progress) to complete
+            "bedsideCareTeam.status": "In-Progress" // Must be active (In-Progress) to complete
         });
 
         if (!appointment) {
@@ -635,13 +678,18 @@ const completeSpecialistCare = async (req, res) => {
             });
         }
 
+        const now = new Date();
+
         // Find specialist and transition status: In-Progress ➔ Completed
         const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
         careTeamObj.status = 'Completed';
-        careTeamObj.respondedAt = new Date(); // Work completion timestamp
+        careTeamObj.endTime = now; // 👈 End of treatment shift timing!
+        
+        // Dynamic duration display calculation
+        careTeamObj.durationDisplay = calculateDurationDisplay(careTeamObj.startTime, now);
 
         await appointment.save();
-        res.json({ success: true, message: "Your bedside treatment phase has been successfully marked as Completed!" });
+        res.json({ success: true, message: "Your bedside treatment phase has been successfully marked as Completed!", data: appointment });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -759,5 +807,5 @@ module.exports = {
      getHospitalColleagues,
     submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary,
 
-    requestBedsideSpecialist,respondToBedsideRequest,submitSpecialistFeedback,completeSpecialistCare
+    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare
 };

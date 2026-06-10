@@ -393,6 +393,14 @@ const getHospitalServices = async (req, res) => {
 };
 
 
+// helper funciton for generate final bill and discharge
+const calcDuration = (start, end) => {
+    if (!start || !end) return "";
+    const duration = moment.duration(moment(end).diff(moment(start)));
+    const hours = Math.floor(duration.asHours());
+    const minutes = duration.minutes();
+    return hours > 0 ? `${hours} hr ${minutes} mins` : `${minutes} mins`;
+};
 // --- 3. FINAL DISCHARGE & DYNAMIC BILLING (FIXED: Handles undefined subdocuments and NaN states safely) ---
 const generateFinalBillAndDischarge = async (req, res) => {
     try {
@@ -442,6 +450,17 @@ const generateFinalBillAndDischarge = async (req, res) => {
             appointment.specialServices.push({ serviceName: `Overstay Bed Surcharge`, price: overstayCharge });
         }
 
+        // 🚀 FIX: Auto-close any active bedside specialist care shifts on final admin discharge
+        if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
+            appointment.bedsideCareTeam.forEach(careMember => {
+                if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
+                    careMember.status = 'Completed';
+                    careMember.endTime = actualEndDate;
+                    careMember.durationDisplay = calcDuration(careMember.startTime, actualEndDate);
+                }
+            });
+        }
+
         await appointment.save();
 
         // Safe Wallet Sync
@@ -480,6 +499,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
 
 
 
@@ -1167,7 +1187,7 @@ const emergencyDischarge = async (req, res) => {
         const { appointmentId, billingItems } = req.body; 
         const hospitalId = req.user.id; // Logged-in Hospital Admin
 
-        // 1. Find the target appointment and verify it belongs to this hospital and is an emergency case
+        // Find the target appointment and verify it belongs to this hospital and is an emergency case
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             hospitalId,
@@ -1192,7 +1212,7 @@ const emergencyDischarge = async (req, res) => {
         let overstayCharge = 0;
         let actualEndDate = new Date();
 
-        // 2. Calculate dynamic overstay bed charges
+        // Calculate dynamic overstay bed charges
         if (appointment.startDate && appointment.endDate) {
             const scheduledEnd = moment(appointment.endDate).startOf('day');
             const actualEnd = moment(actualEndDate).startOf('day');
@@ -1208,7 +1228,7 @@ const emergencyDischarge = async (req, res) => {
         const items = Array.isArray(billingItems) ? billingItems : [];
         const extraTotal = items.reduce((sum, item) => sum + Number(item.price), 0) + overstayCharge;
         
-        // 3. Update Appointment status to Completed
+        // Update Appointment status to Completed
         appointment.status = 'Completed';
         appointment.endDate = actualEndDate;
         appointment.totalAmount = (appointment.totalAmount || 0) + extraTotal;
@@ -1229,9 +1249,20 @@ const emergencyDischarge = async (req, res) => {
             appointment.specialServices.push({ serviceName: `Overstay Bed Surcharge`, price: overstayCharge });
         }
 
+        // 🚀 FIX: Auto-close any active bedside specialist care shifts on final emergency discharge
+        if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
+            appointment.bedsideCareTeam.forEach(careMember => {
+                if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
+                    careMember.status = 'Completed';
+                    careMember.endTime = actualEndDate;
+                    careMember.durationDisplay = calcDuration(careMember.startTime, actualEndDate);
+                }
+            });
+        }
+
         await appointment.save();
 
-        // 4. Safe Wallet Sync (Credit only the stays extra billing amount)
+        // Safe Wallet Sync
         let wallet = await Wallet.findOne({ vendorId: hospitalId });
         if (!wallet) {
             wallet = await Wallet.create({ vendorId: hospitalId, balance: 0, transactions: [] });
@@ -1246,7 +1277,7 @@ const emergencyDischarge = async (req, res) => {
         });
         await wallet.save();
 
-        // 5. Release Bed & Update Ward capacity
+        // Release Bed & Update Ward capacity
         if (appointment.bedId) {
             const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             if (bed) {
@@ -1254,7 +1285,7 @@ const emergencyDischarge = async (req, res) => {
             }
         }
 
-        // 6. 🚀 AUTOMATIC AMBULANCE RELEASE (Frees on-duty ambulance instantly)
+        // Automatic ambulance release
         if (appointment.ambulanceId) {
             await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
                 $set: { availableForEmergency: true } 
@@ -1272,6 +1303,7 @@ const emergencyDischarge = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 module.exports = { 

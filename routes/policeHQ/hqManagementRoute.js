@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
-const { policeHQUploads, policeStationUploads } = require('../../middleware/multer');
+const { policeHQUploads, policeStationUploads,policeEvidenceUploads } = require('../../middleware/multer');
 const {
     getHQDashboard,
     createStation,
@@ -18,7 +18,14 @@ const {
     createCase,
     updateCase,
     deleteCase,
-    assignCase,getHQCaseHistory,getPendingCases,getClosedCases,getArchivedCases
+    assignCase,getHQCaseHistory,getPendingCases,getClosedCases,getArchivedCases,
+
+     updateCaseStatus,
+    addEvidenceHQ,
+    closeCaseHQ,
+    reassignCaseHQ,
+
+    sendSupportRequest
 } = require('../../controllers/policeHQ/hqManagement');
 
 // Base URL: /policeHQ/management
@@ -66,7 +73,13 @@ router.get('/cases/pending', getPendingCases);    // Active/Pending Cases
 router.get('/cases/closed', getClosedCases);      // Completed/Closed Cases
 router.get('/cases/archived', getArchivedCases);  // Archived Cases
  
- 
+ router.patch('/cases/:id/status', updateCaseStatus); // Screen 25/26 - Status Update API
+router.post('/cases/:id/evidence', policeEvidenceUploads, addEvidenceHQ);
+router.put('/cases/:id/close', closeCaseHQ); // Screen 34 - Case Close API
+router.post('/cases/:id/reassign', reassignCaseHQ); // Screen 4/29 - Re-assign API
+
+// Send emergency reinforcement support request to other stations
+router.post('/cases/:id/support-request', sendSupportRequest);
  
  
 module.exports = router;

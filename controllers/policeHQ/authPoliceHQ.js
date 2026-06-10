@@ -57,4 +57,91 @@ const updatePoliceHQProfile = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { registerPoliceHQ, loginPoliceHQ, updatePoliceHQProfile };
+
+/**
+ * 5. SEND PASSWORD RESET REQUEST (forgot password)
+ * Figma Link: Screen 18 (Forgot Password email popup submit)
+ */
+const forgotPasswordRequest = async (req, res) => {
+    try {
+        const { email } = req.body;
+        const hq = await PoliceHQ.findOne({ email });
+        if (!hq) {
+            return res.status(404).json({ success: false, message: "Police HQ with this email does not exist" });
+        }
+
+        // Generate a 4-Digit OTP for Testing
+        const testOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        hq.otp = testOtp;
+        hq.otpExpires = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
+        await hq.save();
+
+        res.json({
+            success: true,
+            message: "OTP sent successfully to your email (Testing Bypass)",
+            otp: testOtp // Testing bypass ke liye response me return kiya hai
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 6. VERIFY OTP
+ * Figma Link: Screen 19 (4-Digit OTP input verify click)
+ */
+const verifyOtpRequest = async (req, res) => {
+    try {
+        const { email, otp } = req.body;
+        const hq = await PoliceHQ.findOne({ email, otp }).select('+otpExpires');
+
+        if (!hq || hq.otpExpires < Date.now()) {
+            return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+        }
+
+        // OTP Valid, use temporary reset access
+        hq.otp = null; 
+        hq.otpExpires = null;
+        await hq.save();
+
+        res.json({
+            success: true,
+            message: "OTP Verified successfully. You can reset your password now."
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 7. RESET PASSWORD AFTER OTP VERIFICATION
+ */
+const resetPasswordAfterVerification = async (req, res) => {
+    try {
+        const { email, newPassword } = req.body;
+        if (!newPassword) {
+            return res.status(400).json({ success: false, message: "newPassword is required" });
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        const hq = await PoliceHQ.findOneAndUpdate(
+            { email },
+            { $set: { password: hashedPassword } },
+            { new: true }
+        );
+
+        if (!hq) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        res.json({
+            success: true,
+            message: "Password reset successfully. Please login with new password."
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+module.exports = { registerPoliceHQ, loginPoliceHQ, updatePoliceHQProfile ,forgotPasswordRequest,
+    verifyOtpRequest,
+    resetPasswordAfterVerification};

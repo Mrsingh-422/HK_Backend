@@ -14,7 +14,7 @@ const {
     submitDischargeSummary, 
     updateDutyStatus,getMedicineList, updateClinicalSummary,
 
-    requestBedsideSpecialist,respondToBedsideRequest,submitSpecialistFeedback,completeSpecialistCare
+    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 
@@ -51,6 +51,7 @@ router.post('/case/discharge-summary', protect('hospital-doctor'), doctorReportU
 // --- BEDSIDE CARE TEAM ROUTES ---
 router.post('/case/bedside-request', protect('hospital-doctor'), requestBedsideSpecialist); // Invite Specialist
 router.post('/case/bedside-respond', protect('hospital-doctor'), respondToBedsideRequest);   // Accept/Reject Invitation
+router.post('/case/bedside-start', protect('hospital-doctor'), startSpecialistCare); // 👈 ADD THIS ROUTE
 router.post('/case/bedside-feedback', protect('hospital-doctor'), submitSpecialistFeedback);  // Submit Specialist Observations
 router.post('/case/bedside-complete', protect('hospital-doctor'), completeSpecialistCare); // 👈 ADD THIS ROUTE
 

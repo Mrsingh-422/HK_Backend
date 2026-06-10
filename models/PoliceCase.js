@@ -64,7 +64,7 @@ const policeCaseSchema = new mongoose.Schema({
     // 6. Status Tracking
    status: {
     type: String,
-    enum: ['Fresh', 'Pending', 'Accepted', 'Under Investigation', 'Critical', 'Closed', 'Archived'],
+    enum: ['Fresh', 'Pending', 'Under Investigation', 'On Hold', 'Critical', 'Closed', 'Archived'], // 👈 'On Hold' status add kiya gaya hai
     default: 'Fresh'
 },
  

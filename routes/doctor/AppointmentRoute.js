@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
 
-const { 
+const { getVendorDashboard,
     getDoctorBookings,
     getTodayBookings,
     confirmAppointment,
@@ -17,6 +17,8 @@ const {
 } = require('../../controllers/doctor/Appointment');
 
 // Base URL: /doctor/appointments
+
+router.get('/dashboard/summary', protect('doctor'), getVendorDashboard);
 
 // 1. Dashboard Stats (Figma: Total Revenue, Completed count)
 router.get('/stats', protect('doctor'), getDoctorStats);

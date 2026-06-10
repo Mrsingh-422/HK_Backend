@@ -25,6 +25,11 @@ const getHospitalAllBookings = async (req, res) => {
                 populate: { path: 'wardId', select: 'name type' } 
             })
             .populate('userId', 'name phone email profilePic age gender')
+            // 🚀 FIX: Populating bedsideCareTeam doctor profile info for counters desk
+            .populate({
+                path: 'bedsideCareTeam.doctorId',
+                select: 'name speciality profileImage dutyStatus'
+            })
             .sort({ createdAt: -1 })
             .limit(limit * 1)
             .skip((page - 1) * limit);

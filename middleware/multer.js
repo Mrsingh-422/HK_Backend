@@ -657,6 +657,35 @@ const doctorReportUploads = multer({
     limits: { fileSize: 10 * 1024 * 1024 } // Max 10MB per file
 }).array('clinicalReports', 10); // 👈 Allows uploading up to 10 files at once! Postman key: 'clinicalReports'
 
+
+// ==========================================
+// 36. POLICE CASE EVIDENCE UPLOADS (Figma Case Details Screen)
+// ==========================================
+const policeEvidenceDir = 'public/uploads/police_evidence';
+ensureDir(policeEvidenceDir);
+
+const policeEvidenceUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, policeEvidenceDir),
+        filename: (req, file, cb) => cb(null, `pevid-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        // Figma instructions: JPG, PNG, MP4 or PDF allowed
+        const allowedMimes = [
+            'image/jpeg', 'image/jpg', 'image/png', 
+            'application/pdf', 
+            'video/mp4'
+        ];
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only JPG, PNG, MP4, and PDF files are allowed!'), false);
+        }
+    },
+    limits: { fileSize: 15 * 1024 * 1024 } // 15MB limit to allow video/PDF evidence
+}).array('evidenceFiles', 10); // Multi-upload support up to 10 files (Postman Key: 'evidenceFiles')
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -695,6 +724,7 @@ module.exports = {
     nursePackageUploads, // Screen: New Package
     serviceUpload, // Screen: Add Service
     termsUpload,
-    doctorReportUploads
+    doctorReportUploads,
+    policeEvidenceUploads
 
 };  

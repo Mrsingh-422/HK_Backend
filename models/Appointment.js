@@ -129,12 +129,12 @@ const appointmentSchema = new mongoose.Schema({
         rejectionReason: { type: String, default: "" },
         
         // Co-Doctor Clinical feedback notes
-        specialistFeedback: {
+        specialistFeedback: [{
             observation: { type: String, default: "" },
             patientCondition: { type: String, default: "" },
             priorityRating: { type: String, default: "" },
-            submittedAt: { type: Date, default: null }
-        },
+            submittedAt: { type: Date, default: Date.now }
+        }],
         requestedAt: { type: Date, default: Date.now },
         respondedAt: { type: Date, default: null }
     }]

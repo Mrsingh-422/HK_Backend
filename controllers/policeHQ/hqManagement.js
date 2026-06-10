@@ -451,7 +451,205 @@ const getArchivedCases = async (req, res) => {
 };
  
  
- 
+ /**
+ * 1. UPDATE CASE STATUS (HQ Level)
+ * Figma Link: Screen 25 & 26 (Status change to 'On Hold' or 'Under Investigation')
+ */
+const updateCaseStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, remarks } = req.body;
+
+        const allowedStatus = ['Fresh', 'Pending', 'Under Investigation', 'On Hold', 'Critical', 'Closed', 'Archived'];
+        if (!allowedStatus.includes(status)) {
+            return res.status(400).json({ success: false, message: "Invalid status value" });
+        }
+
+        const updatedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            { $set: { status, remarks } },
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        res.json({
+            success: true,
+            message: `Case status updated to ${status} successfully`,
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 2. ADD EVIDENCE / ATTACH FILE FROM HQ
+ * Figma Link: Screen 4 & 5 (Case Details Page - Attached File Section with Upload button)
+ */
+/**
+ * ADD EVIDENCE FROM HQ (Using Dedicated policeEvidenceUploads Multer)
+ * Figma: Screen 4 & 5 (Upload file section with Camera/Gallery)
+ */
+const addEvidenceHQ = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Multi-files are received via req.files (from Multer array)
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, message: "No files uploaded" });
+        }
+
+        const caseData = await PoliceCase.findById(id);
+        if (!caseData) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        // Processing each file array
+        req.files.forEach(file => {
+            caseData.evidence.push({
+                fileName: file.originalname,
+                fileUrl: `/uploads/police_evidence/${file.filename}`,
+                fileType: file.mimetype.startsWith('image/') ? 'Image' : 
+                          file.mimetype.startsWith('video/') ? 'Video' : 'Document',
+                fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
+                uploadedAt: Date.now()
+            });
+        });
+
+        caseData.progress.isEvidenceCollected = true;
+        await caseData.save();
+
+        res.json({
+            success: true,
+            message: `${req.files.length} Evidence files attached successfully`,
+            data: caseData
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * SEND REINFORCEMENT/SUPPORT REQUEST TO OTHER STATIONS
+ * Figma: Case Details page backup flow or emergency override trigger
+ */
+const sendSupportRequest = async (req, res) => {
+    try {
+        const { id } = req.params; // Case ID
+        const { supportingStationIds } = req.body; // Array of local police station ObjectIds
+
+        if (!supportingStationIds || !Array.isArray(supportingStationIds)) {
+            return res.status(400).json({ success: false, message: "supportingStationIds array is required" });
+        }
+
+        const updatedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            { 
+                $addToSet: { supportingStations: { $each: supportingStationIds } },
+                $set: { emergencyOverride: true } // Override trigger for backup status
+            },
+            { new: true }
+        ).populate('supportingStations', 'stationName stationCode shoName');
+
+        if (!updatedCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        res.json({
+            success: true,
+            message: "Emergency support request sent to supporting stations successfully",
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 3. CLOSE CASE & SUBMIT FINAL REMARKS (HQ Level)
+ * Figma Link: Screen 34 (Case Summary / Case Closed View)
+ */
+const closeCaseHQ = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { remarks, propertyDamageValue, injuries, casualties, impactLevel } = req.body;
+
+        const updatedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            {
+                $set: {
+                    status: 'Closed',
+                    remarks,
+                    resolvedAt: Date.now(),
+                    'progress.isReportSubmitted': true,
+                    'damageImpact.propertyDamageValue': propertyDamageValue || 0,
+                    'damageImpact.injuries': injuries || 0,
+                    'damageImpact.casualties': casualties || 0,
+                    'damageImpact.impactLevel': impactLevel || 'Minor'
+                }
+            },
+            { new: true }
+        );
+
+        if (!updatedCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        res.json({
+            success: true,
+            message: "Case marked as Closed successfully",
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 4. RE-ASSIGN / DISPATCH CASE TO ANOTHER POLICE STATION
+ * Figma Link: Screen 4, 9, 11 & 29 (Case Re-assign button click opens Select Station grid & Confirm modal)
+ */
+const reassignCaseHQ = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { stationId, severityLevel } = req.body;
+
+        // Check if destination station exists
+        const stationExists = await PoliceStation.findById(stationId);
+        if (!stationExists) {
+            return res.status(404).json({ success: false, message: "Target Police Station not found" });
+        }
+
+        const updatedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            {
+                $set: {
+                    stationId,
+                    severityLevel: severityLevel || 'Level 1',
+                    status: 'Pending', // Reassign hone par status 'Pending' ho jata hai local action ke liye
+                    dispatchedAt: Date.now(),
+                    'progress.isAccepted': false, // Progress reset for new station
+                    'progress.isSiteVisited': false,
+                    'progress.isEvidenceCollected': false,
+                    'progress.isReportSubmitted': false,
+                    assignedStaff: [] // Purane assigned officers clean honge naye station ke liye
+                }
+            },
+            { new: true }
+        ).populate('stationId', 'stationName shoName stationCode');
+
+        res.json({
+            success: true,
+            message: "Case re-assigned successfully to " + stationExists.stationName,
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
  
 module.exports = {
     getHQDashboard,
@@ -471,6 +669,11 @@ module.exports = {
     assignCase,getHQCaseHistory,getPendingCases,
     getClosedCases,
     getArchivedCases,
+
+    updateCaseStatus,
+    addEvidenceHQ,sendSupportRequest,
+    closeCaseHQ,
+    reassignCaseHQ
  
 };
  

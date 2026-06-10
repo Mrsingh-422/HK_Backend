@@ -3,12 +3,109 @@ const Doctor = require('../../models/Doctor');
 const Prescription = require('../../models/Prescription');
 const moment = require('moment');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
+
+
+// GET: Doctor Dashboard Stats
+// endpoint: GET /doctor/dashboard/summary
+const getVendorDashboard = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const todayStart = moment().startOf('day').toDate();
+        const todayEnd = moment().endOf('day').toDate();
+
+        // 1. BASIC COUNTERS (Total vs Today)
+        const stats = await Appointment.aggregate([
+            { $match: { doctorId: new mongoose.Types.ObjectId(doctorId), bookingType: 'Appointment' } },
+            {
+                $group: {
+                    _id: null,
+                    totalBookings: { $sum: 1 },
+                    completed: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } },
+                    pending: { $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] } },
+                    cancelled: { $sum: { $cond: [{ $in: ["$status", ["Cancelled-By-Doctor", "Cancelled-By-User"]] }, 1, 0] } },
+                    totalRevenue: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$totalAmount", 0] } }
+                }
+            }
+        ]);
+
+        const dashboardStats = stats[0] || { totalBookings: 0, completed: 0, pending: 0, cancelled: 0, totalRevenue: 0 };
+
+        // 2. TODAY'S SPECIFIC STATS
+        const todayStats = await Appointment.aggregate([
+            { 
+                $match: { 
+                    doctorId: new mongoose.Types.ObjectId(doctorId), 
+                    bookingType: 'Appointment',
+                    appointmentDate: { $gte: todayStart, $lte: todayEnd }
+                } 
+            },
+            {
+                $group: {
+                    _id: null,
+                    todayCount: { $sum: 1 },
+                    todayRevenue: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$totalAmount", 0] } }
+                }
+            }
+        ]);
+
+        const todaySummary = todayStats[0] || { todayCount: 0, todayRevenue: 0 };
+
+        // 3. CONSULTATION TYPE BREAKDOWN (Figma Chart Data)
+        const breakdown = await Appointment.aggregate([
+            { $match: { doctorId: new mongoose.Types.ObjectId(doctorId), bookingType: 'Appointment' } },
+            {
+                $group: {
+                    _id: "$consultationType",
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        // 4. RECENT APPOINTMENTS (Last 5)
+        const recentAppointments = await Appointment.find({ doctorId, bookingType: 'Appointment' })
+            .populate('userId', 'name profileImage')
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .select('patients appointmentDate appointmentTime status totalAmount consultationType');
+
+        // 5. DOCTOR PROFILE INFO (Rating & Status)
+        const doctorInfo = await Doctor.findById(doctorId).select('averageRating totalReviews dutyStatus profileStatus');
+
+        res.json({
+            success: true,
+            data: {
+                counters: {
+                    totalBookings: dashboardStats.totalBookings,
+                    completed: dashboardStats.completed,
+                    pending: dashboardStats.pending,
+                    cancelled: dashboardStats.cancelled,
+                    totalRevenue: dashboardStats.totalRevenue,
+                    todayBookings: todaySummary.todayCount,
+                    todayRevenue: todaySummary.todayRevenue
+                },
+                doctorProfile: {
+                    rating: doctorInfo.averageRating,
+                    reviews: doctorInfo.totalReviews,
+                    dutyStatus: doctorInfo.dutyStatus,
+                    profileStatus: doctorInfo.profileStatus
+                },
+                consultationBreakdown: breakdown, // Useful for Pie Charts
+                recentActivity: recentAppointments
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // 1. GET ALL INDEPENDENT DOCTOR BOOKINGS (Only Appointments)
 // endpoint: GET /doctor/appointments/patient-bookings
 const getDoctorBookings = async (req, res) => {
     try {
-        const { status } = req.query;
+        const { status, consultationType } = req.query;
         
         // Security Check: Only independent doctors
         if (req.user.role !== 'doctor') {
@@ -17,14 +114,32 @@ const getDoctorBookings = async (req, res) => {
 
         let query = { 
             doctorId: req.user.id, 
-            bookingType: 'Appointment' // 👈 Sirf normal appointments dikheinge
+            bookingType: 'Appointment' // Only normal appointments
         };
 
+        // 1. Status Filter
         if (status) query.status = status;
 
+        // 2. Consultation Type Filter (Video Consult, Clinic Visit, Home Visit)
+        if (consultationType) {
+            const lowerType = consultationType.toLowerCase();
+            
+            // Map query params (video, clinic, home) to exact schema enum values
+            if (lowerType === 'video' || lowerType === 'video consult') {
+                query.consultationType = 'Video Consult';
+            } else if (lowerType === 'clinic' || lowerType === 'clinic visit') {
+                query.consultationType = 'Clinic Visit';
+            } else if (lowerType === 'home' || lowerType === 'home visit') {
+                query.consultationType = 'Home Visit';
+            } else {
+                query.consultationType = consultationType; // Fallback in case exact string is passed
+            }
+        }
+
+        // 3. Sorting (Changed from 1 to -1 to get the latest/newest bookings first)
         const appointments = await Appointment.find(query)
             .populate('userId', 'name phone email')
-            .sort({ appointmentDate: 1, appointmentTime: 1 });
+            .sort({ appointmentDate: -1, appointmentTime: -1 }); // 👈 Reverse sort (Latest first)
 
         res.json({ success: true, count: appointments.length, data: appointments });
     } catch (error) {
@@ -440,7 +555,7 @@ const getPatientHistoryDetails = async (req, res) => {
     }
 };
 
-module.exports = { 
+module.exports = { getVendorDashboard,
     getDoctorBookings, getTodayBookings, confirmAppointment,
     doctorCancelAppointment, startVisit, completeWithPrescription,
     getDoctorStats, getMyConsultationFees, updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
