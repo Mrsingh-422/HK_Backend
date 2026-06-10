@@ -8,12 +8,22 @@ const moment = require('moment'); // Required for "Running: X Days" logic
 const getStaffDashboard = async (req, res) => {
     try {
         const staffId = req.user.id;
+
         const stats = {
-            fresh: await PoliceCase.countDocuments({ assignedStaff: staffId, status: 'Fresh' }),
-            pending: await PoliceCase.countDocuments({ assignedStaff: staffId, status: 'Under Investigation' }),
-            closed: await PoliceCase.countDocuments({ assignedStaff: staffId, status: 'Closed' })
+            fresh: await PoliceCase.countDocuments({ 
+                assignedStaff: staffId, 
+                status: 'Fresh' 
+            }),
+            pending: await PoliceCase.countDocuments({ 
+                assignedStaff: staffId, 
+                status: { $in: ['Pending', 'Under Investigation', 'On Hold', 'Critical'] } // 👈 Unified Query
+            }),
+            closed: await PoliceCase.countDocuments({ 
+                assignedStaff: staffId, 
+                status: { $in: ['Closed', 'Archived'] } // 👈 Unified Query
+            })
         };
- 
+
         res.json({
             success: true,
             data: {
@@ -23,8 +33,11 @@ const getStaffDashboard = async (req, res) => {
                 stats
             }
         });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
  
 // --- CASE MANAGEMENT (Screens 10, 12, 19) ---
  

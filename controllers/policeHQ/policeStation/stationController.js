@@ -9,12 +9,25 @@ const bcrypt = require('bcryptjs');
 const getStationDashboard = async (req, res) => {
     try {
         const stationId = req.user.id;
+
         const stats = {
-            fresh: await PoliceCase.countDocuments({ stationId, status: 'Fresh' }),
-            pending: await PoliceCase.countDocuments({ stationId, status: 'Under Investigation' }),
-            closed: await PoliceCase.countDocuments({ stationId, status: 'Closed' })
+            // Newly dispatched cases
+            fresh: await PoliceCase.countDocuments({ 
+                stationId, 
+                status: 'Fresh' 
+            }),
+            // Ongoing, Critical, and On Hold cases grouped together under 'Pending'
+            pending: await PoliceCase.countDocuments({ 
+                stationId, 
+                status: { $in: ['Pending', 'Under Investigation', 'On Hold', 'Critical'] } 
+            }),
+            // Completed and Archived history cases
+            closed: await PoliceCase.countDocuments({ 
+                stationId, 
+                status: { $in: ['Closed', 'Archived'] } 
+            })
         };
- 
+
         res.json({
             success: true,
             data: {
@@ -23,8 +36,11 @@ const getStationDashboard = async (req, res) => {
                 stats
             }
         });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
  
 // --- 2. STAFF MANAGEMENT (Screens 13, 14, 15, 16) ---
  
@@ -227,46 +243,50 @@ const updateStationProfile = async (req, res) => {
  
 const getPendingCases = async (req, res) => {
     try {
-        // We look for cases belonging to this station that are 'Fresh' or 'Pending'
-        // Usually, 'Fresh' means newly reported and 'Pending' means acknowledged but not yet active
+        const stationId = req.user.id;
+
+        // Dashboard aur is list API ki query bilkul same honi chahiye
         const query = {
-            stationId: req.user.id,
-            status: { $in: ['Fresh', 'Pending'] }
+            stationId,
+            status: { $in: ['Pending', 'Under Investigation', 'On Hold', 'Critical'] }
         };
- 
+
         const pendingCases = await PoliceCase.find(query)
-            .populate('assignedStaff')
-            .sort({ createdAt: -1 }); // Newest first
- 
+            .populate('assignedStaff', 'fullName rank badgeId profileImage')
+            .sort({ updatedAt: -1 }); // Newest activity first
+
         res.json({
             success: true,
             count: pendingCases.length,
             data: pendingCases
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
  
 const getCaseHistory = async (req, res) => {
     try {
-        // History usually consists of resolved or archived cases
+        const stationId = req.user.id;
+
+        // Dashboard closed count aur is history list ki query same honi chahiye
         const query = {
-            stationId: req.user.id,
+            stationId,
             status: { $in: ['Closed', 'Archived'] }
         };
- 
+
         const history = await PoliceCase.find(query)
-            .populate('assignedStaff')
-            .sort({ resolvedAt: -1, updatedAt: -1 }); // Show most recently resolved cases first
- 
+            .populate('assignedStaff', 'fullName rank badgeId profileImage')
+            .sort({ resolvedAt: -1, updatedAt: -1 });
+
         res.json({
             success: true,
             count: history.length,
             data: history
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
