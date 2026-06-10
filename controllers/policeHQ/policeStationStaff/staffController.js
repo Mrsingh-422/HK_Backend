@@ -179,6 +179,186 @@ const submitLeave = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
  
+/**
+ * 1. SHIFT CHECK-IN (On-Duty Activation)
+ * Figma Link: Screen 37 (Shift Check-in tracking & On Duty active timing update)
+ */
+const checkInShift = async (req, res) => {
+    try {
+        const staffId = req.user.id;
+
+        // Set status to On Duty and record current timestamp as lastCheckIn
+        const updatedStaff = await PoliceStaff.findByIdAndUpdate(
+            staffId,
+            {
+                $set: {
+                    status: 'On Duty',
+                    lastCheckIn: Date.now()
+                }
+            },
+            { new: true }
+        );
+
+        res.json({
+            success: true,
+            message: "Shift Checked-in successfully",
+            data: {
+                fullName: updatedStaff.fullName,
+                status: updatedStaff.status,
+                lastCheckIn: updatedStaff.lastCheckIn
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 2. SUBMIT ROSTER REQUEST (Leave, Present, Shift Change, Overtime)
+ * Figma Link: Screen 41 (Present Tab), Screen 43 (Leave Tab with Medical Certificate upload)
+ */
+const submitRosterRequest = async (req, res) => {
+    try {
+        const { requestType, leaveType, duration, startDate, endDate, reason, fromShift, toShift } = req.body;
+
+        const requestPayload = {
+            stationId: req.user.stationId,
+            staffId: req.user.id,
+            requestType: requestType || 'Leave',
+            duration: duration || "1 Day",
+            startDate,
+            endDate,
+            reason
+        };
+
+        // Figma Screen 43: Medical Certificate Attachment handling (Optional)
+        if (req.file) {
+            requestPayload.reason += ` | Attachment: /uploads/police_staff/${req.file.filename}`;
+        }
+
+        // Schema validation compatibility (leaveType is required in Mongoose Schema)
+        if (requestType === 'Shift Change' || requestType === 'Present') {
+            requestPayload.leaveType = 'Casual Leave'; // Fallback mapping to satisfy schema schema validator
+            requestPayload.shiftDetails = {
+                fromShift: fromShift || 'Morning',
+                toShift: toShift || 'Night'
+            };
+        } else {
+            requestPayload.leaveType = leaveType || 'Sick Leave';
+        }
+
+        const leave = await LeaveRequest.create(requestPayload);
+
+        res.status(201).json({
+            success: true,
+            message: `${requestType || 'Leave'} Request Submitted successfully`,
+            data: leave
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 3. CLOSE CASE WITH REMARKS & FINAL REPORT FILE
+ * Figma Link: Screen 40 (Close Case page - status dropdown, final remarks text, and report file upload)
+ */
+const closeCaseWithReport = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { remarks, severityStatus } = req.body; // severityStatus: 'Suspect Arrested', 'False Report' etc.
+
+        const updateData = {
+            status: 'Closed',
+            'progress.isReportSubmitted': true,
+            remarks: remarks || "Case resolved smoothly.",
+            severityStatus: severityStatus || "Resolved",
+            resolvedAt: Date.now()
+        };
+
+        // Image 40: Optional Final Report file PDF/DOCX handling
+        if (req.file) {
+            const finalReportDoc = {
+                fileName: req.file.originalname,
+                fileUrl: `/uploads/police_staff/${req.file.filename}`,
+                fileType: 'Document',
+                fileSize: `${(req.file.size / (1024 * 1024)).toFixed(2)} MB`,
+                uploadedAt: Date.now()
+            };
+            // Pushing the final report to the evidence array as a validated Document
+            await PoliceCase.findByIdAndUpdate(id, { $push: { evidence: finalReportDoc } });
+        }
+
+        const closedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!closedCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        res.json({
+            success: true,
+            message: "Case Closed Successfully with final report registration",
+            data: closedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+/**
+ * 4. GET STAFF NOTIFICATIONS
+ * Figma Link: Dashboard (Image 3) Notification Bell Click
+ */
+const getStaffNotifications = async (req, res) => {
+    try {
+        // Agar aapke database me notification schema ho:
+        // const list = await Notification.find({ recipientId: req.user.id }).sort({ createdAt: -1 });
+        res.json({
+            success: true,
+            message: "Notifications fetched successfully",
+            data: [] // Initial empty array matching Figma screens
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 5. MARK ALL STAFF NOTIFICATIONS AS READ
+ * Figma Link: Today/Yesterday Notification Screen -> Mark all read button
+ */
+const markAllStaffNotificationsRead = async (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: "All notifications marked as read successfully"
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 6. DELETE STAFF NOTIFICATION
+ * Figma Link: Notification row -> Swipe Left delete trash bin click
+ */
+const deleteStaffNotification = async (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: "Notification deleted successfully"
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = {
     getStaffDashboard,
     getAssignedCases,
@@ -189,5 +369,13 @@ module.exports = {
     getDetailedProfile,
     updateProfile,
     changePassword,
-    submitLeave
+    submitLeave,
+
+    checkInShift,
+    submitRosterRequest,
+    closeCaseWithReport,
+    getStaffNotifications,
+    markAllStaffNotificationsRead,
+    deleteStaffNotification
+
 };

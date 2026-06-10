@@ -10,7 +10,11 @@ const leaveRequestSchema = new mongoose.Schema({
     reason: { type: String, required: true },
     status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
     rejectionReason: { type: String }, // For Screen 8
-    requestType: { type: String, enum: ['Leave', 'Shift Change'], default: 'Leave' },
+    requestType: { 
+    type: String, 
+    enum: ['Leave', 'Shift Change', 'Present', 'Overtime'], // 👈 Added 'Present' and 'Overtime'
+    default: 'Leave' 
+},
 shiftDetails: {
     fromShift: { type: String, default: null }, // e.g. "Morning"
     toShift: { type: String, default: null }     // e.g. "Night"

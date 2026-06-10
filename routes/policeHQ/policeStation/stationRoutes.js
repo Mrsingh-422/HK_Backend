@@ -26,7 +26,10 @@ const {
     manageRosterRequest,
     getStationCaseHistoryFiltered,
     updateCaseStatusDetail,
-    getNearbyStationsForCase,getStaffRosterDetailed,transferCaseToStation
+    getNearbyStationsForCase,getStaffRosterDetailed,transferCaseToStation,
+    updateCaseStatusStation,
+    addEvidenceStation,
+    closeCaseStation
 
 } = require('../../../controllers/policeHQ/policeStation/stationController');
 
@@ -89,6 +92,14 @@ router.get('/staff-roster', getStaffRosterDetailed);
 
 // 🚨 Screen 12 & 45: Submit Case Transfer request
 router.post('/cases/:id/transfer', transferCaseToStation);
+// 1. Screen 17 & 40: Update Status Checklist & Remarks
+router.put('/cases/:id/update-status', updateCaseStatusStation);
+
+// 2. Screen 8: Upload evidence with dynamic files and details
+router.post('/cases/:id/evidence', policeEvidenceUploads, addEvidenceStation);
+
+// 3. Screen 11 & 40: Close Case with remarks dropdown and report file upload
+router.put('/cases/:id/close-case', policeEvidenceUploads, closeCaseStation);
  
 module.exports = router;
  

@@ -12,13 +12,28 @@ const {
     getDetailedProfile,
     updateProfile,
     changePassword,
-    submitLeave
+    submitLeave,
+
+    checkInShift,
+    submitRosterRequest,
+    closeCaseWithReport,
+    getStaffNotifications,
+    markAllStaffNotificationsRead,
+    deleteStaffNotification
 } = require('../../../controllers/policeHQ/policeStationStaff/staffController');
 
 // Base URL: /policeStationStaff/staff
  
 // All routes are protected for 'police-staff' role
 router.use(protect('police-staff'));
+
+// Figma Screen 37: Click Check-in button to trigger shift active duty
+router.post('/shift/check-in', checkInShift);
+
+/** LEAVE & ROSTER REQUEST **/
+// Figma Screen 41/43: Submit Present or Leave request with attachment
+router.post('/leave/request', policeStaffUploads, submitRosterRequest);
+
  
 /** DASHBOARD & PROFILE **/
 router.get('/dashboard', getStaffDashboard); // Screen 1
@@ -35,6 +50,16 @@ router.put('/cases/close/:id', closeCase); // Screen 19 Close button
  
 /** LEAVE MANAGEMENT **/
 router.post('/leave/request', submitLeave); // Screen 5 & 6
+
+
+// Figma Screen 40: Close Case with remarks dropdown & final report upload
+router.put('/cases/close/:id', policeStaffUploads, closeCaseWithReport);
+
+
+/** NOTIFICATION SYSTEM (Figma Image 2, 3) **/
+router.get('/notifications', getStaffNotifications);
+router.put('/notifications/mark-all-read', markAllStaffNotificationsRead);
+router.delete('/notifications/:id', deleteStaffNotification);
  
 module.exports = router;
  

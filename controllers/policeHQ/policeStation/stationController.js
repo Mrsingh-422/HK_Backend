@@ -598,6 +598,155 @@ const transferCaseToStation = async (req, res) => {
     }
 };
 
+
+/**
+ * 1. UPDATE CASE STATUS (Checklist & Remarks)
+ * Figma Link: Screen 28 ("Update Status" click opens checklist Screen 17 & 40)
+ */
+const updateCaseStatusStation = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { milestoneStatus, remarks, status } = req.body; 
+        // milestoneStatus e.g., "Site Visit Completed", "Suspect Identified", "Investigation Ongoing"
+        // status e.g., "On Hold", "Under Investigation", "Critical"
+
+        const updateData = {};
+        
+        if (status) {
+            updateData.status = status;
+        }
+        
+        if (milestoneStatus) {
+            updateData.severityStatus = milestoneStatus; // Mapped to severityStatus
+            
+            // Auto update progress schema indicators
+            if (milestoneStatus === "Site Visit Completed") {
+                updateData['progress.isSiteVisited'] = true;
+            } else if (milestoneStatus === "Evidence Collected") {
+                updateData['progress.isEvidenceCollected'] = true;
+            }
+        }
+
+        if (remarks) {
+            updateData.remarks = remarks;
+        }
+
+        const updatedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        res.json({
+            success: true,
+            message: "Case investigation status updated successfully",
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 2. ADD EVIDENCE (Media Upload, Dropdown Type & Description)
+ * Figma Link: Screen 28 ("Add Evidence" button click opens Screen 8)
+ */
+const addEvidenceStation = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { evidenceType, description } = req.body; // evidenceType: Photo, Video, FIR Copy, Witness Statement, Forensic Report
+        
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, message: "Please upload at least one evidence file" });
+        }
+
+        const caseData = await PoliceCase.findById(id);
+        if (!caseData) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        // Multer array process karein
+        req.files.forEach(file => {
+            caseData.evidence.push({
+                fileName: file.originalname,
+                fileUrl: `/uploads/police_evidence/${file.filename}`,
+                fileType: evidenceType || (file.mimetype.startsWith('image/') ? 'Image' : 'Document'),
+                fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
+                uploadedAt: Date.now()
+            });
+        });
+
+        caseData.progress.isEvidenceCollected = true;
+        // Descriptions aur remarks update logging
+        if (description) {
+            caseData.remarks = description;
+        }
+
+        await caseData.save();
+
+        res.json({
+            success: true,
+            message: "Evidence attached successfully to case records",
+            data: caseData
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 3. CLOSE CASE WITH ATTACHMENT REPORT (SHO Final Closure)
+ * Figma Link: Screen 28 ("Close Case" button opens Screen 11/40)
+ */
+const closeCaseStation = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { finalStatus, finalRemarks } = req.body; // finalStatus: Suspect Arrested, False Report, Resolved, Archived
+
+        const updateData = {
+            status: 'Closed',
+            'progress.isReportSubmitted': true,
+            remarks: finalRemarks || "Case resolved successfully.",
+            severityStatus: finalStatus || "Resolved",
+            resolvedAt: Date.now()
+        };
+
+        // File upload verification from Multer
+        if (req.files && req.files.length > 0) {
+            const reportFile = req.files[0];
+            const finalReportDoc = {
+                fileName: reportFile.originalname,
+                fileUrl: `/uploads/police_evidence/${reportFile.filename}`,
+                fileType: 'Document',
+                fileSize: `${(reportFile.size / (1024 * 1024)).toFixed(2)} MB`,
+                uploadedAt: Date.now()
+            };
+            await PoliceCase.findByIdAndUpdate(id, { $push: { evidence: finalReportDoc } });
+        }
+
+        const closedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!closedCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        res.json({
+            success: true,
+            message: "Case Closed and Archived in local station records successfully",
+            data: closedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
  
 module.exports = {
     getStationDashboard,addStaff,
@@ -614,6 +763,9 @@ module.exports = {
     manageRosterRequest,
     getStationCaseHistoryFiltered,
     updateCaseStatusDetail,
-    getNearbyStationsForCase, getStaffRosterDetailed, transferCaseToStation
+    getNearbyStationsForCase, getStaffRosterDetailed, transferCaseToStation,
+    updateCaseStatusStation,
+    addEvidenceStation,
+    closeCaseStation
 };
  
