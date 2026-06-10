@@ -10,6 +10,12 @@ const policeStaffSchema = new mongoose.Schema({
     password: { type: String, required: true, select: false },
     profileImage: { type: String, default: null },
     status: { type: String, enum: ['On Duty', 'On Leave', 'Suspended'], default: 'On Duty' },
+    shift: { 
+        type: String, 
+        enum: ['Shift A (08:00 - 16:00)', 'Shift B (16:00 - 00:00)', 'Night Shift', 'Off Duty'], 
+        default: 'Off Duty' 
+    },
+    lastCheckIn: { type: Date, default: null }, // Checked-in time tracking ke liye
     location: {
         lat: { type: Number, default: 0 },
         lng: { type: Number, default: 0 }

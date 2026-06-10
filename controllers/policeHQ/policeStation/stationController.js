@@ -2,6 +2,7 @@ const PoliceStation = require('../../../models/PoliceStation');
 const PoliceStaff = require('../../../models/PoliceStaff');
 const PoliceCase = require('../../../models/PoliceCase');
 const LeaveRequest = require('../../../models/LeaveRequest');
+const {getDistance} = require('../../../utils/helpers')
 const bcrypt = require('bcryptjs');
  
 // --- 1. DASHBOARD (Screen 1) ---
@@ -268,6 +269,335 @@ const getCaseHistory = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+
+
+
+/**
+ * 1. GET JURISDICTION AREA DETAILS
+ * Figma Link: Screen 21 (Jurisdiction boundary limits & details card)
+ */
+const getStationJurisdiction = async (req, res) => {
+    try {
+        const station = await PoliceStation.findById(req.user.id).select('jurisdiction');
+        if (!station) {
+            return res.status(404).json({ success: false, message: "Station not found" });
+        }
+        res.json({
+            success: true,
+            data: station.jurisdiction
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 2. UPDATE SETTINGS PREFERENCES (TOGGLES)
+ * Figma Link: Screen 36 (New FIR Notifications & Emergency Broadcast toggles)
+ */
+const updateStationPreferences = async (req, res) => {
+    try {
+        const { newFirNotifications, emergencyBroadcasts } = req.body;
+        
+        const station = await PoliceStation.findByIdAndUpdate(
+            req.user.id,
+            {
+                $set: {
+                    'preferences.newFirNotifications': newFirNotifications,
+                    'preferences.emergencyBroadcasts': emergencyBroadcasts
+                }
+            },
+            { new: true }
+        ).select('preferences');
+
+        res.json({
+            success: true,
+            message: "Preferences updated successfully",
+            data: station.preferences
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 3. GET ROSTER ACTIVE PENDING REQUESTS (Leaves & Shift changes)
+ * Figma Link: Screen 32 (New Request list - All, Leave, Shift Change tabs)
+ */
+const getRosterRequests = async (req, res) => {
+    try {
+        const { type } = req.query; // 'Leave', 'Shift Change', or 'All'
+        let query = { stationId: req.user.id, status: 'Pending' };
+
+        if (type && type !== 'All') {
+            query.requestType = type;
+        }
+
+        const requests = await LeaveRequest.find(query)
+            .populate('staffId', 'fullName badgeId rank profileImage');
+
+        res.json({
+            success: true,
+            count: requests.length,
+            data: requests
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 4. MANAGE ROSTER REQUEST (APPROVE / REJECT WITH DETAIL SELECTION)
+ * Figma Link: Screen 10 (Leave request accepted modal) & Screen 31 (Reject Request Reason list)
+ */
+const manageRosterRequest = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, rejectionReason } = req.body; // Approved or Rejected
+
+        const request = await LeaveRequest.findById(id);
+        if (!request) return res.status(404).json({ success: false, message: "Request not found" });
+
+        request.status = status;
+        if (status === 'Rejected') {
+            request.rejectionReason = rejectionReason;
+        }
+        await request.save();
+
+        // Update Staff status based on approval
+        if (status === 'Approved') {
+            const statusToSet = request.requestType === 'Leave' ? 'On Leave' : 'On Duty';
+            await PoliceStaff.findByIdAndUpdate(request.staffId, { status: statusToSet });
+        }
+
+        res.json({
+            success: true,
+            message: `Roster request ${request.requestType} marked as ${status}`,
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 5. GET STATIONS SCOPE CASE HISTORY (WITH TRANSFERRED FILTER)
+ * Figma Link: Screen 12 (History list - tabs: Closed vs Transferred)
+ */
+const getStationCaseHistoryFiltered = async (req, res) => {
+    try {
+        const { tab, search } = req.query; // 'Closed' or 'Transferred'
+        let query = { stationId: req.user.id };
+
+        if (tab === 'Transferred') {
+            // Case is transferred if emergencyOverride is active or has supporting stations
+            query.status = { $in: ['Archived'] };
+            query.emergencyOverride = true;
+        } else {
+            // Default Closed
+            query.status = 'Closed';
+        }
+
+        if (search) {
+            query.caseNo = { $regex: search, $options: 'i' };
+        }
+
+        const cases = await PoliceCase.find(query)
+            .populate('assignedStaff', 'fullName rank badgeId')
+            .populate('supportingStations', 'stationName stationCode')
+            .sort({ resolvedAt: -1 });
+
+        res.json({
+            success: true,
+            count: cases.length,
+            data: cases
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 6. UPDATE DETAILED CASE STATUS (WITH ATTACHMENT)
+ * Figma Link: Screen 17 & 40 (Case status checkbox options, remarks & document attach)
+ */
+const updateCaseStatusDetail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { severityStatus, remarks } = req.body; // e.g. "Suspect Arrested", "Evidence Collected"
+
+        const updateObj = {
+            severityStatus
+        };
+
+        if (remarks) updateObj.remarks = remarks;
+
+        // If file uploaded, push to evidence array
+        if (req.file) {
+            const newDoc = {
+                fileName: req.file.originalname,
+                fileUrl: `/uploads/police_evidence/${req.file.filename}`,
+                fileType: req.file.mimetype.startsWith('image/') ? 'Image' : 'Document',
+                uploadedAt: Date.now()
+            };
+            await PoliceCase.findByIdAndUpdate(id, { $push: { evidence: newDoc } });
+        }
+
+        const updatedCase = await PoliceCase.findByIdAndUpdate(id, { $set: updateObj }, { new: true });
+
+        res.json({
+            success: true,
+            message: "Case status milestone updated",
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 7. GET NEARBY POLICE STATIONS MAP TO CURRENT CASE ID
+ * Figma Link: Screen 9 (List of nearby police stations with load count and distance)
+ */
+const getNearbyStationsForCase = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { search } = req.query;
+
+        const currentCase = await PoliceCase.findById(id);
+        if (!currentCase) {
+            return res.status(404).json({ success: false, message: "Case details not found" });
+        }
+
+        const caseLat = currentCase.location.lat;
+        const caseLng = currentCase.location.lng;
+
+        let query = { _id: { $ne: req.user.id }, isActive: true }; // Excluding own station
+        if (search) {
+            query.stationName = { $regex: search, $options: 'i' };
+        }
+
+        const stations = await PoliceStation.find(query);
+
+        const mapProximity = await Promise.all(
+            stations.map(async (stn) => {
+                const distanceKM = await getDistance(caseLat, caseLng, stn.location.lat, stn.location.lng);
+                
+                // Fetch mock available units dynamically for production
+                const activeUnitsCount = await PoliceStaff.countDocuments({ stationId: stn._id, status: 'On Duty' });
+
+                return {
+                    _id: stn._id,
+                    stationName: stn.stationName,
+                    address: stn.address,
+                    distance: `${distanceKM} km away`,
+                    activeUnits: activeUnitsCount || 5, // Mock default fallback
+                    availabilityText: activeUnitsCount > 3 ? "Available Units" : "Low Availability"
+                };
+            })
+        );
+
+        // Sort nearest first
+        mapProximity.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+
+        res.json({
+            success: true,
+            data: mapProximity
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+/**
+ * 1. GET DETAILED STAFF ROSTER BY SHIFTS
+ * Figma Link: Screen 39 (14 On Duty, 4 On Leave counters & Shift A/B grouped layouts)
+ */
+const getStaffRosterDetailed = async (req, res) => {
+    try {
+        const staff = await PoliceStaff.find({ stationId: req.user.id });
+
+        // Grouping logic for Figma Screen 39
+        const shiftA = staff.filter(s => s.shift === 'Shift A (08:00 - 16:00)' && s.status === 'On Duty');
+        const shiftB = staff.filter(s => s.shift === 'Shift B (16:00 - 00:00)' && s.status === 'On Duty');
+        const onLeaveOrOff = staff.filter(s => s.status === 'On Leave' || s.status === 'Suspended' || s.shift === 'Off Duty');
+
+        // Formatted shifts payload with check-in time representation
+        const formatRosterMember = (member) => ({
+            _id: member._id,
+            fullName: member.fullName,
+            rank: member.rank,
+            profileImage: member.profileImage,
+            status: member.status === 'On Leave' ? 'SICK LEAVE' : 'PRESENT',
+            checkInTime: member.lastCheckIn ? moment(member.lastCheckIn).format('hh:mm A') : "08:00 AM"
+        });
+
+        res.json({
+            success: true,
+            data: {
+                counts: {
+                    onDuty: staff.filter(s => s.status === 'On Duty').length,
+                    onLeave: staff.filter(s => s.status === 'On Leave').length,
+                    weeklyOff: staff.filter(s => s.shift === 'Off Duty').length
+                },
+                shifts: {
+                    shiftA: shiftA.map(formatRosterMember),
+                    shiftB: shiftB.map(m => ({ ...formatRosterMember(m), status: 'SCHEDULED' })), // Upcoming is scheduled
+                    onLeaveOrOff: onLeaveOrOff.map(m => ({
+                        ...formatRosterMember(m),
+                        status: m.status === 'On Leave' ? 'SICK LEAVE' : 'OFF DUTY'
+                    }))
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * 2. TRANSFER CASE (Jurisdiction Change / Department Cell Shift)
+ * Figma Link: Screen 12 (Transferred Tab) & Screen 45 (Transferred Case Summary Details)
+ */
+const transferCaseToStation = async (req, res) => {
+    try {
+        const { id } = req.params; // caseId
+        const { targetStationId, transferReason } = req.body;
+
+        // Destination existence check
+        const targetStation = await PoliceStation.findById(targetStationId);
+        if (!targetStation) {
+            return res.status(404).json({ success: false, message: "Target Police Station/Cell not found." });
+        }
+
+        const updatedCase = await PoliceCase.findByIdAndUpdate(
+            id,
+            {
+                $set: {
+                    stationId: targetStationId, // Reallocate station reference
+                    status: 'Archived',         // Status moves to Archived under current station history
+                    emergencyOverride: true,    // Logged for Transferred history filter
+                    'transferDetails.transferredTo': targetStationId,
+                    'transferDetails.transferredReason': transferReason || "Jurisdiction Change",
+                    'transferDetails.transferredBy': req.user.id, // Current logged-in SHO
+                    'transferDetails.transferredAt': Date.now()
+                }
+            },
+            { new: true }
+        );
+
+        res.json({
+            success: true,
+            message: `Case successfully transferred to ${targetStation.stationName}`,
+            data: updatedCase
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
  
 module.exports = {
     getStationDashboard,addStaff,
@@ -275,6 +605,15 @@ module.exports = {
     getStationCases,acceptCase,
     assignStaffToCase,updateCaseProgress,closeCase,getStaffRoster,
     manageLeaveRequest,getStationProfile,
-    updateStationProfile, getPendingCases, getCaseHistory
+    updateStationProfile, getPendingCases, getCaseHistory,
+
+    // 🚨 Naye Figma Handlers
+    getStationJurisdiction,
+    updateStationPreferences,
+    getRosterRequests,
+    manageRosterRequest,
+    getStationCaseHistoryFiltered,
+    updateCaseStatusDetail,
+    getNearbyStationsForCase, getStaffRosterDetailed, transferCaseToStation
 };
  

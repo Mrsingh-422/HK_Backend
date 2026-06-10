@@ -107,7 +107,13 @@ const policeCaseSchema = new mongoose.Schema({
         casualties: { type: Number, default: 0 },
         impactLevel: { type: String, enum: ['Minor', 'Major', 'Total', 'Critical Structural Damage'] }
     },
-    remarks: { type: String }
+    remarks: { type: String },
+    transferDetails: {
+        transferredTo: { type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStation', default: null },
+        transferredReason: { type: String, default: null }, // e.g. "Jurisdiction Change", "Online Fraud"
+        transferredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStaff', default: null },
+        transferredAt: { type: Date, default: null }
+    }
 
 }, { timestamps: true });
 

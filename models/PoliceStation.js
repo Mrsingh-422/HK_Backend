@@ -4,7 +4,23 @@ const policeStationSchema = new mongoose.Schema({
     stationName: { type: String, required: true },
     stationCode: { type: String, unique: true, required: true }, // e.g., PS-JAIPUR-05
     shoName: { type: String, required: true }, // Station House Officer
-    jurisdictionArea: { type: String },
+    jurisdiction: {
+        zoneName: { type: String, default: "Central District - Sector 4" },
+        sqKmArea: { type: Number, default: 12.5 },
+        population: { type: String, default: "450k" },
+        patrolBeats: { type: Number, default: 8 },
+        boundaryLimits: {
+            north: { type: String, default: "Grand Northern Highway" },
+            south: { type: String, default: "Pearl River Embankment" },
+            east: { type: String, default: "Downtown Financial Ave" },
+            west: { type: String, default: "Western Industrial Park" }
+        },
+        areaDocumentUrl: { type: String, default: "/uploads/jurisdiction/area-doc-central.pdf" }
+    },
+    preferences: {
+        newFirNotifications: { type: Boolean, default: true },
+        emergencyBroadcasts: { type: Boolean, default: true }
+    },
     email: { type: String, required: true, unique: true },
     phone: { type: String, required: true, unique: true },
     emergencyLines: { type: String }, // e.g., 100, 112

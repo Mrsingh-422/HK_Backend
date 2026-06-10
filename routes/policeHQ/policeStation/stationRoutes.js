@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { policeStaffUploads, policeStationUploads } = require('../../../middleware/multer');
+const { policeStaffUploads, policeStationUploads,policeEvidenceUploads } = require('../../../middleware/multer');
 const {
     getStationDashboard,
     addStaff,
@@ -18,7 +18,15 @@ const {
     getStationProfile,
     updateStationProfile,
     getPendingCases,
-    getCaseHistory
+    getCaseHistory,
+
+    getStationJurisdiction,
+    updateStationPreferences,
+    getRosterRequests,
+    manageRosterRequest,
+    getStationCaseHistoryFiltered,
+    updateCaseStatusDetail,
+    getNearbyStationsForCase,getStaffRosterDetailed,transferCaseToStation
 
 } = require('../../../controllers/policeHQ/policeStation/stationController');
 
@@ -53,6 +61,34 @@ router.get('/profile', getStationProfile); // Screen 17, 19
 router.put('/profile', policeStationUploads, updateStationProfile); // Screen 18, 21
 router.get('/pending', getPendingCases);
 router.get('/history', getCaseHistory);
+
+// new 
+// Figma Screen 21: Jurisdiction details maps & boundary beats
+router.get('/jurisdiction', getStationJurisdiction);
+
+// Figma Screen 36: Toggle notification & broadcast preferences
+router.patch('/preferences', updateStationPreferences);
+
+// Figma Screen 32: Requests overview list tab (All, Leaves, Shift changes)
+router.get('/roster-requests', getRosterRequests);
+
+// Figma Screen 8/10: Process approve / reject leave or shift request
+router.put('/roster-requests/:id/manage', manageRosterRequest);
+
+// Figma Screen 12: Split Case History based on tabs (Closed vs Transferred)
+router.get('/case-history-filtered', getStationCaseHistoryFiltered);
+
+// Figma Screen 17 & 40: Update specific case milestone status with file attachment
+router.put('/cases/:id/status-milestone', policeEvidenceUploads, updateCaseStatusDetail);
+
+// Figma Screen 9: Search nearby backup stations coordinates tracking
+router.get('/cases/:id/nearby-stations', getNearbyStationsForCase);
+
+// 🚨 Screen 39: Replace your old roster route with this detailed shift roster route
+router.get('/staff-roster', getStaffRosterDetailed);
+
+// 🚨 Screen 12 & 45: Submit Case Transfer request
+router.post('/cases/:id/transfer', transferCaseToStation);
  
 module.exports = router;
  

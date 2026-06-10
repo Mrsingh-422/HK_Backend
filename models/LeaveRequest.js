@@ -9,7 +9,12 @@ const leaveRequestSchema = new mongoose.Schema({
     endDate: { type: Date, required: true },
     reason: { type: String, required: true },
     status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
-    rejectionReason: { type: String } // For Screen 8
+    rejectionReason: { type: String }, // For Screen 8
+    requestType: { type: String, enum: ['Leave', 'Shift Change'], default: 'Leave' },
+shiftDetails: {
+    fromShift: { type: String, default: null }, // e.g. "Morning"
+    toShift: { type: String, default: null }     // e.g. "Night"
+}
 }, { timestamps: true });
  
 module.exports = mongoose.model('LeaveRequest', leaveRequestSchema);
