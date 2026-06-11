@@ -16,7 +16,7 @@ const {
 
     checkInShift,
     submitRosterRequest,
-    closeCaseWithReport,
+    closeCaseWithReport,updateStaffCaseStatus ,addStaffCaseEvidence,
     getStaffNotifications,
     markAllStaffNotificationsRead,
     deleteStaffNotification
@@ -54,6 +54,11 @@ router.post('/leave/request', submitLeave); // Screen 5 & 6
 
 // Figma Screen 40: Close Case with remarks dropdown & final report upload
 router.put('/cases/close/:id', policeStaffUploads, closeCaseWithReport);
+// Card Action: Update Status (Site Visit Completed, Suspect Identified etc.)
+router.put('/cases/:id/update-status', policeStaffUploads, updateStaffCaseStatus);
+
+// Card Action: Add Evidence media (Photo, Video, FIR Copy etc.)
+router.post('/cases/:id/add-evidence', policeStaffUploads, addStaffCaseEvidence);
 
 
 /** NOTIFICATION SYSTEM (Figma Image 2, 3) **/
