@@ -185,6 +185,7 @@ app.use('/doctor/coupon', require('./routes/doctor/DoctorCouponRoute')); // Doct
 app.use('/doctor/wallet', require('./routes/doctor/DoctorWalletRoute')); // Doctor Wallet Route
 app.use('/doctor/visit-charges', require('./routes/doctor/DoctorVisitChargeRoute')); // Doctor Visit Charges Route
 app.use('/doctor/availability', require('./routes/doctor/DoctorSlotsRoute')); // Doctor Availability Route
+app.use('/doctor/video-call', require('./routes/doctor/VideoCallRoute')); // Doctor Video Call Route
 
 
  
