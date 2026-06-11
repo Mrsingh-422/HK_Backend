@@ -16,7 +16,7 @@ const {
 
     checkInShift,
     submitRosterRequest,
-    closeCaseWithReport,updateStaffCaseStatus ,addStaffCaseEvidence,
+    closeCaseWithReport,updateStaffCaseStatus ,addStaffCaseEvidence,getStaffCaseHistory,
     getStaffNotifications,
     markAllStaffNotificationsRead,
     deleteStaffNotification
@@ -57,6 +57,8 @@ router.put('/cases/close/:id', policeStaffUploads, closeCaseWithReport);
 // 🚨 CORRECTED: mapped with policeEvidenceUploads (Key name: 'evidenceFiles')
 router.put('/cases/:id/update-status', policeEvidenceUploads, updateStaffCaseStatus);
 router.post('/cases/:id/add-evidence', policeEvidenceUploads, addStaffCaseEvidence);
+router.get('/cases/history', getStaffCaseHistory);
+
 
 /** NOTIFICATION SYSTEM (Figma Image 2, 3) **/
 router.get('/notifications', getStaffNotifications);

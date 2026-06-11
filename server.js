@@ -162,6 +162,7 @@ app.use('/user/health-records', require('./routes/user/Doctor/HealthRoute')); //
 app.use('/user/doctors', require('./routes/user/Doctor/BookAppointment')); // Doctor Appointment Booking
 app.use('/user/doctor/menstrual', require('./routes/user/Doctor/MenstrualTrackerRoute')); // Menstrual Cycle Tracking
 app.use('/user/review', require('./routes/user/Doctor/ReviewDoctorRoute')); // Doctor Review Route
+app.use('/user/doctor/video-call', require('./routes/user/Doctor/VideoCallRoute')); // Doctor Video Call Route
 // --- user hospital ---
 app.use('/user/hospital', require('./routes/user/Hospital/BookHospitalRoute'));
 // --- user ambulance ---

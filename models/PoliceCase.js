@@ -36,7 +36,19 @@ const policeCaseSchema = new mongoose.Schema({
     },
     severityStatus: {
         type: String,
-        enum: ['Under Investigation', 'Evidence Collection', 'Witness Statement', 'Suspect Apprehended', 'Under Control'],
+enum: [
+            'Site Visit Completed', 
+            'Evidence Collected', 
+            'Suspect Identified', 
+            'Suspect Arrested', 
+            'Awaiting Approval', 
+            'Investigation Ongoing',
+            'Under Investigation', 
+            'Evidence Collection', 
+            'Witness Statement', 
+            'Suspect Apprehended', 
+            'Under Control'
+        ],        
         default: 'Under Investigation'
     },
     severityLevel: { type: String, default: 'Level 1' },

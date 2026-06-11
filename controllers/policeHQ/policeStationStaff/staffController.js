@@ -454,6 +454,42 @@ const addStaffCaseEvidence = async (req, res) => {
 
 
 
+/**
+ * GET STAFF CASE HISTORY (Closed vs Transferred)
+ * Figma Link: Screen 12 (History page - tabs: Closed vs Transferred)
+ */
+const getStaffCaseHistory = async (req, res) => {
+    try {
+        const staffId = req.user.id;
+        const { tab, search } = req.query; // Expects 'Closed' or 'Transferred'
+        let query = { assignedStaff: staffId };
+
+        if (tab === 'Transferred') {
+            query.status = 'Archived';
+            query.emergencyOverride = true; // Logged for transferred scope
+        } else {
+            query.status = 'Closed';
+        }
+
+        if (search) {
+            query.caseNo = new RegExp(search, 'i');
+        }
+
+        const cases = await PoliceCase.find(query)
+            .populate('stationId', 'stationName stationCode shoName')
+            .populate('transferDetails.transferredTo', 'stationName stationCode shoName')
+            .sort({ resolvedAt: -1, updatedAt: -1 });
+
+        res.json({
+            success: true,
+            count: cases.length,
+            data: cases
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -520,7 +556,7 @@ module.exports = {
 
     checkInShift,
     submitRosterRequest,
-    closeCaseWithReport,updateStaffCaseStatus ,addStaffCaseEvidence,
+    closeCaseWithReport,updateStaffCaseStatus ,addStaffCaseEvidence,getStaffCaseHistory,
     getStaffNotifications,
     markAllStaffNotificationsRead,
     deleteStaffNotification
