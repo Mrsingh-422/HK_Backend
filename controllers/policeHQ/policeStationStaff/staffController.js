@@ -332,14 +332,13 @@ const closeCaseWithReport = async (req, res) => {
 
 /**
  * 1. UPDATE DETAILED CASE STATUS (On-Ground Progress)
- * Figma Link: Card Button "Update Status" -> Screen 40/17 (Select Status Checkbox, Add Remarks, Optional File)
+ * Figma Link: Screen 40/17 (Using req.files array)
  */
 const updateStaffCaseStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const { statusStep, remarks } = req.body; 
 
-        // Figma Screen 40 checkboxes/radio selection values
         const allowedSteps = [
             'Site Visit Completed', 
             'Evidence Collected', 
@@ -358,7 +357,7 @@ const updateStaffCaseStatus = async (req, res) => {
             return res.status(404).json({ success: false, message: "Case not found." });
         }
 
-        // Automatic State-Machine Mapping based on Checked Option
+        // State-Machine update based on option
         if (statusStep === 'Site Visit Completed') {
             caseData.progress.isSiteVisited = true;
         } else if (statusStep === 'Evidence Collected') {
@@ -367,23 +366,24 @@ const updateStaffCaseStatus = async (req, res) => {
             caseData.legalProgress.arrestStatus = 'Arrested';
         }
 
-        // Setting active investigation milestone status
         caseData.severityStatus = statusStep;
         
         if (remarks) {
             caseData.remarks = `[Milestone: ${statusStep}] - ${remarks}\n` + (caseData.remarks || '');
         }
 
-        // Figma Screen 40: Handle optional file uploader/attachment (e.g. site notes)
-        if (req.file) {
-            const milestoneAttachment = {
-                fileName: req.file.originalname,
-                fileUrl: `/uploads/police_staff/${req.file.filename}`,
-                fileType: req.file.mimetype.startsWith('image/') ? 'Image' : 'Document',
-                fileSize: `${(req.file.size / (1024 * 1024)).toFixed(2)} MB`,
-                uploadedAt: Date.now()
-            };
-            caseData.evidence.push(milestoneAttachment);
+        // 🚨 CORRECTED: Using req.files (array) from policeEvidenceUploads
+        if (req.files && req.files.length > 0) {
+            req.files.forEach(file => {
+                const milestoneAttachment = {
+                    fileName: file.originalname,
+                    fileUrl: `/uploads/police_evidence/${file.filename}`, // Saved in police_evidence directory
+                    fileType: file.mimetype.startsWith('image/') ? 'Image' : 'Document',
+                    fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
+                    uploadedAt: Date.now()
+                };
+                caseData.evidence.push(milestoneAttachment);
+            });
         }
 
         await caseData.save();
@@ -400,18 +400,18 @@ const updateStaffCaseStatus = async (req, res) => {
 
 /**
  * 2. ADD EVIDENCE / UPLOAD MEDIA FROM GROUND STAFF
- * Figma Link: Card Button "Add Evidence" -> Screen 8 (Capture/Gallery, Type Dropdown, Description)
+ * Figma Link: Card Button "Add Evidence" -> Screen 8 (Using req.files array)
  */
 const addStaffCaseEvidence = async (req, res) => {
     try {
         const { id } = req.params;
         const { evidenceType, description } = req.body;
 
-        if (!req.file) {
-            return res.status(400).json({ success: false, message: "Please upload an evidence file." });
+        // 🚨 CORRECTED: Check for req.files (array)
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, message: "Please upload at least one evidence file." });
         }
 
-        // Figma Screen 16: Dropdown evidence types
         const allowedEvidenceTypes = ['Photo', 'Video', 'FIR Copy', 'Witness Statement', 'Forensic Report'];
         if (!evidenceType || !allowedEvidenceTypes.includes(evidenceType)) {
             return res.status(400).json({ success: false, message: "Invalid evidence type value." });
@@ -422,29 +422,29 @@ const addStaffCaseEvidence = async (req, res) => {
             return res.status(404).json({ success: false, message: "Case not found." });
         }
 
-        // Mappings for Schema database categories
-        let schemaFileType = 'Document';
-        if (req.file.mimetype.startsWith('image/')) schemaFileType = 'Image';
-        else if (req.file.mimetype.startsWith('video/')) schemaFileType = 'Video';
+        // 🚨 CORRECTED: Loop through req.files array
+        req.files.forEach(file => {
+            let schemaFileType = 'Document';
+            if (file.mimetype.startsWith('image/')) schemaFileType = 'Image';
+            else if (file.mimetype.startsWith('video/')) schemaFileType = 'Video';
 
-        const newEvidence = {
-            fileName: req.file.originalname,
-            fileUrl: `/uploads/police_staff/${req.file.filename}`,
-            fileType: schemaFileType,
-            fileSize: `${(req.file.size / (1024 * 1024)).toFixed(2)} MB`,
-            uploadedAt: Date.now()
-        };
+            caseData.evidence.push({
+                fileName: file.originalname,
+                fileUrl: `/uploads/police_evidence/${file.filename}`, // Saved in police_evidence folder
+                fileType: schemaFileType,
+                fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
+                uploadedAt: Date.now()
+            });
+        });
 
-        caseData.evidence.push(newEvidence);
         caseData.progress.isEvidenceCollected = true;
-
-        // Custom logging in case remarks for description
         caseData.remarks = `[Evidence Attached: ${evidenceType}] - ${description || 'No description'}\n` + (caseData.remarks || '');
+        
         await caseData.save();
 
         res.json({
             success: true,
-            message: "Evidence successfully submitted and progress updated",
+            message: `${req.files.length} Evidence file(s) successfully submitted`,
             data: caseData
         });
     } catch (error) {

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { policeStaffUploads } = require('../../../middleware/multer');
+const { policeStaffUploads,policeEvidenceUploads } = require('../../../middleware/multer');
 const {
     getStaffDashboard,
     getAssignedCases,
@@ -54,12 +54,9 @@ router.post('/leave/request', submitLeave); // Screen 5 & 6
 
 // Figma Screen 40: Close Case with remarks dropdown & final report upload
 router.put('/cases/close/:id', policeStaffUploads, closeCaseWithReport);
-// Card Action: Update Status (Site Visit Completed, Suspect Identified etc.)
-router.put('/cases/:id/update-status', policeStaffUploads, updateStaffCaseStatus);
-
-// Card Action: Add Evidence media (Photo, Video, FIR Copy etc.)
-router.post('/cases/:id/add-evidence', policeStaffUploads, addStaffCaseEvidence);
-
+// 🚨 CORRECTED: mapped with policeEvidenceUploads (Key name: 'evidenceFiles')
+router.put('/cases/:id/update-status', policeEvidenceUploads, updateStaffCaseStatus);
+router.post('/cases/:id/add-evidence', policeEvidenceUploads, addStaffCaseEvidence);
 
 /** NOTIFICATION SYSTEM (Figma Image 2, 3) **/
 router.get('/notifications', getStaffNotifications);
