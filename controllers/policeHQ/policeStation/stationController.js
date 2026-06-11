@@ -149,7 +149,7 @@ const assignStaffToCase = async (req, res) => {
         const updatedCase = await PoliceCase.findByIdAndUpdate(caseId, {
             assignedStaff: staffIds[0], // Lead Officer
             supportingStaff: staffIds.slice(1), // Array of other officers
-            status: 'Under Investigation'
+            status: 'Pending'
         }, { new: true });
  
         res.json({ success: true, message: "Staff Assigned to Case", data: updatedCase });

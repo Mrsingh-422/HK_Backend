@@ -12,11 +12,11 @@ const getStaffDashboard = async (req, res) => {
         const stats = {
             fresh: await PoliceCase.countDocuments({ 
                 assignedStaff: staffId, 
-                status: 'Fresh' 
+                status: { $in: ['Fresh', 'Pending'] } // 👈 Unified Query
             }),
             pending: await PoliceCase.countDocuments({ 
                 assignedStaff: staffId, 
-                status: { $in: ['Pending', 'Under Investigation', 'On Hold', 'Critical'] } // 👈 Unified Query
+                status: { $in: ['Under Investigation', 'On Hold', 'Critical'] } // 👈 Unified Query
             }),
             closed: await PoliceCase.countDocuments({ 
                 assignedStaff: staffId, 
@@ -46,15 +46,21 @@ const getAssignedCases = async (req, res) => {
         const { priority, search, status } = req.query;
         let query = { assignedStaff: req.user.id };
  
-        if (status) query.status = status;
+        // Agar status request 'Fresh' hai, to 'Fresh' aur 'Pending' dono status wale cases query karenge
+        if (status) {
+            if (status === 'Fresh') {
+                query.status = { $in: ['Fresh', 'Pending'] }; // 👈 'Fresh' and 'Pending' dono show honge
+            } else {
+                query.status = status;
+            }
+        }
         if (priority && priority !== 'All') query.severity = priority;
         if (search) query.caseNo = new RegExp(search, 'i');
  
         const cases = await PoliceCase.find(query).sort({ createdAt: -1 });
  
-        // Transform for "Running: X Days" as seen in Image 19
         const formattedCases = cases.map(c => {
-            const start = moment(c.updatedAt); // Assuming investigation starts on last update/accept
+            const start = moment(c.updatedAt);
             const now = moment();
             return {
                 ...c._doc,
@@ -63,7 +69,9 @@ const getAssignedCases = async (req, res) => {
         });
  
         res.json({ success: true, data: formattedCases });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
  
 // Accept Case (Image 12)

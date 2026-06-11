@@ -23,7 +23,7 @@ const policeCaseSchema = new mongoose.Schema({
     // Accused & IPC Legal Mapping (Figma Screen 34)
     accusedName: { type: String, default: null }, // 👈 Added for Accused tracking
     ipcSections: [{ type: String }],             // 👈 Added (e.g. ["420", "506"])
-
+  
     incidentType: {
         type: String,
         enum: ['Theft', 'Assault', 'Robbery', 'Road Accident', 'Murder', 'Kidnapping', 'Drug Related', 'Cyber Crime', 'Domestic Violence', 'Other'],
