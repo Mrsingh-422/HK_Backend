@@ -178,6 +178,7 @@ const getDocDashboard = async (req, res) => {
 // };
 
 // --- 4. CREATE PRESCRIPTION (Fixed Array Safe Map Logic) ---
+// --- 4. CREATE PRESCRIPTION (Updated with Safe Multipart and Diet Plan PDF support) ---
 const processPrescription = async (req, res) => {
     try {
         const { appointmentId, diagnosis, medicines, advice } = req.body;
@@ -185,7 +186,7 @@ const processPrescription = async (req, res) => {
         const appointment = await Appointment.findById(appointmentId);
         if (!appointment) return res.status(404).json({ success: false, message: "Appointment record not found" });
 
-        // 🚀 SECURE ACCESS VALIDATION: Only primary doctor or accepted bedside specialists can prescribe
+        // SECURE ACCESS VALIDATION: Only primary doctor or accepted bedside specialists can prescribe
         const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === req.user.id;
         const isCareTeamMember = appointment.bedsideCareTeam.some(d => 
             d.doctorId.toString() === req.user.id && ['Accepted', 'In-Progress'].includes(d.status)
@@ -198,21 +199,30 @@ const processPrescription = async (req, res) => {
             });
         }
         
-        // Safe array converter if diagnosis comes as a string from frontend
-        const diagnosisArray = Array.isArray(diagnosis) ? diagnosis : (diagnosis ? [diagnosis] : []);
+        // Safe parsing for inputs coming via multipart/form-data
+        const diagnosisArray = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : (Array.isArray(diagnosis) ? diagnosis : []);
+        const medicinesArray = typeof medicines === 'string' ? JSON.parse(medicines) : (Array.isArray(medicines) ? medicines : []);
+
+        // Extract uploaded diet plan PDF path safely from multer
+        let dietPlanPath = null;
+        if (req.file) {
+            dietPlanPath = `/uploads/diet_plans/${req.file.filename}`;
+        }
 
         const prescription = await Prescription.create({
             appointmentId,
             doctorId: req.user.id,
             userId: appointment.userId,
             diagnosis: diagnosisArray,
-            medicines, // Maps [{name, dosage, frequency, duration, instructions}] dynamically
-            additionalNotes: advice
+            medicines: medicinesArray, // Saves multiple medicines array seamlessly
+            additionalNotes: advice,
+            dietPlanPdf: dietPlanPath // Saves optional diet plan PDF path link
         });
 
         res.status(201).json({ success: true, message: "Prescription added successfully", data: prescription });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Prescription Creation Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -796,6 +806,100 @@ const getPatientDetails = async (req, res) => {
 };
 
 
+// --- API: GET PRINTABLE DIGITAL DISCHARGE SUMMARY (Figma Print Sheet Aligned) ---
+const getPrintableDischargeSummary = async (req, res) => {
+    try {
+        const { id } = req.params; // Appointment/Admission ID
+
+        // 1. Fetch Appointment with deep populated fields
+        const appt = await Appointment.findById(id)
+            .populate('userId', 'name phone email profilePic age gender country state city address')
+            .populate('hospitalId', 'name address city state zipCode hospitalImage')
+            .populate('doctorId', 'name speciality qualification')
+            .populate({
+                path: 'bedsideCareTeam.doctorId',
+                select: 'name speciality qualification'
+            });
+
+        if (!appt) {
+            return res.status(404).json({ success: false, message: "Admission Record Not Found." });
+        }
+
+        // 2. Fetch the corresponding Prescription medicines array
+        const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
+
+        // 3. Construct Figma Sheet JSON Structure
+        const dynamicHandoffDoctors = appt.bedsideCareTeam
+            .filter(member => member.status === 'Completed' || member.status === 'Accepted' || member.status === 'In-Progress')
+            .map(member => ({
+                name: member.doctorId?.name || "Specialist",
+                department: `Department of ${member.doctorId?.speciality || 'Medicine'}`
+            }));
+
+        const figmaDataSheet = {
+            // --- FIGMA SHEET HEADER ---
+            header: {
+                hospitalName: appt.hospitalId?.name || "RADIUS HOSPITAL",
+                hospitalAddress: appt.hospitalId?.address || "Mohali, Punjab",
+                hospitalLogo: appt.hospitalId?.hospitalImage?.[0] || null,
+                leadDoctor: {
+                    name: appt.doctorId?.name || "Dr. Deepak Joshi",
+                    title: `Professor & Head: Department of ${appt.doctorId?.speciality || 'Medicine'}`,
+                    qualification: appt.doctorId?.qualification || "MD"
+                },
+                collaborativeDoctors: dynamicHandoffDoctors // Lists all involved bedside specialists
+            },
+
+            // --- FIGMA PATIENT DETAILS CARD ---
+            patientDetails: {
+                appointmentId: appt.bookingId,
+                name: appt.userId?.name || "N/A",
+                address: appt.userId?.address || "Mohali, Punjab",
+                gender: appt.userId?.gender || "Male",
+                age: appt.userId?.age || 30,
+                dateOfAdmission: appt.startDate ? moment(appt.startDate).format("YYYY-MM-DD") : "N/A",
+                dateOfDischarge: appt.endDate ? moment(appt.endDate).format("YYYY-MM-DD") : "N/A",
+                department: `Department of ${appt.doctorId?.speciality || 'Medicine'}, Unit - 1`,
+                paymentStatus: appt.paymentStatus || "Paid",
+                paymentType: appt.paymentMethod || "UPI (Google Pay)",
+                chiefComplaints: appt.clinicalSummary?.chiefComplaint || appt.patients?.[0]?.reasonForVisit || "N/A",
+                diagnosis: appt.clinicalSummary?.diagnosis || "N/A",
+                conditionDuringAdmission: appt.clinicalSummary?.triagePriority || appt.triageLevel || "Stable",
+                conditionDuringDischarge: appt.clinicalSummary?.treatmentResult || "Recovered & Stable"
+            },
+
+            // --- CLINICAL NOTES ---
+            clinicalNotes: appt.clinicalSummary?.admissionNote || "Patient was admitted under cardiac monitoring desk, treated with standard formulations and discharged clinically stable.",
+
+            // --- FIGMA MEDICINE TABLE ARRAY ---
+            medications: prescription ? prescription.medicines.map((med, idx) => ({
+                sNo: String(idx + 1).padStart(2, '0'),
+                medicineName: med.name,
+                dose: med.dosage, // e.g. "1 - 0 - 1"
+                time: med.frequency, // e.g. "Morning - Evening"
+                duration: med.duration // e.g. "5 Days"
+            })) : [],
+
+            // --- FOLLOW UP INSTRUCTIONS ---
+            followUp: {
+                adviseInvestigation: appt.clinicalSummary?.investigation || "ECG Normal, Blood counts stable",
+                adviceGiven: appt.clinicalSummary?.dischargeNote || "Avoid excess salt and drink warm water.",
+                anySpecialInstructionGiven: "This digital Discharge Document is not valid for Medico Legal purpose.",
+                nextAppointment: appt.endDate ? moment(appt.endDate).add(7, 'days').format("YYYY-MM-DD") : "N/A"
+            }
+        };
+
+        res.json({
+            success: true,
+            data: figmaDataSheet
+        });
+
+    } catch (error) {
+        console.error("Discharge summary fetch error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = { 
     getMyDoctorProfile,
@@ -807,5 +911,6 @@ module.exports = {
      getHospitalColleagues,
     submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary,
 
-    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare
+    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
+    getPrintableDischargeSummary
 };

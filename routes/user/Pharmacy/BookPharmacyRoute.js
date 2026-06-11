@@ -6,7 +6,9 @@ const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedic
     getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder,
 getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 
-createPrescriptionRequest,payAndConfirmOrder, getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices
+createPrescriptionRequest,payAndConfirmOrder, getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices,
+
+getActiveStoreComboOffers
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
@@ -90,6 +92,13 @@ router.post(
     '/prescription-request/estimate-prices', 
     protect('user'), 
     estimateRxPrices
+);
+
+
+router.get(
+    '/combo-offers', 
+    protect('user'), 
+    getActiveStoreComboOffers
 );
 
 module.exports = router;

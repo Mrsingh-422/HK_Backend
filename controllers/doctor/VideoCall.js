@@ -3,9 +3,9 @@ const Appointment = require('../../models/Appointment');
 const User = require('../../models/User');
 const Call = require('../../models/Call');
 const admin = require('../../config/firebase');
+const { getMessaging } = require('firebase-admin/messaging');
 const mongoose = require('mongoose');
 
-// 1. INITIATE VIDEO CALL (Triggered by Doctor)
 // 1. INITIATE VIDEO CALL (Triggered by Doctor)
 const initiateVideoCall = async (req, res) => {
     try {
@@ -32,11 +32,9 @@ const initiateVideoCall = async (req, res) => {
         }
 
         // C. Database Safe Check: Prevent E11000 Duplicate Key Error
-        // Agar same callId already database me hai (re-connect / retry ke case me), toh update karenge, warna create karenge.
         let callData = await Call.findOne({ callId });
 
         if (callData) {
-            // Existing record reset karein taaki call re-trigger ho sake bina crash ke
             callData.status = 'initiated';
             callData.startedAt = null;
             callData.endedAt = null;
@@ -46,7 +44,6 @@ const initiateVideoCall = async (req, res) => {
             callData.receiverId = patient._id;
             await callData.save();
         } else {
-            // Naya record insert karein agar callId unique hai
             callData = await Call.create({
                 appointmentId,
                 callerId: doctorId,
@@ -85,7 +82,8 @@ const initiateVideoCall = async (req, res) => {
                     }
                 };
 
-                await admin.messaging().send(message);
+                // 👈 UPDATED TO MODULAR SYNTAX (getMessaging)
+                await getMessaging().send(message); 
                 notificationSent = true;
             } catch (fcmError) {
                 console.error("FCM Push Failed:", fcmError.message);
@@ -174,8 +172,29 @@ const endVideoCall = async (req, res) => {
     }
 };
 
+// 4. GET WEBRTC ICE SERVERS (STUN) CONFIGURATION FOR DOCTOR
+const getIceServers = async (req, res) => {
+    try {
+        const iceServers = [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" },
+            { urls: "stun:stun3.l.google.com:19302" },
+            { urls: "stun:stun4.l.google.com:19302" }
+        ];
+
+        res.json({
+            success: true,
+            iceServers: iceServers
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     initiateVideoCall,
     respondToCall,
-    endVideoCall
+    endVideoCall,
+    getIceServers // 👈 EXPORTED FOR DOCTOR
 };

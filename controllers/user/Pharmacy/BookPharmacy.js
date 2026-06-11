@@ -24,6 +24,8 @@ const fs = require('fs');
 const path = require('path');
 const LabCategory = require('../../../models/LabCategory');
 const PharmacyPrescriptionRequest = require('../../../models/PharmacyPrescriptionRequest');
+const PharmacyComboOffer = require('../../../models/PharmacyComboOffer'); // Import model
+
 
 
 
@@ -1885,10 +1887,33 @@ const payAndConfirmOrder = async (req, res) => {
     }
 };
 
+const getActiveStoreComboOffers = async (req, res) => {
+    try {
+        const { pharmacyId } = req.query;
+        const today = new Date();
+
+        const activeCombos = await PharmacyComboOffer.find({
+            pharmacyId,
+            isActive: true,
+            startDate: { $lte: today },
+            expiryDate: { $gte: today }
+        }).populate('medicineId', 'name image_url mrp best_price');
+
+        res.json({
+            success: true,
+            count: activeCombos.length,
+            data: activeCombos
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder,
-getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines,
+getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines, getActiveStoreComboOffers,
 
 createPrescriptionRequest, payAndConfirmOrder,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices
 };

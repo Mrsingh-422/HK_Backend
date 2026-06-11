@@ -1,5 +1,6 @@
-// controllers/user/VideoCall.js
+// controllers/user/Doctor/VideoCall.js
 const Call = require('../../../models/Call');
+const User = require('../../../models/User'); // 👈 IMPORT ADDED (Fixes updateFcmToken crash)
 const moment = require('moment');
 
 // 1. GET ACTIVE INCOMING CALL (Ringing Screen Fallback Check)
@@ -9,7 +10,6 @@ const getActiveIncomingCall = async (req, res) => {
         const userId = req.user.id; // From Auth Middleware (protect('user'))
 
         // Ringing Timeout Logic: Hum sirf pichle 45 seconds ke andar initiate hui calls ko hi active manenge.
-        // Kyunki phone maximum 45-60 seconds tak hi ring karta hai.
         const ringingTimeoutLimit = new Date(Date.now() - 45000); // 45 seconds ago
 
         const activeCall = await Call.findOne({
@@ -111,8 +111,32 @@ const updateFcmToken = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// 4. GET WEBRTC ICE SERVERS (STUN) CONFIGURATION FOR PATIENT
+// endpoint: GET /user/doctor/video-call/ice-servers
+const getIceServers = async (req, res) => {
+    try {
+        // Public STUN Servers for ICE candidates routing
+        const iceServers = [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" },
+            { urls: "stun:stun3.l.google.com:19302" },
+            { urls: "stun:stun4.l.google.com:19302" }
+        ];
+
+        res.json({
+            success: true,
+            iceServers: iceServers
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getActiveIncomingCall,
     getUserCallHistory,
-    updateFcmToken
+    updateFcmToken,
+    getIceServers // 👈 EXPORTED
 };

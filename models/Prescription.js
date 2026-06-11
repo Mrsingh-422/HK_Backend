@@ -19,7 +19,8 @@ const prescriptionSchema = new mongoose.Schema({
         instructions: String
     }],
     additionalNotes: String,
-    pdfUrl: String 
+    pdfUrl: String ,
+    dietPlanPdf: { type: String, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Prescription', prescriptionSchema);

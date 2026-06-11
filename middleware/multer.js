@@ -686,6 +686,55 @@ const policeEvidenceUploads = multer({
 }).array('evidenceFiles', 10); // Multi-upload support up to 10 files (Postman Key: 'evidenceFiles')
 
 
+
+// ==========================================
+// 37. PATIENT DIET PLAN PDF UPLOADS (Figma Screen: Diet Plan Profile)
+// ==========================================
+const dietPlanDir = 'public/uploads/diet_plans';
+ensureDir(dietPlanDir);
+
+const dietPlanUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, dietPlanDir),
+        filename: (req, file, cb) => cb(null, `diet-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        // Strictly allow only PDF documents for diet plan
+        if (file.mimetype === 'application/pdf') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only PDF documents are allowed for Diet Plan!'), false);
+        }
+    },
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+}).single('dietPlanPdf'); // Postman/Flutter key: 'dietPlanPdf'
+
+
+// ==========================================
+// 38. PHARMACY COMBO OFFERS CONFIGURATION
+// ==========================================
+const comboOfferDir = 'public/uploads/combo_offers';
+ensureDir(comboOfferDir);
+
+const comboOfferUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, comboOfferDir),
+        filename: (req, file, cb) => cb(null, `combo-${Date.now()}-${file.originalname}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        // Only images are allowed
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only Images are allowed for Combo Offers!'), false);
+        }
+    },
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB per image limit
+}).fields([
+    { name: 'images', maxCount: 10 } // Allows uploading up to 10 images at once
+]);
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -725,6 +774,8 @@ module.exports = {
     serviceUpload, // Screen: Add Service
     termsUpload,
     doctorReportUploads,
-    policeEvidenceUploads
+    policeEvidenceUploads,
+    dietPlanUploads,
+    comboOfferUploads
 
 };  

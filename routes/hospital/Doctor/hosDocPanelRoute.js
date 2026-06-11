@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { doctorDocUploads,doctorReportUploads } = require('../../../middleware/multer');
+const { doctorDocUploads,doctorReportUploads,dietPlanUploads } = require('../../../middleware/multer');
 const { 
     getMyDoctorProfile,
         updateDoctorProfile,
@@ -14,7 +14,8 @@ const {
     submitDischargeSummary, 
     updateDutyStatus,getMedicineList, updateClinicalSummary,
 
-    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare
+    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
+    getPrintableDischargeSummary
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 
@@ -30,7 +31,7 @@ router.get('/dashboard', protect('hospital-doctor'), getDocDashboard);
 router.get('/cases', protect('hospital-doctor'), getAssignedCases);
 router.get('/case-details/:id', protect('hospital-doctor'), getPatientDetails);
 
-router.post('/prescription/add', protect('hospital-doctor'), processPrescription);
+router.post('/prescription/add', protect('hospital-doctor'),dietPlanUploads, processPrescription);
 
 router.get('/colleagues', protect('hospital-doctor'), getHospitalColleagues); // For transfer dropdown
 router.post('/case/transfer', protect('hospital-doctor'), transferPatient);
@@ -54,6 +55,8 @@ router.post('/case/bedside-respond', protect('hospital-doctor'), respondToBedsid
 router.post('/case/bedside-start', protect('hospital-doctor'), startSpecialistCare); // 👈 ADD THIS ROUTE
 router.post('/case/bedside-feedback', protect('hospital-doctor'), submitSpecialistFeedback);  // Submit Specialist Observations
 router.post('/case/bedside-complete', protect('hospital-doctor'), completeSpecialistCare); // 👈 ADD THIS ROUTE
+
+router.get('/case/discharge-summary/print/:id', protect('hospital-doctor'), getPrintableDischargeSummary); // 👈 ADD THIS ROUTE
 
 
 

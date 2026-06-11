@@ -64,7 +64,7 @@ enum: [
 
     status: {
         type: String,
-        enum: ['Fresh', 'Pending', 'Under Investigation', 'On Hold', 'Critical', 'Closed', 'Archived'],
+        enum: ['Fresh', 'Pending','Accepted', 'Under Investigation', 'On Hold', 'Critical', 'Closed', 'Archived'],
         default: 'Fresh'
     },
 

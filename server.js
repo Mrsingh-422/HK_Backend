@@ -224,6 +224,7 @@ app.use('/provider/labs/services', require('./routes/provider/Lab/LabsServiceRou
 app.use('/provider/pharmacy/profile', require('./routes/provider/Pharmacy/PharmacyProfileRoute'));
 app.use('/provider/pharmacy/inventory', require('./routes/provider/Pharmacy/MedicineInventoryRoute'));
 app.use('/provider/pharmacy/orders', require('./routes/provider/Pharmacy/PharmacyOrdersRoute'));
+app.use('/provider/pharmacy/combo-offers', require('./routes/provider/Pharmacy/ComboOffersRoute')); // Combo Offers Management Route (BOGO, etc.)
 
 
 // --- Provider Nurse Routes ---
