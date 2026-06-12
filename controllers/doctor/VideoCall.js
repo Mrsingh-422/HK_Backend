@@ -9,7 +9,7 @@ const mongoose = require('mongoose');
 // 1. INITIATE VIDEO CALL (Triggered by Doctor)
 const initiateVideoCall = async (req, res) => {
     try {
-        const { appointmentId, callId, callerName } = req.body;
+        const { appointmentId, callId, callerName ,callType = 'video'} = req.body;
         const doctorId = req.user.id; // From Auth Middleware (protect('doctor'))
 
         // A. Parameters Validation
@@ -39,6 +39,7 @@ const initiateVideoCall = async (req, res) => {
             callData.startedAt = null;
             callData.endedAt = null;
             callData.callerName = callerName;
+            callData.callType = callType; // 👈 Updated callType
             callData.appointmentId = appointmentId;
             callData.callerId = doctorId;
             callData.receiverId = patient._id;
@@ -50,6 +51,7 @@ const initiateVideoCall = async (req, res) => {
                 receiverId: patient._id,
                 callId,
                 callerName,
+                callType, // 👈 Updated callType
                 status: 'initiated'
             });
         }

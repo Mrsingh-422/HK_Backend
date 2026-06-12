@@ -4,11 +4,16 @@ const path = require('path');
 const dotenv = require('dotenv');
 const os = require('os');
 const morgan = require('morgan');
+const http = require('http');
+const socketIo = require('socket.io');
+const chatSocketHandler = require('./utils/chatSocket'); // Import our handler
+
 
 ///////// For bypassing the Windows DNS bug //////////
 const dns = require('node:dns/promises'); // For bypassing the Windows DNS bug
 dns.setServers(["1.1.1.1", "8.8.8.8"]); // Forces Node to bypass the Windows DNS bug
  ////////////////// end bypassing DNS bug //////////////////////////////////
+
 
 // Config
 const envFile = path.join(__dirname, '.env');
@@ -17,8 +22,22 @@ const connectDB = require('./config/db');
 
 // Connect DB
 connectDB();
-
 const app = express();
+
+
+///////////////// websocket server //////////////////
+const server = http.createServer(app);
+// Socket.io initialization with CORS
+const io = socketIo(server, {
+    cors: {
+        origin: "*", // allow dynamic connection
+        methods: ["GET", "POST"]
+    }
+});
+// Chat handlers register karein
+chatSocketHandler(io);
+//////////////// websocket server end //////////////////
+
 
 
 ////////////////////////// for console log format ----- start ----- ////////////////////////////
@@ -163,6 +182,7 @@ app.use('/user/doctors', require('./routes/user/Doctor/BookAppointment')); // Do
 app.use('/user/doctor/menstrual', require('./routes/user/Doctor/MenstrualTrackerRoute')); // Menstrual Cycle Tracking
 app.use('/user/review', require('./routes/user/Doctor/ReviewDoctorRoute')); // Doctor Review Route
 app.use('/user/doctor/video-call', require('./routes/user/Doctor/VideoCallRoute')); // Doctor Video Call Route
+app.use('/api/chat', require('./routes/user/Doctor/ChatRoutes')); // Doctor-User Chat Route
 // --- user hospital ---
 app.use('/user/hospital', require('./routes/user/Hospital/BookHospitalRoute'));
 // --- user ambulance ---
@@ -293,7 +313,7 @@ const getLocalIpAddress = () => {
 const PORT = process.env.PORT;
 
 
-app.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', () => {
     const ip = getLocalIpAddress(); // IP Function call kiya
     // console.log(`🚀 Server running on port ${PORT}`);
     // console.log(`📡 Access locally: http://localhost:${PORT}`);

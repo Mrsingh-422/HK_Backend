@@ -555,11 +555,72 @@ const getPatientHistoryDetails = async (req, res) => {
     }
 };
 
+
+// GET: Fetch appointments eligible for Video Consultation
+// endpoint: GET /doctor/appointments/video-consults
+const getDoctorVideoConsults = async (req, res) => {
+    try {
+        const doctorId = req.user.id; // Decoded from protect('doctor') middleware
+
+        // Mongoose query with strict validation rules
+        const appointments = await Appointment.find({
+            doctorId,
+            bookingType: 'Appointment',            // Only normal appointment bookings
+            consultationType: 'Video Consult',      // Only Video consultations
+            status: { $in: ['Confirmed', 'In-Progress'] } // Active states only
+        })
+        .populate('userId', 'name phone profilePic fcmToken') // Fetch patient's basic profile & token
+        .sort({ appointmentDate: 1, appointmentTime: 1 });   // Upcoming appointments first
+
+        // Formatting data for Flutter/Next.js UI presentation
+        const formattedData = appointments.map(app => {
+            const mainPatient = app.patients[0]; // Actual patient being treated
+            
+            return {
+                appointmentId: app._id,
+                bookingId: app.bookingId,
+                patientName: mainPatient?.patientName || app.userId?.name || "Unknown Patient",
+                patientAge: mainPatient?.patientAge || "N/A",
+                patientGender: mainPatient?.gender || "N/A",
+                reasonForVisit: mainPatient?.reasonForVisit || "General Consultation",
+                appointmentDate: app.appointmentDate,
+                appointmentTime: app.appointmentTime,
+                status: app.status,
+                totalAmount: app.totalAmount,
+                
+                // Account holder details
+                userAccount: {
+                    phone: app.userId?.phone,
+                    profilePic: app.userId?.profilePic || null,
+                    hasFcmToken: !!app.userId?.fcmToken
+                },
+
+                // UI Helper: Frontend can directly use this boolean to enable/disable the "Start Video Call" button
+                isCallActionEnabled: true 
+            };
+        });
+
+        res.json({
+            success: true,
+            count: formattedData.length,
+            data: formattedData
+        });
+
+    } catch (error) {
+        console.error("Error in getDoctorVideoConsults:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
+
 module.exports = { getVendorDashboard,
     getDoctorBookings, getTodayBookings, confirmAppointment,
     doctorCancelAppointment, startVisit, completeWithPrescription,
     getDoctorStats, getMyConsultationFees, updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
     getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription,
-    getPatientHistory, getPatientHistoryDetails
+    getPatientHistory, getPatientHistoryDetails,
+    getDoctorVideoConsults
 
 };

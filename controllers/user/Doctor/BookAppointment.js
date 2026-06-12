@@ -725,6 +725,66 @@ const getShareableTrackingLink = async (req, res) => {
     res.json({ success: true, link });
 };
 
+
+// GET: Fetch appointments eligible for Video Consultation (User/Patient End)
+// endpoint: GET /user/doctor/video-call/appointments
+const getUserVideoConsults = async (req, res) => {
+    try {
+        const userId = req.user.id; // Decoded from protect('user') middleware
+
+        // Mongoose query matching exact same rules for Patient's account
+        const appointments = await Appointment.find({
+            userId,
+            bookingType: 'Appointment',            // Only normal appointment bookings
+            consultationType: 'Video Consult',      // Only Video consultations
+            status: { $in: ['Confirmed', 'In-Progress'] } // Active states only
+        })
+        .populate('doctorId', 'name speciality profileImage') // Fetch doctor's profile details
+        .sort({ appointmentDate: 1, appointmentTime: 1 });   // Upcoming appointments first
+
+        // Formatting data for Flutter/Next.js UI presentation matching Doctor's format
+        const formattedData = appointments.map(app => {
+            const mainPatient = app.patients[0]; // Actual patient getting the treatment
+            
+            return {
+                appointmentId: app._id,
+                bookingId: app.bookingId,
+                patientName: mainPatient?.patientName || "Self",
+                patientAge: mainPatient?.patientAge || "N/A",
+                patientGender: mainPatient?.gender || "N/A",
+                reasonForVisit: mainPatient?.reasonForVisit || "General Consultation",
+                appointmentDate: app.appointmentDate,
+                appointmentTime: app.appointmentTime,
+                status: app.status,
+                totalAmount: app.totalAmount,
+                
+                // Doctor Profile details for Patient Screen UI
+                doctorDetails: {
+                    doctorId: app.doctorId?._id,
+                    name: app.doctorId?.name || "Unknown Doctor",
+                    speciality: app.doctorId?.speciality || "General Physician",
+                    profileImage: app.doctorId?.profileImage || null
+                },
+
+                // UI Helper: Frontend can directly use this boolean to enable/disable the "Join Call" button
+                isCallActionEnabled: app.status === 'In-Progress' || app.status === 'Confirmed'
+            };
+        });
+
+        res.json({
+            success: true,
+            count: formattedData.length,
+            data: formattedData
+        });
+
+    } catch (error) {
+        console.error("Error in getUserVideoConsults:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
 module.exports = { 
     getSpecializations, 
     searchDoctors, 
@@ -737,5 +797,6 @@ module.exports = {
     userCancelAppointment,rescheduleAppointment,
     trackAppointment ,
     getMyPrescriptions,
-    getAvailableSlots,getTrackingStatus,getShareableTrackingLink
+    getAvailableSlots,getTrackingStatus,getShareableTrackingLink,
+    getUserVideoConsults
 };

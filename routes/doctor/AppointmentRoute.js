@@ -13,7 +13,8 @@ const { getVendorDashboard,
     getMyConsultationFees, 
     updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
     getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription,
-    getPatientHistory, getPatientHistoryDetails
+    getPatientHistory, getPatientHistoryDetails,
+    getDoctorVideoConsults
 } = require('../../controllers/doctor/Appointment');
 
 // Base URL: /doctor/appointments
@@ -52,5 +53,8 @@ router.post('/prescription/resend/:id', protect('doctor'), resendPrescription);
 
 router.get('/patient-history', protect('doctor'), getPatientHistory);
 router.get('/patient-history/:id', protect('doctor'), getPatientHistoryDetails);
+
+router.get('/video-consults', protect('doctor'), getDoctorVideoConsults); // 👈 Added
+
 
 module.exports = router;

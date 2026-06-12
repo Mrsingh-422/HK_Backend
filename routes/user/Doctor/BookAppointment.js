@@ -10,7 +10,8 @@ const {
     bookAppointment, verifyTrackingOTP,
     getUserAppointments, 
     userCancelAppointment,rescheduleAppointment,
-    trackAppointment , getMyPrescriptions, getAvailableSlots,getTrackingStatus,getShareableTrackingLink
+    trackAppointment , getMyPrescriptions, getAvailableSlots,getTrackingStatus,getShareableTrackingLink,
+    getUserVideoConsults
 } = require('../../../controllers/user/Doctor/BookAppointment');
 
 // Base URL: /user/doctors
@@ -37,5 +38,7 @@ router.get('/slots/:doctorId', protect('user'), getAvailableSlots);
 
 router.get('/tracking-status/:appointmentId', protect('user'), getTrackingStatus);
 router.get('/shareable-link/:appointmentId', protect('user'), getShareableTrackingLink);
+
+router.get('/video-consults', protect('user'), getUserVideoConsults);
 
 module.exports = router;
