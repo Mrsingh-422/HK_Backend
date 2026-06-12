@@ -1,44 +1,42 @@
 // config/firebase.js
-const { getApps, initializeApp, cert } = require('firebase-admin/app'); // 👈 Modern modular SDK imports
-const path = require('path');
-const fs = require('fs');
+const { getApps, initializeApp, cert } = require('firebase-admin/app');
+require('dotenv').config(); // Load environment variables first
 
 try {
-    // process.cwd() resolves path directly to your project root
-    const rootPath = process.cwd(); 
-    const serviceAccountPath = path.join(rootPath, 'firebase-service-account.json');
-    
-    console.log(`🔍 [Firebase Debug] Checking for credentials file at: ${serviceAccountPath}`);
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+    let privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
-    if (!fs.existsSync(serviceAccountPath)) {
+    // A. Check if all required variables are present in .env
+    if (!projectId || !clientEmail || !privateKey) {
         throw new Error(
-            `\n\n❌ [CRITICAL] 'firebase-service-account.json' file not found!\n` +
-            `👉 Please place the file exactly in this folder:\n` +
-            `👉 Path: ${serviceAccountPath}\n`
+            "Missing Firebase Environment variables!\n" +
+            "Please check FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in your .env file."
         );
     }
 
-    const serviceAccount = require(serviceAccountPath);
-    
-    const EXPECTED_PROJECT_ID = "hk-frontend-5b02d";
-    if (serviceAccount.project_id !== EXPECTED_PROJECT_ID) {
-        console.warn(`⚠️  [WARNING] Loaded service account project_id (${serviceAccount.project_id}) does not match expected frontend project (${EXPECTED_PROJECT_ID}).`);
-    }
+    // B. Fix double-escaped new lines from dotenv (.env formats \n as literal string)
+    // Yeh replace logic process.env ke multi-line character parse issue ko fix karta hai.
+    const formattedPrivateKey = privateKey.replace(/\\n/g, '\n');
 
-    // 👈 Modern modular check (Works exactly like your frontend config)
+    // C. Initialize Firebase modular SDK (Double boot safe)
     if (getApps().length === 0) {
         initializeApp({
-            credential: cert(serviceAccount) // cert() wrapper for service account object
+            credential: cert({
+                projectId: projectId,
+                clientEmail: clientEmail,
+                privateKey: formattedPrivateKey
+            })
         });
-        console.log(`💚 Firebase Admin Initialized Successfully for Project: [${serviceAccount.project_id}]`);
+        console.log(`💚 Firebase Admin Initialized Successfully (ENV Mode) for Project: [${projectId}]`);
     } else {
         console.log("💚 Firebase Admin already active.");
     }
 } catch (error) {
     console.error("\n==================================================");
-    console.error("🔴 FIREBASE INITIALIZATION CRITICAL ERROR:");
+    console.error("🔴 FIREBASE INITIALIZATION CRITICAL ERROR (ENV MODE):");
     console.error(error.message);
     console.error("==================================================\n");
 }
 
-module.exports = {}; // Export empty object as we use modular imports inside controller
+module.exports = {};

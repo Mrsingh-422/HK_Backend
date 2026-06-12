@@ -325,7 +325,7 @@ const getHQCaseHistory = async (req, res) => {
 // --------------------------------------------------
 /**
  * GET PENDING / ACTIVE CASES
- * Status: 'Pending', 'Under Investigation', 'Critical'
+ * Status: 'Pending', 'Under Investigation', 'Critical', 'On Hold'
  */
 const getPendingCases = async (req, res) => {
     try {
@@ -335,7 +335,7 @@ const getPendingCases = async (req, res) => {
         // Fetching all active cases that are not fresh and not closed
         let query = {
             hqId,
-            status: { $in: ['Pending', 'Under Investigation', 'Critical'] }
+            status: { $in: ['Pending', 'Under Investigation', 'Critical', 'On Hold'] }
         };
  
         // Search by Case Number, Victim Name or Address
@@ -920,7 +920,85 @@ const updatePoliceContent = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
+/**
+ * 1. GET STATION JURISDICTION
+ * HQ kisi bhi ek station ki boundary aur jurisdiction fetch kar sakta hai
+ */
+const getStationJurisdiction = async (req, res) => {
+    try {
+        const stationId = req.params.id; // Station ID
+ 
+        // Validate that this station belongs to this HQ
+        const station = await PoliceStation.findOne({ _id: stationId, hqId: req.user.id });
+       
+        if (!station) {
+            return res.status(404).json({ success: false, message: "Police Station not found or unauthorized" });
+        }
+ 
+        res.json({
+            success: true,
+            message: "Jurisdiction data fetched successfully",
+            data: station.jurisdiction
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
+/**
+ * 2. UPDATE STATION JURISDICTION
+ * HQ boundary limits, area stats aur area map document update kar sakta hai
+ */
+const updateStationJurisdiction = async (req, res) => {
+    try {
+        const stationId = req.params.id;
+        const {
+            zoneName,
+            sqKmArea,
+            population,
+            patrolBeats,
+            boundaryNorth,
+            boundarySouth,
+            boundaryEast,
+            boundaryWest
+        } = req.body;
+ 
+        // Fetch station
+        const station = await PoliceStation.findOne({ _id: stationId, hqId: req.user.id });
+        if (!station) {
+            return res.status(404).json({ success: false, message: "Police Station not found" });
+        }
+ 
+        // Object.assign se deep update karna safe nahi hota isliye nested field by field assign karenge
+        if (zoneName) station.jurisdiction.zoneName = zoneName;
+        if (sqKmArea) station.jurisdiction.sqKmArea = Number(sqKmArea);
+        if (population) station.jurisdiction.population = population;
+        if (patrolBeats) station.jurisdiction.patrolBeats = Number(patrolBeats);
+ 
+        if (boundaryNorth) station.jurisdiction.boundaryLimits.north = boundaryNorth;
+        if (boundarySouth) station.jurisdiction.boundaryLimits.south = boundarySouth;
+        if (boundaryEast) station.jurisdiction.boundaryLimits.east = boundaryEast;
+        if (boundaryWest) station.jurisdiction.boundaryLimits.west = boundaryWest;
+ 
+        // Agar area map/pdf document upload hua hai
+        if (req.files && req.files.areaDocument) {
+            // req.files.areaDocument array hoga, isliye [0] index lena hai
+            station.jurisdiction.areaDocumentUrl = `/uploads/police_stations/${req.files.areaDocument[0].filename}`;
+        }
+ 
+        await station.save();
+ 
+        res.json({
+            success: true,
+            message: "Jurisdiction limits updated successfully",
+            data: station.jurisdiction
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
+ 
  
 module.exports = {
     getHQDashboard,
@@ -953,7 +1031,10 @@ module.exports = {
     getOnHoldCases,
 
     getPoliceContent,
-    updatePoliceContent
+    updatePoliceContent,
+
+    getStationJurisdiction,
+    updateStationJurisdiction
  
 };
  

@@ -424,12 +424,14 @@ const policeStationUploads = multer({
         destination: (req, file, cb) => cb(null, policeStationDir),
         filename: (req, file, cb) => cb(null, `ps-${Date.now()}${path.extname(file.originalname)}`)
     }),
-    fileFilter: docFileFilter,
-    limits: { fileSize: 5 * 1024 * 1024 }
+    fileFilter: docFileFilter, // Ensure docFileFilter allows PDFs too!
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB kar dein PDF ke liye
 }).fields([
     { name: 'profileImage', maxCount: 1 },
-    { name: 'stationImages', maxCount: 5 }
+    { name: 'stationImages', maxCount: 5 },
+    { name: 'areaDocument', maxCount: 1 }
 ]);
+ 
 
 // ==========================================
 // 24. POLICE STAFF CONFIGURATION

@@ -32,7 +32,9 @@ const {
     getNearbyPoliceStations,
     getOnHoldCases,
     getPoliceContent,
-    updatePoliceContent
+    updatePoliceContent,
+    getStationJurisdiction,
+    updateStationJurisdiction
 
 
 
@@ -113,6 +115,13 @@ router.get('/content/:type', getPoliceContent);
 
 // Settings content update route (Only Police-HQ edit access)
 router.put('/content/:type', updatePoliceContent);
+// Get Jurisdiction of a specific station
+router.get('/stations/:id/jurisdiction', getStationJurisdiction);
+ 
+// Update Jurisdiction (Form-Data for file upload support)
+// 'areaDocument' wahi key name hai jisse frontend file bhejega
+router.put('/stations/:id/jurisdiction', policeStationUploads, updateStationJurisdiction);
+ 
  
  
 module.exports = router;
