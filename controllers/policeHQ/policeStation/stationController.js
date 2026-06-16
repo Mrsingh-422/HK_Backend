@@ -2,6 +2,7 @@ const PoliceStation = require('../../../models/PoliceStation');
 const PoliceStaff = require('../../../models/PoliceStaff');
 const PoliceCase = require('../../../models/PoliceCase');
 const LeaveRequest = require('../../../models/LeaveRequest');
+const Notification = require('../../../models/PoliceNotification');
 const {getDistance} = require('../../../utils/helpers')
 const bcrypt = require('bcryptjs');
  
@@ -678,19 +679,19 @@ const updateCaseStatusStation = async (req, res) => {
 const addEvidenceStation = async (req, res) => {
     try {
         const { id } = req.params;
-        const { evidenceType, description } = req.body; // evidenceType: Photo, Video, FIR Copy, Witness Statement, Forensic Report
-        
-        if (!req.files || req.files.length === 0) {
+        const { evidenceType, description } = req.body;
+       
+        // Smart Check: Accept both req.file (single) and req.files (array)
+        const uploadedFiles = req.file ? [req.file] : (req.files ? (Array.isArray(req.files) ? req.files : Object.values(req.files).flat()) : []);
+ 
+        if (uploadedFiles.length === 0) {
             return res.status(400).json({ success: false, message: "Please upload at least one evidence file" });
         }
-
+ 
         const caseData = await PoliceCase.findById(id);
-        if (!caseData) {
-            return res.status(404).json({ success: false, message: "Case not found" });
-        }
-
-        // Multer array process karein
-        req.files.forEach(file => {
+        if (!caseData) return res.status(404).json({ success: false, message: "Case not found" });
+ 
+        uploadedFiles.forEach(file => {
             caseData.evidence.push({
                 fileName: file.originalname,
                 fileUrl: `/uploads/police_evidence/${file.filename}`,
@@ -699,25 +700,18 @@ const addEvidenceStation = async (req, res) => {
                 uploadedAt: Date.now()
             });
         });
-
+ 
         caseData.progress.isEvidenceCollected = true;
-        // Descriptions aur remarks update logging
-        if (description) {
-            caseData.remarks = description;
-        }
-
+        if (description) caseData.remarks = description;
+ 
         await caseData.save();
-
-        res.json({
-            success: true,
-            message: "Evidence attached successfully to case records",
-            data: caseData
-        });
+ 
+        res.json({ success: true, message: "Evidence attached successfully", data: caseData });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
+ 
 /**
  * 3. CLOSE CASE WITH ATTACHMENT REPORT (SHO Final Closure)
  * Figma Link: Screen 28 ("Close Case" button opens Screen 11/40)
@@ -725,19 +719,21 @@ const addEvidenceStation = async (req, res) => {
 const closeCaseStation = async (req, res) => {
     try {
         const { id } = req.params;
-        const { finalStatus, finalRemarks } = req.body; // finalStatus: Suspect Arrested, False Report, Resolved, Archived
-
+        const { finalStatus, finalRemarks } = req.body;
+ 
         const updateData = {
             status: 'Closed',
             'progress.isReportSubmitted': true,
             remarks: finalRemarks || "Case resolved successfully.",
-            severityStatus: finalStatus || "Resolved",
+            // Ensure status matches Enum if passing to severityStatus
             resolvedAt: Date.now()
         };
-
-        // File upload verification from Multer
-        if (req.files && req.files.length > 0) {
-            const reportFile = req.files[0];
+ 
+        // Smart File Handle
+        const uploadedFiles = req.file ? [req.file] : (req.files ? (Array.isArray(req.files) ? req.files : Object.values(req.files).flat()) : []);
+ 
+        if (uploadedFiles.length > 0) {
+            const reportFile = uploadedFiles[0];
             const finalReportDoc = {
                 fileName: reportFile.originalname,
                 fileUrl: `/uploads/police_evidence/${reportFile.filename}`,
@@ -747,27 +743,278 @@ const closeCaseStation = async (req, res) => {
             };
             await PoliceCase.findByIdAndUpdate(id, { $push: { evidence: finalReportDoc } });
         }
-
-        const closedCase = await PoliceCase.findByIdAndUpdate(
-            id,
-            { $set: updateData },
+ 
+        const closedCase = await PoliceCase.findByIdAndUpdate(id, { $set: updateData }, { new: true });
+        if (!closedCase) return res.status(404).json({ success: false, message: "Case not found" });
+ 
+        res.json({ success: true, message: "Case Closed successfully", data: closedCase });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// ==========================================
+// 🚨 MISSING APIs TO MATCH FIGMA FLOW
+// ==========================================
+ 
+ 
+// 1. GET SINGLE CASE SUMMARY (For Station)
+const getCaseSummaryStation = async (req, res) => {
+    try {
+        const caseData = await PoliceCase.findOne({ _id: req.params.id, stationId: req.user.id })
+            .populate('assignedStaff', 'fullName rank badgeId profileImage')
+            .populate('supportingStations', 'stationName stationCode')
+            .populate('transportDetails.ambulanceId')
+            .populate('transportDetails.hospitalId');
+ 
+        if (!caseData) return res.status(404).json({ success: false, message: "Case not found" });
+ 
+        res.json({ success: true, data: caseData });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+ 
+// 2. GET & DELETE NOTIFICATIONS (For Station)
+const getStationNotifications = async (req, res) => {
+    try {
+        const notifications = await Notification.find({ recipientId: req.user.id }).sort({ createdAt: -1 });
+        res.json({ success: true, data: notifications });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+ 
+const deleteStationNotification = async (req, res) => {
+    try {
+        await Notification.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: "Notification deleted" });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+ 
+// 3. SEND BACKUP/SUPPORT REQUEST (From Station to another Station)
+const requestBackupStation = async (req, res) => {
+    try {
+        const { supportingStationIds, reason } = req.body;
+       
+        const updatedCase = await PoliceCase.findOneAndUpdate(
+            { _id: req.params.id, stationId: req.user.id },
+            {
+                $addToSet: { supportingStations: { $each: supportingStationIds } },
+                $set: { emergencyOverride: true } // Figma flow indicates override when backup needed
+            },
             { new: true }
         );
-
-        if (!closedCase) {
-            return res.status(404).json({ success: false, message: "Case not found" });
-        }
-
+ 
+        // Optional: Yahan HQ aur Target Station ko Notification bhejne ka code aayega
+       
+        res.json({ success: true, message: "Backup request sent successfully", data: updatedCase });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+ 
+// 4. GET DETAILED OFFICER PROFILE (With Activity)
+const getOfficerDetailedProfile = async (req, res) => {
+    try {
+        const staff = await PoliceStaff.findOne({ _id: req.params.id, stationId: req.user.id });
+        if (!staff) return res.status(404).json({ success: false, message: "Staff not found" });
+ 
+        // Get cases assigned to this officer
+        const activeCases = await PoliceCase.find({ assignedStaff: staff._id, status: { $ne: 'Closed' } })
+            .select('caseNo updatedAt status incidentType');
+ 
         res.json({
             success: true,
-            message: "Case Closed and Archived in local station records successfully",
-            data: closedCase
+            data: {
+                officer: staff,
+                stats: {
+                    casesAssigned: activeCases.length,
+                    attendance: "96%", // Dynamic attendance logic later
+                },
+                recentActivity: activeCases // Sending as recent activity
+            }
+        });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+const getRosterHistory = async (req, res) => {
+    try {
+        // Aap chaho toh query parameters se filter bhi laga sakte ho (e.g., ?status=Approved)
+        const { type, status } = req.query;
+       
+        let query = {
+            stationId: req.user.id,
+            status: { $in: ['Approved', 'Rejected'] } // Dono fetch karega by default
+        };
+ 
+        // Agar specific status chahiye (Sirf Approved ya sirf Rejected)
+        if (status && ['Approved', 'Rejected'].includes(status)) {
+            query.status = status;
+        }
+ 
+        // Agar specific type chahiye ('Leave' ya 'Shift Change')
+        if (type && type !== 'All') {
+            query.requestType = type;
+        }
+ 
+        const history = await LeaveRequest.find(query)
+            .populate('staffId', 'fullName badgeId rank profileImage')
+            .sort({ updatedAt: -1 }); // Sabse recent wale upar aayenge
+ 
+        res.json({
+            success: true,
+            count: history.length,
+            data: history
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+/**
+ * CREATE CASE (FROM POLICE STATION)
+ * Handles new incident registration directly from Police Station
+ */
+const createStationCase = async (req, res) => {
+    try {
+        const stationId = req.user.id;
+ 
+        // 1. Fetch Police Station to get its parent hqId
+        const station = await PoliceStation.findById(stationId);
+        if (!station) {
+            return res.status(404).json({ success: false, message: "Police Station not found" });
+        }
+ 
+        // 2. Validate required fields
+        const { victimName, victimPhone, address, location } = req.body;
+        if (!victimName || !victimPhone || !address || !location || !location.lat || !location.lng) {
+            return res.status(400).json({
+                success: false,
+                message: "victimName, victimPhone, address, and location (lat, lng) are required."
+            });
+        }
+ 
+        // 3. Create Case
+        const newCase = await PoliceCase.create({
+            ...req.body,
+            hqId: station.hqId,   // 👈 HQ ID automatically station se le liya
+            stationId: stationId, // 👈 Station ID token se le liya
+            status: 'Fresh'     // 👈 Kyunki station khud bana raha hai, toh directly 'Pending' ya 'Under Investigation' me jayega
+        });
+ 
+        res.status(201).json({
+            success: true,
+            message: "Case registered successfully by Police Station",
+            data: newCase
+        });
+    } catch (error) {
+        // Handle Mongoose Validation Errors gracefully
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(val => val.message);
+            return res.status(400).json({ success: false, message: messages.join(', ') });
+        }
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// ==========================================
+// NOTIFICATION APIs
+// ==========================================
+ 
+/**
+ * 1. CREATE NOTIFICATION (For Testing or Manual Broadcast)
+ */
+const createStationNotification = async (req, res) => {
+    try {
+        const { recipientId, recipientRole, type, title, message, relatedItemId } = req.body;
+ 
+        const newNotification = await Notification.create({
+            recipientId: recipientId || req.user.id, // Agar id nahi di toh khud ko bhej dega
+            recipientRole: recipientRole || 'Police-Station',
+            type: type || 'General',
+            title,
+            message,
+            relatedItemId
+        });
+ 
+        res.status(201).json({
+            success: true,
+            message: "Notification created successfully",
+            data: newNotification
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
  
+/**
+ * 2. MARK ALL NOTIFICATIONS AS READ
+ */
+const markAllNotificationsRead = async (req, res) => {
+    try {
+        // Sirf unhi ko update karo jo us user ke hain aur unread hain
+        const result = await Notification.updateMany(
+            { recipientId: req.user.id, isRead: false },
+            { $set: { isRead: true } }
+        );
+ 
+        res.json({
+            success: true,
+            message: "All notifications marked as read",
+            updatedCount: result.modifiedCount // Kitne notifications update hue
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// ==========================================
+// DOCUMENTATION & SUPPORT APIs (Station App)
+// ==========================================
+ 
+/**
+ * 1. GET APP CONTENT (Help, Privacy, Terms)
+ */
+const getStationAppContent = async (req, res) => {
+    try {
+        const { type } = req.params; // 'help', 'privacy', 'terms'
+       
+        const station = await PoliceStation.findById(req.user.id).select('documentation');
+        if (!station || !station.documentation[type]) {
+            return res.status(404).json({ success: false, message: "Invalid content type or Station not found" });
+        }
+ 
+        res.json({
+            success: true,
+            data: station.documentation[type] // Specific block bhejenge
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
+/**
+ * 2. UPDATE APP CONTENT (If Station Admin wants to change Help Phone/Email or Text)
+ */
+const updateStationAppContent = async (req, res) => {
+    try {
+        const { type } = req.params; // 'help', 'privacy', 'terms'
+        const { title, content, contactPhone, contactEmail } = req.body;
+ 
+        // Dynamic key generation (e.g., "documentation.help.title")
+        const updateObj = {};
+        if (title) updateObj[`documentation.${type}.title`] = title;
+        if (content) updateObj[`documentation.${type}.content`] = content;
+        if (contactPhone) updateObj[`documentation.${type}.contactPhone`] = contactPhone;
+        if (contactEmail) updateObj[`documentation.${type}.contactEmail`] = contactEmail;
+ 
+        const updatedStation = await PoliceStation.findByIdAndUpdate(
+            req.user.id,
+            { $set: updateObj },
+            { new: true }
+        ).select('documentation');
+ 
+        res.json({
+            success: true,
+            message: `${type} content updated successfully`,
+            data: updatedStation.documentation[type]
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
+  
 module.exports = {
     getStationDashboard,addStaff,
     updateStaff,getStaffList,removeStaff,
@@ -786,6 +1033,18 @@ module.exports = {
     getNearbyStationsForCase, getStaffRosterDetailed, transferCaseToStation,
     updateCaseStatusStation,
     addEvidenceStation,
-    closeCaseStation
+    closeCaseStation,
+    createStationNotification,
+    markAllNotificationsRead,
+    getStationAppContent,
+    updateStationAppContent,
+    getCaseSummaryStation,
+    getStationNotifications,
+    deleteStationNotification,
+    requestBackupStation,
+    getOfficerDetailedProfile,
+    getRosterHistory,
+    createStationCase
+    
 };
  

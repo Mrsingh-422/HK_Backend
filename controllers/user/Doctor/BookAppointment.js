@@ -1,3 +1,4 @@
+// controllers/user/Doctor/BookAppointment.js
 const Doctor = require('../../../models/Doctor');
 const Appointment = require('../../../models/Appointment');
 const Specialization = require('../../../models/Specialization');
@@ -9,13 +10,13 @@ const User = require('../../../models/User');
 const DocRescheduleLimit = require("../../../models/DocRescheduleLimit"); 
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
+const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const moment = require('moment');
 const crypto = require('crypto');
 
 const Bed = require('../../../models/Bed'); // For hospital admissions
 
 // 1. GET ALL SPECIALIZATIONS (For dropdown)
-// endpoint: GET /user/doctors/specializations
 const getSpecializations = async (req, res) => {
     try {
         const list = await Specialization.find({ isActive: true });
@@ -26,19 +27,16 @@ const getSpecializations = async (req, res) => {
 };
 
 // 2. SEARCH & FILTER DOCTORS (Website & App Listing)
-// endpoint: GET /user/doctors/list?speciality=Cardiologist&city=Mohali
 const searchDoctors = async (req, res) => {
     try {
         const { speciality, city, search, consultationType, userLat, userLng } = req.body;
         
         let query = { role: 'doctor', profileStatus: 'Approved', isActive: true };
 
-        // 1. Basic Filters
         if (speciality) query.speciality = speciality;
         if (city) query.city = { $regex: city, $options: 'i' };
         if (search) query.name = { $regex: search, $options: 'i' };
 
-        // 2. Consultation Type Filter (Figma Requirement)
         if (consultationType === 'Video Consult') {
             query['consultationStatus.online'] = true;
         } else if (consultationType === 'Clinic Visit') {
@@ -50,14 +48,11 @@ const searchDoctors = async (req, res) => {
         let doctors = await Doctor.find(query)
             .select('-password -token')
             .populate('hospitalId', 'name')
-            .lean(); // .lean() use karein taaki hum easily new fields (distance) add kar sakein
+            .lean();
 
-        // 3. Distance Calculation Logic
-        // Promise.all use karein taaki loop fast chale
         const doctorsWithDistance = await Promise.all(doctors.map(async (doc) => {
             let distance = 0;
             
-            // Agar doctor aur user dono ke coordinates hain
             if (userLat && userLng && doc.location && doc.location.lat && doc.location.lng) {
                 distance = await getDistance(
                     parseFloat(userLat), 
@@ -69,11 +64,10 @@ const searchDoctors = async (req, res) => {
 
             return {
                 ...doc,
-                distance: distance // KM mein distance add ho jayega
+                distance: distance 
             };
         }));
 
-        // 4. Sort by distance (Optional: Pass true from frontend if needed)
         doctorsWithDistance.sort((a, b) => a.distance - b.distance);
 
         res.json({ 
@@ -88,7 +82,6 @@ const searchDoctors = async (req, res) => {
 };
 
 // 3. GET DOCTOR PROFILE DETAILS
-// endpoint: GET /user/doctors/details/:id
 const getDoctorDetails = async (req, res) => {
     try {
         const doctorId = req.params.id;
@@ -99,19 +92,15 @@ const getDoctorDetails = async (req, res) => {
 
         if (!doctorDoc) return res.status(404).json({ message: "Doctor not found" });
 
-        // 1. Fetch Doctor's Availability Config
         const availability = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
 
-        // 2. Format Working Hours for Figma UI
         let workingHoursDisplay = [];
         const allDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
         if (availability) {
-            // Hum days ko group kar rahe hain (e.g., Mon-Fri)
             const workDays = allDays.filter(day => !availability.offDays.includes(day));
             const closedDays = availability.offDays;
 
-            // Simple Display Logic for Flutter
             workingHoursDisplay = [
                 {
                     days: workDays.length > 0 ? `${workDays[0].slice(0,3)} - ${workDays[workDays.length-1].slice(0,3)}` : "Not Available",
@@ -128,7 +117,6 @@ const getDoctorDetails = async (req, res) => {
                 });
             }
         } else {
-            // Default if not set
             workingHoursDisplay = [{ days: "Mon - Fri", time: "09:00 AM - 05:00 PM", isClosed: false }];
         }
 
@@ -140,10 +128,7 @@ const getDoctorDetails = async (req, res) => {
                 profile: {
                     ...doctor,
                     experience: `${doctor.experienceYears}+ years`,
-                    // FIGMA: Working Hours Section (Dynamic)
                     workingHours: workingHoursDisplay,
-                    
-                    // FIGMA: Other Professional Info
                     helpWith: doctor.treatedConditions || ["Fever", "Cough", "Headache"],
                     competencies: doctor.competencies || ["MD Degree", "Emergency Care"],
                 },
@@ -157,7 +142,7 @@ const getDoctorDetails = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// endpoint: GET /user/doctors/visit-charges/:doctorId
+// GET VISIT CONFIG
 const getDoctorVisitConfig = async (req, res) => {
     try {
         const { doctorId } = req.params;
@@ -166,7 +151,7 @@ const getDoctorVisitConfig = async (req, res) => {
         if (!charges) {
             return res.json({ 
                 success: true, 
-                data: { fixedPrice: 100, fixedDistance: 3, pricePerKM: 10 }, // Global Default
+                data: { fixedPrice: 100, fixedDistance: 3, pricePerKM: 10 }, 
                 isDefault: true 
             });
         }
@@ -174,8 +159,7 @@ const getDoctorVisitConfig = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- A. GET APPLICABLE COUPONS FOR A DOCTOR ---
-// endpoint: GET /user/doctors/coupons/:doctorId
+// GET APPLICABLE COUPONS
 const getAvailableCoupons = async (req, res) => {
     try {
         const { doctorId } = req.params;
@@ -183,8 +167,8 @@ const getAvailableCoupons = async (req, res) => {
             isActive: true,
             expiryDate: { $gt: new Date() },
             $or: [
-                { vendorId: doctorId }, // Specific to this doctor
-                { isAdminCreated: true, vendorType: { $in: ['Doctor', 'All'] } } // Global Doctor Coupons
+                { vendorId: doctorId }, 
+                { isAdminCreated: true, vendorType: { $in: ['Doctor', 'All'] } } 
             ]
         });
         res.json({ success: true, data: coupons });
@@ -192,17 +176,17 @@ const getAvailableCoupons = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// VALIDATE COUPON
 const validateCoupon = async (req, res) => {
     try {
         const { couponCode, subtotal, doctorId } = req.body;
         const userId = req.user.id;
 
-        // 1. Input Validation
         if (!couponCode || !subtotal || !doctorId) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
         }
 
-        // 2. Find Coupon
         const coupon = await Coupon.findOne({ 
             couponName: couponCode.toUpperCase(), 
             isActive: true 
@@ -212,12 +196,10 @@ const validateCoupon = async (req, res) => {
             return res.status(404).json({ success: false, message: "Invalid or inactive coupon code" });
         }
 
-        // 3. Expiry Check
         if (new Date(coupon.expiryDate) < new Date()) {
             return res.status(400).json({ success: false, message: "Coupon has expired" });
         }
 
-        // 4. Minimum Order Amount Check (Ensure numbers)
         const numericSubtotal = Number(subtotal);
         if (numericSubtotal < Number(coupon.minOrderAmount)) {
             return res.status(400).json({ 
@@ -226,32 +208,27 @@ const validateCoupon = async (req, res) => {
             });
         }
 
-        // 5. Vendor Specific Check (If not global)
         if (coupon.vendorId && coupon.vendorId.toString() !== doctorId) {
             return res.status(400).json({ success: false, message: "This coupon is not applicable for this doctor" });
         }
 
-        // 6. Usage Limit Check
         const userUsage = coupon.usedBy.find(u => u.userId.toString() === userId);
         if (userUsage && userUsage.usageCount >= coupon.maxUsagePerUser) {
             return res.status(400).json({ success: false, message: "You have exceeded the usage limit for this coupon" });
         }
 
-        // 7. Discount Calculation (Safe math)
         let discount = (numericSubtotal * Number(coupon.discountPercentage)) / 100;
         
-        // Cap the discount to maxDiscount
         if (discount > Number(coupon.maxDiscount)) {
             discount = Number(coupon.maxDiscount);
         }
 
-        // 8. Return Success
         res.json({
             success: true,
             message: "Coupon applied successfully!",
             data: {
                 couponId: coupon._id,
-                discountAmount: Math.round(discount), // Rounded to avoid decimals
+                discountAmount: Math.round(discount), 
                 finalAmount: Math.round(numericSubtotal - discount)
             }
         });
@@ -261,10 +238,8 @@ const validateCoupon = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// --- B. CHECKOUT SUMMARY (Calculate Price Breakdown) ---
-// endpoint: POST /user/doctors/checkout-summary
-// 1. UNIFIED CHECKOUT SUMMARY (Sabse Important)
-// Yeh API batayegi ki final paisa kitna lagega Admission ya Appointment ka
+
+// GET CHECKOUT SUMMARY
 const getCheckoutSummary = async (req, res) => {
     try {
         const { 
@@ -276,39 +251,33 @@ const getCheckoutSummary = async (req, res) => {
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
 
-        // 1. Base Consultation Fee
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
         let baseFee = doctor.fees[typeMap[consultationType]] || 0;
 
-        // 2. Visit/Travel Charges Calculation (For Home Visit only)
         let visitCharge = 0;
         if (consultationType === 'Home Visit') {
             if (!address) return res.status(400).json({ message: "Address required for Home Visit" });
 
-            // Doctor ki specific visit charge config uthayein
             const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
             
             if (chargeConfig) {
-                visitCharge = chargeConfig.fixedPrice; // Base Travel Fee
+                visitCharge = chargeConfig.fixedPrice; 
                 if (distance > chargeConfig.fixedDistance) {
                     visitCharge += (distance - chargeConfig.fixedDistance) * chargeConfig.pricePerKM;
                 }
             } else {
-                visitCharge = 100; // Default fallback if no config set
+                visitCharge = 100; 
             }
         }
 
-        // 3. Premium Slot Fee
         let premiumFee = 0;
         const avail = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
         const slot = avail?.premiumSlots.find(s => s.time === timeSlot);
         if (slot) premiumFee = slot.extraFee;
 
-        // 4. Special Services & Subtotal
         const servicesTotal = specialServices.reduce((sum, s) => sum + (s.price || 0), 0);
         let subtotal = baseFee + visitCharge + premiumFee + servicesTotal;
 
-        // 5. Coupon Logic
         let discount = 0;
         if (couponCode) {
             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
@@ -321,7 +290,7 @@ const getCheckoutSummary = async (req, res) => {
             success: true,
             data: {
                 baseFee,
-                visitCharge, // <-- This is the Dynamic Travel Fee from Doctor Panel
+                visitCharge, 
                 premiumFee,
                 servicesTotal,
                 discount,
@@ -334,33 +303,27 @@ const getCheckoutSummary = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-
-// --- C. UPDATED BOOK APPOINTMENT (With Discount & Charges) ---
-// Updated POST /user/doctors/book
-// POST /user/doctors/book
-// bookAppointment controller (Updated)
-// --- UNIFIED BOOKING CONTROLLER (Works for both Independent & Hospital Doctors) ---
+// --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY ORDER CREATION) ---
+// Mapped only for Independent Doctors (Role check added) [1]
 const bookAppointment = async (req, res) => {
     try {
-        console.log("Incoming Request Body:", req.body);
+        console.log("Incoming Appointment Booking Request:", req.body);
 
-        // --- Frontend ki keys ke hisaab se destructure karein ---
         let { 
             doctorId, 
             appointmentDate, 
-            timeSlot,          // <--- Frontend se 'timeSlot' aa raha hai
+            timeSlot,          
             consultationType, 
             patients, 
             address,
-            pricingBreakdown,  // <--- Frontend se 'pricingBreakdown' aa raha hai
-            totalAmount        // <--- Frontend se 'totalAmount' aa raha hai
+            pricingBreakdown,  
+            totalAmount        
         } = req.body;
 
-        // 1. Keys mapping (Agar frontend change nahi karna chahte)
         const appointmentTime = timeSlot; 
         const pricingData = pricingBreakdown; 
 
-        // 2. STICKY VALIDATIONS
+        // 1. Basic Validations
         if (!doctorId || !appointmentDate || !appointmentTime) {
             return res.status(400).json({ 
                 success: false, 
@@ -372,6 +335,18 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ 
                 success: false, 
                 message: "Pricing details or totalAmount missing." 
+            });
+        }
+
+        // 2. Strict Independent Doctor Role Validation [1]
+        const doctor = await Doctor.findById(doctorId);
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor not found." });
+        }
+        if (doctor.role !== 'doctor') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "This booking route only supports independent doctors." 
             });
         }
 
@@ -387,16 +362,19 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "This slot is already booked." });
         }
 
-        const bookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        
-        // 4. Create Appointment using the mapped keys
+        const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+        // 4. Create Razorpay Order in paise (1 INR = 100 paise)
+        const rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
+
+        // 5. Create Draft/Unpaid Appointment Record in MongoDB
         const appointment = await Appointment.create({
             userId: req.user.id,
             doctorId,
             patients: typeof patients === 'string' ? JSON.parse(patients) : patients,
             address: consultationType === 'Home Visit' ? (typeof address === 'string' ? JSON.parse(address) : address) : undefined,
             appointmentDate: new Date(appointmentDate),
-            appointmentTime, // "10:00"
+            appointmentTime, 
             consultationType,
             
             pricingBreakdown: {
@@ -408,13 +386,23 @@ const bookAppointment = async (req, res) => {
             },
             
             totalAmount: Number(totalAmount),
-            bookingId,
-            status: 'Confirmed',
-            paymentStatus: 'Paid',
+            bookingId: tempBookingId,
+            status: 'Pending', // Pending payment signature verification
+            paymentStatus: 'Pending',
+            transactionId: rzpOrder.id, // Store Razorpay Order ID as tracker
             'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString()
         });
 
-        res.status(201).json({ success: true, bookingId, data: appointment });
+        // 6. Return Razorpay configurations to Mobile/Web Frontend
+        res.status(201).json({ 
+            success: true, 
+            message: "Razorpay order created. Complete payment to confirm.",
+            key_id: process.env.RAZORPAY_KEY_ID, // Send key_id securely
+            amount: rzpOrder.amount, // in paise
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: appointment._id,
+            bookingId: tempBookingId
+        });
 
     } catch (error) { 
         console.error("Critical Booking Error:", error);
@@ -422,6 +410,57 @@ const bookAppointment = async (req, res) => {
     }
 };
 
+// --- NEW METHOD: VERIFY PAYMENT AND CONFIRM APPOINTMENT ---
+// endpoint: POST /user/doctors/verify-payment
+const verifyDoctorPayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+        if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "All payment tokens (orderId, paymentId, signature) are mandatory." 
+            });
+        }
+
+        // 1. Verify payment signature security key
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+
+        if (!isVerified) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Signature verification failed. Invalid transaction token." 
+            });
+        }
+
+        // 2. Find and Confirm the Appointment record in DB
+        const appointment = await Appointment.findByIdAndUpdate(
+            appointmentId,
+            {
+                $set: {
+                    status: 'Confirmed',
+                    paymentStatus: 'Paid',
+                    transactionId: razorpayPaymentId // Save actual transaction reference ID
+                }
+            },
+            { new: true }
+        ).populate('doctorId', 'name speciality');
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
+        }
+
+        res.json({
+            success: true,
+            message: "Payment verified successfully. Booking is now Confirmed!",
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Signature Verification Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 const verifyTrackingOTP = async (req, res) => {
@@ -441,8 +480,8 @@ const verifyTrackingOTP = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
 // 5. GET USER APPOINTMENTS (Figma: My Bookings)
-// endpoint: GET /user/doctors/my-appointments
 const getUserAppointments = async (req, res) => {
     try {
         const { status } = req.query; 
@@ -452,8 +491,6 @@ const getUserAppointments = async (req, res) => {
         };        
         if (status) query.status = status; 
         
-
-        // Fetch Global Doctor Reschedule Limit dynamically
         const globalConfig = await DocRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
@@ -464,7 +501,7 @@ const getUserAppointments = async (req, res) => {
         res.json({ 
             success: true, 
             count: appointments.length, 
-            maxRescheduleLimit: maxLimit, // 👈 Flutter dynamically uses this to gray out Cancel buttons
+            maxRescheduleLimit: maxLimit, 
             data: appointments 
         });
     } catch (error) {
@@ -472,9 +509,7 @@ const getUserAppointments = async (req, res) => {
     }
 };
 
-// 6. CANCEL APPOINTMENT (User Side)
-// endpoint: PATCH /user/doctors/cancel/:id
-// 6. CANCEL APPOINTMENT (User Side - Secure Cancellation-Reschedule Loop)
+// 6. CANCEL APPOINTMENT
 const userCancelAppointment = async (req, res) => {
     try {
         const { reason } = req.body;
@@ -494,9 +529,8 @@ const userCancelAppointment = async (req, res) => {
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const currentCancelCount = appointment.cancellationCount || 0;
-        const currentRescheduleCount = appointment.rescheduleCount || 0; // 👈 Fetch current reschedule count
+        const currentRescheduleCount = appointment.rescheduleCount || 0; 
 
-        // 🚀 CRITICAL RULE: Agar reschedule limits exhaust ho chuki hain, toh cancellation strictly block hoga
         if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
@@ -533,8 +567,7 @@ const userCancelAppointment = async (req, res) => {
     }
 };
 
-// --- NEW API: RESCHEDULE DOCTOR APPOINTMENT ---
-// method : POST
+// RESCHEDULE
 const rescheduleAppointment = async (req, res) => {
     try {
         const { appointmentId, newDate, newTimeSlot } = req.body;
@@ -546,13 +579,11 @@ const rescheduleAppointment = async (req, res) => {
         const appt = await Appointment.findOne({ _id: appointmentId, userId: req.user.id });
         if (!appt) return res.status(404).json({ success: false, message: "Appointment record not found." });
 
-        // 1. Fetch Dynamic Global limit configuration for Doctors
         const globalConfig = await DocRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const currentRescheduleCount = appt.rescheduleCount || 0;
 
-        // 2. RULE 1: Reschedule Count Validation (Checks against global admin limit)
         if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
@@ -560,7 +591,6 @@ const rescheduleAppointment = async (req, res) => {
             });
         }
 
-        // 3. RULE 2: Target Slot Availability Checking (Overlaps checking)
         const isBooked = await Appointment.findOne({
             _id: { $ne: appointmentId },
             doctorId: appt.doctorId,
@@ -573,11 +603,10 @@ const rescheduleAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Naya selected slot pehle se hi kisi aur patient ke liye booked hai." });
         }
 
-        // 4. Update and Save changes
         appt.appointmentDate = new Date(newDate);
         appt.appointmentTime = newTimeSlot;
         appt.rescheduleCount = currentRescheduleCount + 1;
-        appt.status = 'Confirmed'; // Wapas active state par return laya gaya
+        appt.status = 'Confirmed'; 
 
         await appt.save();
         res.json({ success: true, message: "Appointment rescheduled successfully", data: appt });
@@ -587,8 +616,7 @@ const rescheduleAppointment = async (req, res) => {
     }
 };
 
-// 7. TRACK LIVE STATUS (Figma Tracking Screen)
-// endpoint: GET /user/doctors/track/:appointmentId
+// TRACK
 const trackAppointment = async (req, res) => {
     try {
         const appointment = await Appointment.findOne({ 
@@ -603,7 +631,7 @@ const trackAppointment = async (req, res) => {
             status: appointment.status,
             eta: appointment.tracking?.eta || "12 min", 
             doctorLocation: appointment.tracking?.liveLocation || { lat: 30.7333, lng: 76.7794 }, 
-            otp: appointment.tracking?.otp, // Database wala real OTP
+            otp: appointment.tracking?.otp, 
             data: appointment 
         });
     } catch (error) {
@@ -611,9 +639,7 @@ const trackAppointment = async (req, res) => {
     }
 };
 
-
-//8. GET PRESCRIPTION & DIAGNOSIS (Figma: Prescription View Button)
-// endpoint: GET /user/doctors/prescription
+// GET PRESCRIPTIONS
 const getMyPrescriptions = async (req, res) => {
     try {
         const data = await Prescription.find({ userId: req.user.id })
@@ -625,26 +651,23 @@ const getMyPrescriptions = async (req, res) => {
     }
 };
 
-// GET /user/doctors/slots/:doctorId?date=2026-03-20
+// GET SLOTS
 const getAvailableSlots = async (req, res) => {
     try {
         const { doctorId } = req.params;
-        const { date } = req.query; // e.g., "2026-05-20"
+        const { date } = req.query; 
         
-        // 1. Availability config fetch karein
         const config = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
         
         if (!config) {
             return res.json({ success: true, message: "Availability not set", slots:[] });
         }
 
-        // 2. Off-days check karein
         const dayName = moment(date).format('dddd'); 
         if (config.offDays.includes(dayName) || config.blockedDates.includes(date)) {
             return res.json({ success: true, message: "Doctor is unavailable on this date", slots:[] });
         }
 
-        // 3. Existing Bookings fetch karein
         const booked = await Appointment.find({ 
             doctorId, 
             appointmentDate: date, 
@@ -653,7 +676,6 @@ const getAvailableSlots = async (req, res) => {
         
         const bookedTimes = booked.map(b => b.appointmentTime);
 
-        // 4. Slots Generate karein
         let slots = [];
         let start = moment(config.startTime, "HH:mm");
         let end = moment(config.endTime, "HH:mm");
@@ -661,12 +683,9 @@ const getAvailableSlots = async (req, res) => {
         while (start.isBefore(end)) {
             const timeStr = start.format("HH:mm");
             
-            // Check if blocked or booked
             const isBooked = bookedTimes.includes(timeStr);
             const isBlocked = config.unavailableSlots.includes(timeStr);
 
-            // --- PREMIUM FEE LOGIC ---
-            // Check karein kya ye time slot premium list mein hai
             const premiumEntry = config.premiumSlots.find(p => p.time === timeStr);
             const premiumFee = premiumEntry ? premiumEntry.extraFee : 0;
 
@@ -675,9 +694,7 @@ const getAvailableSlots = async (req, res) => {
                 isBooked: isBooked,
                 isBlocked: isBlocked,
                 available: !isBooked && !isBlocked,
-                // UI ke liye extra data
                 premiumFee: premiumFee, 
-                // Agar premium hai to total fee = Base Fee + Premium Fee dikha sakte hain
             });
             
             start.add(config.slotDuration || 30, 'minutes');
@@ -686,7 +703,7 @@ const getAvailableSlots = async (req, res) => {
         res.json({ 
             success: true, 
             date, 
-            baseFee: 0, // Frontend yahan doctor ki base fee pass kar sakta hai ya profile se le sakta hai
+            baseFee: 0, 
             slots 
         });
     } catch (error) { 
@@ -705,9 +722,9 @@ const getTrackingStatus = async (req, res) => {
             success: true,
             data: {
                 doctorName: appointment.doctorId.name,
-                status: appointment.status, // "On the way"
-                eta: "12 min", // Dr. calculation logic later
-                otp: appointment.tracking.otp, // Screen 22: 8902
+                status: appointment.status, 
+                eta: "12 min", 
+                otp: appointment.tracking.otp, 
                 liveLocation: appointment.tracking.liveLocation,
                 contact: {
                     phone: appointment.doctorId.phone,
@@ -718,33 +735,26 @@ const getTrackingStatus = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// B. Share Live Status (Screenshot 21)
-// Sirf link generate karke dena hai
 const getShareableTrackingLink = async (req, res) => {
     const link = `https://hk.app/track/live/${req.params.id}`;
     res.json({ success: true, link });
 };
 
-
-// GET: Fetch appointments eligible for Video Consultation (User/Patient End)
-// endpoint: GET /user/doctor/video-call/appointments
 const getUserVideoConsults = async (req, res) => {
     try {
-        const userId = req.user.id; // Decoded from protect('user') middleware
+        const userId = req.user.id; 
 
-        // Mongoose query matching exact same rules for Patient's account
         const appointments = await Appointment.find({
             userId,
-            bookingType: 'Appointment',            // Only normal appointment bookings
-            consultationType: 'Video Consult',      // Only Video consultations
-            status: { $in: ['Confirmed', 'In-Progress'] } // Active states only
+            bookingType: 'Appointment',            
+            consultationType: 'Video Consult',      
+            status: { $in: ['Confirmed', 'In-Progress'] } 
         })
-        .populate('doctorId', 'name speciality profileImage') // Fetch doctor's profile details
-        .sort({ appointmentDate: 1, appointmentTime: 1 });   // Upcoming appointments first
+        .populate('doctorId', 'name speciality profileImage') 
+        .sort({ appointmentDate: 1, appointmentTime: 1 });   
 
-        // Formatting data for Flutter/Next.js UI presentation matching Doctor's format
         const formattedData = appointments.map(app => {
-            const mainPatient = app.patients[0]; // Actual patient getting the treatment
+            const mainPatient = app.patients[0]; 
             
             return {
                 appointmentId: app._id,
@@ -758,7 +768,6 @@ const getUserVideoConsults = async (req, res) => {
                 status: app.status,
                 totalAmount: app.totalAmount,
                 
-                // Doctor Profile details for Patient Screen UI
                 doctorDetails: {
                     doctorId: app.doctorId?._id,
                     name: app.doctorId?.name || "Unknown Doctor",
@@ -766,7 +775,6 @@ const getUserVideoConsults = async (req, res) => {
                     profileImage: app.doctorId?.profileImage || null
                 },
 
-                // UI Helper: Frontend can directly use this boolean to enable/disable the "Join Call" button
                 isCallActionEnabled: app.status === 'In-Progress' || app.status === 'Confirmed'
             };
         });
@@ -783,8 +791,6 @@ const getUserVideoConsults = async (req, res) => {
     }
 };
 
-
-
 module.exports = { 
     getSpecializations, 
     searchDoctors, 
@@ -792,6 +798,7 @@ module.exports = {
     getAvailableCoupons,validateCoupon,
     getCheckoutSummary,
     bookAppointment, 
+    verifyDoctorPayment, // 👈 New Verification Exported
     verifyTrackingOTP,
     getUserAppointments,
     userCancelAppointment,rescheduleAppointment,

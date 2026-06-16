@@ -9,7 +9,7 @@ const {
     getIncomingReferrals,getEmergencyCases, trackAllAmbulances, getHospitalWards, updateWardInfo, deleteWard, getAllHospitalAdmissions,
     toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy,finalizeDischarge, setHospitalShift ,getHospitalReferralBookings, 
-    updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,emergencyDischarge
+    updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges
 
 } = require('../../controllers/hospital/HospitalPanel');
  
@@ -80,6 +80,6 @@ router.put('/terms/uploadfile', protect('hospital'), termsUpload, uploadHospital
 
 router.get('/history', protect('hospital'), getHospitalHistory);
 router.post('/discharge/emergency', protect('hospital'), emergencyDischarge); // 👈 ADD THIS ROUTE
-
-
+router.get('/admissions/details/:id', protect('hospital'), getHospitalCaseDetails); // 👈 ADD THIS ROUTE
+router.get('/discharges/pending', protect('hospital'), getHospitalPendingDischarges); // 👈 ADD THIS ROUTE
 module.exports = router;

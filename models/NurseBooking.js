@@ -99,6 +99,10 @@ const nurseBookingSchema = new mongoose.Schema({
     needConsumable: { type: Boolean, default: false },
     prescriptionImage: String,
     couponCode: String,
+   serviceOTP: { type: String, default: null },
+cancelReason: { type: String, default: null },
+rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }] ,
+
 
 }, { timestamps: true });
 nurseBookingSchema.index({ nurseId: 1, status: 1 });

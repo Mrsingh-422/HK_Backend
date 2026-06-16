@@ -4,6 +4,9 @@ const { doctorDocUploads,doctorReportUploads,dietPlanUploads } = require('../../
 const { 
     getMyDoctorProfile,
         updateDoctorProfile,
+        getDoctorHistory, 
+        getPendingAdmissions,
+    takeChargeOfAdmission ,rejectTransfer,
 
     getDocDashboard, 
     getAssignedCases, 
@@ -11,7 +14,7 @@ const {
     processPrescription, 
     getHospitalColleagues, 
     transferPatient, acceptTransfer,
-    submitDischargeSummary, 
+    submitDischargeSummary, uploadPatientReports,
     updateDutyStatus,getMedicineList, updateClinicalSummary,
 
     requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
@@ -39,13 +42,14 @@ router.post('/case/accept-transfer', protect('hospital-doctor'), acceptTransfer)
 
 
 router.post('/case/discharge-summary', protect('hospital-doctor'), submitDischargeSummary);
-
+router.post('/case/upload-reports/:id', protect('hospital-doctor'), doctorReportUploads, uploadPatientReports);
 router.patch('/status/duty-toggle', protect('hospital-doctor'), updateDutyStatus); // NO 403 ERROR NOW
 
 router.get('/medicines', protect('hospital-doctor'), getMedicineList);
 router.put('/case/clinical-summary/:id', protect('hospital-doctor'), updateClinicalSummary);
 router.get('/specializations', protect('hospital-doctor'), getSpecializations);
 router.post('/case/discharge-summary', protect('hospital-doctor'), doctorReportUploads, submitDischargeSummary);
+router.get('/cases/history-list', protect('hospital-doctor'), getDoctorHistory);
 
 
 
@@ -57,6 +61,11 @@ router.post('/case/bedside-feedback', protect('hospital-doctor'), submitSpeciali
 router.post('/case/bedside-complete', protect('hospital-doctor'), completeSpecialistCare); // 👈 ADD THIS ROUTE
 
 router.get('/case/discharge-summary/print/:id', protect('hospital-doctor'), getPrintableDischargeSummary); // 👈 ADD THIS ROUTE
+router.get('/cases/pending-admissions', protect('hospital-doctor'), getPendingAdmissions); // 👈 ADD THIS ROUTE
+router.post('/case/take-charge', protect('hospital-doctor'), takeChargeOfAdmission);  
+router.post('/case/reject-transfer', protect('hospital-doctor'), rejectTransfer); // 👈 ADD THIS ROUTE
+
+
 
 
 

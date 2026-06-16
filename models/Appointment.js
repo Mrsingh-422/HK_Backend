@@ -10,7 +10,7 @@ const appointmentSchema = new mongoose.Schema({
     ambulanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance', default: null }, // Link to Ambulance if brought by driver
     bedBookingType: { 
         type: String, 
-        enum: ['General-Bed', 'Emergency-Bed'], 
+        enum: ['General-Bed', 'Emergency-Bed'], // general bed for hospital booking direct and emergency bed for ambulance brought patients
         default: 'General-Bed' 
     },
 

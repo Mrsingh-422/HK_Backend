@@ -454,6 +454,47 @@ const submitDischargeSummary = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+// --- API: UPLOAD & ATTACH PATIENT CLINICAL REPORTS (Independent Multi-upload - NEW API) ---
+// Endpoint: POST /hospital-doctor/panel/case/upload-reports/:id
+const uploadPatientReports = async (req, res) => {
+    try {
+        const { id } = req.params; // Appointment/Admission ID
+
+        // 1. Fetch uploaded multiple files paths from multer fields
+        // Since we are uploading multiple files, we access them via req.files
+        const files = req.files || [];
+        
+        if (files.length === 0) {
+            return res.status(400).json({ success: false, message: "Kripya kam se kam ek report file upload karein (clinicalReports key me)." });
+        }
+
+        const reportPaths = files.map(f => `/uploads/doctor_reports/${f.filename}`);
+
+        // 2. Update Appointment using atomic $push and $each to append new reports securely
+        // This ensures old reports are NOT overwritten, they are appended to the list!
+        const appointment = await Appointment.findByIdAndUpdate(
+            id,
+            { 
+                $push: { "clinicalSummary.uploadedReports": { $each: reportPaths } } 
+            },
+            { new: true, runValidators: true }
+        );
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Patient Admission Record Not Found." });
+        }
+
+        res.json({ 
+            success: true, 
+            message: `${reportPaths.length} Reports uploaded and attached to patient's clinical file successfully.`, 
+            data: appointment.clinicalSummary.uploadedReports // Returns complete updated reports array
+        });
+
+    } catch (error) {
+        console.error("Independent report upload error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 // --- 8. DUTY STATUS TOGGLE ---
 const updateDutyStatus = async (req, res) => {
@@ -900,16 +941,197 @@ const getPrintableDischargeSummary = async (req, res) => {
     }
 };
 
+// --- API: GET DOCTOR COMPLETED/TRANSFERRED CASES HISTORY (Paginated & Searchable) ---
+const getDoctorHistory = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { page = 1, limit = 10, search } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        // Fetching cases where this doctor was ever involved (Primary, Handover sender/receiver, or Bedside specialist)
+        // AND the case is either fully Completed or currently transferred to another primary doctor
+        let query = {
+            $and: [
+                {
+                    $or: [
+                        { doctorId: doctorId },
+                        { "treatmentHistory.fromDoctorId": doctorId },
+                        { "treatmentHistory.toDoctorId": doctorId },
+                        { "bedsideCareTeam.doctorId": doctorId }
+                    ]
+                },
+                {
+                    $or: [
+                        { doctorId: { $ne: doctorId } }, // currently transferred away
+                        { status: 'Completed' }          // or fully discharged/completed
+                    ]
+                }
+            ]
+        };
+
+        // Advanced Search handler
+        if (search) {
+            const isBookingId = search.toUpperCase().startsWith('HKH-') || search.toUpperCase().startsWith('HK-');
+            
+            if (isBookingId) {
+                query.bookingId = { $regex: search, $options: 'i' };
+            } else {
+                // If searched by Patient Name
+                const matchedUsers = await User.find({
+                    name: { $regex: search, $options: 'i' }
+                }).select('_id');
+                const userIds = matchedUsers.map(u => u._id);
+                query.userId = { $in: userIds };
+            }
+        }
+
+        const totalRecords = await Appointment.countDocuments(query);
+
+        const history = await Appointment.find(query)
+            .populate('userId', 'name phone email profilePic age gender')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .sort({ updatedAt: -1 }) // Sorted by latest activity
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        res.json({
+            success: true,
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / parseInt(limit)),
+            currentPage: parseInt(page),
+            count: history.length,
+            data: history
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// --- 14. GET PENDING WARD ADMISSIONS (NEW API - Waiting for Doctor Assignment) ---
+const getPendingAdmissions = async (req, res) => {
+    try {
+        const hospitalId = req.user.hospitalId;
+        if (!hospitalId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Unauthorized: Aap kisi hospital se associated nahi hain." 
+            });
+        }
+
+        // Find admissions physically in a bed (In-Progress) but awaiting doctor assignment
+        const admissions = await Appointment.find({
+            hospitalId,
+            bookingType: 'Admission',
+            doctorId: null,
+            status: 'In-Progress' 
+        })
+        .populate('userId', 'name phone age gender profilePic')
+        .populate('bedId', 'bedNumber pricePerDay');
+
+        res.json({ success: true, count: admissions.length, data: admissions });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 15. TAKE CHARGE OF WARD ADMISSION (NEW API - Self Doctor Assignment) ---
+const takeChargeOfAdmission = async (req, res) => {
+    try {
+        const { appointmentId } = req.body;
+        const doctorId = req.user.id;
+
+        // Verify patient is currently admitted, belongs to same hospital, and has no doctor assigned
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            hospitalId: req.user.hospitalId,
+            doctorId: null,
+            status: 'In-Progress'
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Patient already assigned to another doctor, discharged, or record not found." 
+            });
+        }
+
+        const now = new Date();
+
+        // Assign Doctor & Start Treatment Shift Tracking
+        appointment.doctorId = doctorId;
+        appointment.treatmentHistory.push({
+            toDoctorId: doctorId,
+            action: 'Initial-Assignment',
+            notes: `Dr. ${req.user.name} took charge of the ward admission.`,
+            timestamp: now,
+            startTime: now // Start shift tracking!
+        });
+
+        await appointment.save();
+        res.json({ success: true, message: "Aapne patient ka charge le liya hai. Ward case activated.", data: appointment });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 16. REJECT/DECLINE PATIENT HANDOVER (Doctor B Action - NEW API) ---
+const rejectTransfer = async (req, res) => {
+    try {
+        const { appointmentId, reason } = req.body;
+        const doctorId = req.user.id; // Doctor B (Who is rejecting)
+
+        const appointment = await Appointment.findOne({ 
+            _id: appointmentId, 
+            pendingDoctorId: doctorId 
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Handover request not found or already processed." });
+        }
+
+        const senderDoctorId = appointment.doctorId; // Doctor A (Original sender)
+
+        // 1. Clear pending transfer state (Patient goes back to Doctor A's active queue instantly)
+        appointment.pendingDoctorId = null;
+        
+        // 2. Push rejection log to timeline history securely
+        appointment.treatmentHistory.push({
+            fromDoctorId: doctorId, // Doctor B
+            toDoctorId: senderDoctorId, // Doctor A
+            action: 'Transfer-Initiated', // Kept schema enum compatible
+            notes: `Transfer Rejected by Dr. ${req.user.name}. Reason: ${reason || 'Shift duty mismatch'}`,
+            timestamp: new Date()
+        });
+
+        await appointment.save();
+        res.json({ success: true, message: "Handover transfer declined successfully. Case returned to sender." });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 module.exports = { 
     getMyDoctorProfile,
     updateDoctorProfile,
+    getDoctorHistory,
+
+    getPendingAdmissions,
+    takeChargeOfAdmission ,
+    rejectTransfer,
 
     getSpecializations,
     getDocDashboard, getAssignedCases, getPatientDetails, 
     processPrescription, transferPatient, acceptTransfer,
      getHospitalColleagues,
-    submitDischargeSummary, updateDutyStatus, getMedicineList, updateClinicalSummary,
+    submitDischargeSummary,uploadPatientReports, updateDutyStatus, getMedicineList, updateClinicalSummary,
 
     requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
     getPrintableDischargeSummary

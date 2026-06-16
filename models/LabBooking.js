@@ -106,6 +106,7 @@ appliedCoupon: {
             'Confirmed',             // Order ready to process
             'Phlebotomist Assigned', // Lab assigned a Driver/Phlebotomist
             'Sample Collected',      // Driver reached and took blood sample
+            'Sample Deposited',
             'Testing',               // Sample reached lab and in-process
             'Report Generated',      // Result ready
             'Completed',             // Report uploaded and sent to User
@@ -125,7 +126,14 @@ appliedCoupon: {
 
     // The final output
     reportFile: { type: String, default: null }, // Link to PDF file
-    cancelReason: { type: String }
+    cancelReason: { type: String },
+      tracking: {
+        otp: { type: String, default: null }
+    },
+        phlebotomistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
+        rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
+
+
 
 }, { timestamps: true });
 

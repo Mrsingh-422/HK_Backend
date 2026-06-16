@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+ 
 const policeStationSchema = new mongoose.Schema({
     hqId: { type: mongoose.Schema.Types.ObjectId, ref: 'PoliceHQ', required: true },
     stationName: { type: String, required: true },
@@ -21,6 +22,23 @@ const policeStationSchema = new mongoose.Schema({
         newFirNotifications: { type: Boolean, default: true },
         emergencyBroadcasts: { type: Boolean, default: true }
     },
+    // 🚨 NAYI KEYS YAHAN ADD KI GAYI HAIN (Help, Privacy, Terms ke liye)
+    documentation: {
+        help: {
+            title: { type: String, default: "Help & Documentation" },
+            content: { type: String, default: "Welcome to Help & Support. Please refer to standard FAQs or contact administration." },
+            contactPhone: { type: String, default: "+91 9876543210" },
+            contactEmail: { type: String, default: "help@healthkangaroo.com" }
+        },
+        privacy: {
+            title: { type: String, default: "Privacy & Security" },
+            content: { type: String, default: "1. Confidentiality: All police records are highly confidential. Unauthorized sharing is punishable by law." }
+        },
+        terms: {
+            title: { type: String, default: "Standard Terms & Conditions" },
+            content: { type: String, default: "1. Incorporation Into Agreements. These Terms and Conditions apply..." }
+        }
+    },
     email: { type: String, required: true, unique: true },
     phone: { type: String, required: true, unique: true },
     emergencyLines: { type: String }, // e.g., 100, 112
@@ -36,5 +54,6 @@ const policeStationSchema = new mongoose.Schema({
     otp: { type: String, select: false },
     token: { type: String, default: null }
 }, { timestamps: true });
-
+ 
 module.exports = mongoose.model('PoliceStation', policeStationSchema);
+ 

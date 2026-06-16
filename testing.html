@@ -3,343 +3,413 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nurse Panel - Service & Package Management</title>
+    <title>HK Panel - Figma UI & API Simulator</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        .custom-shadow { box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
-        .loading-overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.7); z-index: 50; align-items: center; justify-content: center; }
-        .tab-active { border-bottom: 3px solid #0d9488; color: #0d9488; font-weight: bold; }
+        :root { --brand: #00B377; --brand-light: #E6F7F1; --brand-dark: #008f6d; }
+        body { background-color: #0F172A; font-family: 'Plus Jakarta Sans', sans-serif; color: #F8FAFB; }
+        .figma-screen { width: 390px; height: 844px; background: #F8FAFB; border-radius: 40px; overflow-y: auto; position: relative; border: 8px solid #334155; color: #1E293B; box-shadow: 0 20px 50px rgba(0,0,0,0.3); }
+        .api-terminal { font-family: 'Courier New', Courier, monospace; background-color: #090D16; border: 1px solid #1E293B; color: #10B981; border-radius: 20px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .btn-green { background: var(--brand); color: white; font-weight: 800; border-radius: 14px; padding: 12px; font-size: 12px; transition: 0.2s; border: none; cursor: pointer; text-align: center; }
+        .btn-green:hover { background: var(--brand-dark); }
     </style>
 </head>
-<body class="bg-gray-50 font-sans">
+<body class="p-8">
 
-    <div id="loader" class="loading-overlay">
-        <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-teal-600"></div>
-    </div>
-
-    <div class="min-h-screen flex flex-col">
-        <header class="bg-teal-600 text-white p-4 shadow-md">
-            <div class="container mx-auto flex justify-between items-center">
-                <h1 class="text-xl font-bold">🩺 MedCare Provider Panel</h1>
-                <div class="flex gap-4 text-xs font-medium">
-                    <span class="bg-white/20 px-3 py-1 rounded-full">Status: <b class="text-white">Active (Approved)</b></span>
-                </div>
+    <div class="max-w-7xl mx-auto space-y-8">
+        
+        <!-- HEADER -->
+        <header class="border-b border-slate-800 pb-6 flex justify-between items-center">
+            <div>
+                <p class="text-xs font-black text-green-400 uppercase tracking-widest flex items-center gap-1.5"><i data-lucide="layout" class="w-4 h-4"></i> Interactive Figma Wireframe</p>
+                <h1 class="text-3xl font-black tracking-tight">Hospital Doctor Panel: UI & API Flow Map</h1>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="bg-green-500/10 text-green-400 border border-green-500/20 px-4 py-2.5 rounded-2xl text-xs font-black uppercase flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span> Telemetry Active
+                </span>
             </div>
         </header>
 
-        <div class="flex-1 container mx-auto py-8 px-4 grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div class="space-y-6">
-                <h2 class="text-lg font-bold text-gray-800 border-b pb-2">📋 Instructions</h2>
-                <div class="bg-white p-6 rounded-xl custom-shadow border text-sm text-gray-600 space-y-3">
-                    <p><b>Service:</b> Pick category and template to list a single service.</p>
-                    <p><b>Package:</b> Combine multiple master services into a bundle.</p>
+        <!-- THREE COLUMN PLAYGROUND -->
+        <div class="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
+            
+            <!-- COLUMN 1: NAVIGATION INDEX (TABS) -->
+            <div class="xl:col-span-3 bg-slate-800 border border-slate-700 p-6 rounded-3xl space-y-3">
+                <h3 class="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-1.5"><i data-lucide="layers" class="w-4 h-4"></i> Figma Screen Index</h3>
+                <button onclick="switchFigmaScreen('screen-dashboard', 1)" id="tab-btn-1" class="w-full text-left p-3.5 rounded-xl text-xs font-bold bg-green-500/10 text-green-400 border-l-4 border-green-500 flex justify-between items-center transition">
+                    <span>1. Dashboard Map & Duty</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+                <button onclick="switchFigmaScreen('screen-sos', 2)" id="tab-btn-2" class="w-full text-left p-3.5 rounded-xl text-xs font-bold hover:bg-slate-700/50 text-slate-300 flex justify-between items-center transition">
+                    <span>2. SOS Emergency Alerts</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+                <button onclick="switchFigmaScreen('screen-workspace', 3)" id="tab-btn-3" class="w-full text-left p-3.5 rounded-xl text-xs font-bold hover:bg-slate-700/50 text-slate-300 flex justify-between items-center transition">
+                    <span>3. Patient Care Workspace</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+                <button onclick="switchFigmaScreen('screen-prescription', 4)" id="tab-btn-4" class="w-full text-left p-3.5 rounded-xl text-xs font-bold hover:bg-slate-700/50 text-slate-300 flex justify-between items-center transition">
+                    <span>4. Write Prescription</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+                <button onclick="switchFigmaScreen('screen-bedside', 5)" id="tab-btn-5" class="w-full text-left p-3.5 rounded-xl text-xs font-bold hover:bg-slate-700/50 text-slate-300 flex justify-between items-center transition">
+                    <span>5. Bedside Specialist Team</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+                <button onclick="switchFigmaScreen('screen-discharge', 6)" id="tab-btn-6" class="w-full text-left p-3.5 rounded-xl text-xs font-bold hover:bg-slate-700/50 text-slate-300 flex justify-between items-center transition">
+                    <span>6. Submit Discharge Summary</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+                <button onclick="switchFigmaScreen('screen-print', 7)" id="tab-btn-7" class="w-full text-left p-3.5 rounded-xl text-xs font-bold hover:bg-slate-700/50 text-slate-300 flex justify-between items-center transition">
+                    <span>7. Printable Summary Sheet</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <!-- COLUMN 2: VIRTUAL MOBILE FRAME -->
+            <div class="xl:col-span-5 flex justify-center">
+                
+                <div class="figma-screen no-scrollbar relative">
+                    
+                    <!-- SCREEN 1: DASHBOARD & DUTY -->
+                    <div id="screen-dashboard" class="screen active p-6 space-y-6 h-full flex flex-col justify-between">
+                        <div class="flex justify-between items-center border-b pb-4">
+                            <div><p class="text-[9px] text-slate-400 font-black uppercase tracking-wider">Welcome Back</p><h4 class="text-lg font-black text-slate-800">Dr. Deepak Joshi</h4></div>
+                            <span class="bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase px-3 py-1 rounded-full">On Duty</span>
+                        </div>
+                        
+                        <div class="bg-white border rounded-3xl p-5 shadow-sm text-center space-y-2">
+                            <i data-lucide="activity" class="text-green-500 w-10 h-10 mx-auto"></i>
+                            <h4 class="font-black text-slate-800 text-sm">Real-Time Transit Map</h4>
+                            <p class="text-xs text-slate-400">All ambulances & direct admissions connected</p>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-2">
+                            <div class="bg-white border p-4 rounded-2xl text-center">
+                                <span class="text-[8px] font-black uppercase text-slate-400">Emergency</span>
+                                <h3 class="text-xl font-black text-red-500 mt-1">03</h3>
+                            </div>
+                            <div class="bg-white border p-4 rounded-2xl text-center">
+                                <span class="text-[8px] font-black uppercase text-slate-400">Medical</span>
+                                <h3 class="text-xl font-black text-blue-500 mt-1">01</h3>
+                            </div>
+                            <div class="bg-white border p-4 rounded-2xl text-center">
+                                <span class="text-[8px] font-black uppercase text-slate-400">Referral</span>
+                                <h3 class="text-xl font-black text-amber-500 mt-1">08</h3>
+                            </div>
+                        </div>
+                        
+                        <button class="btn-green w-full py-4 text-xs font-black uppercase tracking-widest mt-auto">Active duty initialized</button>
+                    </div>
+
+                    <!-- SCREEN 2: SOS EMERGENCY ALERTS -->
+                    <div id="screen-sos" class="screen p-6 space-y-6">
+                        <div class="flex items-center gap-3 border-b pb-4">
+                            <i data-lucide="bell" class="text-red-500 w-6 h-6 animate-bounce"></i>
+                            <h2 class="text-lg font-black text-slate-800">SOS Requests (2)</h2>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2 p-1 bg-slate-100 rounded-xl text-[10px] font-black text-center text-slate-500">
+                            <span class="bg-white text-slate-800 py-2 rounded-lg">All (2)</span>
+                            <span class="py-2">Active</span>
+                            <span class="py-2">Pending</span>
+                        </div>
+                        <div class="space-y-3">
+                            <div class="bg-white border p-5 rounded-3xl space-y-3">
+                                <div class="flex justify-between items-start">
+                                    <div><h4 class="font-black text-slate-800 text-xs">Sanjay Sharma</h4><p class="text-[8px] font-mono text-slate-400">HK-AMB-2045</p></div>
+                                    <span class="bg-red-50 text-red-500 text-[8px] font-black uppercase px-2 py-0.5 rounded">Emergency</span>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button class="flex-1 bg-red-500/10 text-red-500 py-2.5 rounded-lg text-[9px] font-black uppercase">Reject</button>
+                                    <button class="flex-1 btn-green py-2.5 rounded-lg text-[9px] font-black uppercase">Accept</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SCREEN 3: PATIENT CARE WORKSPACE -->
+                    <div id="screen-workspace" class="screen p-6 space-y-6">
+                        <div class="flex justify-between items-start border-b pb-4">
+                            <div><h3 class="text-lg font-black text-slate-800">Mudabir Khanday</h3><p class="text-[9px] font-mono text-slate-400">ID: HKH-72A0AD</p></div>
+                            <span class="bg-red-50 text-red-500 text-[8px] font-black uppercase px-2 py-1 rounded-full">Emergency</span>
+                        </div>
+                        <div class="grid grid-cols-4 gap-2 text-[10px] font-black">
+                            <div class="bg-slate-50 border p-3 rounded-xl text-center">
+                                <span class="text-[7px] text-slate-400 uppercase block">Age</span>
+                                <span class="text-slate-700">39 Years</span>
+                            </div>
+                            <div class="bg-slate-50 border p-3 rounded-xl text-center">
+                                <span class="text-[7px] text-slate-400 uppercase block">Gender</span>
+                                <span class="text-slate-700">Male</span>
+                            </div>
+                            <div class="bg-slate-50 border p-3 rounded-xl text-center">
+                                <span class="text-[7px] text-slate-400 uppercase block">Blood Group</span>
+                                <span class="text-red-500">O+</span>
+                            </div>
+                            <div class="bg-slate-50 border p-3 rounded-xl text-center">
+                                <span class="text-[7px] text-slate-400 uppercase block">Bed</span>
+                                <span class="text-green-500">NI-05</span>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-white border p-4 rounded-2xl space-y-2">
+                            <h5 class="text-[9px] font-black text-slate-400 uppercase">Audit Handover Timeline</h5>
+                            <div class="text-[10px] border-l-2 pl-3 py-1 relative">
+                                <div class="absolute w-2 h-2 rounded-full bg-green-500 -left-[5px] top-2"></div>
+                                <span class="font-bold text-green-500 uppercase">[Initial-Assignment]</span>
+                                <p class="text-slate-500 mt-0.5">Assigned to Dr. Deepak Joshi</p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-2">
+                            <button class="bg-slate-50 border hover:border-green-400 text-green-500 p-4 rounded-xl text-[9px] font-black uppercase">Write Rx</button>
+                            <button class="bg-slate-50 border hover:border-amber-400 text-amber-500 p-4 rounded-xl text-[9px] font-black uppercase">Handover</button>
+                            <button class="bg-red-50 text-red-500 p-4 rounded-xl text-[9px] font-black uppercase">Discharge</button>
+                        </div>
+                    </div>
+
+                    <!-- SCREEN 4: WRITE PRESCRIPTION -->
+                    <div id="screen-prescription" class="screen p-6 space-y-6">
+                        <h2 class="text-lg font-black text-slate-800 border-b pb-3 flex justify-between items-center">
+                            <span>Add Prescription</span>
+                            <i data-lucide="heart" class="text-green-500 w-5 h-5"></i>
+                        </h2>
+                        <div class="bg-white border p-5 rounded-3xl space-y-4 shadow-sm">
+                            <div class="space-y-1">
+                                <label class="text-[8px] font-black text-slate-400 uppercase">Select Medicine</label>
+                                <select class="w-full bg-slate-50 border p-3 rounded-xl text-xs font-bold outline-none text-slate-700">
+                                    <option>Insulin 40IU/ml Injection</option>
+                                    <option>Paracetamol 500mg Tablet</option>
+                                </select>
+                            </div>
+                            <div class="flex gap-2">
+                                <button class="flex-1 bg-green-50 border-2 border-green-500 text-green-500 py-2.5 rounded-xl text-[9px] font-black">Morning</button>
+                                <button class="flex-1 bg-slate-50 border py-2.5 rounded-xl text-[9px] font-bold text-slate-500">Afternoon</button>
+                                <button class="flex-1 bg-green-50 border-2 border-green-500 text-green-500 py-2.5 rounded-xl text-[9px] font-black">Evening</button>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[8px] font-black text-slate-400 uppercase">Duration (Days)</label>
+                                <select class="w-full bg-slate-50 border p-3 rounded-xl text-xs font-bold outline-none text-slate-700">
+                                    <option>5 Days</option>
+                                    <option>10 Days</option>
+                                    <option>30 Days</option>
+                                </select>
+                            </div>
+                            <button class="w-full bg-amber-500 text-slate-950 py-3 rounded-xl text-[9px] font-black uppercase tracking-wider">Add Medicine to List</button>
+                        </div>
+                    </div>
+
+                    <!-- SCREEN 5: BEDSIDE SPECIALIST TEAM -->
+                    <div id="screen-bedside" class="screen p-6 space-y-6">
+                        <h3 class="text-lg font-black text-slate-800 border-b pb-3 flex justify-between items-center">
+                            <span>Bedside care Team</span>
+                            <i data-lucide="users" class="text-green-500 w-5 h-5"></i>
+                        </h3>
+                        <div class="bg-white border p-5 rounded-3xl space-y-3 shadow-sm text-xs">
+                            <p class="text-[9px] font-black text-slate-400 uppercase">Specialists Invited</p>
+                            <div class="flex justify-between items-center bg-slate-50 p-3 rounded-xl">
+                                <div><h5 class="font-black text-slate-800">Dr. Sarah Conner</h5><p class="text-[8px] text-slate-400">Cardiologist</p></div>
+                                <span class="bg-green-50 text-green-600 text-[8px] font-black uppercase px-2 py-0.5 rounded">Accepted</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SCREEN 6: SUBMIT DISCHARGE SUMMARY -->
+                    <div id="screen-discharge" class="screen p-6 space-y-6">
+                        <h2 class="text-lg font-black text-slate-800 border-b pb-3">Submit Summary</h2>
+                        <div class="bg-white border p-5 rounded-3xl space-y-4 shadow-sm text-xs">
+                            <div class="border-2 border-dashed border-slate-200 p-5 rounded-2xl text-center space-y-1">
+                                <i data-lucide="file-text" class="text-slate-400 w-8 h-8 mx-auto"></i>
+                                <span class="text-[9px] font-black text-slate-400 uppercase">Upload optional reports (PDF/JPG)</span>
+                            </div>
+                            <input type="text" placeholder="Diagnosis summary" class="w-full bg-slate-50 border p-3 rounded-xl outline-none">
+                            <input type="text" placeholder="Investigations summary" class="w-full bg-slate-50 border p-3 rounded-xl outline-none">
+                            <input type="text" placeholder="Treatment Result" class="w-full bg-slate-50 border p-3 rounded-xl outline-none">
+                            <input type="text" placeholder="Discharge Notes" class="w-full bg-slate-50 border p-3 rounded-xl outline-none">
+                            <button class="btn-green w-full mt-2">Submit ready for Discharge</button>
+                        </div>
+                    </div>
+
+                    <!-- SCREEN 7: PRINTABLE SUMMARY SHEET -->
+                    <div id="screen-print" class="screen p-6 space-y-4 bg-white text-slate-800 text-[9px] font-bold">
+                        <div class="border-b pb-3 text-center">
+                            <h2 class="text-sm font-black text-slate-800">Fortis Hospital Mohali</h2>
+                            <p class="text-[7px] text-slate-400">Sector 62, Sahibzada Ajit Singh Nagar, Punjab 160062</p>
+                        </div>
+                        <div class="space-y-1">
+                            <div class="flex justify-between"><span>Patient Name:</span><span>Mudabir Khanday</span></div>
+                            <div class="flex justify-between"><span>Age / Gender:</span><span>39 Yrs / Male</span></div>
+                            <div class="flex justify-between"><span>Admitted Date:</span><span>2026-05-28</span></div>
+                            <div class="flex justify-between"><span>Discharged Date:</span><span>2026-05-31</span></div>
+                        </div>
+                        <div class="border-t pt-2">
+                            <span class="text-[8px] font-black uppercase text-slate-400">Prescribed Medications</span>
+                            <div class="flex justify-between mt-1 text-[8px] text-slate-600"><span>Tab. Dolo 650 mg.</span><span>1 - 0 - 1</span><span>5 Days</span></div>
+                        </div>
+                        <div class="border-t pt-2 space-y-1">
+                            <div class="flex justify-between"><span>Advise Investigation:</span><span>ECG Normal, Blood counts stable</span></div>
+                            <div class="flex justify-between"><span>Advice Given:</span><span>Take absolute bed rest</span></div>
+                        </div>
+                        <div class="pt-6 border-t flex justify-between items-end">
+                            <div><p class="text-[7px] text-slate-400">Lead Doctor</p><p class="text-xs font-black text-slate-800">Dr. Deepak Joshi</p></div>
+                            <div class="w-12 h-12 bg-slate-100 flex items-center justify-center rounded">QR Code</div>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- COLUMN 3: LIVE API TELEMETRY LOG TERMINAL -->
+            <div class="xl:col-span-4 bg-slate-800 border border-slate-700 p-6 rounded-3xl space-y-6">
+                <h3 class="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><i data-lucide="terminal" class="text-green-400"></i> API Telemetry Terminal</h3>
+                
+                <div class="api-terminal p-4 h-[350px] overflow-y-auto space-y-4 no-scrollbar">
+                    <div class="space-y-1">
+                        <span class="text-[9px] font-black text-slate-500 uppercase block">Active Endpoint</span>
+                        <p class="text-white text-xs font-black font-mono flex items-center gap-2"><span id="telemetry-method" class="bg-blue-500/10 text-blue-400 px-2.5 py-1 rounded uppercase">GET</span> <span id="telemetry-url">/panel/profile</span></p>
+                    </div>
+                    <div class="space-y-1 border-t border-slate-800 pt-3">
+                        <span class="text-[9px] font-black text-slate-500 uppercase block">Mongoose Schema Keys Mapped</span>
+                        <div id="telemetry-keys" class="text-[10px] text-amber-500 font-mono space-y-1"></div>
+                    </div>
+                    <div class="space-y-1 border-t border-slate-800 pt-3">
+                        <span class="text-[9px] font-black text-slate-500 uppercase block">JSON Response Body</span>
+                        <pre id="telemetry-response" class="text-[10px] text-green-400 overflow-x-auto whitespace-pre-wrap leading-relaxed">Awaiting workspace interaction...</pre>
+                    </div>
+                </div>
+
+                <div class="figma-card p-6 bg-slate-900 border-slate-800 text-xs">
+                    <h5 class="font-black text-slate-300">Sandbox Authorization Token</h5>
+                    <p class="text-[9px] text-green-400 font-mono break-all mt-2">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhMTA0ZGU5MzM0Y2I1...</p>
                 </div>
             </div>
 
-            <div class="lg:col-span-2 space-y-6">
-                <div class="flex border-b border-gray-200 mb-4 bg-white rounded-t-xl px-4">
-                    <button onclick="switchTab('service-sec')" id="tab-service" class="px-6 py-3 text-sm tab-active">Add Service</button>
-                    <button onclick="switchTab('package-sec')" id="tab-package" class="px-6 py-3 text-sm text-gray-500">Create Package</button>
-                    <button onclick="switchTab('list-sec'); fetchMyPackages();" id="tab-list" class="px-6 py-3 text-sm text-gray-500">My Packages</button>
-                </div>
-
-                <!-- 1. ADD SERVICE SECTION (Existing Logic Preserved) -->
-                <div id="service-sec" class="tab-content">
-                    <form id="serviceForm" class="bg-white p-8 rounded-b-xl custom-shadow border space-y-6">
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label class="text-sm font-semibold text-gray-600 mb-2 block">Category</label>
-                                <select id="categoryDropdown" required class="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500">
-                                    <option value="">Loading...</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-600 mb-2 block">Service Title</label>
-                                <select id="subCategoryDropdown" required class="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-teal-500" disabled>
-                                    <option value="">-- Select Service --</option>
-                                </select>
-                                <input type="hidden" id="careSubCategoryId">
-                            </div>
-                        </div>
-                        <textarea id="descArea" required class="w-full border rounded-lg p-3 text-sm h-24" placeholder="Description..."></textarea>
-
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
-                            <div class="bg-gray-50 p-4 rounded-lg border pricing-box" id="box-oneDay">
-                                <span class="text-xs font-bold text-teal-700 uppercase">One Day Price</span>
-                                <input type="number" class="base-input w-full mt-2 border p-2 text-sm rounded bg-gray-100 font-bold" readonly>
-                                <input type="number" class="disc-input w-full mt-1 border p-2 text-sm rounded" placeholder="Discount %" value="0">
-                                <div class="mt-2 text-xs">Final: ₹<span class="final-val">0</span></div>
-                            </div>
-                            <div class="bg-gray-50 p-4 rounded-lg border pricing-box" id="box-multiDay">
-                                <span class="text-xs font-bold text-teal-700 uppercase">Multi Day Price</span>
-                                <input type="number" class="base-input w-full mt-2 border p-2 text-sm rounded bg-gray-100 font-bold" readonly>
-                                <input type="number" class="disc-input w-full mt-1 border p-2 text-sm rounded" placeholder="Discount %" value="0">
-                                <div class="mt-2 text-xs">Final: ₹<span class="final-val">0</span></div>
-                            </div>
-                            <div class="bg-gray-50 p-4 rounded-lg border pricing-box" id="box-hourly">
-                                <span class="text-xs font-bold text-teal-700 uppercase">Hourly Price</span>
-                                <input type="number" class="base-input w-full mt-2 border p-2 text-sm rounded bg-gray-100 font-bold" readonly>
-                                <input type="number" class="disc-input w-full mt-1 border p-2 text-sm rounded" placeholder="Discount %" value="0">
-                                <div class="mt-2 text-xs">Final: ₹<span class="final-val">0</span></div>
-                            </div>
-                        </div>
-
-                        <div class="flex gap-4 mt-3">
-                            <select id="masterConsumables" class="flex-1 border rounded-lg p-3 text-sm"><option value="">-- Select Service First --</option></select>
-                            <input type="number" id="consDisc" class="w-24 border rounded-lg p-3 text-sm" placeholder="Disc %">
-                            <button type="button" onclick="addConsumableToRow('service')" class="bg-teal-600 text-white px-6 rounded-lg text-sm font-bold">Add</button>
-                        </div>
-                        <div class="mt-4 border rounded-lg overflow-hidden">
-                            <table class="w-full text-sm text-left"><tbody id="consumableTableBody"></tbody></table>
-                        </div>
-                        <button type="submit" class="w-full bg-teal-600 text-white py-4 rounded-lg text-sm font-bold uppercase shadow-xl">List Service Now</button>
-                    </form>
-                </div>
-
-                <!-- 2. CREATE PACKAGE SECTION -->
-                <div id="package-sec" class="tab-content hidden">
-                    <form id="packageForm" class="bg-white p-8 rounded-b-xl custom-shadow border space-y-6">
-                        <div>
-                            <label class="text-sm font-semibold text-gray-600 mb-2 block">Package Name</label>
-                            <input type="text" id="pkgName" required class="w-full border rounded-lg p-3 text-sm" placeholder="e.g. Elderly Full Care Bundle">
-                        </div>
-
-                        <div>
-                            <label class="text-sm font-semibold text-gray-600 mb-2 block text-teal-600">Select Master Services to Bundle</label>
-                            <div id="pkgServiceCheckboxes" class="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto border p-4 rounded-lg bg-gray-50">
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div class="bg-teal-50 p-4 rounded-lg border border-teal-100 pkg-pricing-box" id="pkg-box-oneDay">
-                                <span class="text-xs font-bold text-teal-700 uppercase">Package One Day</span>
-                                <input type="number" class="pkg-base w-full mt-2 border p-2 text-sm rounded" placeholder="Base ₹">
-                                <input type="number" class="pkg-disc w-full mt-1 border p-2 text-sm rounded" placeholder="Disc %" value="0">
-                                <div class="mt-2 text-xs font-bold">Final: ₹<span class="pkg-final">0</span></div>
-                            </div>
-                            <div class="bg-teal-50 p-4 rounded-lg border border-teal-100 pkg-pricing-box" id="pkg-box-multiDay">
-                                <span class="text-xs font-bold text-teal-700 uppercase">Package Multi Day</span>
-                                <input type="number" class="pkg-base w-full mt-2 border p-2 text-sm rounded" placeholder="Base ₹">
-                                <input type="number" class="pkg-disc w-full mt-1 border p-2 text-sm rounded" placeholder="Disc %" value="0">
-                                <div class="mt-2 text-xs font-bold">Final: ₹<span class="pkg-final">0</span></div>
-                            </div>
-                            <div class="bg-teal-50 p-4 rounded-lg border border-teal-100 pkg-pricing-box" id="pkg-box-hourly">
-                                <span class="text-xs font-bold text-teal-700 uppercase">Package Hourly</span>
-                                <input type="number" class="pkg-base w-full mt-2 border p-2 text-sm rounded" placeholder="Base ₹">
-                                <input type="number" class="pkg-disc w-full mt-1 border p-2 text-sm rounded" placeholder="Disc %" value="0">
-                                <div class="mt-2 text-xs font-bold">Final: ₹<span class="pkg-final">0</span></div>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="text-sm font-semibold text-gray-600 mb-2 block">Extra Consumables for Package</label>
-                            <div class="flex gap-4">
-                                <select id="pkgMasterConsumables" class="flex-1 border rounded-lg p-3 text-sm"></select>
-                                <input type="number" id="pkgConsDisc" class="w-24 border rounded-lg p-3 text-sm" placeholder="Disc %">
-                                <button type="button" onclick="addConsumableToRow('package')" class="bg-teal-600 text-white px-6 rounded-lg text-sm font-bold">Add</button>
-                            </div>
-                            <div class="mt-4 border rounded-lg overflow-hidden">
-                                <table class="w-full text-sm text-left"><tbody id="pkgConsumableTableBody"></tbody></table>
-                            </div>
-                        </div>
-
-                        <button type="submit" class="w-full bg-teal-600 text-white py-4 rounded-lg text-sm font-bold uppercase shadow-xl">List Package Bundle</button>
-                    </form>
-                </div>
-
-                <div id="list-sec" class="tab-content hidden">
-                    <div id="myPackagesContainer" class="grid grid-cols-1 gap-4"></div>
-                </div>
-            </div>
         </div>
+
     </div>
 
     <script>
-        const API_BASE_URL = "http://localhost:5002"; 
-        const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5Yjk5MzFiOGVmZWI1YWRiY2NlNzM5ZCIsInJvbGUiOiJOdXJzZSIsImlhdCI6MTc3NzI3NTIzMywiZXhwIjo0OTMwODc1MjMzfQ.woa9g6Ku7tv7G8_ZW0406qMxkuya4fHDmgo6Q0_pBJo";
-
-        let svcSelectedConsumables = [];
-        let pkgSelectedConsumables = [];
-
-        window.onload = () => {
-            fetchCategories();
-            fetchNurseServicesForPkg();
-            fetchMasterConsumablesForAll();
-        };
-
-        function switchTab(id) {
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
-            document.getElementById(id).classList.remove('hidden');
-            document.querySelectorAll('[id^="tab-"]').forEach(t => t.className = "px-6 py-3 text-sm text-gray-500");
-            document.getElementById('tab-' + id.split('-')[0]).className = "px-6 py-3 text-sm tab-active";
-        }
-
-        // --- SERVICE LOGIC ---
-        async function fetchCategories() {
-            const res = await fetch(`${API_BASE_URL}/admin/nurse-csv/categories`);
-            const result = await res.json();
-            const dropdown = document.getElementById('categoryDropdown');
-            dropdown.innerHTML = '<option value="">-- Select Category --</option>';
-            result.data.forEach(cat => dropdown.innerHTML += `<option value="${cat}">${cat}</option>`);
-        }
-
-        document.getElementById('categoryDropdown').onchange = async (e) => {
-            const cat = e.target.value;
-            const subDropdown = document.getElementById('subCategoryDropdown');
-            if(!cat) return;
-            subDropdown.disabled = false;
-            const res = await fetch(`${API_BASE_URL}/admin/nurse-csv/sub-categories?category=${cat}`);
-            const result = await res.json();
-            subDropdown.innerHTML = '<option value="">-- Select Service --</option>';
-            result.data.forEach(sub => subDropdown.innerHTML += `<option value="${sub}">${sub}</option>`);
-        };
-
-        document.getElementById('subCategoryDropdown').onchange = async (e) => {
-            const cat = document.getElementById('categoryDropdown').value;
-            const sub = e.target.value;
-            document.getElementById('loader').style.display = 'flex';
-            const res = await fetch(`${API_BASE_URL}/admin/nurse-csv/details?category=${cat}&subCategory=${sub}`);
-            const result = await res.json();
-            document.getElementById('loader').style.display = 'none';
-            if(result.data) {
-                document.getElementById('careSubCategoryId').value = result.data._id;
-                document.getElementById('descArea').value = result.data.description;
-                document.querySelector('#box-oneDay .base-input').value = result.data.oneDayOneTimePrice || 0;
-                document.querySelector('#box-multiDay .base-input').value = result.data.forMultipleDaysPrice || 0;
-                document.querySelector('#box-hourly .base-input').value = result.data.pricePerHour || 0;
-                refreshFinalPrices();
-
-                const conDropdown = document.getElementById('masterConsumables');
-                conDropdown.innerHTML = '<option value="">-- Select Consumable --</option>';
-                if (result.data.resolvedConsumables) {
-                    result.data.resolvedConsumables.forEach(item => {
-                        conDropdown.innerHTML += `<option value="${item._id}" data-mrp="${item.mrp}" data-name="${item.itemName}" data-unit="${item.unitType}">${item.itemName} (${item.size}) - ₹${item.mrp}</option>`;
-                    });
+        let ACTIVE_SCREEN_ID = 'screen-dashboard';
+        
+        // Mapped dynamic keys database definitions
+        const FIGMA_API_METRIC_MAP = {
+            'screen-dashboard': {
+                method: 'GET',
+                url: '/hospital-doctor/panel/dashboard',
+                keys: ['welcomeName', 'dutyStatus', 'stats', 'grid.emergencyCount', 'grid.admissionCount', 'grid.transferCount'],
+                response: {
+                    success: true,
+                    welcomeName: "Dr. Deepak Joshi",
+                    dutyStatus: "On Duty",
+                    stats: { totalCases: 45, requests: 3, active: 8 },
+                    grid: { emergencyCount: 3, admissionCount: 1, transferCount: 8 }
+                }
+            },
+            'screen-sos': {
+                method: 'GET',
+                url: '/hospital-doctor/panel/cases?tab=pending',
+                keys: ['_id', 'bookingId', 'bookingType', 'triageLevel', 'userId', 'patients', 'pickupLocation.address'],
+                response: {
+                    success: true,
+                    data: [
+                        { _id: "6a0ee2a4467fdb20dcdd37d5", bookingId: "HK-AMB-372831", serviceType: "Accident emergency", triageLevel: "Emergency", userId: "699840713e333a342227edc8" }
+                    ]
+                }
+            },
+            'screen-workspace': {
+                method: 'GET',
+                url: '/hospital-doctor/panel/case-details/:id',
+                keys: ['_id', 'bookingId', 'status', 'userId', 'bedId', 'treatmentHistory', 'durationDisplay'],
+                response: {
+                    success: true,
+                    data: {
+                        _id: "6a0ee2a4467fdb20dcdd37d5",
+                        bookingId: "HKH-72A0AD",
+                        status: "In-Progress",
+                        userId: { name: "Mudabir Khanday", bloodGroup: "O+", age: 39 },
+                        bedId: { bedNumber: "NI-05", pricePerDay: 2500 }
+                    }
+                }
+            },
+            'screen-prescription': {
+                method: 'POST',
+                url: '/hospital-doctor/panel/prescription/add',
+                keys: ['appointmentId', 'diagnosis', 'medicines', 'advice', 'dietPlanPdf'],
+                response: {
+                    success: true,
+                    message: "Prescription added successfully",
+                    data: { dietPlanPdf: "/uploads/diet_plans/diet-17723.pdf", medicines: [{ name: "Insulin 40IU/ml Injection", dosage: "1-1-1", duration: "3 days" }] }
+                }
+            },
+            'screen-bedside': {
+                method: 'POST',
+                url: '/hospital-doctor/panel/case/bedside-request',
+                keys: ['appointmentId', 'specialistDoctorId', 'reason', 'patientCondition', 'priority'],
+                response: {
+                    success: true,
+                    message: "Bedside help request sent to specialist successfully!"
+                }
+            },
+            'screen-discharge': {
+                method: 'POST',
+                url: '/hospital-doctor/panel/case/discharge-summary',
+                keys: ['clinicalReports', 'appointmentId', 'diagnosis', 'investigation', 'treatmentResult', 'dischargeNote'],
+                response: {
+                    success: true,
+                    message: "Discharge summary & medical reports submitted successfully.",
+                    data: { status: "Discharge-Pending", clinicalSummary: { uploadedReports: ["/uploads/doctor_reports/report-17723.pdf"] } }
+                }
+            },
+            'screen-print': {
+                method: 'GET',
+                url: '/hospital-doctor/panel/case/discharge-summary/print/:id',
+                keys: ['header', 'patientDetails', 'clinicalNotes', 'medications', 'followUp'],
+                response: {
+                    success: true,
+                    data: { header: { hospitalName: "Fortis Hospital Mohali" }, patientDetails: { appointmentId: "HKH-72A0AD", name: "Mudabir Khanday" } }
                 }
             }
         };
 
-        function addConsumableToRow(target) {
-            const isPkg = target === 'package';
-            const selectId = isPkg ? 'pkgMasterConsumables' : 'masterConsumables';
-            const discId = isPkg ? 'pkgConsDisc' : 'consDisc';
-            const tableId = isPkg ? 'pkgConsumableTableBody' : 'consumableTableBody';
-            const select = document.getElementById(selectId);
-            const opt = select.options[select.selectedIndex];
-            if(!select.value) return;
-
-            const masterItemId = select.value;
-            const mrp = parseFloat(opt.dataset.mrp);
-            const disc = parseFloat(document.getElementById(discId).value) || 0;
-            const final = Math.round(mrp - (mrp * (disc/100)));
-
-            const itemObj = { masterItemId, discountPercentage: disc };
-            if(isPkg) pkgSelectedConsumables.push(itemObj); else svcSelectedConsumables.push(itemObj);
-
-            document.getElementById(tableId).innerHTML += `<tr class="border-b"><td class="p-2">${opt.dataset.name}</td><td class="p-2">₹${mrp}</td><td class="p-2 text-red-500">${disc}%</td><td class="p-2 font-bold">₹${final}</td></tr>`;
-        }
-
-        async function fetchNurseServicesForPkg() {
-            const res = await fetch(`${API_BASE_URL}/provider/nurse/package/nurse-services`, { headers: { 'Authorization': `Bearer ${TOKEN}` }});
-            const result = await res.json();
-            document.getElementById('pkgServiceCheckboxes').innerHTML = result.data.map(s => `
-                <label class="flex items-center gap-2 text-sm bg-white p-3 border rounded-xl cursor-pointer hover:border-teal-500"><input type="checkbox" name="pkgServices" value="${s._id}" class="w-4 h-4 accent-teal-600"><div><b>${s.subCategory}</b><br><small class="text-gray-400">${s.category}</small></div></label>`).join('');
-        }
-
-        async function fetchMasterConsumablesForAll() {
-            const res = await fetch(`${API_BASE_URL}/provider/nurse/dash/consumables/search`, { headers: { 'Authorization': `Bearer ${TOKEN}` }});
-            const result = await res.json();
-            const dropdown = document.getElementById('pkgMasterConsumables');
-            dropdown.innerHTML = '<option value="">Search Consumable...</option>';
-            result.data.forEach(item => {
-                dropdown.innerHTML += `<option value="${item._id}" data-mrp="${item.mrp}" data-name="${item.itemName}">${item.itemName} (${item.size})</option>`;
-            });
-        }
-
-        document.querySelectorAll('.pkg-base, .pkg-disc').forEach(el => {
-            el.oninput = () => {
-                document.querySelectorAll('.pkg-pricing-box').forEach(box => {
-                    const base = parseFloat(box.querySelector('.pkg-base').value) || 0;
-                    const disc = parseFloat(box.querySelector('.pkg-disc').value) || 0;
-                    box.querySelector('.pkg-final').innerText = Math.round(base - (base * (disc / 100)));
-                });
+        function switchFigmaScreen(screenId, tabIdx) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+            
+            // Tab active updates
+            document.querySelectorAll('.sidebar-link').forEach(btn => btn.className = "w-full text-left p-3.5 rounded-xl text-xs font-bold hover:bg-slate-700/50 text-slate-300 flex justify-between items-center transition");
+            
+            const activeBtn = document.getElementById(`tab-btn-${tabIdx}`);
+            if (activeBtn) {
+                activeBtn.className = "w-full text-left p-3.5 rounded-xl text-xs font-bold bg-green-500/10 text-green-400 border-l-4 border-green-500 flex justify-between items-center transition";
             }
-        });
 
-        // 🚀 FIX: Handle Package Submission with JSON Stringify for specific fields
-        document.getElementById('packageForm').onsubmit = async (e) => {
-            e.preventDefault();
-            document.getElementById('loader').style.display = 'flex';
-
-            const payload = {
-                packageName: document.getElementById('pkgName').value,
-                description: "Nurse Bundle Package",
-                includedServices: JSON.stringify(Array.from(document.querySelectorAll('input[name="pkgServices"]:checked')).map(el => el.value)),
-                pricing: JSON.stringify({
-                    oneDay: { base: document.querySelector('#pkg-box-oneDay .pkg-base').value, discount: document.querySelector('#pkg-box-oneDay .pkg-disc').value },
-                    multipleDays: { base: document.querySelector('#pkg-box-multiDay .pkg-base').value, discount: document.querySelector('#pkg-box-multiDay .pkg-disc').value },
-                    hourly: { base: document.querySelector('#pkg-box-hourly .pkg-base').value, discount: document.querySelector('#pkg-box-hourly .pkg-disc').value }
-                }),
-                consumablesUsed: JSON.stringify(pkgSelectedConsumables)
-            };
-
-            const formData = new FormData();
-            Object.keys(payload).forEach(key => formData.append(key, payload[key]));
-
-            const res = await fetch(`${API_BASE_URL}/provider/nurse/package/manage`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${TOKEN}` },
-                body: formData
-            });
-            const result = await res.json();
-            document.getElementById('loader').style.display = 'none';
-            if(result.success) { alert("✅ Package Created!"); location.reload(); }
-            else { alert("❌ Error: " + result.message); }
-        };
-
-        async function fetchMyPackages() {
-            const res = await fetch(`${API_BASE_URL}/provider/nurse/package/my-packages`, { headers: { 'Authorization': `Bearer ${TOKEN}` }});
-            const result = await res.json();
-            document.getElementById('myPackagesContainer').innerHTML = result.data.map(p => `
-                <div class="bg-white p-5 rounded-2xl border custom-shadow flex justify-between items-center">
-                    <div><h4 class="font-bold text-teal-700 text-lg">${p.packageName}</h4><p class="text-xs text-gray-500">${p.includedServices.length} Services Bundle</p></div>
-                    <div class="text-right"><div class="text-xl font-black text-gray-800">₹${p.pricing.oneDay.final}</div><small class="text-gray-400">One-Day Price</small></div>
-                </div>`).join('') || '<p class="text-center text-gray-400">No packages yet.</p>';
+            // Update Telemetry Log dynamically
+            const config = FIGMA_API_METRIC_MAP[screenId];
+            if(config) {
+                document.getElementById('telemetry-method').innerText = config.method;
+                document.getElementById('telemetry-url').innerText = config.url;
+                document.getElementById('telemetry-response').innerText = JSON.stringify(config.response, null, 4);
+                
+                document.getElementById('telemetry-keys').innerHTML = config.keys.map(k => `
+                    <div class="flex items-center gap-1.5"><i data-lucide="check-circle" class="w-3.5 h-3.5 text-amber-500"></i> <span>${k}</span></div>
+                `).join('');
+                lucide.createIcons();
+            }
         }
 
-        function refreshFinalPrices() {
-            document.querySelectorAll('.pricing-box').forEach(box => {
-                const base = parseFloat(box.querySelector('.base-input').value) || 0;
-                const disc = parseFloat(box.querySelector('.disc-input').value) || 0;
-                box.querySelector('.final-val').innerText = Math.round(base - (base * (disc / 100)));
-            });
-        }
-        document.querySelectorAll('.disc-input').forEach(el => el.oninput = refreshFinalPrices);
-
-        document.getElementById('serviceForm').onsubmit = async (e) => {
-            e.preventDefault();
-            const payload = {
-                careSubCategoryId: document.getElementById('careSubCategoryId').value,
-                careCategoryId: document.getElementById('categoryDropdown').value,
-                title: document.getElementById('subCategoryDropdown').value,
-                description: document.getElementById('descArea').value,
-                pricing: JSON.stringify({
-                    oneDay: { base: document.querySelector('#box-oneDay .base-input').value, discount: document.querySelector('#box-oneDay .disc-input').value },
-                    multipleDays: { base: document.querySelector('#box-multiDay .base-input').value, discount: document.querySelector('#box-multiDay .disc-input').value },
-                    hourly: { base: document.querySelector('#box-hourly .base-input').value, discount: document.querySelector('#box-hourly .disc-input').value }
-                }),
-                consumablesUsed: JSON.stringify(svcSelectedConsumables),
-                status: 'Approved'
-            };
-            const formData = new FormData();
-            Object.keys(payload).forEach(key => formData.append(key, payload[key]));
-            const res = await fetch(`${API_BASE_URL}/provider/nurse/dash/service/manage`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${TOKEN}` },
-                body: formData
-            });
-            if((await res.json()).success) { alert("✅ Service Added!"); location.reload(); }
-        };
+        // Initialize default view
+        switchFigmaScreen('screen-dashboard', 1);
+        lucide.createIcons();
     </script>
 </body>
 </html>
+yeh dynamic wireframe and simulator tyaar kiya hai doctor panel ka jb figma wise check krna hoga complete sequence of status to and isme figma ke screen k according complete flow map kiya hai response, keys, enums ke sath..... 
+
+ab mujhe batayo driver panel and doctor hospital panel dono ko design and logic synced bna diya hai na poora? ager haan to poora diagram and logic detail sequence wise dscrible krke complete task finish kr do... proper hinge english me... dhyan rkhna response formats ko badlna mat jo dynamic use ho rha hai same rkhna...

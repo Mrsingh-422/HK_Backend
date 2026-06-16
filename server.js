@@ -256,6 +256,7 @@ app.use('/provider/nurse/package', require('./routes/provider/Nurse/NursePackage
 ////////////////////// Driver Routes /////////////////////
 app.use('/driver/pharmacy/orders', require('./routes/driver/driverPharmacy/OrdersRoute'));  
 app.use('/driver/lab/orders', require('./routes/driver/driverLab/driverLabOrdersRoute')); 
+app.use('/driver/nurse/orders', require('./routes/driver/driverNurse/NurseDriverOrdersRoute'));
 
 //////////////// Ambulance Routes /////////////////////
 app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulance'));

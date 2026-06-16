@@ -1,5 +1,6 @@
 const MedicineInventory = require('../../../models/MedicineInventory');
 const Medicine = require('../../../models/Medicine');
+const PharmacyComboOffer = require('../../../models/PharmacyComboOffer');
 
 const getMedicineInventory = async (req, res) => {
     const { medicineId } = req.params;
@@ -85,31 +86,63 @@ const getMedicineFullDetails = async (req, res) => {
 };
 
 // --- 3. COMPARE SELLERS (Figma Screen: Choose Pharmacy) ---
+// --- 2. POPULATE COMBO OFFERS IN SELLERS COMPARISON SCREEN ---
 const getSellersForMedicine = async (req, res) => {
     try {
         const { medicineId } = req.params;
+        const today = new Date();
         
         const sellers = await MedicineInventory.find({ medicineId, is_available: true })
             .populate('pharmacyId', 'name address rating profileImage city location')
-            .sort({ vendor_price: 1 });
+            .sort({ vendor_price: 1 })
+            .lean();
 
-        res.json({ success: true, data: sellers });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // Enforce active BOGO tags on each seller row so the patient can choose the store with best combo deal [1]
+        const sellersWithOffers = await Promise.all(sellers.map(async (seller) => {
+            if (!seller.pharmacyId) return null;
+
+            const activePromo = await PharmacyComboOffer.findOne({
+                pharmacyId: seller.pharmacyId._id,
+                medicineId: seller.medicineId,
+                isActive: true,
+                startDate: { $lte: today },
+                expiryDate: { $gte: today }
+            }).lean();
+
+            return {
+                ...seller,
+                comboOffer: activePromo ? {
+                    offerId: activePromo._id,
+                    campaignDisplayName: activePromo.campaignDisplayName,
+                    buyQty: activePromo.buyQty,
+                    getFreeQty: activePromo.getFreeQty,
+                    images: activePromo.images || []
+                } : null
+            };
+        }));
+
+        res.json({ 
+            success: true, 
+            data: sellersWithOffers.filter(s => s !== null) 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+// --- 1. POPULATE ACTIVE BOGO OFFERS IN STORE'S MEDICINE CATALOGUE ---
 const getPharmacySpecificMedicines = async (req, res) => {
     try {
         const { pharmacyId } = req.params;
         const page = parseInt(req.query.page) || 1;
-        const limit = 20; // 20 ki pagination as requested
+        const limit = 20; 
         const skip = (page - 1) * limit;
+        const today = new Date();
 
-        // 1. Total count nikalna pagination ke liye
         const total = await MedicineInventory.countDocuments({ 
             pharmacyId, 
             is_available: true 
         });
 
-        // 2. Inventory fetch karna with Medicine details
         const inventory = await MedicineInventory.find({ 
             pharmacyId, 
             is_available: true 
@@ -118,15 +151,23 @@ const getPharmacySpecificMedicines = async (req, res) => {
             path: 'medicineId',
             select: 'name mrp packaging image_url prescription_required salt'
         })
-        .sort({ createdAt: -1 }) // Newest medicines first
+        .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean();
 
-        // 3. Flutter ke liye data format karna
-        const formattedMedicines = inventory.map(item => {
+        // Har item ke liye check karenge ki kya koi Active Combo BOGO Offer chal raha hai
+        const formattedMedicines = await Promise.all(inventory.map(async (item) => {
             const med = item.medicineId;
-            if (!med) return null; // Safety check agar medicine delete ho gayi ho
+            if (!med) return null;
+
+            const activePromo = await PharmacyComboOffer.findOne({
+                pharmacyId,
+                medicineId: med._id,
+                isActive: true,
+                startDate: { $lte: today },
+                expiryDate: { $gte: today }
+            }).lean();
 
             return {
                 inventoryId: item._id,
@@ -142,22 +183,32 @@ const getPharmacySpecificMedicines = async (req, res) => {
                 stock: item.stock_quantity,
                 packaging: med.packaging,
                 prescriptionRequired: med.prescription_required,
-                isAvailable: item.is_available
+                isAvailable: item.is_available,
+                
+                // Added live combo details inside catalog items so UI can render "Buy 2 Get 1" badge immediately [1]
+                comboOffer: activePromo ? {
+                    offerId: activePromo._id,
+                    campaignDisplayName: activePromo.campaignDisplayName,
+                    buyQty: activePromo.buyQty,
+                    getFreeQty: activePromo.getFreeQty,
+                    images: activePromo.images || []
+                } : null
             };
-        }).filter(m => m !== null); // Null items remove karna
+        }));
 
         res.json({
             success: true,
             total,
             currentPage: page,
             totalPages: Math.ceil(total / limit),
-            data: formattedMedicines
+            data: formattedMedicines.filter(m => m !== null)
         });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 module.exports = {

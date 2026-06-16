@@ -34,8 +34,45 @@ const PharmacyComboOffer = require('../../../models/PharmacyComboOffer'); // Imp
 
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
 const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime) => {
-    let itemTotal = 0;
-    items.forEach(item => { itemTotal += (item.price * item.quantity); });
+    let rawItemTotalWithoutPromo = 0; // Pure price of items before discount [1]
+    let promoDeductedTotal = 0;       // Final priced items total after BOGO reduction [1]
+    const today = new Date();
+
+    for (const item of items) {
+        const pricePerUnit = Number(item.price || item.pricePerUnit || 0);
+        const orderedQty = Number(item.quantity || 1);
+        const medicineId = item.medicineId._id || item.medicineId;
+
+        // Raw total calculation
+        rawItemTotalWithoutPromo += (pricePerUnit * orderedQty);
+
+        // Check if there is an active BOGO campaign running for this medicine in target pharmacy
+        const activePromo = await PharmacyComboOffer.findOne({
+            pharmacyId,
+            medicineId,
+            isActive: true,
+            startDate: { $lte: today },
+            expiryDate: { $gte: today }
+        });
+
+        if (activePromo) {
+            // Apply Buy X Get Y Free math rule [1]
+            const X = activePromo.buyQty;
+            const Y = activePromo.getFreeQty;
+            
+            const bundleSize = X + Y;
+            const fullBundles = Math.floor(orderedQty / bundleSize);
+            const remainingUnits = orderedQty % bundleSize;
+
+            const chargeableQty = (fullBundles * X) + Math.min(remainingUnits, X);
+            promoDeductedTotal += (pricePerUnit * chargeableQty);
+        } else {
+            promoDeductedTotal += (pricePerUnit * orderedQty);
+        }
+    }
+
+    // Savings calculated from the promo
+    const comboSavings = rawItemTotalWithoutPromo - promoDeductedTotal; // Saved amount [1]
 
     let deliveryCharge = 0;
     let rapidCharge = 0;
@@ -44,19 +81,16 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     const cleanPharmaId = pharmacyId.toString();
     const charges = await DeliveryCharge.findOne({ vendorId: cleanPharmaId });
 
-    // 1. Standard Delivery Charge (If Home Delivery)
     if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
         deliveryCharge = charges ? Number(charges.fixedPrice) : 40;
     }
     
-    // 2. FIXED: Rapid charge sirf tab lagega jab isRapid true ho AUR koi slot selected na ho (Immediate mode)
     if (isRapid && (!appointmentTime || appointmentTime === 'Immediate')) {
         rapidCharge = charges ? Number(charges.fastDeliveryExtra) : 29;
     } else {
-        rapidCharge = 0; // 3 hrs or Custom slot mein rapid charge zero
+        rapidCharge = 0;
     }
 
-    // 3. Premium Slot Charge
     if (appointmentTime && appointmentTime !== 'Immediate') {
         const availConfig = await Availability.findOne({ vendorId: cleanPharmaId });
         if (availConfig && availConfig.premiumSlots) {
@@ -66,21 +100,27 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         }
     }
 
-    // 4. Coupon Logic
     let couponDiscount = 0;
     let couponId = null;
     if (couponCode) {
         const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-        if (coupon && itemTotal >= coupon.minOrderAmount) {
-            couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+        if (coupon && promoDeductedTotal >= coupon.minOrderAmount) {
+            couponDiscount = Math.min((promoDeductedTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
             couponId = coupon._id;
         }
     }
 
-    const totalAmount = (itemTotal - couponDiscount) + deliveryCharge + rapidCharge + slotCharge;
+    const totalAmount = (promoDeductedTotal - couponDiscount) + deliveryCharge + rapidCharge + slotCharge;
     
     return { 
-        itemTotal, couponDiscount, couponId, deliveryCharge, rapidDeliveryCharge: rapidCharge, slotCharge, 
+        itemTotal: Math.round(promoDeductedTotal), 
+        originalItemTotal: Math.round(rawItemTotalWithoutPromo),
+        comboSavings: Math.round(comboSavings), // Sent to show "Saved $4.50!" on UI [1]
+        couponDiscount: Math.round(couponDiscount), 
+        couponId, 
+        deliveryCharge, 
+        rapidDeliveryCharge: rapidCharge, 
+        slotCharge, 
         totalAmount: Math.round(totalAmount) 
     };
 };
