@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer');
 const { 
-    getNurses, getNurseDetails,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon, checkoutNurseBooking, placeNurseBooking, getMyNurseBookings, rateNurseService,
+    getNurses, getNurseDetails,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
     uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages
 } = require('../../../controllers/user/Nurse/BookNurse');
@@ -21,6 +21,7 @@ router.get('/delivery-config/:nurseId', getNurseDeliveryConfig); // For calculat
 // 2. Booking Flow
 router.post('/checkout', protect('user'), checkoutNurseBooking);
 router.post('/book', protect('user'), placeNurseBooking);
+router.post('/verify-payment', protect('user'), verifyNursePayment);
 router.get('/track/:id', protect('user'), getAppointmentStatus); // Figma Tracking Screen
 
 router.get('/coupons/:id', getAvailableCoupons); // Get coupons applicable for this nurse/service

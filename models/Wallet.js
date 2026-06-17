@@ -1,7 +1,7 @@
+// models/Wallet.js
 const mongoose = require('mongoose');
 
 const walletSchema = new mongoose.Schema({
-    // vendorId ab Doctor ya Provider dono ki ID hold kar sakta hai
     vendorId: { 
         type: mongoose.Schema.Types.ObjectId, 
         required: true, 
@@ -10,7 +10,8 @@ const walletSchema = new mongoose.Schema({
     vendorModel: {
         type: String,
         required: true,
-        enum: ['Doctor', 'Provider'] // 'Doctor' collection aur 'Provider' dono ke liye
+        // 👈 Expanded to support all unified vendor collections
+        enum: ['Doctor', 'Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance'] 
     },
     balance: { type: Number, default: 0 },
     transactions: [{

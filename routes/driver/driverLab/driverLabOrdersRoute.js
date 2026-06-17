@@ -1,28 +1,64 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
+const { driverDocUploads } = require('../../../middleware/multer'); // Used for Profile update
+
 const { 
-    getDriverOrders, 
-    getOrderDetail,
-    respondToOrder, 
-    reachLocation,
-    verifySampleCollection,
-    updateProgress,
-    reportCollectionIssue,
+    forgotPassword,
+    verifyForgotOtp,
+    resetPassword,
+    changePassword,
+    updateProfile,
     toggleDriverStatus,
-    reassignLabOrderDueToEmergency // 🌟 सिंक किया गया
+    getDriverOrders,
+    getOrderDetail,
+    respondToOrder,
+    startDelivery,
+    arriveAtLocation,
+    verifySampleCollection,
+    deliverSampleToLab,
+    reportNoResponse,
+    createBookingAtHome,
+    addFamilyToBooking,
+    appendItemsToBooking,
+    getAdminContact,
+    reassignLabOrderDueToEmergency
 } = require('../../../controllers/driver/driverLab/LabDriverOrders');
 
-// Base URL: /driver/lab/orders
+// Base URL: /driver/lab
 
-router.get('/orders', protect('driver'), getDriverOrders);
-router.get('/detail/:bookingId', protect('driver'), getOrderDetail);
-router.patch('/respond/:orderId', protect('driver'), respondToOrder);
-router.patch('/arrive/:orderId', protect('driver'), reachLocation);
-router.post('/verify-otp', protect('driver'), verifySampleCollection);
-router.patch('/update-progress/:orderId', protect('driver'), updateProgress);
-router.post('/report-issue/:orderId', protect('driver'), reportCollectionIssue);
+// ==========================================
+// 1. AUTHENTICATION & PROFILE ACTIONS
+// ==========================================
+router.post('/forgot-password', forgotPassword);
+router.post('/verify-forgot-otp', verifyForgotOtp);
+router.post('/reset-password', resetPassword);
+router.patch('/change-password', protect('driver'), changePassword);
+router.put('/update-profile', protect('driver'), driverDocUploads, updateProfile);
 router.patch('/toggle-status', protect('driver'), toggleDriverStatus);
-router.post('/reassign-emergency', protect('driver'), reassignLabOrderDueToEmergency); // 🌟 एंडपॉइंट जोड़ा गया
+router.get('/contact-admin', protect('driver'), getAdminContact);
+
+// ==========================================
+// 2. DIAGNOSTIC WORKFLOWS
+// ==========================================
+router.get('/orders/list', protect('driver'), getDriverOrders);
+router.get('/orders/detail/:bookingId', protect('driver'), getOrderDetail);
+router.post('/orders/respond/:orderId', protect('driver'), respondToOrder);
+router.patch('/orders/start/:orderId', protect('driver'), startDelivery); // "Start Service" button
+router.patch('/orders/arrive/:orderId', protect('driver'), arriveAtLocation); // "Collect Sample" triggers OTP
+
+router.post('/orders/verify-otp', protect('driver'), verifySampleCollection); // "Verify OTP" and change status to Sample Collected
+
+router.post('/orders/deliver-lab/:orderId', protect('driver'), deliverSampleToLab); // "Sample Delivered to Lab" submit form
+router.post('/orders/no-response/:orderId', protect('driver'), reportNoResponse); // "No Response" button action
+
+// ==========================================
+// 3. DYNAMIC ADDITIONS (Figma At-Home Patient Actions)
+// ==========================================
+router.post('/orders/create', protect('driver'), createBookingAtHome); // Fresh Booking registration
+router.post('/orders/add-family/:bookingId', protect('driver'), addFamilyToBooking); // Add Family Members
+router.patch('/orders/add-items/:bookingId', protect('driver'), appendItemsToBooking); // Append Tests/Packages
+
+router.post('/orders/reassign-emergency', protect('driver'), reassignLabOrderDueToEmergency);
 
 module.exports = router;

@@ -10,7 +10,7 @@ const generateToken = (id, role) => {
 };
 
 // 1. REGISTER DRIVER (By Vendor)
-// endpoint: POST /api/provider/driver/add
+// endpoint: POST /provider/driver/add
 const registerDriver = async (req, res) => {
     try {
         const vendorId = req.user.id; 
@@ -45,7 +45,7 @@ const registerDriver = async (req, res) => {
 };
 
 // // LOGIN DRIVER (Username ya Phone dono se login possible hai)
-// endpoint: POST /api/provider/driver/login
+// endpoint: POST /provider/driver/login
 const loginDriver = async (req, res) => {
     try {
         const { identifier, password } = req.body; // 'identifier' mein username ya phone aayega

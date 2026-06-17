@@ -737,6 +737,43 @@ const comboOfferUploads = multer({
 ]);
 
 
+// ==========================================
+// 39. NURSE PROGRESS & COMPLETION UPLOADS (Figma Screen 7, 13, 23)
+// ==========================================
+const nurseProgressDir = 'public/uploads/nurse_progress';
+ensureDir(nurseProgressDir);
+
+const nurseProgressUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, nurseProgressDir),
+        filename: (req, file, cb) => cb(null, `nurse-progress-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 10 * 1024 * 1024 } // Max 10MB limit
+}).fields([
+    { name: 'profilePic', maxCount: 1 },        // Screen 13: Edit Profile Picture
+    { name: 'progressPhotos', maxCount: 10 },    // Screen 23: Live timer progress photos
+    { name: 'handmadeInvoice', maxCount: 1 }     // Screen 7: Completion invoice upload
+]);
+
+// ==========================================
+// 40. PHARMACY DELIVERY DRIVER UPLOADS (Figma Screen 13, 14, 21)
+// ==========================================
+const pharmaDeliveryDir = 'public/uploads/pharmacy_deliveries';
+ensureDir(pharmaDeliveryDir);
+
+const pharmacyDeliveryUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, pharmaDeliveryDir),
+        filename: (req, file, cb) => cb(null, `delivery-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 10 * 1024 * 1024 } // Max 10MB limit
+}).fields([
+    { name: 'profilePic', maxCount: 1 },        // Screen 21: Edit Profile Image
+    { name: 'deliveryPic', maxCount: 1 }        // Screen 14: Delivered order proof photo
+]);
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -778,6 +815,8 @@ module.exports = {
     doctorReportUploads,
     policeEvidenceUploads,
     dietPlanUploads,
-    comboOfferUploads
+    comboOfferUploads,
+    nurseProgressUpload,
+    pharmacyDeliveryUpload
 
 };  

@@ -1,27 +1,58 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
+const { nurseProgressUpload } = require('../../../middleware/multer'); 
+
 const { 
     getNurseBookings, 
     getBookingDetail,
     respondToBooking, 
-    updateProgress, 
-    verifyOtpAndStartService, 
-    completeService,
-    reportNurseIssue,
-    toggleDriverStatus,reassignNurseDueToEmergency
+    toggleDriverStatus,
+    forgotPassword,
+    verifyForgotOtp,
+    resetPassword,
+    changePassword,
+    updateProfile,
+    rejectBookingWithReason,
+    arriveAtLocation,
+    verifyOtpAndStartService,
+    addProgressUpdate,
+    submitServiceCompletion,
+    verifyCompleteOtp,
+    getAdminContact
 } = require('../../../controllers/driver/driverNurse/NurseDriverOrders');
 
-// Base URL: /driver/nurse/orders
+// Base URL: /driver/nurse
 
-router.get('/list', protect('driver'), getNurseBookings);
-router.get('/detail/:bookingId', protect('driver'), getBookingDetail);
-router.patch('/respond/:bookingId', protect('driver'), respondToBooking);
-router.patch('/update-progress/:bookingId', protect('driver'), updateProgress);
-router.post('/verify-start-otp', protect('driver'), verifyOtpAndStartService);
-router.post('/complete', protect('driver'), completeService);
-router.post('/report-issue/:bookingId', protect('driver'), reportNurseIssue);
+// ==========================================
+// 1. AUTHENTICATION & PASSWORD OPERATIONS
+// ==========================================
+router.post('/forgot-password', forgotPassword);
+router.post('/verify-forgot-otp', verifyForgotOtp);
+router.post('/reset-password', resetPassword);
+router.patch('/change-password', protect('driver'), changePassword);
+
+// ==========================================
+// 2. PROFILE & STATUS (With Multer for Profile Picture)
+// ==========================================
+router.put('/update-profile', protect('driver'), nurseProgressUpload, updateProfile);
 router.patch('/toggle-status', protect('driver'), toggleDriverStatus);
-router.post('/reassign-emergency', protect('driver'), reassignNurseDueToEmergency);
+router.get('/contact-admin', protect('driver'), getAdminContact);
+
+// ==========================================
+// 3. SERVICE WORKFLOW & BOOKING MANAGEMENT
+// ==========================================
+router.get('/orders/list', protect('driver'), getNurseBookings);
+router.get('/orders/detail/:bookingId', protect('driver'), getBookingDetail);
+router.patch('/orders/respond/:bookingId', protect('driver'), respondToBooking);
+router.patch('/orders/reject-reason/:bookingId', protect('driver'), rejectBookingWithReason);
+router.patch('/orders/arrive/:bookingId', protect('driver'), arriveAtLocation);
+router.post('/orders/verify-start-otp', protect('driver'), verifyOtpAndStartService);
+
+router.patch('/orders/progress-update/:bookingId', protect('driver'), nurseProgressUpload, addProgressUpdate);
+
+router.post('/orders/submit-completion/:bookingId', protect('driver'), nurseProgressUpload, submitServiceCompletion);
+
+router.post('/orders/verify-complete-otp', protect('driver'), verifyCompleteOtp);
 
 module.exports = router;

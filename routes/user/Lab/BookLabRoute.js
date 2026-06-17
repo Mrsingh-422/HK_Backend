@@ -12,7 +12,7 @@ const {
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
     checkoutLabBooking,
-    confirmPrescriptionBooking,
+    confirmPrescriptionBooking,verifyLabPayment,
     rateLabOrder,cancelBooking,
     getAvailableCoupons ,validateLabCoupon,
     getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,
@@ -69,6 +69,7 @@ router.get('/delivery-charges', protect('user'), getLabDeliveryCharges); // NEW
 // Booking (Protected)
 router.post('/checkout', protect('user'), checkoutLabBooking);
 router.post('/confirm-prescription', protect('user'), confirmPrescriptionBooking); // Prescription Flow Part 2
+router.post('/verify-payment', protect('user'), verifyLabPayment); // NEW
 router.post('/upload-prescription', protect('user'), prescriptionUploads.array('prescriptionImages', 5), uploadPrescriptionFlow);
 
 // Discovery & Logistics

@@ -3,10 +3,11 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { pharmacyPrescriptionUploads } = require('../../../middleware/multer');
 const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
-    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory,trackOrder,
+    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory,trackOrder,
 getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 
-createPrescriptionRequest,payAndConfirmOrder, getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices,
+createPrescriptionRequest,payAndConfirmOrder,verifyPrescriptionRequestPayment,
+ getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices,
 
 getActiveStoreComboOffers
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
@@ -53,6 +54,8 @@ router.post('/cancel-order',protect('user'),cancelMedicineOrder);
 
 router.post('/place-order', pharmacyPrescriptionUploads.fields([{ name: 'prescriptionImages', maxCount: 5 }]), protect('user'),placeOrder);
 
+router.post('/verify-payment',protect('user'),verifyPharmacyPayment);
+
 router.get('/order-history',protect('user'),getOrderHistory);
 router.get('/track-order/:orderId',protect('user'),trackOrder);
 
@@ -87,6 +90,12 @@ router.post(
     '/prescription-request/pay-confirm', 
     protect('user'), 
     payAndConfirmOrder
+);
+
+router.post(
+    '/prescription-request/verify-payment', 
+    protect('user'), 
+    verifyPrescriptionRequestPayment
 );
 router.post(
     '/prescription-request/estimate-prices', 

@@ -87,12 +87,23 @@ const pharmacyBookingSchema = new mongoose.Schema({
     prescriptionImages: [String],
     status: { 
         type: String, 
-        enum: ['Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Cancelled'], 
+        enum: ['Pending','Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Cancelled'], 
         default: 'Placed' 
     },
 
     cancelReason: { type: String },
     prescriptionFile: { type: String }, // For prescription-based orders
+
+     // 🌟 Figma Screen 14 (Proof of Delivery Photo)
+    deliveryProofPic: { type: String, default: null },
+
+    // 🌟 Figma Screen 13 (Return Details)
+    returnReason: { type: String, default: null },
+
+    // Live trip tracking timestamps
+    startedAt: { type: Date, default: null },
+    arrivedAt: { type: Date, default: null },
+
     
 }, { timestamps: true });
 

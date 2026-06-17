@@ -1,26 +1,54 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
+const { pharmacyDeliveryUpload } = require('../../../middleware/multer'); // सेंट्रलाइज्ड फ़ाइल से इंपोर्ट किया
+
 const { 
+    forgotPassword,
+    verifyForgotOtp,
+    resetPassword,
+    changePassword,
+    updateProfile,
+    toggleDriverStatus,
     getDriverOrders, 
     getOrderDetail, 
     respondToOrder, 
-    updateProgress, 
+    startDelivery,
+    arriveAtLocation, 
     verifyOtpAndDeliver, 
-    reportDeliveryIssue,
-    toggleDriverStatus,
+    returnOrder,
+    getAdminContact,
     reassignOrderDueToEmergency
 } = require('../../../controllers/driver/driverPharmacy/Orders');
 
-// Base URL: /driver/pharmacy/orders
+// Base URL: /driver/pharmacy
 
-router.get('/list', protect('driver'), getDriverOrders);
-router.get('/detail/:orderId', protect('driver'), getOrderDetail);
-router.post('/respond', protect('driver'), respondToOrder);
-router.patch('/update-progress', protect('driver'), updateProgress);
-router.post('/verify-otp', protect('driver'), verifyOtpAndDeliver);
-router.post('/report-issue', protect('driver'), reportDeliveryIssue);
+// ==========================================
+// 1. AUTHENTICATION & PROFILE ACTIONS
+// ==========================================
+router.post('/forgot-password', forgotPassword);
+router.post('/verify-forgot-otp', verifyForgotOtp);
+router.post('/reset-password', resetPassword);
+router.patch('/change-password', protect('driver'), changePassword);
+router.put('/update-profile', protect('driver'), pharmacyDeliveryUpload, updateProfile);
 router.patch('/toggle-status', protect('driver'), toggleDriverStatus);
-router.post('/reassign-emergency', protect('driver'), reassignOrderDueToEmergency);
+router.get('/contact-admin', protect('driver'), getAdminContact);
+
+// ==========================================
+// 2. ORDER TRIP WORKFLOWS
+// ==========================================
+router.get('/orders/list', protect('driver'), getDriverOrders);
+router.get('/orders/detail/:orderId', protect('driver'), getOrderDetail);
+router.post('/orders/respond', protect('driver'), respondToOrder);
+router.patch('/orders/start/:orderId', protect('driver'), startDelivery); // "Start" Route Button
+router.patch('/orders/arrive/:orderId', protect('driver'), arriveAtLocation); // "Arrived" Button
+
+// "Verify OTP" and upload Delivery Proof Photo
+router.post('/orders/verify-otp', protect('driver'), pharmacyDeliveryUpload, verifyOtpAndDeliver);
+
+// "Return Order" with comments
+router.post('/orders/return/:orderId', protect('driver'), returnOrder);
+
+router.post('/orders/reassign-emergency', protect('driver'), reassignOrderDueToEmergency);
 
 module.exports = router;

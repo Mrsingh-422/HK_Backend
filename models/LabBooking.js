@@ -132,6 +132,17 @@ appliedCoupon: {
     },
         phlebotomistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
         rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
+        // 🌟 Figma Screen 12 (Lab Deposit details)
+    labDepositName: { type: String, default: null },
+
+    // 🌟 Figma Screen 21 (No Show logs)
+    noShowComments: { type: String, default: null },
+
+    // Trip tracking timestamps
+    startedAt: { type: Date, default: null },
+    arrivedAt: { type: Date, default: null },
+    collectedAt: { type: Date, default: null },
+    depositedAt: { type: Date, default: null }
 
 
 

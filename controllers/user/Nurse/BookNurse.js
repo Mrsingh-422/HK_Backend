@@ -12,6 +12,9 @@ const Coupon = require('../../../models/Coupon');
 const moment = require('moment');
 const crypto = require('crypto');
 
+const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+
+
 // 1. LIST NURSES
 const getNurses = async (req, res) => {
     try {
@@ -470,13 +473,23 @@ const checkoutNurseBooking = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 5. PLACE BOOKING (With Coupon Usage Tracking) ---
+// 5. PLACE BOOKING (Replacing placeNurseBooking with Razorpay payload creation)
 const placeNurseBooking = async (req, res) => {
     try {
-        const { nurseId, serviceId, packageId, isPackage, schedule, priceBreakdown, patients, address, selectedConsumables, assessmentLocation, appliedCoupon } = req.body;
+        const { 
+            nurseId, serviceId, packageId, isPackage, schedule, priceBreakdown, 
+            patients, address, selectedConsumables, assessmentLocation, 
+            appliedCoupon, paymentMethod 
+        } = req.body;
         
         const item = isPackage ? await NursePackage.findById(packageId) : await NurseService.findById(serviceId);
         const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+        // Create Razorpay Order if payment is Online
+        let rzpOrder = null;
+        if (paymentMethod !== 'COD') {
+            rzpOrder = await createRazorpayOrder(priceBreakdown.totalPrice, `receipt_${bId}`);
+        }
 
         const booking = await NurseBooking.create({
             userId: req.user.id,
@@ -501,12 +514,73 @@ const placeNurseBooking = async (req, res) => {
             address,
             assessmentLocation,
             selectedConsumables,
-            status: 'Pending'
+            paymentMethod: paymentMethod || 'COD',
+            paymentStatus: 'Pending',
+            status: 'Pending' // Stays Pending until paid or confirmed [1]
         });
 
-        // 🚀 UPDATE COUPON USAGE HISTORY
-        if (appliedCoupon && appliedCoupon.couponId) {
-            const coupon = await Coupon.findById(appliedCoupon.couponId);
+        // COD confirmed instantly
+        if (paymentMethod === 'COD') {
+            // Update Coupon Usage directly for COD
+            if (appliedCoupon && appliedCoupon.couponId) {
+                const coupon = await Coupon.findById(appliedCoupon.couponId);
+                if (coupon) {
+                    const userIndex = coupon.usedBy.findIndex(u => u.userId.toString() === req.user.id.toString());
+                    if (userIndex > -1) {
+                        coupon.usedBy[userIndex].usageCount += 1;
+                    } else {
+                        coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
+                    }
+                    await coupon.save();
+                }
+            }
+            return res.status(201).json({ success: true, message: "Booking confirmed!", data: booking });
+        }
+
+        // Return payment configurations for online
+        res.status(201).json({
+            success: true,
+            message: "Razorpay order created for Nurse booking.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount,
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: booking._id,
+            bookingId: bId
+        });
+
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+// 🚨 NEW CONTROLLER: VERIFY NURSE BOOKING PAYMENT SIGNATURE
+// endpoint: POST /user/nurse/verify-payment
+const verifyNursePayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+        if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+            return res.status(400).json({ success: false, message: "Missing payment verification keys." });
+        }
+
+        // 1. Verify Signature
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+        if (!isVerified) {
+            return res.status(400).json({ success: false, message: "Invalid payment signature." });
+        }
+
+        // 2. Find Pending Booking
+        const booking = await NurseBooking.findById(appointmentId);
+        if (!booking) return res.status(404).json({ success: false, message: "Nurse booking not found." });
+
+        // 3. Confirm Booking State
+        booking.status = 'Confirmed';
+        booking.paymentStatus = 'Paid';
+        booking.paymentMethod = 'Online';
+        await booking.save();
+
+        // 🚨 4. UPDATE COUPON USAGE HISTORY (Increments usage safely after payment success!)
+        if (booking.appliedCoupon && booking.appliedCoupon.couponId) {
+            const coupon = await Coupon.findById(booking.appliedCoupon.couponId);
             if (coupon) {
                 const userIndex = coupon.usedBy.findIndex(u => u.userId.toString() === req.user.id.toString());
                 if (userIndex > -1) {
@@ -518,8 +592,15 @@ const placeNurseBooking = async (req, res) => {
             }
         }
 
-        res.status(201).json({ success: true, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({
+            success: true,
+            message: "Nurse payment successfully verified & booking confirmed!",
+            data: booking
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 
@@ -722,6 +803,6 @@ const getGlobalPackages = async (req, res) => {
     }
 };
 
-module.exports = { getNurses,getNurseDetails,searchNurses,checkoutNurseBooking, placeNurseBooking,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService,
+module.exports = { getNurses,getNurseDetails,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
     uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon };

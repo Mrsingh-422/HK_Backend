@@ -24,6 +24,9 @@ const cities = require('../../../data/cities.json');
 const Fuse = require('fuse.js');
 const LabCategory = require('../../../models/LabCategory');
 
+const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+
+
 
 
 // --- UPDATED: CALCULATE BILL (Per Patient Rapid Charge Logic) ---
@@ -1023,8 +1026,8 @@ const validateLabCoupon = async (req, res) => {
 };
 
 
-// 3. FINAL CHECKOUT (Integrating Delivery & Coupons)
-// 2. CHECKOUT (Integrating Slot Charge)
+// 3. FINAL CHECKOUT (Integrating Delivery, Coupons & Razorpay Payments)
+// Replacing checkoutLabBooking in controllers/user/Lab/BookLab.js
 const checkoutLabBooking = async (req, res) => {
     try {
         const { 
@@ -1050,8 +1053,16 @@ const checkoutLabBooking = async (req, res) => {
             appointmentTime 
         );
 
+        const tempBookingId = `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        let rzpOrder = null;
+
+        // 🚨 RAZORPAY INTEGRATION: Create Order if Payment is Online
+        if (paymentMethod !== 'COD') {
+            rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
+        }
+
         const booking = await LabBooking.create({
-            bookingId: `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            bookingId: tempBookingId,
             userId: req.user.id,
             labId: cart.labCart.labId,
             patients: await mapPatients(req.user.id, selectedPatientIds),
@@ -1063,21 +1074,40 @@ const checkoutLabBooking = async (req, res) => {
             address, 
             appointmentDate, 
             appointmentTime,
-            billSummary: bill, // Yahan bill.slotCharge save ho raha hai
+            billSummary: bill, 
             paymentMethod,
             isRapid: isRapid || false,
-            status: 'Confirmed'
+            // If payment is online, set status to 'Pending' until signature verification [1]
+            status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending',
+            paymentStatus: paymentMethod === 'COD' ? 'Pending' : 'Pending',
+            tracking: {
+                otp: Math.floor(1000 + Math.random() * 9000).toString()
+            }
         });
 
-        // Clear Cart logic
-        await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
+        // 🚨 Note: COD me cart abhi clear ho jayega, Online me verify-payment success hone par clear hoga.
+        if (paymentMethod === 'COD') {
+            await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
+            return res.status(201).json({ success: true, message: "Booking confirmed successfully!", data: booking });
+        }
 
-        res.status(201).json({ success: true, message: "Booking confirmed successfully!", data: booking });
+        // Return Razorpay data to frontend for online payments
+        res.status(201).json({
+            success: true,
+            message: "Razorpay order created. Complete payment to confirm.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount, // in paise
+            razorpayOrderId: rzpOrder.id,
+            bookingId: tempBookingId,
+            appointmentId: booking._id // Mapped ID
+        });
+
     } catch (error) { 
         console.error("FATAL CHECKOUT ERROR:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 // Helper to map patient IDs to full objects
@@ -1090,7 +1120,7 @@ async function mapPatients(userId, pids) {
     });
 }
 
-// 4. INITIATE BOOKING (Direct)
+// 4. INITIATE BOOKING (Direct Booking - Replacing bookLabTest)
 const bookLabTest = async (req, res) => {
     try {
         const { 
@@ -1098,17 +1128,21 @@ const bookLabTest = async (req, res) => {
             appointmentDate, appointmentTime, address, couponCode, paymentMethod 
         } = req.body;
 
-        // Generate Order ID
-        const bookingId = `ORD-${Date.now().toString().slice(-6)}${crypto.randomInt(100, 999)}`;
+        const tempBookingId = `ORD-${Date.now().toString().slice(-6)}${crypto.randomInt(100, 999)}`;
         
-        // Dynamic bill calculation based on new model fields
+        // Dynamic bill calculation
         const bill = await calculateBill(labId, items, patients.length, collectionType, couponCode, isRapid);
 
+        let rzpOrder = null;
+        if (paymentMethod !== 'COD') {
+            rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
+        }
+
         const booking = await LabBooking.create({
-            bookingId,
+            bookingId: tempBookingId,
             userId: req.user.id,
             labId,
-            patients, // Array of family members
+            patients, 
             items: {
                 tests: items.tests || [],
                 packages: items.packages || []
@@ -1120,10 +1154,25 @@ const bookLabTest = async (req, res) => {
             billSummary: bill,
             paymentMethod,
             status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending',
-            paymentStatus: 'Pending'
+            paymentStatus: 'Pending',
+            tracking: {
+                otp: Math.floor(1000 + Math.random() * 9000).toString()
+            }
         });
 
-        res.status(201).json({ success: true, data: booking });
+        if (paymentMethod === 'COD') {
+            return res.status(201).json({ success: true, data: booking });
+        }
+
+        res.status(201).json({
+            success: true,
+            message: "Razorpay order created for direct booking.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount,
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: booking._id
+        });
+
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -1229,8 +1278,7 @@ const cancelBooking = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 9. CONFIRM SUGGESTED TESTS (Prescription Flow - Figma Screen 67)
-// Jab Lab tests add kar dega, tab user yahan se payment karke booking confirm karega
+// 9. CONFIRM SUGGESTED TESTS (Prescription Flow - Replacing confirmPrescriptionBooking)
 const confirmPrescriptionBooking = async (req, res) => {
     try {
         const { bookingId, appointmentDate, appointmentTime, address, paymentMethod, couponCode } = req.body;
@@ -1240,28 +1288,94 @@ const confirmPrescriptionBooking = async (req, res) => {
             return res.status(400).json({ message: "Invalid booking or tests not yet added by Lab" });
         }
 
-        // Recalculate bill based on tests added by Lab
         const bill = await calculateBill(
             booking.labId, 
             booking.items, 
             booking.patients.length, 
             booking.collectionType, 
             couponCode, 
-            false // rapid is usually decided earlier
+            false 
         );
+
+        let rzpOrder = null;
+        if (paymentMethod !== 'COD') {
+            rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${booking.bookingId}`);
+        }
 
         booking.appointmentDate = appointmentDate;
         booking.appointmentTime = appointmentTime;
         booking.address = address;
         booking.billSummary = bill;
         booking.paymentMethod = paymentMethod;
-        booking.status = 'Confirmed';
-        booking.paymentStatus = paymentMethod === 'COD' ? 'Pending' : 'Done';
+        booking.status = paymentMethod === 'COD' ? 'Confirmed' : 'Pending';
+        booking.paymentStatus = 'Pending';
         
         await booking.save();
-        res.json({ success: true, message: "Booking confirmed!", data: booking });
+
+        if (paymentMethod === 'COD') {
+            return res.json({ success: true, message: "Booking confirmed!", data: booking });
+        }
+
+        res.json({
+            success: true,
+            message: "Razorpay order created for prescription booking.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount,
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: booking._id
+        });
+
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+
+// 🚨 NEW CONTROLLER: VERIFY LAB PAYMENT SIGNATURE
+// endpoint: POST /user/labs/verify-payment
+const verifyLabPayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+        if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+            return res.status(400).json({ success: false, message: "Missing required payment tokens." });
+        }
+
+        // 1. Verify Signature
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+        if (!isVerified) {
+            return res.status(400).json({ success: false, message: "Invalid transaction signature." });
+        }
+
+        // 2. Find and update status to Confirmed & Paid
+        const booking = await LabBooking.findByIdAndUpdate(
+            appointmentId,
+            {
+                $set: {
+                    status: 'Confirmed',
+                    paymentStatus: 'Done',
+                    paymentMethod: 'UPI' // Default online
+                }
+            },
+            { new: true }
+        );
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
+
+        // 3. Clear User's Lab Cart securely now!
+        await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
+
+        res.json({
+            success: true,
+            message: "Lab booking successfully verified and confirmed!",
+            data: booking
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // 10. ADD RATING & REVIEW
 const rateLabOrder = async (req, res) => {
@@ -1718,6 +1832,6 @@ module.exports = {
     checkoutLabBooking,
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
-    cancelBooking, confirmPrescriptionBooking, rateLabOrder ,
+    cancelBooking, confirmPrescriptionBooking,verifyLabPayment, rateLabOrder ,
     getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,getWomenCategories,getWomenTestsByCategory
 };

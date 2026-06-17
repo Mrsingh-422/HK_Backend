@@ -26,6 +26,7 @@ const LabCategory = require('../../../models/LabCategory');
 const PharmacyPrescriptionRequest = require('../../../models/PharmacyPrescriptionRequest');
 const PharmacyComboOffer = require('../../../models/PharmacyComboOffer'); // Import model
 
+const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
 
 
@@ -1158,8 +1159,10 @@ const checkoutMedicineOrder = async (req, res) => {
     }
 };
 
-// 2. PLACE ORDER (Final Step)
-// POST /user/pharmacy/place-order
+// ==========================================
+// 1. PLACE ORDER (With Strict Backend Prescription Restrictions)
+// Replacing placeOrder in controllers/user/Pharmacy/BookPharmacy.js
+// ==========================================
 const placeOrder = async (req, res) => {
     try {
         const { 
@@ -1170,44 +1173,48 @@ const placeOrder = async (req, res) => {
 
         const userId = req.user.id;
         
-        // Final verification before locking the order (Populates master Medicine to read MRP)
+        // A. Cart Fetch & Population
         const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
         if (!cart || !cart.pharmacyCart.items.length) {
-            return res.status(400).json({ message: "Transaction expired. Cart is empty." });
+            return res.status(400).json({ success: false, message: "Transaction expired. Cart is empty." });
         }
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
 
-        // 1. Atomic Stock Deduction
-        for (const item of cart.pharmacyCart.items) {
-            const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId._id });
-            if (!inventory || inventory.stock_quantity < item.quantity) {
-                return res.status(400).json({ message: `Stock mismatch for ${item.name}. Please refresh cart.` });
-            }
-            inventory.stock_quantity -= item.quantity;
-            if (inventory.stock_quantity <= 0) inventory.is_available = false;
-            await inventory.save();
-        }
+        // 🚨 B. STRICT PRESCRIPTION VALIDATION (Backend Restriction)
+        // Check if AT LEAST ONE medicine in the cart requires a prescription
+        const rxMandatory = cart.pharmacyCart.items.some(item => 
+            item.medicineId?.prescription_required?.toUpperCase() === "YES"
+        );
 
-        // 2. Handle Prescription
+        // Extract uploaded prescription images from multipart request
         let rxImages = [];
         if (req.files && req.files['prescriptionImages']) {
             rxImages = req.files['prescriptionImages'].map(f => f.path);
         }
 
-        // 3. Final Bill calculation
+        // 👉 RULE: Agar prescription mandatory hai par images uploaded nahi hain, to block karein [1]
+        if (rxMandatory && rxImages.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "At least one medicine in your cart requires a prescription. Please upload a valid prescription to place this order." 
+            });
+        }
+
+        const isPrescriptionOrder = rxMandatory || rxImages.length > 0;
+
+        // C. Bill calculations
         const bill = await calculatePharmacyBillHelper(
             pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime
         );
 
-        // --- UPDATED: Map Cart items dynamically to capture database MRPs safely ---
+        // Map items exactly matching your schema
         const mappedOrderItems = cart.pharmacyCart.items.map(item => {
-            // item.medicineId contains populated master medicine details from DB
             const masterMedsMrp = item.medicineId ? Number(item.medicineId.mrp || 0) : 0;
             return {
                 medicineId: item.medicineId._id,
                 name: item.name,
-                mrp: masterMedsMrp, // Capture standard admin MRP from master Medicine db
+                mrp: masterMedsMrp, 
                 price: item.price,
                 quantity: item.quantity,
                 duration: item.duration,
@@ -1215,39 +1222,126 @@ const placeOrder = async (req, res) => {
             };
         });
 
-        // 4. Create Order
-        const order = await PharmacyBooking.create({
-            orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+        // Unique dynamic Order ID
+        const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        let rzpOrder = null;
+
+        // D. RAZORPAY INTEGRATION: Create order if online, do not touch stock yet
+        if (paymentMethod !== 'COD') {
+            rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
+        } else {
+            // COD Logic: Atomic Stock Deduction instantly
+            for (const item of cart.pharmacyCart.items) {
+                const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId._id });
+                if (!inventory || inventory.stock_quantity < item.quantity) {
+                    return res.status(400).json({ message: `Stock mismatch for ${item.name}. Please refresh cart.` });
+                }
+                inventory.stock_quantity -= item.quantity;
+                if (inventory.stock_quantity <= 0) inventory.is_available = false;
+                await inventory.save();
+            }
+        }
+
+        // E. Create booking matching strictly your Schema Keys
+        const booking = await PharmacyBooking.create({
+            orderId: tempOrderId,               
             userId,
-            pharmacyId,
+            pharmacyId,                         
             patients: await mapPatients(userId, selectedPatientIds || ['Self']),
-            items: mappedOrderItems, // Mapped array carrying MRP values
+            items: mappedOrderItems,            
             collectionType,
             address: typeof address === 'string' ? JSON.parse(address) : address,
             appointmentDate,
             appointmentTime,
             billSummary: bill,
             paymentMethod: paymentMethod || 'COD',
-            orderType: rxImages.length > 0 ? 'Prescription' : 'General',
+            // 🚨 Strict Force Enforcement of orderType & status
+            orderType: isPrescriptionOrder ? 'Prescription' : 'General',
             prescriptionImages: rxImages,
-            status: rxImages.length > 0 ? 'Under Review' : 'Placed',
-            paymentStatus: paymentMethod === 'COD' ? 'Pending' : 'Paid'
+            // If COD: Prescription goes to 'Under Review', general goes to 'Placed'
+            // If Online: Always goes to 'Pending' first to wait for Razorpay verification
+            status: paymentMethod === 'COD' 
+                ? (isPrescriptionOrder ? 'Under Review' : 'Placed') 
+                : 'Pending',
+            paymentStatus: 'Pending',
+            deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString()
         });
 
-        // 5. Clear User Cart
-        await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
+        // COD clears cart instantly
+        if (paymentMethod === 'COD') {
+            await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
+            return res.status(201).json({ success: true, data: booking });
+        }
 
-        res.status(201).json({ 
-            success: true, 
-            message: "Order has been placed successfully!", 
-            orderId: order.orderId,
-            data: order 
+        // F. Return Razorpay config to frontend for Online payment [1]
+        res.status(201).json({
+            success: true,
+            message: "Razorpay order created for pharmacy checkout.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount, // in paise
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: booking._id // Mapped DB Id
+        });
+
+    } catch (error) {
+        console.error("placeOrder Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 2. VERIFY PHARMACY PAYMENT & REDUCE STOCK
+// Replacing verifyPharmacyPayment inside controllers/user/Pharmacy/BookPharmacy.js
+// ==========================================
+const verifyPharmacyPayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+        if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+            return res.status(400).json({ success: false, message: "Missing payment tokens." });
+        }
+
+        // 1. Verify Signature
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+        if (!isVerified) {
+            return res.status(400).json({ success: false, message: "Signature verification failed." });
+        }
+
+        // 2. Fetch pending order
+        const order = await PharmacyBooking.findById(appointmentId);
+        if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+
+        // 3. ATOMIC STOCK DEDUCTION (Success hone par stock locks)
+        for (const item of order.items) {
+            if (!item.medicineId) continue;
+            const inventory = await MedicineInventory.findOne({ pharmacyId: order.pharmacyId, medicineId: item.medicineId });
+            if (inventory) {
+                inventory.stock_quantity = Math.max(0, inventory.stock_quantity - item.quantity);
+                if (inventory.stock_quantity === 0) inventory.is_available = false;
+                await inventory.save();
+            }
+        }
+
+        // 🚨 4. FLOW RESTORE: Verify hone ke baad agar Prescription order hai, to state 'Under Review' rahegi [1]
+        order.status = order.orderType === 'Prescription' ? 'Under Review' : 'Placed';
+        order.paymentStatus = 'Paid';
+        order.paymentMethod = 'Online';
+        await order.save();
+
+        // 5. Clear User Pharmacy Cart now
+        await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
+
+        res.json({
+            success: true,
+            message: "Pharmacy payment successfully verified & order placed!",
+            data: order
         });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 const uploadPrescription = async (req, res) => {
@@ -1822,20 +1916,21 @@ const createPrescriptionRequest = async (req, res) => {
     }
 };
 
-// 3. PAY AND CONVERT REQUEST TO FINAL ORDER (Promotes Request to PharmacyBooking model)
-// POST /user/pharmacy/prescription-request/pay-confirm
+// ==========================================
+// 3. PAY AND CONVERT REQUEST TO FINAL ORDER (Prescription Review Flow)
+// Replacing payAndConfirmOrder in controllers/user/Pharmacy/BookPharmacy.js
+// ==========================================
 const payAndConfirmOrder = async (req, res) => {
     try {
         const { requestId, paymentMethod } = req.body;
         const userId = req.user.id;
 
-        // 1. Fetch the target prescription request and ensure it belongs to the logged-in user
+        // 1. Fetch prescription request and check state
         const request = await PharmacyPrescriptionRequest.findOne({ requestId, userId });
         if (!request) {
-            return res.status(404).json({ success: false, message: "Prescription request not found" });
+            return res.status(404).json({ success: false, message: "Prescription request not found." });
         }
 
-        // 2. Business validation: Enforce sequential state flow limits
         if (request.status !== 'Bill Generated') {
             return res.status(400).json({ 
                 success: false, 
@@ -1843,57 +1938,129 @@ const payAndConfirmOrder = async (req, res) => {
             });
         }
 
-        // 3. Atomic stock deduction for mapped medicines
-        if (request.verifiedBill && request.verifiedBill.items && request.verifiedBill.items.length > 0) {
-            for (const billItem of request.verifiedBill.items) {
-                // Safeguard: Skip stock deduction if pharmacist couldn't map the manual drug to a DB ObjectId
-                if (!billItem.medicineId || !mongoose.isValidObjectId(billItem.medicineId)) {
-                    continue;
-                }
+        const bill = request.verifiedBill;
+        const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-                const inventory = await MedicineInventory.findOne({ 
-                    pharmacyId: request.pharmacyId, 
-                    medicineId: billItem.medicineId 
-                });
-                
+        // 🚨 RAZORPAY INTEGRATION: If Online payment, create order but DO NOT deduct stock or create permanent order yet
+        if (paymentMethod !== 'COD') {
+            const rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
+            
+            // Set temporary status to prevent double payment hit
+            request.status = 'Pending Payment';
+            await request.save();
+
+            return res.json({
+                success: true,
+                message: "Prescription checkout verified. Complete payment.",
+                key_id: process.env.RAZORPAY_KEY_ID,
+                amount: rzpOrder.amount, // in paise
+                razorpayOrderId: rzpOrder.id,
+                appointmentId: request._id // Request ID maps to appointmentId during verify step
+            });
+        }
+
+        // COD Flow logic remains strictly instant (Backward-compatibility preserved)
+        if (request.verifiedBill?.items) {
+            for (const billItem of request.verifiedBill.items) {
+                if (!billItem.medicineId) continue;
+                const inventory = await MedicineInventory.findOne({ pharmacyId: request.pharmacyId, medicineId: billItem.medicineId });
                 if (inventory) {
-                    // Decrement and ensure stock never drops below 0
                     inventory.stock_quantity = Math.max(0, inventory.stock_quantity - (billItem.quantity || 1));
-                    if (inventory.stock_quantity === 0) {
-                        inventory.is_available = false;
-                    }
+                    if (inventory.stock_quantity === 0) inventory.is_available = false;
                     await inventory.save();
                 }
             }
         }
 
-        // 4. Map verified bill items to the permanent Order scheme, carrying over the administrative MRPs
-        const orderItems = (request.verifiedBill.items || []).map(item => {
-            // Find corresponding custom duration matching on the medicine name string
-            const matchingRequestedMed = request.requestedMedicines.find(rm => 
-                rm.name.trim().toLowerCase() === item.name.trim().toLowerCase()
-            );
-            const durationDays = matchingRequestedMed ? Number(matchingRequestedMed.durationDays || 15) : 15;
+        const orderItems = (request.verifiedBill.items || []).map(item => ({
+            medicineId: item.medicineId || null,
+            name: item.name,
+            mrp: Number(item.mrp || 0),
+            price: Number(item.pricePerUnit || 0),
+            quantity: Number(item.quantity || 1),
+            duration: "15 Days"
+        }));
 
-            return {
-                medicineId: item.medicineId || null, // Stores unmapped manual items safely as null
-                name: item.name,
-                mrp: Number(item.mrp || 0),         // Captures administrative MRP verified by pharmacist
-                price: Number(item.pricePerUnit || 0), // Final customer selling price
-                quantity: Number(item.quantity || 1),
-                duration: `${durationDays} Days`
-            };
-        });
-
-        // 5. Convert request data to a permanent order (PharmacyBooking) with Placed/Paid status metadata
         const finalOrder = await PharmacyBooking.create({
-            orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            orderId: tempOrderId,
             userId,
             pharmacyId: request.pharmacyId,
-            patients: [{ 
-                name: request.address ? request.address.name : "Patient", 
-                relation: 'Self' 
-            }],
+            patients: [{ name: request.address ? request.address.name : "Patient", relation: 'Self' }],
+            items: orderItems,
+            collectionType: 'Home Delivery',
+            address: request.address || {},
+            appointmentDate: new Date(),
+            appointmentTime: 'Immediate',
+            billSummary: {
+                itemTotal: bill.itemTotal || 0,
+                deliveryCharge: bill.deliveryCharge || 0,
+                totalAmount: bill.totalAmount || 0
+            },
+            paymentMethod: 'COD',
+            paymentStatus: 'Pending',
+            orderType: 'Prescription',
+            prescriptionImages: request.prescriptionImage ? [request.prescriptionImage] : [],
+            status: 'Placed'
+        });
+
+        request.status = 'Paid';
+        await request.save();
+
+        res.status(201).json({
+            success: true,
+            message: "Prescription order confirmed with COD successfully!",
+            data: finalOrder
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 4. VERIFY PRESCRIPTION REQUEST PAYMENT SIGNATURE
+// Replacing verifyPrescriptionRequestPayment in controllers/user/Pharmacy/BookPharmacy.js
+// ==========================================
+const verifyPrescriptionRequestPayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+        if (!isVerified) {
+            return res.status(400).json({ success: false, message: "Signature verification failed." });
+        }
+
+        // In this flow, appointmentId refers to the PharmacyPrescriptionRequest _id
+        const request = await PharmacyPrescriptionRequest.findById(appointmentId);
+        if (!request) return res.status(404).json({ success: false, message: "Prescription request not found." });
+
+        // Atomic Stock deduction on verified payment success
+        if (request.verifiedBill?.items) {
+            for (const billItem of request.verifiedBill.items) {
+                if (!billItem.medicineId) continue;
+                const inventory = await MedicineInventory.findOne({ pharmacyId: request.pharmacyId, medicineId: billItem.medicineId });
+                if (inventory) {
+                    inventory.stock_quantity = Math.max(0, inventory.stock_quantity - (billItem.quantity || 1));
+                    if (inventory.stock_quantity === 0) inventory.is_available = false;
+                    await inventory.save();
+                }
+            }
+        }
+
+        const orderItems = (request.verifiedBill.items || []).map(item => ({
+            medicineId: item.medicineId || null,
+            name: item.name,
+            mrp: Number(item.mrp || 0),
+            price: Number(item.pricePerUnit || 0),
+            quantity: Number(item.quantity || 1),
+            duration: "15 Days"
+        }));
+
+        const finalOrder = await PharmacyBooking.create({
+            orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            userId: req.user.id,
+            pharmacyId: request.pharmacyId,
+            patients: [{ name: request.address ? request.address.name : "Patient", relation: 'Self' }],
             items: orderItems,
             collectionType: 'Home Delivery',
             address: request.address || {},
@@ -1904,25 +2071,23 @@ const payAndConfirmOrder = async (req, res) => {
                 deliveryCharge: request.verifiedBill.deliveryCharge || 0,
                 totalAmount: request.verifiedBill.totalAmount || 0
             },
-            paymentMethod: paymentMethod || 'Online',
+            paymentMethod: 'Online',
             paymentStatus: 'Paid',
             orderType: 'Prescription',
             prescriptionImages: request.prescriptionImage ? [request.prescriptionImage] : [],
-            status: 'Placed'
+            status: 'Placed' // Once approved and paid, order status is 'Placed'
         });
 
-        // 6. Transition prescription request status to 'Paid' to lock state
         request.status = 'Paid';
         await request.save();
 
         res.status(201).json({
             success: true,
-            message: "Payment successful! Request converted to order.",
-            orderId: finalOrder.orderId,
+            message: "Prescription payment verified and order placed successfully!",
             data: finalOrder
         });
+
     } catch (error) {
-        console.error("Payment Confirmation API Error:", error.message);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -1952,8 +2117,8 @@ const getActiveStoreComboOffers = async (req, res) => {
 
 
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
-   getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,getOrderHistory, trackOrder,
+   getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory, trackOrder,
 getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines, getActiveStoreComboOffers,
 
-createPrescriptionRequest, payAndConfirmOrder,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices
+createPrescriptionRequest, payAndConfirmOrder,verifyPrescriptionRequestPayment,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices
 };

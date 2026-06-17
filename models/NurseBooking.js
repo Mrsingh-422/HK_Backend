@@ -99,9 +99,39 @@ const nurseBookingSchema = new mongoose.Schema({
     needConsumable: { type: Boolean, default: false },
     prescriptionImage: String,
     couponCode: String,
-   serviceOTP: { type: String, default: null },
-cancelReason: { type: String, default: null },
-rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }] ,
+
+    // Figma Screen 23 (Service Timer & Started details)
+    startedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
+    
+    // Figma Screen 7 & 23 (Service Notes & Mid-Progress Photos)
+    serviceNotes: { type: String, default: null },
+    progressPhotos: [{ type: String }], // Photos uploaded during live timer
+
+    // Figma Screen 7 (Upload Handmade Invoice photo)
+    handmadeInvoice: { type: String, default: null },
+
+    // Figma Screen 2 & 7 (Consumable tracking)
+    usedConsumable: { type: Boolean, default: false },
+    consumablesSelected: [{
+        name: String,
+        price: Number
+    }],
+    totalConsumableCharges: { type: Number, default: 0 },
+
+    // Figma Screen 7 (Early completion details & extra charges)
+    earlyCompleteNotes: { type: String, default: null },
+    extraServicePayment: { type: Number, default: 0 },
+
+    // Figma Screen 15 & 19 (Rejection details)
+    cancelReason: { type: String, default: null },
+    additionalComments: { type: String, default: null },
+
+    // OTP for start and end verification
+    serviceOTP: { type: String, default: null },
+    completionOTP: { type: String, default: null },
+    rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
+
 
 
 }, { timestamps: true });
