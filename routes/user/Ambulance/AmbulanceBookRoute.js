@@ -4,7 +4,7 @@ const { ambulanceDocUploads } = require('../../../middleware/multer');
 const { 
     getAmbulanceMasterData, getNearbyHospitals, getNearestAmbulances,getAmbulanceDetails,
     getAmbulanceCoupons, validateAmbulanceCoupon, calculateAmbulanceFare, 
-    confirmAmbulanceBooking, getBookingStatus, addReview, updateReview,
+    confirmAmbulanceBooking,verifyAmbulancePayment, getBookingStatus, addReview, updateReview,
     getUserNumbers, uploadIncidentPhoto, getLiveTracking,
     getMyAmbulanceBookings, cancelAmbulanceBooking
     
@@ -33,6 +33,7 @@ router.post('/calculate-fare', protect('user'), calculateAmbulanceFare); // Comb
 // NOTE: Yeh ek hi API Medical, Accidental aur Referral teeno flows handle karegi.
 // Referral Card upload ke liye 'referralCard' field use hogi.
 router.post('/confirm-booking', protect('user'), ambulanceDocUploads, confirmAmbulanceBooking);
+router.post('/verify-payment', protect('user'), verifyAmbulancePayment); // Payment verification for all flows
 
 // Accidental cases only: Booking ke baad photo capture karne ke liye
 router.post('/accidental/upload-photo/:bookingId', protect('user'), ambulanceDocUploads, uploadIncidentPhoto);
@@ -54,55 +55,5 @@ router.put('/review/update/:id', protect('user'), updateReview);
 router.get('/my-bookings', protect('user'), getMyAmbulanceBookings);
 router.patch('/cancel/:id', protect('user'), cancelAmbulanceBooking);
 
-// router.get('/seed-pickup-coordinates', async (req, res) => {
-//     try {
-//         const Booking = require('../../../models/AmbulanceBooking'); // Import booking model natively
-        
-//         // Find all accidental & medical bookings from database
-//         const bookings = await Booking.find({
-//             serviceType: { $in: ['Accident emergency', 'Medical Ambulance'] }
-//         });
-
-//         let updatedCount = 0;
-
-//         // Standard Mohali location addresses pool for matching
-//         const mohaliAddresses = [
-//             "Sector 62, Mohali, Punjab",
-//             "Phase 3B2, Mohali, Punjab",
-//             "Phase 7, Mohali, Punjab",
-//             "Sector 70, Mohali, Punjab",
-//             "Phase 11, Mohali, Punjab",
-//             "Tdi Business Center, Mohali, Punjab",
-//             "Sector 74, Sahibzada Ajit Singh Nagar, Punjab"
-//         ];
-
-//         for (const booking of bookings) {
-//             // Generates completely random coordinates strictly inside Mohali geographic boundaries
-//             const lat = parseFloat((30.6800 + Math.random() * (30.7500 - 30.6800)).toFixed(6));
-//             const lng = parseFloat((76.6800 + Math.random() * (76.7500 - 76.6800)).toFixed(6));
-            
-//             const randomAddress = mohaliAddresses[Math.floor(Math.random() * mohaliAddresses.length)];
-
-//             booking.pickupLocation = {
-//                 address: booking.pickupLocation?.address || randomAddress,
-//                 lat: lat,
-//                 lng: lng
-//             };
-
-//             await booking.save();
-//             updatedCount++;
-//         }
-
-//         res.json({
-//             success: true,
-//             message: `Pickup locations successfully seeded with random Mohali/Chandigarh coordinates for ${updatedCount} bookings.`,
-//             updatedCount
-//         });
-
-//     } catch (error) {
-//         console.error("Seeding Error:", error);
-//         res.status(500).json({ success: false, message: error.message });
-//     }
-// });
 
 module.exports = router;

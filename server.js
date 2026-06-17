@@ -265,6 +265,7 @@ app.use('/driver/nurse', require('./routes/driver/driverNurse/NurseDriverOrdersR
 app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulance'));
 app.use('/driver/ambulance', require('./routes/ambulance/AmbulanceJourneyRoute')); // Ambulance Booking Management
 app.use('/ambulance/booking', require('./routes/ambulance/BookingAmbRoute')); // Ambulance Booking Management
+app.use('/driver/ambulance/wallet', require('./routes/ambulance/AmbulanceWalletRoute')); // Ambulance Wallet Route
 
 //////////////// others Routes or public routes  /////////////////////
 app.use('/api/public', require('./routes/others/locationRoutes'));

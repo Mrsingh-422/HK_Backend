@@ -8,6 +8,8 @@ const Wallet = require('../../../models/Wallet');
 const mongoose = require('mongoose');
 const { getDistance } = require('../../../utils/helpers');
 
+const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
     return `HK-${new Date().getFullYear()}-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -321,6 +323,7 @@ const calculateAmbulanceFare = async (req, res) => {
 // controllers/user/Ambulance/AmbulanceBook.js
 // controllers/user/Ambulance/AmbulanceBook.js
 
+// --- UNIVERSAL CONFIRM BOOKING (Replacing confirmAmbulanceBooking) ---
 const confirmAmbulanceBooking = async (req, res) => {
     try {
         // 1. Flutter/Form-data Parsing (Handles stringified objects from mobile client)
@@ -339,7 +342,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const { 
             ambulanceId, hospitalId, pickupHospitalId, serviceType, 
-            triageLevel, patientDetails, staffType, couponCode, paymentId,
+            triageLevel, patientDetails, staffType, paymentId,
             scheduledDate, appointmentTime, reason, incidentDescription, referralReason 
         } = body;
 
@@ -366,13 +369,12 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
-        // 5. FIX: Try-Catch Protected dynamic location parser to prevent plain string crashes
+        // 5. Protected dynamic location parser
         let finalPickupLocation = { address: "Pickup Location", lat: 30.7046, lng: 76.7179 };
         
         if (body.pickupLocation) {
             if (typeof body.pickupLocation === 'string') {
                 try {
-                    // Try parsing as JSON object
                     const parsed = JSON.parse(body.pickupLocation);
                     if (parsed && typeof parsed === 'object') {
                         finalPickupLocation = {
@@ -382,7 +384,6 @@ const confirmAmbulanceBooking = async (req, res) => {
                         };
                     }
                 } catch (e) {
-                    // If parsing fails (Plain string address like Nijjar Road), save as-it-is safely
                     finalPickupLocation = {
                         address: body.pickupLocation, 
                         lat: 30.7046,
@@ -398,9 +399,17 @@ const confirmAmbulanceBooking = async (req, res) => {
             }
         }
 
+        const tempBookingId = `HK-BOK-${Date.now().toString().slice(-6)}`;
+        let rzpOrder = null;
+
+        // 🚨 RAZORPAY INTEGRATION: Free/Accidental Case me order nahi banega, seedha direct booking ho jayegi!
+        if (!fare.isFree) {
+            rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
+        }
+
         // 6. Create Booking in database
         const booking = await Booking.create({
-            bookingId: `HK-BOK-${Date.now().toString().slice(-6)}`,
+            bookingId: tempBookingId,
             caseReference: generateCaseRef(serviceType),
             userId: req.user.id,
             ambulanceId,
@@ -411,7 +420,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
             scheduledTime: appointmentTime || null,
             supportStaffSelected: supportStaffSelected,
-            pickupLocation: finalPickupLocation, // Uses safely parsed location node
+            pickupLocation: finalPickupLocation,
 
             patientDetails: {
                 ...parsedDetails,
@@ -434,8 +443,9 @@ const confirmAmbulanceBooking = async (req, res) => {
                 total: fare.total
             },
             isFreeCase: fare.isFree,
-            paymentStatus: fare.isFree ? 'Paid' : (paymentId ? 'Paid' : 'Pending'),
-            transactionId: paymentId || null,
+            // Free case me dynamic 'Paid' mark hoga, Online paid cases me verification hone par 'Paid' hoga
+            paymentStatus: fare.isFree ? 'Paid' : 'Pending',
+            transactionId: rzpOrder ? rzpOrder.id : (paymentId || null),
             status: 'Searching', 
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{ 
@@ -445,8 +455,8 @@ const confirmAmbulanceBooking = async (req, res) => {
             }]
         });
 
-        // 7. Update Coupon Usage History (Secure array mapping)
-        if (fare.couponId) {
+        // 🚨 Free Cases me Coupon sync/usage count abhi update ho jayegi
+        if (fare.isFree && fare.couponId) {
             const coupon = await Coupon.findById(fare.couponId);
             const userIndex = coupon.usedBy.findIndex(u => u.userId && u.userId.toString() === req.user.id.toString());
             if (userIndex > -1) {
@@ -455,14 +465,74 @@ const confirmAmbulanceBooking = async (req, res) => {
                 coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
             }
             await coupon.save();
+            return res.status(201).json({ success: true, message: "Booking Request Sent Successfully (Free Case)", booking });
         }
 
-        // Response format is 100% same as original to keep frontend active
-        res.status(201).json({ success: true, message: "Booking Request Sent Successfully", booking });
+        // Return Razorpay parameters for online booking
+        res.status(201).json({ 
+            success: true, 
+            message: "Razorpay order created for ambulance. Complete payment to confirm.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount, // in paise
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: booking._id, // internal ID
+            bookingId: tempBookingId
+        });
 
     } catch (error) { 
         console.error("Booking Error:", error);
         res.status(500).json({ message: error.message }); 
+    }
+};
+
+// 🚨 NEW CONTROLLER: VERIFY AMBULANCE PAYMENT SIGNATURE
+// endpoint: POST /user/ambulance/verify-payment
+const verifyAmbulancePayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+        if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+            return res.status(400).json({ success: false, message: "Missing payment tokens." });
+        }
+
+        // 1. Verify Signature
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+        if (!isVerified) {
+            return res.status(400).json({ success: false, message: "Signature verification failed." });
+        }
+
+        // 2. Fetch pending booking
+        const booking = await Booking.findById(appointmentId);
+        if (!booking) return res.status(404).json({ success: false, message: "Ambulance booking not found." });
+
+        // 3. Confirm payment state
+        booking.paymentStatus = 'Paid';
+        booking.transactionId = razorpayPaymentId;
+        await booking.save();
+
+        // 🚨 4. UPDATE COUPON USAGE HISTORY (Increments only after payment success!)
+        const couponId = booking.couponDetails?.couponId;
+        if (couponId) {
+            const coupon = await Coupon.findById(couponId);
+            if (coupon) {
+                const userIndex = coupon.usedBy.findIndex(u => u.userId && u.userId.toString() === req.user.id.toString());
+                if (userIndex > -1) {
+                    coupon.usedBy[userIndex].usageCount += 1;
+                } else {
+                    coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
+                }
+                await coupon.save();
+            }
+        }
+
+        res.json({
+            success: true,
+            message: "Ambulance payment successfully verified!",
+            data: booking
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -812,7 +882,7 @@ module.exports = {
     createAmbulanceBooking,
     getBookingStatus, getAmbulanceCoupons , validateAmbulanceCoupon,
     calculateAmbulanceFare,
-    confirmAmbulanceBooking, updateReview,addReview,
+    confirmAmbulanceBooking,verifyAmbulancePayment, updateReview,addReview,
 
     getUserNumbers,
     createAccidentalBooking,

@@ -15,6 +15,9 @@ const { getDistance } = require('../../../utils/helpers');
 const crypto = require('crypto');
 const moment = require('moment');
 
+const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+
+
 // 1. LIST HOSPITALS (Screenshot 18, 19)
 const getHospitals = async (req, res) => {
     try {
@@ -422,14 +425,14 @@ const getHospitalCheckoutSummary = async (req, res) => {
 };
 
 // --- 3. FINAL RANGE BOOKING ---
-// 3. FINAL RANGE BOOKING (Fixed Ward available bed update and schema binding)
-// --- 3. FINAL RANGE BOOKING (Complete dynamic flow with strict overlap check & secure coupon array updates) ---
+// 3. FINAL RANGE BOOKING (Complete dynamic flow with strict overlap check & secure coupon array updates)
+// Replacing finalHospitalBooking inside controllers/user/Hospital/BookHospital.js
 const finalHospitalBooking = async (req, res) => {
     try {
         const {
             hospitalId, doctorId, bedId, bookingType, triageLevel,
             startDate, endDate, appointmentDate, appointmentTime, patients, pricing,
-            specialServices, couponId, couponCode
+            specialServices, couponId, couponCode, paymentMethod = 'Online' // Default to Online
         } = req.body;
 
         // 1. RULE 1: Strict double-booking validation check for selected date range
@@ -454,13 +457,19 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        const bookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const tempBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        let rzpOrder = null;
+
+        // 🚨 RAZORPAY INTEGRATION: If Online payment, create order but DO NOT reserve bed/decrement ward count yet
+        if (paymentMethod !== 'COD') {
+            rzpOrder = await createRazorpayOrder(pricing.totalPayable, `receipt_${tempBookingId}`);
+        }
 
         let wardName = "";
         let bedNumber = "";
 
-        // 2. Bed updates aur direct Ward reference decrement handling (FIXED beds._id bug)
-        if (bedId) {
+        // COD Logic remains instant (Bed reserved and Ward beds decremented immediately)
+        if (paymentMethod === 'COD' && bedId) {
             const bed = await Bed.findById(bedId).populate('wardId');
             if (bed) {
                 bedNumber = bed.bedNumber;
@@ -470,11 +479,17 @@ const finalHospitalBooking = async (req, res) => {
                     await Ward.findByIdAndUpdate(bed.wardId._id, { $inc: { availableBeds: -1 } });
                 }
             }
-            // FIX: Booking ke waqt bed strictly 'Reserved' hoga, 'Occupied' physical admission par badlega!
             await Bed.findByIdAndUpdate(bedId, { status: 'Reserved' }); 
+        } else if (paymentMethod !== 'COD' && bedId) {
+            // For online, just fetch wardName & bedNumber to save in draft booking info
+            const bed = await Bed.findById(bedId).populate('wardId');
+            if (bed) {
+                bedNumber = bed.bedNumber;
+                if (bed.wardId) wardName = bed.wardId.name;
+            }
         }
 
-        // 3. Create Appointment using the mapped schemas keys
+        // Create Appointment record
         const appointment = await Appointment.create({
             userId: req.user.id,
             hospitalId,
@@ -497,33 +512,120 @@ const finalHospitalBooking = async (req, res) => {
             },
             couponDetails: couponId ? { couponId, couponCode, discountValue: pricing.discountAmount } : undefined,
             totalAmount: pricing.totalPayable,
-            bookingId,
-            status: 'Hospital-Pending', // Strictly pending for hospital acceptance
+            bookingId: tempBookingId,
+            // If COD: Goes to Hospital-Pending. If Online: Stays 'Pending' until verification [1]
+            status: paymentMethod === 'COD' ? 'Hospital-Pending' : 'Pending',
+            paymentStatus: 'Pending',
+            transactionId: rzpOrder ? rzpOrder.id : undefined,
             wardName,
             bedNumber
         });
 
-        // 4. SECURE COUPON TRACKING: Array push loophole dhoor kiya gaya hai
+        // COD updates coupon usage immediately
+        if (paymentMethod === 'COD') {
+            if (couponId) {
+                const existingUsage = await Coupon.findOne({ _id: couponId, "usedBy.userId": req.user.id });
+                if (existingUsage) {
+                    await Coupon.updateOne(
+                        { _id: couponId, "usedBy.userId": req.user.id },
+                        { $inc: { "usedBy.$.usageCount": 1 } }
+                    );
+                } else {
+                    await Coupon.findByIdAndUpdate(couponId, { 
+                        $push: { usedBy: { userId: req.user.id, usageCount: 1 } } 
+                    });
+                }
+            }
+            return res.status(201).json({ success: true, bookingId: tempBookingId, data: appointment });
+        }
+
+        // Return Razorpay data to frontend for online payments
+        res.status(201).json({ 
+            success: true, 
+            message: "Razorpay order created. Complete payment to confirm.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount, // in paise
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: appointment._id,
+            bookingId: tempBookingId
+        });
+
+    } catch (error) { 
+        console.error("Booking Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+// 🚨 NEW CONTROLLER: VERIFY HOSPITAL BOOKING PAYMENT SIGNATURE
+// endpoint: POST /user/hospital/verify-payment
+const verifyHospitalPayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+        if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "All payment verification tokens are mandatory." 
+            });
+        }
+
+        // 1. Verify Signature
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+        if (!isVerified) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Signature verification failed. Invalid transaction signature." 
+            });
+        }
+
+        // 2. Fetch Pending Appointment
+        const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
+
+        // 🚨 3. ATOMIC BED ALLOCATION & WARD DECREMENT (Success hone par bed lock aur available count reduce) [1]
+        if (appointment.bedId) {
+            const bed = await Bed.findById(appointment.bedId).populate('wardId');
+            if (bed) {
+                if (bed.wardId) {
+                    await Ward.findByIdAndUpdate(bed.wardId._id, { $inc: { availableBeds: -1 } });
+                }
+                await Bed.findByIdAndUpdate(appointment.bedId, { status: 'Reserved' });
+            }
+        }
+
+        // 4. Update status to 'Hospital-Pending' and paymentStatus to 'Paid'
+        appointment.status = 'Hospital-Pending';
+        appointment.paymentStatus = 'Paid';
+        appointment.transactionId = razorpayPaymentId;
+        await appointment.save();
+
+        // 🚨 5. SECURE COUPON TRACKING: Increment coupon usage history after payment success! [1]
+        const couponId = appointment.couponDetails?.couponId;
         if (couponId) {
             const existingUsage = await Coupon.findOne({ _id: couponId, "usedBy.userId": req.user.id });
             if (existingUsage) {
-                // Agar user pehle use kar chuka hai, toh uski usageCount increment karenge
                 await Coupon.updateOne(
                     { _id: couponId, "usedBy.userId": req.user.id },
                     { $inc: { "usedBy.$.usageCount": 1 } }
                 );
             } else {
-                // Pehli baar use karne par push karenge
                 await Coupon.findByIdAndUpdate(couponId, { 
                     $push: { usedBy: { userId: req.user.id, usageCount: 1 } } 
                 });
             }
         }
 
-        res.status(201).json({ success: true, bookingId, data: appointment });
-    } catch (error) { 
-        console.error("Booking Error:", error);
-        res.status(500).json({ message: error.message }); 
+        res.json({
+            success: true,
+            message: "Payment successfully verified & Admission request submitted!",
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Signature Verification Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -833,6 +935,6 @@ const getBookingProfiles = async (req, res) => {
 module.exports = {
     getHospitals, getWards, getBedGrid, getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
     getAvailableBedsForRange,cancelBedBooking, rescheduleBedBooking, getBedMonthlySchedule,
-    getHospitalCheckoutSummary, finalHospitalBooking, getMyHospitalBookings, getBookingProfiles,
+    getHospitalCheckoutSummary, finalHospitalBooking,verifyHospitalPayment, getMyHospitalBookings, getBookingProfiles,
     getHospitalDetails, addReview, updateReview
 };

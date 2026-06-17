@@ -8,7 +8,7 @@ const {
 
     getAvailableBedsForRange,
     getHospitalCheckoutSummary,cancelBedBooking, rescheduleBedBooking, getBedMonthlySchedule,
-    finalHospitalBooking,
+    finalHospitalBooking,verifyHospitalPayment,
     getMyHospitalBookings ,
     getBookingProfiles,
     getHospitalDetails,addReview, updateReview
@@ -34,7 +34,7 @@ router.post('/check-availability', getAvailableBedsForRange);
 // Payment & Logic
 router.post('/checkout-summary', getHospitalCheckoutSummary);
 router.post('/book', protect('user'), finalHospitalBooking);
-
+router.post('/verify-payment', protect('user'), verifyHospitalPayment);
 
 router.patch('/cancel/:id', protect('user'), cancelBedBooking);
 router.post('/reschedule', protect('user'), rescheduleBedBooking);
