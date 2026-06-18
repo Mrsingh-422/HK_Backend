@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { 
+    getPharmacyDashboardStats,
     getPharmacyOrders, 
     getAvailableDrivers, 
     assignDriverManual , reassignDriverManual,updateOrderStatus,
@@ -11,6 +12,7 @@ const {
 
 // Base: /provider/pharmacy/orders
 
+router.get('/dashboard-stats', protect('pharmacy'), getPharmacyDashboardStats);
 router.get('/list', protect('pharmacy'), getPharmacyOrders);
 router.get('/available-drivers', protect('pharmacy'), getAvailableDrivers);
 router.post('/assign-manual', protect('pharmacy'), assignDriverManual);

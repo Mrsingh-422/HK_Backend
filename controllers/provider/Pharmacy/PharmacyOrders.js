@@ -3,6 +3,76 @@ const Driver = require('../../../models/Driver');
 const PharmacyPrescriptionRequest = require("../../../models/PharmacyPrescriptionRequest");
 const mongoose = require('mongoose');
 const Medicine = require('../../../models/Medicine');
+const moment = require('moment');
+const Wallet = require('../../../models/Wallet');
+
+
+// ==========================================
+// NEW: GET PHARMACY DASHBOARD STATS
+// ==========================================
+// Endpoint: GET /provider/pharmacy/orders/dashboard-stats
+const getPharmacyDashboardStats = async (req, res) => {
+    try {
+        const pharmacyId = req.user.id; // Logged-in pharmacy ID
+
+        // Single Mongo Query to aggregate all metrics for performance
+        const stats = await PharmacyBooking.aggregate([
+            { $match: { pharmacyId: new mongoose.Types.ObjectId(pharmacyId) } },
+            {
+                $group: {
+                    _id: null,
+                    pendingRequests: { $sum: { $cond: [{ $in: ["$status", ["Placed", "Pending"]] }, 1, 0] } },
+                    // 🚀 Priority Count: Pending orders where rapid delivery charge is applied
+                    priorityRequests: { 
+                        $sum: { 
+                            $cond: [
+                                { 
+                                    $and: [
+                                        { $in: ["$status", ["Placed", "Pending"]] }, 
+                                        { $gt: ["$billSummary.rapidDeliveryCharge", 0] }
+                                    ] 
+                                }, 
+                                1, 
+                                0
+                            ] 
+                        } 
+                    },
+                    activeOrders: { $sum: { $cond: [{ $in: ["$status", ["Packed", "Shipped", "Accepted", "OutForDelivery"]] }, 1, 0] } },
+                    completedOrders: { $sum: { $cond: [{ $in: ["$status", ["Delivered", "Completed"]] }, 1, 0] } },
+                    totalEarnings: { $sum: { $cond: [{ $in: ["$status", ["Delivered", "Completed"]] }, "$billSummary.totalAmount", 0] } }
+                }
+            }
+        ]);
+
+        // Fallback wallet query for verification of active balance
+        const wallet = await Wallet.findOne({ vendorId: pharmacyId });
+
+        const result = stats[0] || {
+            pendingRequests: 0,
+            priorityRequests: 0,
+            activeOrders: 0,
+            completedOrders: 0,
+            totalEarnings: 0
+        };
+
+        res.json({
+            success: true,
+            data: {
+                pendingRequests: result.pendingRequests,
+                priorityRequests: result.priorityRequests, // Dashboard Priority Tab Badge Counter
+                activeOrders: result.activeOrders,
+                completedOrders: result.completedOrders,
+                totalEarnings: result.totalEarnings,
+                walletBalance: wallet?.balance || 0
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 // 1. DASHBOARD LISTING (Updated with Priority/Rapid Delivery Filter)
 // Endpoint: GET /provider/pharmacy/orders/list
@@ -378,7 +448,7 @@ const rejectPrescriptionRequest = async (req, res) => {
 };
 
 
-module.exports = { getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
+module.exports = { getPharmacyDashboardStats, getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
 
     submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest
  };
