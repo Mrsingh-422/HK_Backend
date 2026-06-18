@@ -93,7 +93,16 @@ const ambulanceSchema = new mongoose.Schema({
         enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
         default: 'Incomplete' 
     },
-    rejectionReason: { type: String, default: null }
+    rejectionReason: { type: String, default: null },
+    bankDetails: {
+        accountType: { type: String, enum: ['Savings', 'Current'], default: 'Savings' },
+        bankName: { type: String, default: "" },
+        accountHolderName: { type: String, default: "" },
+        accountNumber: { type: String, default: "" },
+        ifscCode: { type: String, default: "" },
+        upiId: { type: String, default: "" },
+        isVerified: { type: Boolean, default: false }
+    }
 
 }, { timestamps: true });
 

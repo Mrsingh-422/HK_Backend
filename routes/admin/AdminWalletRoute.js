@@ -5,7 +5,7 @@ const { protect } = require('../../middleware/authMiddleware'); // Admin Auth pr
 const { 
     getPendingWithdrawals, 
     approveWithdrawal, 
-    rejectWithdrawal 
+    rejectWithdrawal ,verifyVendorBankDetails,getPendingBankVerifications,getAdminWalletDashboardStats
 } = require('../../controllers/admin/AdminWallet');
 
 // Base URL: /api/admin/wallet
@@ -14,5 +14,9 @@ const {
 router.get('/pending-withdrawals', protect('admin'), getPendingWithdrawals);
 router.patch('/approve-withdrawal/:requestId', protect('admin'), approveWithdrawal);
 router.patch('/reject-withdrawal/:requestId', protect('admin'), rejectWithdrawal);
+router.patch('/verify-bank/:vendorModel/:vendorId', protect('admin'), verifyVendorBankDetails);
+router.get('/pending-banks', protect('admin'), getPendingBankVerifications);
+router.get('/dashboard-stats', protect('admin'), getAdminWalletDashboardStats);
+
 
 module.exports = router;

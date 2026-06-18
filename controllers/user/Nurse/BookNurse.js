@@ -12,7 +12,7 @@ const Coupon = require('../../../models/Coupon');
 const moment = require('moment');
 const crypto = require('crypto');
 
-const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { createRazorpayOrder, verifyRazorpaySignature , fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
 
 // 1. LIST NURSES
@@ -568,21 +568,25 @@ const verifyNursePayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid payment signature." });
         }
 
-        // 2. Find Pending Booking
+        // 2. Fetch Pending Booking
         const booking = await NurseBooking.findById(appointmentId);
         if (!booking) return res.status(404).json({ success: false, message: "Nurse booking not found." });
 
-        // 3. Confirm Booking State
+        // 🚨 3. Fetch authentic payment details from Razorpay Server [1]
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+
+        // 4. Confirm Booking State
         booking.status = 'Confirmed';
         booking.paymentStatus = 'Paid';
         booking.paymentMethod = 'Online';
+        booking.paymentDetails = rzpDetails; // 👈 Saved detailed payment audit logs
         await booking.save();
 
-        // 🚨 4. UPDATE COUPON USAGE HISTORY (Increments usage safely after payment success!)
+        // 5. UPDATE COUPON USAGE HISTORY
         if (booking.appliedCoupon && booking.appliedCoupon.couponId) {
             const coupon = await Coupon.findById(booking.appliedCoupon.couponId);
             if (coupon) {
-                const userIndex = coupon.usedBy.findIndex(u => u.userId.toString() === req.user.id.toString());
+                const userIndex = coupon.usedBy.findIndex(u => u.userId && u.userId.toString() === req.user.id.toString());
                 if (userIndex > -1) {
                     coupon.usedBy[userIndex].usageCount += 1;
                 } else {

@@ -10,7 +10,7 @@ const User = require('../../../models/User');
 const DocRescheduleLimit = require("../../../models/DocRescheduleLimit"); 
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
-const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const moment = require('moment');
 const crypto = require('crypto');
 
@@ -425,22 +425,22 @@ const verifyDoctorPayment = async (req, res) => {
 
         // 1. Verify payment signature security key
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
-
         if (!isVerified) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Signature verification failed. Invalid transaction token." 
-            });
+            return res.status(400).json({ success: false, message: "Signature verification failed." });
         }
 
-        // 2. Find and Confirm the Appointment record in DB
+        // 🚨 2. Fetch authentic payment details from Razorpay Server [1]
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+
+        // 3. Find and Confirm the Appointment record in DB
         const appointment = await Appointment.findByIdAndUpdate(
             appointmentId,
             {
                 $set: {
                     status: 'Confirmed',
                     paymentStatus: 'Paid',
-                    transactionId: razorpayPaymentId // Save actual transaction reference ID
+                    transactionId: razorpayPaymentId,
+                    paymentDetails: rzpDetails // 👈 Saved detailed payment audit logs
                 }
             },
             { new: true }

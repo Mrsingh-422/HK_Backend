@@ -26,7 +26,7 @@ const LabCategory = require('../../../models/LabCategory');
 const PharmacyPrescriptionRequest = require('../../../models/PharmacyPrescriptionRequest');
 const PharmacyComboOffer = require('../../../models/PharmacyComboOffer'); // Import model
 
-const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
 
 
@@ -1311,7 +1311,10 @@ const verifyPharmacyPayment = async (req, res) => {
         const order = await PharmacyBooking.findById(appointmentId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found." });
 
-        // 3. ATOMIC STOCK DEDUCTION (Success hone par stock locks)
+        // 🚨 3. Fetch authentic payment details from Razorpay Server [1]
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+
+        // 4. ATOMIC STOCK DEDUCTION
         for (const item of order.items) {
             if (!item.medicineId) continue;
             const inventory = await MedicineInventory.findOne({ pharmacyId: order.pharmacyId, medicineId: item.medicineId });
@@ -1322,13 +1325,14 @@ const verifyPharmacyPayment = async (req, res) => {
             }
         }
 
-        // 🚨 4. FLOW RESTORE: Verify hone ke baad agar Prescription order hai, to state 'Under Review' rahegi [1]
+        // 5. Update statuses
         order.status = order.orderType === 'Prescription' ? 'Under Review' : 'Placed';
         order.paymentStatus = 'Paid';
         order.paymentMethod = 'Online';
+        order.paymentDetails = rzpDetails; // 👈 Saved detailed payment audit logs
         await order.save();
 
-        // 5. Clear User Pharmacy Cart now
+        // 6. Clear User Pharmacy Cart now
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
         res.json({
@@ -1925,18 +1929,51 @@ const payAndConfirmOrder = async (req, res) => {
         const { requestId, paymentMethod } = req.body;
         const userId = req.user.id;
 
-        // 1. Fetch prescription request and check state
-        const request = await PharmacyPrescriptionRequest.findOne({ requestId, userId });
-        if (!request) {
-            return res.status(404).json({ success: false, message: "Prescription request not found." });
-        }
+        // 🔍 DEBUG LOG: API triggered
+        console.log(`\x1b[36m[DEBUG] payAndConfirmOrder: Received Request -> requestId: "${requestId}", userId: "${userId}", paymentMethod: "${paymentMethod}"\x1b[0m`);
 
-        if (request.status !== 'Bill Generated') {
+        // 🚨 STAGE 1: STRICT INPUT VALIDATION
+        if (!requestId || requestId === "undefined" || requestId === "null" || requestId.trim() === "") {
+            console.warn(`\x1b[33m[DEBUG] payAndConfirmOrder: STAGE 1 FAILED -> requestId is empty or invalid string.\x1b[0m`);
             return res.status(400).json({ 
                 success: false, 
-                message: `Request status is currently '${request.status}'. Payment can only be completed for 'Bill Generated' status.` 
+                message: "Validation Error: 'requestId' parameter is missing, null, or undefined in the request body." 
             });
         }
+
+        // 🚨 STAGE 2: HYBRID QUERY FALLBACK (Finds by either MongoDB _id or custom requestId string dynamically)
+        const cleanId = requestId.trim();
+        const isObjectId = mongoose.Types.ObjectId.isValid(cleanId);
+        
+        const dbQuery = { userId };
+        if (isObjectId) {
+            dbQuery._id = cleanId; // If 24-character hex ID is sent, match against _id
+            console.log(`[DEBUG] payAndConfirmOrder: Detected Mongoose ObjectId. Querying by _id...`);
+        } else {
+            dbQuery.requestId = cleanId; // If standard REQ- code is sent, match against requestId
+            console.log(`[DEBUG] payAndConfirmOrder: Detected custom string. Querying by requestId...`);
+        }
+
+        const request = await PharmacyPrescriptionRequest.findOne(dbQuery);
+        
+        if (!request) {
+            console.warn(`\x1b[33m[DEBUG] payAndConfirmOrder: STAGE 2 FAILED -> No document found in DB matching query:`, dbQuery, `\x1b[0m`);
+            return res.status(400).json({ 
+                success: false, 
+                message: `Business Error: No active prescription request found matching identifier: '${requestId}' for this user account.` 
+            });
+        }
+
+        // 🚨 STAGE 3: Status validation
+        if (request.status !== 'Bill Generated') {
+            console.warn(`\x1b[33m[DEBUG] payAndConfirmOrder: STAGE 3 FAILED -> Request status is currently '${request.status}' (Expected: 'Bill Generated')\x1b[0m`);
+            return res.status(400).json({ 
+                success: false, 
+                message: `Business Error: Request status is currently '${request.status}'. Payment can only be processed when status is 'Bill Generated'.` 
+            });
+        }
+
+        console.log(`\x1b[32m[DEBUG] payAndConfirmOrder: ALL GUARDS PASSED. Processing billing & stock reduction...\x1b[0m`);
 
         const bill = request.verifiedBill;
         const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
@@ -2013,6 +2050,7 @@ const payAndConfirmOrder = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("payAndConfirmOrder Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2030,11 +2068,13 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Signature verification failed." });
         }
 
-        // In this flow, appointmentId refers to the PharmacyPrescriptionRequest _id
         const request = await PharmacyPrescriptionRequest.findById(appointmentId);
         if (!request) return res.status(404).json({ success: false, message: "Prescription request not found." });
 
-        // Atomic Stock deduction on verified payment success
+        // 🚨 1. Fetch authentic payment details from Razorpay Server [1]
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+
+        // 2. Atomic Stock deduction
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
@@ -2075,7 +2115,8 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             paymentStatus: 'Paid',
             orderType: 'Prescription',
             prescriptionImages: request.prescriptionImage ? [request.prescriptionImage] : [],
-            status: 'Placed' // Once approved and paid, order status is 'Placed'
+            status: 'Placed',
+            paymentDetails: rzpDetails // 👈 Saved detailed payment audit logs
         });
 
         request.status = 'Paid';

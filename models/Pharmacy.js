@@ -52,6 +52,15 @@ const pharmacySchema = new mongoose.Schema({
         lat: { type: Number, default: 0 },
         lng: { type: Number, default: 0 }
     },
+    bankDetails: {
+        accountType: { type: String, enum: ['Savings', 'Current'], default: 'Savings' },
+        bankName: { type: String, default: "" },
+        accountHolderName: { type: String, default: "" },
+        accountNumber: { type: String, default: "" },
+        ifscCode: { type: String, default: "" },
+        upiId: { type: String, default: "" },
+        isVerified: { type: Boolean, default: false }
+    }
 
 
 

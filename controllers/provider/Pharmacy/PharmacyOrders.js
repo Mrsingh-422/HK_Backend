@@ -2,16 +2,24 @@ const PharmacyBooking = require('../../../models/PharmacyBooking');
 const Driver = require('../../../models/Driver');
 const PharmacyPrescriptionRequest = require("../../../models/PharmacyPrescriptionRequest");
 const mongoose = require('mongoose');
+const Medicine = require('../../../models/Medicine');
 
-// 1. DASHBOARD LISTING (Figma Tabs: General | Prescription)
-// Endpoint: GET /provider/pharmacy/orders/list?orderType=General&status=Placed
+// 1. DASHBOARD LISTING (Updated with Priority/Rapid Delivery Filter)
+// Endpoint: GET /provider/pharmacy/orders/list
 const getPharmacyOrders = async (req, res) => {
     try {
-        const { orderType, status } = req.query; 
+        const { orderType, status, isPriority } = req.query; 
         let query = { pharmacyId: req.user.id };
         
         if (orderType) query.orderType = orderType; // 'General' or 'Prescription'
         if (status) query.status = status;
+
+        // 🚀 Priority / Rapid Delivery filter logic
+        if (isPriority === 'true') {
+            query['billSummary.rapidDeliveryCharge'] = { $gt: 0 };
+        } else if (isPriority === 'false') {
+            query['billSummary.rapidDeliveryCharge'] = 0;
+        }
 
         const orders = await PharmacyBooking.find(query)
             .populate('userId', 'name phone')
@@ -23,7 +31,9 @@ const getPharmacyOrders = async (req, res) => {
             count: orders.length,
             data: orders 
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 2. GET AVAILABLE DRIVERS (Figma: Assign Delivery Boy list)
@@ -150,6 +160,64 @@ const reassignDriverManual = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
+// UPDATE ORDER STATUS (e.g. Packed, Shipped, Delivered, Cancelled)
+// Endpoint: PATCH /provider/pharmacy/orders/status/:orderId
+const updateOrderStatus = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { status, deliveryStatus } = req.body;
+        const pharmacyId = req.user.id;
+
+        // 🔍 DEBUG LOG: API triggers parameters printing
+        console.log(`\x1b[36m[DEBUG] updateOrderStatus: Deployed for orderId: "${orderId}", status: "${status}", deliveryStatus: "${deliveryStatus}"\x1b[0m`);
+
+        // Coordinate dynamic checks
+        const isObjectId = mongoose.Types.ObjectId.isValid(orderId.trim());
+        const query = { pharmacyId };
+
+        if (isObjectId) {
+            query._id = orderId.trim();
+        } else {
+            query.orderId = orderId.trim();
+        }
+
+        const order = await PharmacyBooking.findOne(query);
+        if (!order) {
+            console.warn(`\x1b[33m[DEBUG] updateOrderStatus: Order not found in DB with query:`, query, `\x1b[0m`);
+            return res.status(400).json({ 
+                success: false, 
+                message: `Business Error: Order not found or unauthorized to update status for order: '${orderId}'` 
+            });
+        }
+
+        // Apply fields dynamically if present in request body
+        if (status) order.status = status;
+        if (deliveryStatus) order.deliveryStatus = deliveryStatus;
+
+        // Save order changes
+        await order.save();
+        console.log(`\x1b[32m[DEBUG] updateOrderStatus: Order status successfully saved to DB.\x1b[0m`);
+
+        res.json({
+            success: true,
+            message: `Order status successfully updated to '${order.status}'`,
+            data: order
+        });
+    } catch (error) {
+        // 🚨 CRITICAL: Print exact error stack trace to your backend terminal
+        console.error("\x1b[31m[CRITICAL] updateOrderStatus Error Details:\x1b[0m", error);
+        
+        // If validation fails (e.g. invalid enum value), return 400 Bad Request
+        const statusCode = error.name === 'ValidationError' ? 400 : 500;
+        res.status(statusCode).json({ 
+            success: false, 
+            errorName: error.name,
+            message: error.message 
+        });
+    }
+};
+
 
 
 
@@ -310,7 +378,7 @@ const rejectPrescriptionRequest = async (req, res) => {
 };
 
 
-module.exports = { getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,
+module.exports = { getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
 
     submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest
  };

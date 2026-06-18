@@ -8,7 +8,7 @@ const Wallet = require('../../../models/Wallet');
 const mongoose = require('mongoose');
 const { getDistance } = require('../../../utils/helpers');
 
-const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
@@ -505,12 +505,16 @@ const verifyAmbulancePayment = async (req, res) => {
         const booking = await Booking.findById(appointmentId);
         if (!booking) return res.status(404).json({ success: false, message: "Ambulance booking not found." });
 
-        // 3. Confirm payment state
+        // 🚨 3. Fetch authentic payment details from Razorpay Server [1]
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+
+        // 4. Confirm payment state
         booking.paymentStatus = 'Paid';
         booking.transactionId = razorpayPaymentId;
+        booking.paymentDetails = rzpDetails; // 👈 Saved detailed payment audit logs
         await booking.save();
 
-        // 🚨 4. UPDATE COUPON USAGE HISTORY (Increments only after payment success!)
+        // 5. UPDATE COUPON USAGE HISTORY
         const couponId = booking.couponDetails?.couponId;
         if (couponId) {
             const coupon = await Coupon.findById(couponId);

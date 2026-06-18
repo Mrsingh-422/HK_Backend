@@ -6,9 +6,8 @@ const Driver = require('../../../models/Driver');
 const moment = require('moment');
 
 // ==========================================
-// 1. PROFILE & DASHBOARD
+// 1. PROFILE & DASHBOARD (Updated with Priority Count)
 // ==========================================
-
 const getProviderDashboard = async (req, res) => {
     try {
         const stats = await NurseBooking.aggregate([
@@ -16,14 +15,36 @@ const getProviderDashboard = async (req, res) => {
             { $group: {
                 _id: null,
                 pendingRequests: { $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] } },
-                activeJobs: { $sum: { $cond: [{ $in: ["$status", ["Confirmed", "Assigned", "Started"]] }, 1, 0] } },
+                // 🚀 New: Count of pending requests that have faster/express service charge applied
+                priorityRequests: { 
+                    $sum: { 
+                        $cond: [
+                            { 
+                                $and: [
+                                    { $eq: ["$status", "Pending"] }, 
+                                    { $gt: ["$priceBreakdown.fasterServiceCharge", 0] }
+                                ] 
+                            }, 
+                            1, 
+                            0
+                        ] 
+                    } 
+                },
+                activeJobs: { $sum: { $cond: [{ $in: ["$status", ["Confirmed", "Assigned", "On-The-Way", "Arrived", "Service-Started"]] }, 1, 0] } },
                 completedJobs: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } },
-                totalEarnings: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$finalPrice", 0] } }
+                totalEarnings: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$totalPrice", 0] } }
             }}
         ]);
-        res.json({ success: true, data: stats[0] || { pendingRequests:0, activeJobs:0, completedJobs:0, totalEarnings:0 } });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        
+        res.json({ 
+            success: true, 
+            data: stats[0] || { pendingRequests: 0, priorityRequests: 0, activeJobs: 0, completedJobs: 0, totalEarnings: 0 } 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 const updateProviderProfile = async (req, res) => {
     try {
@@ -123,15 +144,28 @@ const deleteService = async (req, res) => {
 };
 
 // ==========================================
-// 3. BOOKING & STAFF MANAGEMENT
+// 3. BOOKING MANAGEMENT (Updated with Priority Filter)
 // ==========================================
-
 const getBookingRequests = async (req, res) => {
     try {
-        const { status } = req.query; // Pending, Confirmed, etc.
-        const bookings = await NurseBooking.find({ nurseId: req.user.id, status }).sort({ createdAt: -1 });
-        res.json({ success: true, data: bookings });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const { status, isPriority } = req.query; // e.g. status=Pending
+        let query = { nurseId: req.user.id };
+        
+        if (status) query.status = status;
+
+        // 🚀 Priority / Faster Service filter logic
+        if (isPriority === 'true') {
+            query['priceBreakdown.fasterServiceCharge'] = { $gt: 0 };
+        } else if (isPriority === 'false') {
+            // Normal bookings where express delivery is either 0 or not applied
+            query['priceBreakdown.fasterServiceCharge'] = { $eq: 0 };
+        }
+
+        const bookings = await NurseBooking.find(query).sort({ createdAt: -1 });
+        res.json({ success: true, count: bookings.length, data: bookings });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 const handleBookingAction = async (req, res) => {

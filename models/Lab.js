@@ -66,6 +66,15 @@
 isInsuranceAccepted: { type: Boolean, default: false },
 acceptedInsurances: [{ type: String }], // e.g. ["RGHS", "ECHS", "Ayushman Bharat"]
 is24x7: { type: Boolean, default: false },
+bankDetails: {
+        accountType: { type: String, enum: ['Savings', 'Current'], default: 'Savings' },
+        bankName: { type: String, default: "" },
+        accountHolderName: { type: String, default: "" },
+        accountNumber: { type: String, default: "" },
+        ifscCode: { type: String, default: "" },
+        upiId: { type: String, default: "" },
+        isVerified: { type: Boolean, default: false }
+    }
         
         
 

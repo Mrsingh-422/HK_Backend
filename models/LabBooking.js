@@ -142,7 +142,26 @@ appliedCoupon: {
     startedAt: { type: Date, default: null },
     arrivedAt: { type: Date, default: null },
     collectedAt: { type: Date, default: null },
-    depositedAt: { type: Date, default: null }
+    depositedAt: { type: Date, default: null },
+
+    paymentDetails: {
+        razorpayPaymentId: { type: String, default: "" },
+        razorpayOrderId: { type: String, default: "" },
+        razorpaySignature: { type: String, default: "" },
+        method: { type: String, default: "" },        // upi, card, netbanking, wallet
+        amount: { type: Number, default: 0 },         // Amount in Rupees (converted from paise)
+        currency: { type: String, default: "INR" },
+        status: { type: String, default: "" },         // captured, failed
+        bank: { type: String, default: "" },           // Bank name if netbanking/card
+        wallet: { type: String, default: "" },         // Wallet name if wallet
+        vpa: { type: String, default: "" },            // UPI VPA if UPI
+        cardDetails: {
+            last4: String,
+            network: String,
+            type: String
+        },
+        paidAt: { type: Date, default: null }
+    }
 
 
 

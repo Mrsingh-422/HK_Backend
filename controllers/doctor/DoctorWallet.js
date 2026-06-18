@@ -78,47 +78,29 @@ const calculateVendorBalances = async (vendorId) => {
 const getDoctorWalletStats = async (req, res) => {
     try {
         const doctorId = req.user.id;
+        const doctor = req.user; // Decoded profile carries fresh bankDetails [1]
 
-        // Dynamic Balances calculate karein
         const balances = await calculateVendorBalances(doctorId);
-
-        // Standard stats for cards (Today vs Weekly earnings)
-        const todayStart = moment().startOf('day').toDate();
-        const weeklyStart = moment().subtract(7, 'days').toDate();
 
         const stats = {
             today: await Appointment.aggregate([
-                { 
-                    $match: { 
-                        doctorId: new mongoose.Types.ObjectId(doctorId), 
-                        status: 'Completed', 
-                        updatedAt: { $gte: todayStart } 
-                    } 
-                }, 
+                { $match: { doctorId: new mongoose.Types.ObjectId(doctorId), status: 'Completed', updatedAt: { $gte: moment().startOf('day').toDate() } } }, 
                 { $group: { _id: null, total: { $sum: "$totalAmount" } } }
             ]),
             weekly: await Appointment.aggregate([
-                { 
-                    $match: { 
-                        doctorId: new mongoose.Types.ObjectId(doctorId), 
-                        status: 'Completed', 
-                        updatedAt: { $gte: weeklyStart } 
-                    } 
-                }, 
+                { $match: { doctorId: new mongoose.Types.ObjectId(doctorId), status: 'Completed', updatedAt: { $gte: moment().subtract(7, 'days').toDate() } } }, 
                 { $group: { _id: null, total: { $sum: "$totalAmount" } } }
             ]),
         };
 
-        const wallet = await Wallet.findOne({ vendorId: doctorId, vendorModel: 'Doctor' });
-
         res.json({ 
             success: true, 
-            totalBalance: balances.walletBalance,        // Cleared + Uncleared virtual remaining balance
-            withdrawableBalance: balances.withdrawableBalance, // 👈 Cleared balance older than 7 days (Available to withdraw)
-            pendingBalance: balances.pendingEarnings,    // 👈 Locked balance (Completed within last 7 days)
+            totalBalance: balances.walletBalance,
+            withdrawableBalance: balances.withdrawableBalance,
+            pendingBalance: balances.pendingEarnings,
             todayEarning: stats.today[0]?.total || 0,
             weeklyEarning: stats.weekly[0]?.total || 0,
-            bankDetails: wallet?.bankDetails || null
+            bankDetails: doctor.bankDetails || null // 👈 Read dynamically from Doctor profile [1]
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
@@ -130,48 +112,59 @@ const requestDoctorWithdrawal = async (req, res) => {
     try {
         const { amount } = req.body;
         const doctorId = req.user.id;
+        const doctor = req.user; // Decoded and populated via protect('doctor') middleware
 
         const wallet = await Wallet.findOne({ vendorId: doctorId, vendorModel: 'Doctor' });
         if (!wallet) {
             return res.status(404).json({ success: false, message: "Wallet not found." });
         }
 
-        // A. Dynamic verification against cleared/withdrawable balance
+        // Calculate dynamic balances using lock checks
         const balances = await calculateVendorBalances(doctorId);
 
-        // requested amount should not exceed cleared balance
         if (balances.withdrawableBalance < amount) {
             return res.status(400).json({ 
                 success: false, 
-                message: `Insufficient withdrawable balance. You have ₹${balances.pendingEarnings} locked under 7-day clearance period. Current available withdrawable limit is ₹${balances.withdrawableBalance}.` 
+                message: `Insufficient withdrawable balance. Your available limit is ₹${balances.withdrawableBalance}.` 
             });
         }
 
-        if (!wallet.bankDetails || (!wallet.bankDetails.accountNumber && !wallet.bankDetails.upiId)) {
-            return res.status(400).json({ success: false, message: "Please update your bank details first." });
+        // 🚨 STRICTOR RULE 1: Ensure Bank details are not empty [1]
+        if (!doctor.bankDetails || !doctor.bankDetails.accountNumber) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please update your bank details in your profile settings first." 
+            });
         }
 
-        // B. Hold/Deduct amount from current virtual balance
+        // 🚨 STRICTOR RULE 2: Block requests unless bank details are verified by Admin! [1]
+        if (doctor.bankDetails.isVerified !== true) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Your bank details are not verified by Admin. Payouts are strictly allowed only to verified bank accounts to prevent fraud." 
+            });
+        }
+
+        // Hold amount from current virtual balance
         wallet.balance -= amount;
         wallet.transactions.push({ 
             type: 'Debit', 
             amount: amount, 
             remark: `Withdrawal Request (Hold) - ₹${amount}` 
         });
-
         await wallet.save();
 
-        // C. Create request document for Admin Panel sync
+        // Create request document with verified bank details [1]
         const request = await WithdrawalRequest.create({
             vendorId: doctorId,
             vendorModel: 'Doctor',
             amount,
             bankDetails: {
-                accountHolderName: wallet.bankDetails.accountHolderName,
-                accountNumber: wallet.bankDetails.accountNumber,
-                ifscCode: wallet.bankDetails.ifscCode,
-                bankName: wallet.bankDetails.bankName,
-                upiId: wallet.bankDetails.upiId
+                accountHolderName: doctor.bankDetails.accountHolderName,
+                accountNumber: doctor.bankDetails.accountNumber,
+                ifscCode: doctor.bankDetails.ifscCode,
+                bankName: doctor.bankDetails.bankName,
+                upiId: doctor.bankDetails.upiId || ""
             },
             status: 'Pending'
         });
@@ -196,4 +189,37 @@ const getDoctorTransactions = async (req, res) => {
     }
 };
 
-module.exports = { getDoctorWalletStats, requestDoctorWithdrawal, getDoctorTransactions };
+// 4. UPDATE DOCTOR BANK DETAILS (Strict verification reset) - [1]
+const updateDoctorBankDetails = async (req, res) => {
+    try {
+        const { accountType, bankName, accountHolderName, accountNumber, ifscCode, upiId } = req.body;
+
+        if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
+            return res.status(400).json({ success: false, message: "Missing required bank details fields." });
+        }
+
+        // 🚨 SECURITY GUARD: Reset verification status to false on any change [1]
+        const updatedBankDetails = {
+            accountType: accountType || 'Savings',
+            bankName,
+            accountHolderName,
+            accountNumber,
+            ifscCode,
+            upiId: upiId || "",
+            isVerified: false // Locked for admin re-verification [1]
+        };
+
+        req.user.bankDetails = updatedBankDetails;
+        await req.user.save();
+
+        res.json({ 
+            success: true, 
+            message: "Bank details updated successfully. Payouts are locked until Admin verifies your account.", 
+            data: updatedBankDetails 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { getDoctorWalletStats, requestDoctorWithdrawal, getDoctorTransactions,updateDoctorBankDetails };

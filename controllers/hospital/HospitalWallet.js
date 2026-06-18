@@ -74,11 +74,10 @@ const calculateHospitalBalances = async (hospitalId) => {
 const getHospitalWalletStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
+        const hospital = req.user; // Decoded profile carries fresh bankDetails [1]
 
-        // Dynamic balances calculate karein
         const balances = await calculateHospitalBalances(hospitalId);
 
-        // Daily vs Weekly stats for dashboard
         const stats = {
             todayEarnings: await Appointment.aggregate([
                 { $match: { hospitalId: new mongoose.Types.ObjectId(hospitalId), status: 'Completed', updatedAt: { $gte: moment().startOf('day').toDate() } } },
@@ -94,15 +93,15 @@ const getHospitalWalletStats = async (req, res) => {
 
         res.json({ 
             success: true, 
-            totalBalance: balances.walletBalance,             // Uncleared + Cleared remaining virtual balance
-            withdrawableBalance: balances.withdrawableBalance,      // 👈 Available (completed >= 7 days ago) - [1.2.2]
-            pendingBalance: balances.pendingEarnings,         // 👈 Locked (completed within last 7 days) - [1.2.2]
-            bankDetails: wallet?.bankDetails || null,
+            totalBalance: balances.walletBalance,             
+            withdrawableBalance: balances.withdrawableBalance,      
+            pendingBalance: balances.pendingEarnings,         
+            bankDetails: hospital.bankDetails || null, // 👈 Read dynamically from Hospital profile [1]
             stats: {
                 today: stats.todayEarnings[0]?.total || 0,
                 weekly: stats.weeklyEarnings[0]?.total || 0
             },
-            transactions: wallet?.transactions.slice(-10) || [] // Last 10 transactions
+            transactions: wallet?.transactions.slice(-10) || [] 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
@@ -110,31 +109,45 @@ const getHospitalWalletStats = async (req, res) => {
 };
 
 // 2. REQUEST WITHDRAWAL (With 7-days dynamic locks)
+// Replacing requestHospitalWithdrawal inside controllers/hospital/HospitalWallet.js
 const requestHospitalWithdrawal = async (req, res) => {
     try {
         const { amount } = req.body;
         const hospitalId = req.user.id;
+        const hospital = req.user; // Decoded and populated via protect('hospital') middleware
 
         const wallet = await Wallet.findOne({ vendorId: hospitalId, vendorModel: 'Hospital' });
         if (!wallet) {
             return res.status(404).json({ success: false, message: "Hospital wallet not found." });
         }
 
-        // dynamic clearance verification [1.2.2]
+        // dynamic clearance verification
         const balances = await calculateHospitalBalances(hospitalId);
 
         if (balances.withdrawableBalance < amount) {
             return res.status(400).json({ 
                 success: false, 
-                message: `Insufficient withdrawable balance. You have ₹${balances.pendingEarnings} locked under 7-day clearance period. Available limit to request is ₹${balances.withdrawableBalance}.` 
+                message: `Insufficient withdrawable balance. Your available limit is ₹${balances.withdrawableBalance}.` 
             });
         }
 
-        if (!wallet.bankDetails || !wallet.bankDetails.accountNumber) {
-            return res.status(400).json({ success: false, message: "Please update your bank details first." });
+        // 🚨 STRICTOR RULE 1: Ensure Bank details are not empty [1]
+        if (!hospital.bankDetails || !hospital.bankDetails.accountNumber) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please update your bank details in your hospital profile first." 
+            });
         }
 
-        // A. Hold amount from current virtual balance
+        // 🚨 STRICTOR RULE 2: Block requests unless bank details are verified by Admin! [1]
+        if (hospital.bankDetails.isVerified !== true) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Your bank details are not verified by Admin. Hospital payouts are strictly blocked for unverified accounts." 
+            });
+        }
+
+        // Hold amount
         wallet.balance -= amount;
         wallet.transactions.push({
             type: 'Debit',
@@ -144,17 +157,17 @@ const requestHospitalWithdrawal = async (req, res) => {
         });
         await wallet.save();
 
-        // B. Create request document for Centralized Admin Panel sync
+        // Create request document with verified bank details [1]
         const request = await WithdrawalRequest.create({
             vendorId: hospitalId,
-            vendorModel: 'Hospital', // Polymorphic mapping key [1]
+            vendorModel: 'Hospital',
             amount,
             bankDetails: {
-                accountHolderName: wallet.bankDetails.accountHolderName,
-                accountNumber: wallet.bankDetails.accountNumber,
-                ifscCode: wallet.bankDetails.ifscCode,
-                bankName: wallet.bankDetails.bankName,
-                upiId: wallet.bankDetails.upiId || ""
+                accountHolderName: hospital.bankDetails.accountHolderName,
+                accountNumber: hospital.bankDetails.accountNumber,
+                ifscCode: hospital.bankDetails.ifscCode,
+                bankName: hospital.bankDetails.bankName,
+                upiId: hospital.bankDetails.upiId || ""
             },
             status: 'Pending'
         });
@@ -170,4 +183,37 @@ const requestHospitalWithdrawal = async (req, res) => {
     }
 };
 
-module.exports = { getHospitalWalletStats, requestHospitalWithdrawal };
+// 3. UPDATE HOSPITAL BANK DETAILS (Strict verification reset) - [1]
+const updateHospitalBankDetails = async (req, res) => {
+    try {
+        const { accountType, bankName, accountHolderName, accountNumber, ifscCode, upiId } = req.body;
+
+        if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
+            return res.status(400).json({ success: false, message: "Missing required bank details fields." });
+        }
+
+        // 🚨 SECURITY GUARD: Reset verification status to false on any change [1]
+        const updatedBankDetails = {
+            accountType: accountType || 'Savings',
+            bankName,
+            accountHolderName,
+            accountNumber,
+            ifscCode,
+            upiId: upiId || "",
+            isVerified: false // Locked for admin re-verification [1]
+        };
+
+        req.user.bankDetails = updatedBankDetails;
+        await req.user.save();
+
+        res.json({ 
+            success: true, 
+            message: "Hospital bank details updated successfully. Payouts are locked until Admin verifies your account.", 
+            data: updatedBankDetails 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { getHospitalWalletStats, requestHospitalWithdrawal, updateHospitalBankDetails };

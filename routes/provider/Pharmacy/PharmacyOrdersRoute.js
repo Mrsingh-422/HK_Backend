@@ -4,7 +4,7 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { 
     getPharmacyOrders, 
     getAvailableDrivers, 
-    assignDriverManual , reassignDriverManual,
+    assignDriverManual , reassignDriverManual,updateOrderStatus,
 
     submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest
 } = require('../../../controllers/provider/Pharmacy/PharmacyOrders');
@@ -15,7 +15,7 @@ router.get('/list', protect('pharmacy'), getPharmacyOrders);
 router.get('/available-drivers', protect('pharmacy'), getAvailableDrivers);
 router.post('/assign-manual', protect('pharmacy'), assignDriverManual);
 router.post('/reassign', protect('pharmacy'), reassignDriverManual);
-
+router.patch('/status/:orderId', protect('pharmacy'), updateOrderStatus);
 
 // ai prescription review
 router.post(

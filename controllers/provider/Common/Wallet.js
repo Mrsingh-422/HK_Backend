@@ -92,22 +92,18 @@ const calculateProviderBalances = async (vendorId, role) => {
 const getWalletStats = async (req, res) => {
     try {
         const vendorId = req.user.id;
-        const role = req.user.role; // 'Lab', 'Pharmacy', or 'Nurse'
+        const role = req.user.role; 
+        const provider = req.user; // Decoded profile carries fresh bankDetails [1]
 
-        // Dynamic balances calculate karein
         const balances = await calculateProviderBalances(vendorId, role);
-
-        // Fetch wallet details
-        const wallet = await Wallet.findOne({ vendorId, vendorModel: role });
 
         res.json({ 
             success: true, 
             providerRole: role,
-            totalBalance: balances.walletBalance,             // Uncleared + Cleared remaining balance
-            withdrawableBalance: balances.withdrawableBalance,      // 👈 Available after 7 days - [1.2.2]
-            pendingBalance: balances.pendingEarnings,         // 👈 Locked earnings (pichle 7 dino ki) - [1.2.2]
-            bankDetails: wallet?.bankDetails || null,
-            transactions: wallet?.transactions || []
+            totalBalance: balances.walletBalance,             
+            withdrawableBalance: balances.withdrawableBalance,      
+            pendingBalance: balances.pendingEarnings,         
+            bankDetails: provider.bankDetails || null // 👈 Read dynamically from Lab/Pharmacy/Nurse profile [1]
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
@@ -120,28 +116,40 @@ const requestWithdrawal = async (req, res) => {
         const { amount } = req.body;
         const vendorId = req.user.id;
         const role = req.user.role; // 'Lab', 'Pharmacy', or 'Nurse'
+        const provider = req.user;  // Decoded and populated via protect('provider') middleware
 
         const wallet = await Wallet.findOne({ vendorId, vendorModel: role });
         if (!wallet) {
             return res.status(404).json({ success: false, message: "Wallet record not found." });
         }
 
-        // Calculate dynamic balances using lock check
+        // Calculate dynamic balances using lock checks
         const balances = await calculateProviderBalances(vendorId, role);
 
-        // requested amount check against withdrawableBalance
         if (balances.withdrawableBalance < amount) {
             return res.status(400).json({ 
                 success: false, 
-                message: `Insufficient withdrawable balance. You have ₹${balances.pendingEarnings} locked under 7-day clearance period. Available limit is ₹${balances.withdrawableBalance}.` 
+                message: `Insufficient withdrawable balance. Your available limit is ₹${balances.withdrawableBalance}.` 
             });
         }
 
-        if (!wallet.bankDetails || (!wallet.bankDetails.accountNumber)) {
-            return res.status(400).json({ success: false, message: "Please update your bank details first." });
+        // 🚨 STRICTOR RULE 1: Ensure Bank details are not empty [1]
+        if (!provider.bankDetails || !provider.bankDetails.accountNumber) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please update your bank details in your provider profile settings first." 
+            });
         }
 
-        // A. Hold amount from virtual balance
+        // 🚨 STRICTOR RULE 2: Block requests unless bank details are verified by Admin! [1]
+        if (provider.bankDetails.isVerified !== true) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Your bank details are not verified by Admin. Payouts are strictly blocked for unverified bank accounts." 
+            });
+        }
+
+        // Hold amount
         wallet.balance -= amount;
         wallet.transactions.push({ 
             type: 'Debit', 
@@ -150,17 +158,17 @@ const requestWithdrawal = async (req, res) => {
         });
         await wallet.save();
 
-        // B. Create a unified withdrawal request for Admin Panel
+        // Create request document with verified bank details [1]
         const request = await WithdrawalRequest.create({
             vendorId,
-            vendorModel: role, // Dynamically maps to Lab, Pharmacy, or Nurse
+            vendorModel: role,
             amount,
             bankDetails: {
-                accountHolderName: wallet.bankDetails.accountHolderName,
-                accountNumber: wallet.bankDetails.accountNumber,
-                ifscCode: wallet.bankDetails.ifscCode,
-                bankName: wallet.bankDetails.bankName,
-                upiId: wallet.bankDetails.upiId || ""
+                accountHolderName: provider.bankDetails.accountHolderName,
+                accountNumber: provider.bankDetails.accountNumber,
+                ifscCode: provider.bankDetails.ifscCode,
+                bankName: provider.bankDetails.bankName,
+                upiId: provider.bankDetails.upiId || ""
             },
             status: 'Pending'
         });
@@ -175,4 +183,36 @@ const requestWithdrawal = async (req, res) => {
     }
 };
 
-module.exports = { getWalletStats, requestWithdrawal };
+// 3. UPDATE PROVIDER BANK DETAILS (Strict verification reset) - [1]
+const updateProviderBankDetails = async (req, res) => {
+    try {
+        const { accountType, bankName, accountHolderName, accountNumber, ifscCode, upiId } = req.body;
+
+        if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
+            return res.status(400).json({ success: false, message: "Missing required bank details fields." });
+        }
+
+        // 🚨 SECURITY GUARD: Reset verification status to false on any change [1]
+        const updatedBankDetails = {
+            accountType: accountType || 'Savings',
+            bankName,
+            accountHolderName,
+            accountNumber,
+            ifscCode,
+            upiId: upiId || "",
+            isVerified: false // Locked for admin re-verification [1]
+        };
+
+        req.user.bankDetails = updatedBankDetails;
+        await req.user.save();
+
+        res.json({ 
+            success: true, 
+            message: "Bank details updated successfully. Payouts are locked until Admin verifies your account.", 
+            data: updatedBankDetails 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+module.exports = { getWalletStats, requestWithdrawal, updateProviderBankDetails };

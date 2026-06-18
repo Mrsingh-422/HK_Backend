@@ -24,7 +24,7 @@ const cities = require('../../../data/cities.json');
 const Fuse = require('fuse.js');
 const LabCategory = require('../../../models/LabCategory');
 
-const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
 
 
@@ -1345,14 +1345,18 @@ const verifyLabPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid transaction signature." });
         }
 
-        // 2. Find and update status to Confirmed & Paid
+        // 🚨 2. Fetch authentic payment details from Razorpay Server [1]
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+
+        // 3. Find and update status to Confirmed & Paid
         const booking = await LabBooking.findByIdAndUpdate(
             appointmentId,
             {
                 $set: {
                     status: 'Confirmed',
                     paymentStatus: 'Done',
-                    paymentMethod: 'UPI' // Default online
+                    paymentMethod: 'UPI',
+                    paymentDetails: rzpDetails // 👈 Saved detailed payment audit logs
                 }
             },
             { new: true }
@@ -1362,7 +1366,7 @@ const verifyLabPayment = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 3. Clear User's Lab Cart securely now!
+        // 4. Clear User's Lab Cart
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
 
         res.json({

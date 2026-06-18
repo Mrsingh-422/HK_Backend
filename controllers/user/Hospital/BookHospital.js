@@ -15,7 +15,7 @@ const { getDistance } = require('../../../utils/helpers');
 const crypto = require('crypto');
 const moment = require('moment');
 
-const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
 
 // 1. LIST HOSPITALS (Screenshot 18, 19)
@@ -584,7 +584,10 @@ const verifyHospitalPayment = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 🚨 3. ATOMIC BED ALLOCATION & WARD DECREMENT (Success hone par bed lock aur available count reduce) [1]
+        // 🚨 3. Fetch authentic payment details from Razorpay Server [1]
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+
+        // 4. ATOMIC BED ALLOCATION & WARD DECREMENT (Done safely after payment success!)
         if (appointment.bedId) {
             const bed = await Bed.findById(appointment.bedId).populate('wardId');
             if (bed) {
@@ -595,13 +598,14 @@ const verifyHospitalPayment = async (req, res) => {
             }
         }
 
-        // 4. Update status to 'Hospital-Pending' and paymentStatus to 'Paid'
+        // 5. Update status
         appointment.status = 'Hospital-Pending';
         appointment.paymentStatus = 'Paid';
         appointment.transactionId = razorpayPaymentId;
+        appointment.paymentDetails = rzpDetails; // 👈 Saved detailed payment audit logs
         await appointment.save();
 
-        // 🚨 5. SECURE COUPON TRACKING: Increment coupon usage history after payment success! [1]
+        // 6. UPDATE COUPON USAGE HISTORY
         const couponId = appointment.couponDetails?.couponId;
         if (couponId) {
             const existingUsage = await Coupon.findOne({ _id: couponId, "usedBy.userId": req.user.id });

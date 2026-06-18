@@ -5,7 +5,7 @@ const { protect } = require('../../middleware/authMiddleware'); // protect middl
 const { 
     getAmbulanceWalletStats, 
     requestAmbulanceWithdrawal, 
-    getMyTransactions 
+    getMyTransactions ,updateAmbulanceBankDetails
 } = require('../../controllers/ambulance/AmbulanceWallet');
 
 // Base URL: /driver/ambulance/wallet
@@ -14,5 +14,6 @@ const {
 router.get('/stats', protect('ambulance'), getAmbulanceWalletStats);
 router.post('/withdraw', protect('ambulance'), requestAmbulanceWithdrawal);
 router.get('/transactions', protect('ambulance'), getMyTransactions);
+router.patch('/bank-details', protect('ambulance'), updateAmbulanceBankDetails);
 
 module.exports = router;

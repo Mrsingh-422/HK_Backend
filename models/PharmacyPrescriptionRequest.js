@@ -30,7 +30,7 @@ const prescriptionRequestSchema = new mongoose.Schema({
 
      status: {
         type: String,
-        enum: ['Pending Review', 'Reviewing', 'Bill Generated', 'Rejected', 'Paid'], // 'Paid' added here
+        enum: ['Pending Review', 'Reviewing', 'Bill Generated', 'Rejected', 'Paid', 'Pending Payment'], // 👈 Added 'Pending Payment' here
         default: 'Pending Review'
     },
     rejectReason: { 
