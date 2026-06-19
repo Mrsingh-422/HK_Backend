@@ -3,6 +3,9 @@ const Ambulance = require('../../models/Ambulance');
 const Appointment = require('../../models/Appointment'); // 👈 FIX 1: Added missing Appointment model import
 const crypto = require('crypto'); // 👈 FIX 2: Added missing crypto module import
 const mongoose = require('mongoose');
+const { sendPushNotification } = require('../../utils/notifaction'); // 👈 FIX 3: Added missing notification helper import
+const Review = require('../../models/Review');
+
 
 const getMyActiveTrip = async (req, res) => {
     try {
@@ -22,57 +25,150 @@ const getMyActiveTrip = async (req, res) => {
     }
 };
 
-// 1. GET NEW REQUESTS (PAGINATED)
+// --- 1. GET INCOMING REQUESTS (PAGINATED & TARGETED ONLY) ---
 const getIncomingRequests = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = 10;
+        const driverId = req.user.id;
 
-        const requests = await Booking.find({ status: 'Searching' })
-            .sort({ createdAt: -1 })
-            .skip((page - 1) * limit)
-            .limit(limit)
-            .populate('userId', 'name phone profilePic');
+        // Query logic: Driver strictly sees broadcast accidental emergencies OR requests targeted directly to them
+        const requests = await Booking.find({ 
+            status: 'Searching',
+            $or: [
+                { serviceType: 'Accident emergency' }, // Broadcast emergency
+                { ambulanceId: driverId } // Directly requested to this driver
+            ]
+        })
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('userId', 'name phone profilePic');
 
         res.json({ success: true, page, data: requests });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. ACCEPT REQUEST (Figma Screen 35)
+// --- 2. ACCEPT REQUEST (Figma Screen 35) ---
 const acceptBooking = async (req, res) => {
     try {
-        const { bookingId } = req.params; // e.g., "HK-BOK-404336"
+        const { id } = req.params; // 👈 FIXED: ObjectId read from params (not custom bookingId string)
         const ambulanceId = req.user.id;
 
-        // Check if driver is already on duty
+        // Pehle check karein ki driver busy toh nahi hai
         const driver = await Ambulance.findById(ambulanceId);
         if (!driver.availableForEmergency) {
-            return res.status(400).json({ message: "You are already on a trip" });
+            return res.status(400).json({ success: false, message: "You are already on an active trip." });
         }
 
-        // FIX: Replaced findByIdAndUpdate with findOneAndUpdate to search strictly by dynamic bookingId string
+        // 1. Pehle confirm karein ki status abhi bhi 'Searching' hai (prevents duplicate driver accepts)
+        const bookingCheck = await Booking.findOne({ _id: id, status: 'Searching' });
+        if (!bookingCheck) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "This trip is no longer available (accepted by another driver or cancelled)." 
+            });
+        }
+
+        const isAccidental = bookingCheck.serviceType === 'Accident emergency';
+        const timelineStatus = isAccidental ? 'Driver Assigned' : 'Accepted by Driver';
+        const timelineNote = isAccidental 
+            ? `${driver.name} has accepted your emergency request and is arriving shortly.`
+            : `${driver.name} accepted your request. Waiting for your payment to start navigation.`;
+
+        // 2. 🚨 ATOMIC UPDATE: Query by strictly _id and status: 'Searching'
         const booking = await Booking.findOneAndUpdate(
-            { bookingId: bookingId }, 
+            { _id: id, status: 'Searching' }, // 👈 FIXED: Query strictly by MongoDB ObjectId _id
             {
-                ambulanceId: ambulanceId,
-                status: 'Confirmed',
-                $push: { trackingTimeline: { status: 'Driver Assigned', note: `${driver.name} is on the way` } }
+                $set: {
+                    ambulanceId: ambulanceId,
+                    status: 'Confirmed'
+                },
+                $push: { 
+                    trackingTimeline: { 
+                        status: timelineStatus, 
+                        timestamp: new Date(),
+                        note: timelineNote 
+                    } 
+                }
             }, 
             { new: true }
         );
 
         if (!booking) {
-            return res.status(404).json({ message: "Booking record not found in system." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "This trip was just claimed by another driver." 
+            });
         }
 
-        // Mark driver busy
+        // Driver ko busy mark karein
         driver.availableForEmergency = false;
         await driver.save();
 
-        res.json({ success: true, message: "Trip Confirmed", data: booking });
+        // 🟢 Push Notifications send karein (FCM module)
+        if (isAccidental) {
+            await sendPushNotification(
+                booking.userId, 
+                'user', 
+                "Emergency Driver Assigned!", 
+                `${driver.name} is arriving shortly. OTP is ${booking.otp}.`,
+                { bookingId: booking._id.toString(), type: 'driver_assigned' }
+            );
+            res.json({ success: true, message: "Emergency ride confirmed.", data: booking });
+        } else {
+            await sendPushNotification(
+                booking.userId, 
+                'user', 
+                "Ambulance Request Accepted", 
+                "Driver accepted your request! Please complete the payment to start navigation.",
+                { bookingId: booking._id.toString(), type: 'payment_pending' }
+            );
+            res.json({ success: true, message: "Request accepted. Waiting for patient payment.", data: booking });
+        }
+
     } catch (error) { 
         console.error("Accept booking error:", error);
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// --- 3. REJECT REQUEST (Driver Rejection) ---
+const rejectBooking = async (req, res) => {
+    try {
+        const { id } = req.params; // 👈 FIXED: ObjectId read from params (not custom bookingId string)
+        const driverId = req.user.id;
+
+        const booking = await Booking.findOne({ _id: id }); // 👈 FIXED: Query strictly by MongoDB ObjectId _id
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
+
+        // Update status to Cancelled and mark driver rejection logs
+        booking.status = 'Cancelled';
+        booking.cancelledBy = 'Driver';
+        booking.cancellationReason = "Driver rejected request";
+        booking.trackingTimeline.push({ 
+            status: 'Cancelled', 
+            timestamp: new Date(), 
+            note: `Request rejected by driver. User notified.` 
+        });
+
+        await booking.save();
+
+        // Ensure driver's availability remains free
+        await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: true } });
+
+        // 🚨 Notify User immediately via FCM
+        await sendPushNotification(
+            booking.userId, 
+            'user', 
+            "Ambulance Request Rejected", 
+            "The driver is currently busy. Please select another ambulance.",
+            { type: 'request_rejected' }
+        );
+
+        res.json({ success: true, message: "SOS Booking rejected successfully. User notified." });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -239,38 +335,6 @@ const verifyPickupOtp = async (req, res) => {
     }
 };
 
-const rejectBooking = async (req, res) => {
-    try {
-        const { bookingId } = req.params;
-        const { reason, comments } = req.body; // Figma Radio options: "Busy on another case", "Vehicle issue", etc.
-
-        // Booking remains in 'Searching' state so other nearby drivers can see and accept it
-        const booking = await Booking.findOneAndUpdate(
-            { bookingId },
-            {
-                $set: { cancelledBy: 'Driver', cancellationReason: reason },
-                $push: { 
-                    trackingTimeline: { 
-                        status: 'Rejected by Driver', 
-                        timestamp: new Date(), 
-                        note: `Driver rejected. Reason: ${reason}. Note: ${comments || ''}` 
-                    } 
-                }
-            },
-            { new: true }
-        );
-
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
-
-        // Restore driver's active availability state
-        await Ambulance.findByIdAndUpdate(req.user.id, { $set: { availableForEmergency: true } });
-
-        res.json({ success: true, message: "SOS Booking rejected successfully. Returned back to pool." });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
-    }
-};
-
 // --- API: RE-ROUTE TRANSIT AMBULANCE (Figma Screen: Re-Route Dialog) ---
 const reRouteAmbulance = async (req, res) => {
     try {
@@ -307,26 +371,50 @@ const getDriverDashboardStats = async (req, res) => {
     try {
         const driverId = req.user.id; // Logged-in Driver ID
 
-        // FIX: MongoDB aggregate strictly requires explicit ObjectId wrapping to match records
-        const stats = await Booking.aggregate([
-            { $match: { ambulanceId: new mongoose.Types.ObjectId(driverId) } },
-            { $group: {
-                _id: null,
-                emergency: { $sum: { $cond: [{ $in: ["$serviceType", ["Accident emergency", "Quick Response"]] }, 1, 0] } },
-                medical: { $sum: { $cond: [{ $eq: ["$serviceType", "Medical Ambulance"] }, 1, 0] } },
-                referral: { $sum: { $cond: [{ $eq: ["$serviceType", "Referral Ambulance"] }, 1, 0] } }
-            }}
+        // Parallel processing: Live stats count aur Reviews count ek sath fetch karein
+        const [stats, reviews, totalTrips] = await Promise.all([
+            // Trip counts based on serviceType
+            Booking.aggregate([
+                { $match: { ambulanceId: new mongoose.Types.ObjectId(driverId) } },
+                { $group: {
+                    _id: null,
+                    emergency: { $sum: { $cond: [{ $in: ["$serviceType", ["Accident emergency", "Quick Response"]] }, 1, 0] } },
+                    medical: { $sum: { $cond: [{ $eq: ["$serviceType", "Medical Ambulance"] }, 1, 0] } },
+                    referral: { $sum: { $cond: [{ $eq: ["$serviceType", "Referral Ambulance"] }, 1, 0] } }
+                }}
+            ]),
+            // Fetch live reviews for rating calculation
+            Review.find({ targetId: driverId, targetType: 'Ambulance' }).select('rating').lean(),
+            // Count total completed/delivered trips
+            Booking.countDocuments({ ambulanceId: driverId, status: 'Delivered' })
         ]);
+
+        // Calculate dynamic average rating
+        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        if (reviews.length > 0) {
+            const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
+            averageRating = Number((totalRating / reviews.length).toFixed(1));
+        }
+
+        const counts = stats[0] || { emergency: 0, medical: 0, referral: 0 };
 
         res.json({
             success: true,
-            data: stats[0] || { emergency: 0, medical: 0, referral: 0 }
+            data: {
+                emergencyTrips: counts.emergency, // Emergency trips count
+                medicalTrips: counts.medical,     // Medical trips count
+                referralTrips: counts.referral,   // Referral trips count
+                totalTrips: totalTrips,           // Total delivered trips
+                rating: averageRating,             // 👈 LIVE DYNAMIC RATING FOR DRIVER
+                totalReviews: reviews.length      // Total reviews count
+            }
         });
     } catch (error) {
         console.error("Driver Stats Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // --- 7. GET DRIVER COMPLETE TRIPS HISTORY (NEW API) ---
 const getDriverTripHistory = async (req, res) => {

@@ -4,9 +4,11 @@ const { ambulanceDocUploads } = require('../../../middleware/multer');
 const { 
     getAmbulanceMasterData, getNearbyHospitals, getNearestAmbulances,getAmbulanceDetails,
     getAmbulanceCoupons, validateAmbulanceCoupon, calculateAmbulanceFare, 
-    confirmAmbulanceBooking,verifyAmbulancePayment, getBookingStatus, addReview, updateReview,
+    confirmAmbulanceBooking,initiateAmbulancePaymentAfterAcceptance,
+    verifyAmbulancePayment, getBookingStatus, addReview, updateReview,
     getUserNumbers, uploadIncidentPhoto, getLiveTracking,
-    getMyAmbulanceBookings, cancelAmbulanceBooking
+    getMyAmbulanceBookings, cancelAmbulanceBooking,
+    getAmbulanceReviewsList
     
 } = require('../../../controllers/user/Ambulance/AmbulanceBook');
 
@@ -33,6 +35,7 @@ router.post('/calculate-fare', protect('user'), calculateAmbulanceFare); // Comb
 // NOTE: Yeh ek hi API Medical, Accidental aur Referral teeno flows handle karegi.
 // Referral Card upload ke liye 'referralCard' field use hogi.
 router.post('/confirm-booking', protect('user'), ambulanceDocUploads, confirmAmbulanceBooking);
+router.post('/initiate-payment/:bookingId', protect('user'), initiateAmbulancePaymentAfterAcceptance);
 router.post('/verify-payment', protect('user'), verifyAmbulancePayment); // Payment verification for all flows
 
 // Accidental cases only: Booking ke baad photo capture karne ke liye
@@ -54,6 +57,10 @@ router.put('/review/update/:id', protect('user'), updateReview);
 ////////
 router.get('/my-bookings', protect('user'), getMyAmbulanceBookings);
 router.patch('/cancel/:id', protect('user'), cancelAmbulanceBooking);
+
+
+router.get('/reviews/:id', getAmbulanceReviewsList);
+
 
 
 module.exports = router;

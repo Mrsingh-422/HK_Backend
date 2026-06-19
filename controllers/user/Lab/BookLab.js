@@ -10,6 +10,7 @@ const MasterLabTest = require('../../../models/MasterLabTest');
 const MasterLabPackage = require('../../../models/MasterLabPackage');
 const MasterRequest = require('../../../models/MasterRequest');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
+const Review = require('../../../models/Review'); // 👈 Import the polymorphic Review model
 
 const Cart = require('../../../models/Cart'); // Import check karein
 const User = require('../../../models/User');
@@ -23,6 +24,16 @@ const states = require('../../../data/states.json');
 const cities = require('../../../data/cities.json');
 const Fuse = require('fuse.js');
 const LabCategory = require('../../../models/LabCategory');
+
+// for rating and reviews
+const Doctor = require('../../../models/Doctor'); 
+const Pharmacy = require('../../../models/Pharmacy');
+const Ambulance = require('../../../models/Ambulance');
+const Hospital = require('../../../models/Hospital');
+const Nurse = require('../../../models/Nurse');
+// end rating
+
+const { sendPushNotification } = require('../../../utils/notifaction'); // For Notifications
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
@@ -702,7 +713,6 @@ const getLabDetails = async (req, res) => {
         if (config) {
             const now = moment();
             const dayName = now.format('YYYY-MM-DD');
-            const dayOfWeek = now.format('Status'); // e.g., "Monday"
 
             // A. Timing Label (Figma: Open 7 AM - 9 PM)
             timingLabel = `Open ${config.startTime} - ${config.endTime}`;
@@ -725,7 +735,6 @@ const getLabDetails = async (req, res) => {
                 { $group: { _id: "$appointmentTime", count: { $sum: 1 } } }
             ]);
 
-            // Current time ke baad wala pehla slot dhoondein jo full na ho
             for (let slot of allSlots) {
                 const slotTime = moment(slot.time, "hh:mm A");
                 if (slotTime.isAfter(now)) {
@@ -742,7 +751,6 @@ const getLabDetails = async (req, res) => {
                 }
             }
 
-            // Agar aaj koi slot nahi mila, toh kal ka pehla slot de dein
             if (!nextSlot) {
                 nextSlot = {
                     date: "Tomorrow",
@@ -751,7 +759,14 @@ const getLabDetails = async (req, res) => {
             }
         }
 
-        // 3. Final Response matching Figma
+        // 🚨 NEW: Fetch dynamic last 3 user reviews for this Lab to show on profile
+        const recentReviews = await Review.find({ targetId: id, targetType: 'Lab' })
+            .select('userName rating comment createdAt')
+            .sort({ createdAt: -1 })
+            .limit(3)
+            .lean();
+
+        // 3. Final Response matching Figma with live reviews
         res.json({ 
             success: true, 
             data: {
@@ -759,13 +774,15 @@ const getLabDetails = async (req, res) => {
                 openStatus,           // Figma: "Open Now"
                 timingLabel,          // Figma: "Open 7 AM - 9 PM"
                 gallery: lab.documents?.labImages || [], // Figma Gallery
-                nextAvailableSlot: nextSlot // Figma: "Today - 4:00 PM"
+                nextAvailableSlot: nextSlot, // Figma: "Today - 4:00 PM"
+                recentReviews        // 👈 Added live detailed reviews
             } 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 
@@ -1385,25 +1402,192 @@ const verifyLabPayment = async (req, res) => {
 const rateLabOrder = async (req, res) => {
     try {
         const { bookingId, rating, comment } = req.body;
+        
+        // Ensure rating is valid
+        if (!rating || rating < 1 || rating > 5) {
+            return res.status(400).json({ success: false, message: "Valid rating (1 to 5) is required." });
+        }
+
         const booking = await LabBooking.findById(bookingId);
 
         if (!booking || booking.status !== 'Completed') {
-            return res.status(400).json({ message: "You can only rate completed orders" });
+            return res.status(400).json({ success: false, message: "You can only rate completed lab bookings." });
         }
 
-        // Update Lab model's average rating logic here
-        const lab = await Lab.findById(booking.labId);
-        const totalReviews = lab.totalReviews + 1;
-        const newRating = ((lab.rating * lab.totalReviews) + rating) / totalReviews;
+        // A. Duplicate review validation check
+        const existingReview = await Review.findOne({ userId: req.user.id, orderId: bookingId });
+        if (existingReview) {
+            return res.status(400).json({ success: false, message: "You have already submitted a review for this diagnostic order." });
+        }
 
-        await Lab.findByIdAndUpdate(booking.labId, {
-            rating: newRating.toFixed(1),
-            totalReviews: totalReviews
+        // B. Create Polymorphic Review record
+        await Review.create({
+            userId: req.user.id,
+            userName: req.user.name || "Verified User",
+            targetId: booking.labId, // Target Lab ID
+            targetType: 'Lab', // Polymorphic reference tag
+            orderId: bookingId,
+            rating,
+            comment: comment || ""
         });
 
-        res.json({ success: true, message: "Thank you for your feedback!" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // C. Dynamic Aggregation: Recalculate average rating & total reviews
+        const stats = await Review.aggregate([
+            { $match: { targetId: booking.labId, targetType: 'Lab' } },
+            {
+                $group: {
+                    _id: null,
+                    averageRating: { $avg: "$rating" },
+                    totalReviews: { $sum: 1 }
+                }
+            }
+        ]);
+
+        if (stats.length > 0) {
+            const newRating = Number(stats[0].averageRating.toFixed(1));
+            const totalReviews = stats[0].totalReviews;
+
+            // Cache metrics in Lab document for ultra-fast listings reads
+            await Lab.findByIdAndUpdate(booking.labId, {
+                rating: newRating,
+                totalReviews: totalReviews
+            });
+        }
+
+        res.json({ success: true, message: "Thank you for sharing your diagnostics experience!" });
+
+    } catch (error) { 
+        console.error("Rate Lab Order Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
+// --- 11. GET UNIVERSAL PAGINATED REVIEWS (Strictly 25 items per page) ---
+// GET /user/labs/reviews/:targetType/:targetId?page=1
+const getPaginatedReviews = async (req, res) => {
+    try {
+        const { targetType, targetId } = req.params; // targetType e.g., 'Lab', 'Doctor', 'Hospital'
+        const page = parseInt(req.query.page) || 1;
+        const limit = 25; // strictly paginated by 25 as requested
+        const skip = (page - 1) * limit;
+
+        // Validation for Polymorphic target Types
+        const allowedTypes = ['Doctor', 'Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance', 'Driver'];
+        if (!allowedTypes.includes(targetType)) {
+            return res.status(400).json({ success: false, message: "Invalid target type for reviews." });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(targetId)) {
+            return res.status(400).json({ success: false, message: "Invalid target ID." });
+        }
+
+        const query = {
+            targetId: new mongoose.Types.ObjectId(targetId),
+            targetType: targetType
+        };
+
+        // Parallel count and find operations
+        const [reviews, total] = await Promise.all([
+            Review.find(query)
+                .select('userName rating comment createdAt')
+                .sort({ createdAt: -1 }) // Newest reviews first
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Review.countDocuments(query)
+        ]);
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            limit,
+            data: reviews
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Helper mapping for polymorphic models updates
+const getModelByTargetType = (type) => {
+    const models = {
+        'Doctor': Doctor,
+        'Hospital': Hospital,
+        'Lab': Lab,
+        'Pharmacy': Pharmacy,
+        'Nurse': Nurse,
+        'Ambulance': Ambulance
+    };
+    return models[type] || null;
+};
+
+// --- 12. UNIVERSAL UPDATE REVIEW WITH CACHE RECALCULATION ---
+// PUT /user/labs/review/update/:id
+const updateReview = async (req, res) => {
+    try {
+        const { id } = req.params; // Review Document unique _id
+        const { rating, comment } = req.body;
+
+        if (rating && (rating < 1 || rating > 5)) {
+            return res.status(400).json({ success: false, message: "Valid rating (1 to 5) is required." });
+        }
+
+        // 1. Find the existing review to capture its targetType and targetId
+        const review = await Review.findOne({ _id: id, userId: req.user.id });
+        if (!review) {
+            return res.status(404).json({ success: false, message: "Review not found or unauthorized to edit." });
+        }
+
+        // 2. Apply dynamic updates
+        if (rating) review.rating = rating;
+        if (comment !== undefined) review.comment = comment;
+        await review.save();
+
+        // 🚨 3. RECALCULATE AGGREGATE RATING FOR THE TARGET VENDOR (Prevents Stale Cache)
+        const stats = await Review.aggregate([
+            { $match: { targetId: review.targetId, targetType: review.targetType } },
+            {
+                $group: {
+                    _id: null,
+                    averageRating: { $avg: "$rating" },
+                    totalReviews: { $sum: 1 }
+                }
+            }
+        ]);
+
+        if (stats.length > 0) {
+            const newRating = Number(stats[0].averageRating.toFixed(1));
+            const totalReviews = stats[0].totalReviews;
+
+            // Dynamically identify target model (Lab, Doctor, Nurse etc.) and update
+            const TargetModel = getModelByTargetType(review.targetType);
+            if (TargetModel) {
+                await TargetModel.findByIdAndUpdate(review.targetId, {
+                    rating: newRating,
+                    totalReviews: totalReviews
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: "Review successfully updated and ratings synchronized.",
+            data: {
+                id: review._id,
+                rating: review.rating,
+                comment: review.comment
+            }
+        });
+
+    } catch (error) {
+        console.error("Update Review Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -1836,6 +2020,6 @@ module.exports = {
     checkoutLabBooking,
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
-    cancelBooking, confirmPrescriptionBooking,verifyLabPayment, rateLabOrder ,
+    cancelBooking, confirmPrescriptionBooking,verifyLabPayment, rateLabOrder ,getPaginatedReviews,updateReview,
     getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,getWomenCategories,getWomenTestsByCategory
 };

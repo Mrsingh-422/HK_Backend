@@ -3,6 +3,9 @@ const Wallet = require('../../../models/Wallet');
 const WithdrawalRequest = require('../../../models/WithdrawalRequest');
 const moment = require('moment');
 const mongoose = require('mongoose');
+const Lab = require('../../../models/Lab');
+const Pharmacy = require('../../../models/Pharmacy');
+const Nurse = require('../../../models/Nurse');
 
 // Helper to dynamically resolve booking model and run aggregate calculations based on Provider Type
 const calculateProviderBalances = async (vendorId, role) => {
@@ -187,12 +190,14 @@ const requestWithdrawal = async (req, res) => {
 const updateProviderBankDetails = async (req, res) => {
     try {
         const { accountType, bankName, accountHolderName, accountNumber, ifscCode, upiId } = req.body;
+        const vendorId = req.user.id;
+        const role = req.user.role; // 'Lab', 'Pharmacy', or 'Nurse'
 
         if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
             return res.status(400).json({ success: false, message: "Missing required bank details fields." });
         }
 
-        // 🚨 SECURITY GUARD: Reset verification status to false on any change [1]
+        // SECURITY GUARD: Reset verification status to false on any change [1]
         const updatedBankDetails = {
             accountType: accountType || 'Savings',
             bankName,
@@ -203,16 +208,28 @@ const updateProviderBankDetails = async (req, res) => {
             isVerified: false // Locked for admin re-verification [1]
         };
 
-        req.user.bankDetails = updatedBankDetails;
-        await req.user.save();
+        // Determine correct collection dynamically [1]
+        let VendorModel;
+        if (role === 'Lab') VendorModel = Lab;
+        else if (role === 'Pharmacy') VendorModel = Pharmacy;
+        else if (role === 'Nurse') VendorModel = Nurse;
+
+        // 🚨 CRITICAL FIX: Use findByIdAndUpdate to bypass 2dsphere indexing and full-document validation bugs!
+        const updatedVendor = await VendorModel.findByIdAndUpdate(
+            vendorId,
+            { $set: { bankDetails: updatedBankDetails } },
+            { new: true }
+        );
 
         res.json({ 
             success: true, 
             message: "Bank details updated successfully. Payouts are locked until Admin verifies your account.", 
-            data: updatedBankDetails 
+            data: updatedVendor.bankDetails 
         });
     } catch (error) {
+        console.error("updateProviderBankDetails Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 module.exports = { getWalletStats, requestWithdrawal, updateProviderBankDetails };

@@ -8,14 +8,17 @@ const controller = require('../../controllers/ambulance/BookingAmb'); // New con
 
 router.get('/active-trip', protect(['ambulance', 'hospital-ambulance']), controller.getMyActiveTrip);
 router.get('/requests', protect(['ambulance', 'hospital-ambulance']), controller.getIncomingRequests);
-router.patch('/accept/:bookingId', protect(['ambulance', 'hospital-ambulance']), controller.acceptBooking);
+
+router.patch('/accept/:id', protect(['ambulance', 'hospital-ambulance']), controller.acceptBooking);
+router.patch('/reject/:id', protect(['ambulance', 'hospital-ambulance']), controller.rejectBooking); 
+
 router.patch('/update-trip/:id', protect(['ambulance', 'hospital-ambulance']), controller.updateTripStatus);
 router.post('/incident-photo/:id', protect(['ambulance', 'hospital-ambulance']), ambulanceDocUploads, controller.uploadIncidentPhoto);
 
 router.patch('/finalize-handoff/:id', protect(['ambulance', 'hospital-ambulance']), controller.finalizeTripHandoff);
 router.patch('/verify-otp/:id', protect(['ambulance', 'hospital-ambulance']), controller.verifyPickupOtp);
 
-router.patch('/reject/:bookingId', protect(['ambulance', 'hospital-ambulance']), controller.rejectBooking); 
+
 
 // FIX: Replaced 'patch' with 'router.patch' to prevent router crash
 router.patch('/re-route/:id', protect(['ambulance', 'hospital-ambulance']), controller.reRouteAmbulance); 

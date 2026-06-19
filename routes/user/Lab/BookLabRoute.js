@@ -13,7 +13,7 @@ const {
     getMasterTestDetails, getMasterPackageDetails,
     checkoutLabBooking,
     confirmPrescriptionBooking,verifyLabPayment,
-    rateLabOrder,cancelBooking,
+    rateLabOrder,getPaginatedReviews,updateReview,cancelBooking,
     getAvailableCoupons ,validateLabCoupon,
     getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,
     getWomenCategories,getWomenTestsByCategory
@@ -84,7 +84,10 @@ router.post('/book', protect('user'), bookLabTest);
 router.get('/my-bookings', protect('user'), getMyBookings);
 router.get('/details/:id/track', protect('user'), getBookingDetails);
 router.put('/cancel/:id', protect('user'), cancelBooking);
+// rating user full
 router.post('/rate', protect('user'), rateLabOrder);
+router.get('/reviews/:targetType/:targetId', protect('user'), getPaginatedReviews);
+router.put('/review/update/:id', protect('user'), updateReview);
 
 router.get('/women-special-tests', protect('user'), getWomenSpecialTests); //
 router.get('/test/women/categories', protect('user'), getWomenCategories); //
