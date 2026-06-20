@@ -31,6 +31,7 @@ const Pharmacy = require('../../../models/Pharmacy');
 const Ambulance = require('../../../models/Ambulance');
 const Hospital = require('../../../models/Hospital');
 const Nurse = require('../../../models/Nurse');
+const Driver = require('../../../models/Driver');
 // end rating
 
 const { sendPushNotification } = require('../../../utils/notifaction'); // For Notifications
@@ -1519,71 +1520,163 @@ const getModelByTargetType = (type) => {
         'Lab': Lab,
         'Pharmacy': Pharmacy,
         'Nurse': Nurse,
-        'Ambulance': Ambulance
+        'Ambulance': Ambulance,
+        'Driver': Driver
     };
     return models[type] || null;
 };
 
-// --- 12. UNIVERSAL UPDATE REVIEW WITH CACHE RECALCULATION ---
-// PUT /user/labs/review/update/:id
-const updateReview = async (req, res) => {
+
+// --- DYNAMIC RATING RECALCULATOR HELPER ---
+const recalculateTargetRating = async (targetId, targetType) => {
+    const stats = await Review.aggregate([
+        { $match: { targetId: new mongoose.Types.ObjectId(targetId), targetType } },
+        {
+            $group: {
+                _id: null,
+                averageRating: { $avg: "$rating" },
+                totalReviews: { $sum: 1 }
+            }
+        }
+    ]);
+
+    if (stats.length > 0) {
+        const newRating = Number(stats[0].averageRating.toFixed(1));
+        const totalReviews = stats[0].totalReviews;
+
+        const TargetModel = getModelByTargetType(targetType);
+        if (TargetModel) {
+            await TargetModel.findByIdAndUpdate(targetId, {
+                rating: newRating,
+                totalReviews: totalReviews
+            });
+        }
+    }
+};
+
+// --- 13. UPDATE REVIEW VIA ORDER ID (Figma: Edit feedback from Order history) ---
+// PUT /user/labs/review/update-by-order/:orderId
+const updateReviewByOrderId = async (req, res) => {
     try {
-        const { id } = req.params; // Review Document unique _id
+        const { orderId } = req.params; // Booking/Order MongoDB _id
         const { rating, comment } = req.body;
 
         if (rating && (rating < 1 || rating > 5)) {
             return res.status(400).json({ success: false, message: "Valid rating (1 to 5) is required." });
         }
 
-        // 1. Find the existing review to capture its targetType and targetId
-        const review = await Review.findOne({ _id: id, userId: req.user.id });
-        if (!review) {
-            return res.status(404).json({ success: false, message: "Review not found or unauthorized to edit." });
+        if (!mongoose.Types.ObjectId.isValid(orderId)) {
+            return res.status(400).json({ success: false, message: "Invalid order/booking ID format." });
         }
 
-        // 2. Apply dynamic updates
+        // Find review directly using orderId and userId
+        const review = await Review.findOne({ orderId: new mongoose.Types.ObjectId(orderId), userId: req.user.id });
+        if (!review) {
+            return res.status(404).json({ success: false, message: "No review found registered for this order." });
+        }
+
+        // Apply changes
         if (rating) review.rating = rating;
         if (comment !== undefined) review.comment = comment;
         await review.save();
 
-        // 🚨 3. RECALCULATE AGGREGATE RATING FOR THE TARGET VENDOR (Prevents Stale Cache)
-        const stats = await Review.aggregate([
-            { $match: { targetId: review.targetId, targetType: review.targetType } },
-            {
-                $group: {
-                    _id: null,
-                    averageRating: { $avg: "$rating" },
-                    totalReviews: { $sum: 1 }
-                }
-            }
-        ]);
-
-        if (stats.length > 0) {
-            const newRating = Number(stats[0].averageRating.toFixed(1));
-            const totalReviews = stats[0].totalReviews;
-
-            // Dynamically identify target model (Lab, Doctor, Nurse etc.) and update
-            const TargetModel = getModelByTargetType(review.targetType);
-            if (TargetModel) {
-                await TargetModel.findByIdAndUpdate(review.targetId, {
-                    rating: newRating,
-                    totalReviews: totalReviews
-                });
-            }
-        }
+        // Recalculate average rating for the target vendor
+        await recalculateTargetRating(review.targetId, review.targetType);
 
         res.json({
             success: true,
-            message: "Review successfully updated and ratings synchronized.",
-            data: {
-                id: review._id,
-                rating: review.rating,
-                comment: review.comment
-            }
+            message: "Review successfully updated via Order ID and ratings synchronized.",
+            data: review
         });
 
     } catch (error) {
-        console.error("Update Review Error:", error);
+        console.error("Update Review By Order Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 14. UPDATE REVIEW VIA VENDOR/TARGET ID & ORDER ID ---
+// PUT /user/labs/review/update-by-vendor/:targetId
+const updateReviewByVendorId = async (req, res) => {
+    try {
+        const { targetId } = req.params; // Vendor/Target MongoDB _id
+        const { orderId, rating, comment } = req.body; // Order ID passed in body
+
+        if (!mongoose.Types.ObjectId.isValid(targetId) || !mongoose.Types.ObjectId.isValid(orderId)) {
+            return res.status(400).json({ success: false, message: "Invalid dynamic ObjectId formats." });
+        }
+
+        if (rating && (rating < 1 || rating > 5)) {
+            return res.status(400).json({ success: false, message: "Valid rating (1 to 5) is required." });
+        }
+
+        // Find review using targetId, orderId and userId
+        const review = await Review.findOne({
+            targetId: new mongoose.Types.ObjectId(targetId),
+            orderId: new mongoose.Types.ObjectId(orderId),
+            userId: req.user.id
+        });
+
+        if (!review) {
+            return res.status(404).json({ success: false, message: "No matching review found for this vendor and order." });
+        }
+
+        // Apply changes
+        if (rating) review.rating = rating;
+        if (comment !== undefined) review.comment = comment;
+        await review.save();
+
+        // Recalculate average rating for the target vendor
+        await recalculateTargetRating(review.targetId, review.targetType);
+
+        res.json({
+            success: true,
+            message: "Review successfully updated via Vendor ID and ratings synchronized.",
+            data: review
+        });
+
+    } catch (error) {
+        console.error("Update Review By Vendor Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 15. GET REVIEW BY ORDER ID (To check if user already reviewed a booking) ---
+// GET /user/labs/review/by-order/:orderId
+const getReviewByOrderId = async (req, res) => {
+    try {
+        const { orderId } = req.params; // Booking/Order MongoDB _id
+
+        if (!mongoose.Types.ObjectId.isValid(orderId)) {
+            return res.status(400).json({ success: false, message: "Invalid order/booking ID format." });
+        }
+
+        // Search strictly for the logged-in user's review for this specific order
+        const review = await Review.findOne({ 
+            orderId: new mongoose.Types.ObjectId(orderId), 
+            userId: req.user.id 
+        }).lean();
+
+        if (!review) {
+            // Case A: Agar user ne is booking par koi review nahi diya hai
+            return res.json({
+                success: true,
+                hasReviewed: false,
+                message: "No review has been submitted for this order yet.",
+                data: null
+            });
+        }
+
+        // Case B: Agar review pehle se database me exist karta hai
+        res.json({
+            success: true,
+            hasReviewed: true,
+            message: "Review found for this order.",
+            data: review
+        });
+
+    } catch (error) {
+        console.error("Get Review By Order Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2020,6 +2113,6 @@ module.exports = {
     checkoutLabBooking,
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
-    cancelBooking, confirmPrescriptionBooking,verifyLabPayment, rateLabOrder ,getPaginatedReviews,updateReview,
+    cancelBooking, confirmPrescriptionBooking,verifyLabPayment, rateLabOrder ,getPaginatedReviews,updateReviewByOrderId, updateReviewByVendorId,getReviewByOrderId,
     getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,getWomenCategories,getWomenTestsByCategory
 };

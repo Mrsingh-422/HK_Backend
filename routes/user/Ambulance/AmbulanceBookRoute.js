@@ -5,10 +5,11 @@ const {
     getAmbulanceMasterData, getNearbyHospitals, getNearestAmbulances,getAmbulanceDetails,
     getAmbulanceCoupons, validateAmbulanceCoupon, calculateAmbulanceFare, 
     confirmAmbulanceBooking,initiateAmbulancePaymentAfterAcceptance,
-    verifyAmbulancePayment, getBookingStatus, addReview, updateReview,
+    verifyAmbulancePayment, getBookingStatus, 
+    // addReview, updateReview,
     getUserNumbers, uploadIncidentPhoto, getLiveTracking,
     getMyAmbulanceBookings, cancelAmbulanceBooking,
-    getAmbulanceReviewsList
+    getAmbulanceReviewsList,rateAmbulanceBooking
     
 } = require('../../../controllers/user/Ambulance/AmbulanceBook');
 
@@ -51,8 +52,8 @@ router.get('/live-track/:id', protect('user'), getLiveTracking); // Detailed Dri
 // =============================================================================
 // 5. REVIEWS
 // =============================================================================
-router.post('/review/add', protect('user'), addReview);
-router.put('/review/update/:id', protect('user'), updateReview);
+// router.post('/review/add', protect('user'), addReview);
+// router.put('/review/update/:id', protect('user'), updateReview);
 
 ////////
 router.get('/my-bookings', protect('user'), getMyAmbulanceBookings);
@@ -61,6 +62,7 @@ router.patch('/cancel/:id', protect('user'), cancelAmbulanceBooking);
 
 router.get('/reviews/:id', getAmbulanceReviewsList);
 
+router.post('/rate', protect('user'), rateAmbulanceBooking);
 
 
 module.exports = router;

@@ -11,7 +11,8 @@ const {
     finalHospitalBooking,verifyHospitalPayment,
     getMyHospitalBookings ,
     getBookingProfiles,
-    getHospitalDetails,addReview, updateReview
+    getHospitalDetails,addReview, updateReview,
+    rateHospitalAdmission
 } = require('../../../controllers/user/Hospital/BookHospital');
 
 // URL: /user/hospital
@@ -50,4 +51,5 @@ router.get('/booking-profiles', protect('user'), getBookingProfiles);
 // Reviews
 router.post('/add-review/:hospitalId', protect('user'), addReview);
 router.put('/update-review/:reviewId', protect('user'), updateReview);
+router.post('/rate', protect('user'), rateHospitalAdmission);
 module.exports = router;

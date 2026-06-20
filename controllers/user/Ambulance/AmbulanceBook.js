@@ -8,8 +8,6 @@ const Wallet = require('../../../models/Wallet');
 const mongoose = require('mongoose');
 const { getDistance } = require('../../../utils/helpers');
 const { sendPushNotification } = require('../../../utils/notifaction');
-
-
 const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
 const generateCaseRef = (type) => {
@@ -148,7 +146,14 @@ const getAmbulanceDetails = async (req, res) => {
             averageRating = Number((totalRating / reviews.length).toFixed(1)); 
         }
 
-        // 3. Prepare Detailed Response with Live Ratings
+        // 🚨 Fetch last 3 recent reviews for this specific ambulance
+        const recentReviews = await Review.find({ targetId: id, targetType: 'Ambulance' })
+            .select('userName rating comment createdAt')
+            .sort({ createdAt: -1 })
+            .limit(3)
+            .lean();
+
+        // 3. Prepare Detailed Response with Live Ratings & Recent Reviews
         const data = {
             _id: ambulance._id,
             // --- Driver / Identification ---
@@ -159,7 +164,7 @@ const getAmbulanceDetails = async (req, res) => {
                 experience: ambulance.experienceYears || "N/A",
                 bloodGroup: ambulance.bloodGroup,
                 department: ambulance.driverInfo?.department,
-                rating: averageRating, // 👈 NOW FULLY DYNAMIC!
+                rating: averageRating, // 👈 DYNAMICALLY CALCULATED!
                 totalReviews: reviews.length, // 👈 Dynamic reviews counter
                 tripsCount: reviews.length > 0 ? `${reviews.length * 3 + 120}+` : "1,240+" // Semi-dynamic
             },
@@ -218,7 +223,10 @@ const getAmbulanceDetails = async (req, res) => {
                 licenseVerified: !!ambulance.documents?.drivingLicenseFile,
                 rcVerified: !!ambulance.documents?.rcFile,
                 insuranceValid: !!ambulance.documents?.insuranceFile
-            }
+            },
+
+            // 🚨 ADDED: Dynamic Last 3 User Reviews List
+            recentReviews 
         };
 
         res.json({
@@ -647,45 +655,45 @@ const verifyAmbulancePayment = async (req, res) => {
 
 
 
-const addReview = async (req, res) => {
-    try {
-        const { targetId, targetType, orderId, rating, comment } = req.body;
+// const addReview = async (req, res) => {
+//     try {
+//         const { targetId, targetType, orderId, rating, comment } = req.body;
 
-        // Check if user already reviewed this order
-        const existing = await Review.findOne({ userId: req.user.id, orderId });
-        if (existing) return res.status(400).json({ message: "Review already submitted for this order" });
+//         // Check if user already reviewed this order
+//         const existing = await Review.findOne({ userId: req.user.id, orderId });
+//         if (existing) return res.status(400).json({ message: "Review already submitted for this order" });
 
-        const review = await Review.create({
-            userId: req.user.id,
-            userName: req.user.name,
-            targetId,
-            targetType,
-            orderId,
-            rating,
-            comment
-        });
+//         const review = await Review.create({
+//             userId: req.user.id,
+//             userName: req.user.name,
+//             targetId,
+//             targetType,
+//             orderId,
+//             rating,
+//             comment
+//         });
 
-        res.status(201).json({ success: true, message: "Review added successfully", data: review });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+//         res.status(201).json({ success: true, message: "Review added successfully", data: review });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
 
 // --- 2. UPDATE REVIEW ---
-const updateReview = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { rating, comment } = req.body;
+// const updateReview = async (req, res) => {
+//     try {
+//         const { id } = req.params;
+//         const { rating, comment } = req.body;
 
-        const review = await Review.findOneAndUpdate(
-            { _id: id, userId: req.user.id },
-            { $set: { rating, comment } },
-            { new: true }
-        );
+//         const review = await Review.findOneAndUpdate(
+//             { _id: id, userId: req.user.id },
+//             { $set: { rating, comment } },
+//             { new: true }
+//         );
 
-        if (!review) return res.status(404).json({ message: "Review not found" });
+//         if (!review) return res.status(404).json({ message: "Review not found" });
 
-        res.json({ success: true, message: "Review updated", data: review });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+//         res.json({ success: true, message: "Review updated", data: review });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
 
 
 
@@ -1038,6 +1046,51 @@ const getAmbulanceReviewsList = async (req, res) => {
 };
 
 
+const rateAmbulanceBooking = async (req, res) => {
+    try {
+        const { bookingId, rating, comment } = req.body;
+
+        const booking = await AmbulanceBooking.findOne({ _id: bookingId, userId: req.user.id });
+        if (!booking || booking.status !== 'Delivered') {
+            return res.status(400).json({ success: false, message: "You can only rate completed ambulance trips." });
+        }
+
+        const existingReview = await Review.findOne({ userId: req.user.id, orderId: bookingId });
+        if (existingReview) {
+            return res.status(400).json({ success: false, message: "You have already submitted a review for this trip." });
+        }
+
+        // Create Polymorphic Review
+        await Review.create({
+            userId: req.user.id,
+            userName: req.user.name || "Verified User",
+            targetId: booking.ambulanceId,
+            targetType: 'Ambulance',
+            orderId: bookingId,
+            rating,
+            comment: comment || ""
+        });
+
+        // Recalculate average rating & sync to Ambulance profile
+        const stats = await Review.aggregate([
+            { $match: { targetId: booking.ambulanceId, targetType: 'Ambulance' } },
+            { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }
+        ]);
+
+        if (stats.length > 0) {
+            await Ambulance.findByIdAndUpdate(booking.ambulanceId, {
+                rating: Number(stats[0].averageRating.toFixed(1)),
+                totalReviews: stats[0].totalReviews
+            });
+        }
+
+        res.json({ success: true, message: "Thank you for rating our emergency transport!" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 
 module.exports = {
@@ -1048,7 +1101,8 @@ module.exports = {
     getBookingStatus, getAmbulanceCoupons , validateAmbulanceCoupon,
     calculateAmbulanceFare,
     confirmAmbulanceBooking,initiateAmbulancePaymentAfterAcceptance,
-    verifyAmbulancePayment, updateReview,addReview,
+    verifyAmbulancePayment, 
+    // updateReview,addReview,
 
     getUserNumbers,
     createAccidentalBooking,
@@ -1059,7 +1113,8 @@ module.exports = {
     cancelAmbulanceBooking,getMyAmbulanceBookings,
 
 
-    getAmbulanceReviewsList
+    getAmbulanceReviewsList,
+    rateAmbulanceBooking
 
     
 };

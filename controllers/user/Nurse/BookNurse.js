@@ -7,6 +7,7 @@ const DeliveryCharge = require('../../../models/DeliveryCharge');
 const { isNurseAvailable, generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const NurseConsumable = require('../../../models/MasterConsumable');
 const Coupon = require('../../../models/Coupon');
+const Review = require('../../../models/Review');
 
 // const { generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const moment = require('moment');
@@ -82,7 +83,26 @@ const getNurseDetails = async (req, res) => {
         const nurse = await Nurse.findById(nurseId).lean();
         if (!nurse) return res.status(404).json({ message: "Nurse not found" });
 
-        // Parallel fetching for performance
+        // Dynamic dynamic rating calculation from Polymorphic Review schema
+        const reviews = await Review.find({ 
+            targetId: nurseId, 
+            targetType: 'Nurse' 
+        }).select('rating').lean();
+
+        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        if (reviews.length > 0) {
+            const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
+            averageRating = Number((totalRating / reviews.length).toFixed(1)); 
+        }
+
+        // Fetch last 3 recent reviews specifically for this Nurse Provider
+        const recentReviews = await Review.find({ targetId: nurseId, targetType: 'Nurse' })
+            .select('userName rating comment createdAt')
+            .sort({ createdAt: -1 })
+            .limit(3)
+            .lean();
+
+        // Parallel fetching for services, packages and configs
         const [services, packages, config] = await Promise.all([
             NurseService.find({ nurseId, status: 'Approved' })
                 .populate('consumablesUsed.masterItemId')
@@ -98,9 +118,12 @@ const getNurseDetails = async (req, res) => {
             success: true, 
             data: { 
                 ...nurse, 
+                rating: averageRating,           // 👈 Dynamic average rating
+                totalReviews: reviews.length,    // 👈 Dynamic total reviews count
                 services: services || [], 
                 packages: packages || [], 
-                availability: config || null 
+                availability: config || null,
+                recentReviews                    // 👈 Added live last 3 user reviews
             } 
         });
     } catch (e) { 
@@ -807,6 +830,52 @@ const getGlobalPackages = async (req, res) => {
     }
 };
 
-module.exports = { getNurses,getNurseDetails,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService,
+
+
+const rateNurseBooking = async (req, res) => {
+    try {
+        const { bookingId, rating, comment } = req.body;
+
+        const booking = await NurseBooking.findOne({ _id: bookingId, userId: req.user.id });
+        if (!booking || booking.status !== 'Completed') {
+            return res.status(400).json({ success: false, message: "You can only rate completed nursing care sessions." });
+        }
+
+        const existingReview = await Review.findOne({ userId: req.user.id, orderId: bookingId });
+        if (existingReview) {
+            return res.status(400).json({ success: false, message: "You have already submitted a review for this care booking." });
+        }
+
+        // Create Polymorphic Review
+        await Review.create({
+            userId: req.user.id,
+            userName: req.user.name || "Verified User",
+            targetId: booking.nurseId,
+            targetType: 'Nurse',
+            orderId: bookingId,
+            rating,
+            comment: comment || ""
+        });
+
+        // Recalculate average rating & sync to Nurse profile
+        const stats = await Review.aggregate([
+            { $match: { targetId: booking.nurseId, targetType: 'Nurse' } },
+            { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }
+        ]);
+
+        if (stats.length > 0) {
+            await Nurse.findByIdAndUpdate(booking.nurseId, {
+                rating: Number(stats[0].averageRating.toFixed(1)),
+                totalReviews: stats[0].totalReviews
+            });
+        }
+
+        res.json({ success: true, message: "Thank you for rating your home nursing session!" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { getNurses,getNurseDetails,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService, rateNurseBooking,
     getAppointmentStatus, 
     uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon };

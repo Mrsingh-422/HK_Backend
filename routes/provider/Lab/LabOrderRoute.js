@@ -10,7 +10,7 @@ const {
     handleOrderAction, 
     assignStaff, 
     updateProgressStatus, 
-    uploadReport 
+    uploadReport ,generateAndUploadSmartReport,getReportTemplates
 } = require('../../../controllers/provider/Lab/LabsOrder');
 
 // Base URL: /provider/labs
@@ -29,8 +29,13 @@ router.patch('/assign-staff/:orderId', protect('provider'), assignStaff);
 
 // Update testing status
 router.patch('/update-progress/:orderId', protect('provider'), updateProgressStatus);
-
+ 
 // Upload report PDF
 router.post('/upload-report/:orderId', protect('provider'), labDocUploads, uploadReport);
+
+router.post('/generate-report/:orderId', protect('provider'), generateAndUploadSmartReport); // 👈 Added
+
+router.get('/report-templates', protect('provider'), getReportTemplates); // 👈 Added
+
 
 module.exports = router;

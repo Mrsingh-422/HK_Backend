@@ -55,22 +55,60 @@ const getHospitals = async (req, res) => {
 const getHospitalDetails = async (req, res) => {
     try {
         const { id } = req.params;
+        
+        // 1. Fetch Hospital Basic Info
         const hospital = await Hospital.findById(id).select('-password -token').lean();
         if (!hospital) return res.status(404).json({ message: "Hospital not found" });
 
-        // Fetch Wards, Doctors, and Admin-added Services (Figma S-29)
+        // =========================================================================
+        // 🚨 2. DYNAMIC RATINGS & REVIEWS CALCULATOR (For Hospital Profile)
+        // =========================================================================
+        const reviews = await Review.find({ 
+            targetId: id, 
+            targetType: 'Hospital' 
+        }).select('rating').lean();
+
+        let averageRating = 4.5; // Default fallback if no reviews exist in DB yet
+        if (reviews.length > 0) {
+            const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
+            // Format to 1 decimal place (e.g. 4.3)
+            averageRating = Number((totalRating / reviews.length).toFixed(1)); 
+        }
+
+        // Fetch last 3 recent reviews specifically for this Hospital
+        const recentReviews = await Review.find({ targetId: id, targetType: 'Hospital' })
+            .select('userName rating comment createdAt')
+            .sort({ createdAt: -1 })
+            .limit(3)
+            .lean();
+
+        // 3. Fetch Wards, Doctors, and Admin-added Services (Figma S-29)
         const [wards, doctors, services] = await Promise.all([
             Ward.find({ hospitalId: id, isActive: true }),
             Doctor.find({ hospitalId: id, profileStatus: 'Approved' }).select('name speciality profileImage fees averageRating consultationStatus'),
             HospitalService.find({ hospitalId: id }) // Fetch Nurse, Security, etc.
         ]);
 
+        // 4. Dynamic Response Payload
         res.json({
             success: true,
-            data: { hospital, wards, doctors, services }
+            data: { 
+                hospital: {
+                    ...hospital,
+                    rating: averageRating,           // 👈 Dynamic calculated rating
+                    totalReviews: reviews.length     // 👈 Dynamic total reviews count
+                }, 
+                wards, 
+                doctors, 
+                services,
+                recentReviews                        // 👈 Added live last 3 user reviews
+            }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 // 2. WARD & BED AVAILABILITY (Screenshot 22, 27)
 // 2. WARD AVAILABILITY
 const getWards = async (req, res) => {
@@ -935,10 +973,70 @@ const getBookingProfiles = async (req, res) => {
 };
 
 
+// --- POST: RATE COMPLETED HOSPITAL BED ADMISSION ---
+// POST /user/hospital/rate
+const rateHospitalAdmission = async (req, res) => {
+    try {
+        const { bookingId, rating, comment } = req.body;
+
+        // 1. Pehle confirm karein ki user ki admission booking completed hai ya nahi
+        const booking = await Appointment.findOne({ 
+            _id: bookingId, 
+            userId: req.user.id, 
+            bookingType: 'Admission' 
+        });
+
+        if (!booking || booking.status !== 'Completed') {
+            return res.status(400).json({ success: false, message: "You can only rate completed hospital bed bookings/admissions." });
+        }
+
+        // 2. Check karein ki user pehle se is booking ko rate toh nahi kar chuka (duplicate review protection)
+        const existingReview = await Review.findOne({ userId: req.user.id, orderId: bookingId });
+        if (existingReview) {
+            return res.status(400).json({ success: false, message: "You have already submitted a review for this hospital admission." });
+        }
+
+        // 3. Create Polymorphic Review for Hospital
+        await Review.create({
+            userId: req.user.id,
+            userName: req.user.name || "Verified User",
+            targetId: booking.hospitalId, // Hospital ID
+            targetType: 'Hospital',       // Polymorphic tag pointing to Hospital model
+            orderId: bookingId,
+            rating,
+            comment: comment || ""
+        });
+
+        // 4. Dynamic Aggregation: Live average recalculate karein
+        const stats = await Review.aggregate([
+            { $match: { targetId: booking.hospitalId, targetType: 'Hospital' } },
+            { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }
+        ]);
+
+        if (stats.length > 0) {
+            const newRating = Number(stats[0].averageRating.toFixed(1));
+            const totalReviews = stats[0].totalReviews;
+
+            // Cache updated metrics inside Hospital document for fast reads
+            await Hospital.findByIdAndUpdate(booking.hospitalId, {
+                rating: newRating,
+                totalReviews: totalReviews
+            });
+        }
+
+        res.json({ success: true, message: "Thank you for rating your hospital stay experience!" });
+
+    } catch (error) {
+        console.error("Rate Hospital Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 module.exports = {
     getHospitals, getWards, getBedGrid, getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
-    getAvailableBedsForRange,cancelBedBooking, rescheduleBedBooking, getBedMonthlySchedule,
+    getAvailableBedsForRange,cancelBedBooking, rescheduleBedBooking, getBedMonthlySchedule, rateHospitalAdmission,
     getHospitalCheckoutSummary, finalHospitalBooking,verifyHospitalPayment, getMyHospitalBookings, getBookingProfiles,
     getHospitalDetails, addReview, updateReview
 };

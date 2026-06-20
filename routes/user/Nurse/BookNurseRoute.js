@@ -5,7 +5,7 @@ const { prescriptionUploads } = require('../../../middleware/multer');
 const { 
     getNurses, getNurseDetails,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
-    uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages
+    uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking
 } = require('../../../controllers/user/Nurse/BookNurse');
 
 // Base URL: /user/nurse
@@ -41,5 +41,8 @@ router.post('/rate', protect('user'), rateNurseService); // Screen 12
 
 // Search (If you want a dedicated search endpoint)
 router.post('/search', searchNurses);
+
+
+router.post('/rate', protect('user'), rateNurseBooking);
 
 module.exports = router;

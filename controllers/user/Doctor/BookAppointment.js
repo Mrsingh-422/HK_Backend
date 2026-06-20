@@ -13,6 +13,8 @@ const { getDistance } = require('../../../utils/helpers');
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const moment = require('moment');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
+const Review = require('../../../models/Review'); // For dynamic ratings calculation
 
 const Bed = require('../../../models/Bed'); // For hospital admissions
 
@@ -92,6 +94,28 @@ const getDoctorDetails = async (req, res) => {
 
         if (!doctorDoc) return res.status(404).json({ message: "Doctor not found" });
 
+        // =========================================================================
+        // 🚨 DYNAMIC RATINGS & REVIEWS CALCULATOR (For Doctor Profile)
+        // =========================================================================
+        const reviews = await Review.find({ 
+            targetId: doctorId, 
+            targetType: 'Doctor' 
+        }).select('rating').lean();
+
+        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        if (reviews.length > 0) {
+            const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
+            // Format to 1 decimal place (e.g. 4.3)
+            averageRating = Number((totalRating / reviews.length).toFixed(1)); 
+        }
+
+        // Fetch last 3 recent reviews specifically for this Doctor
+        const recentReviews = await Review.find({ targetId: doctorId, targetType: 'Doctor' })
+            .select('userName rating comment createdAt')
+            .sort({ createdAt: -1 })
+            .limit(3)
+            .lean();
+
         const availability = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
 
         let workingHoursDisplay = [];
@@ -127,6 +151,8 @@ const getDoctorDetails = async (req, res) => {
             data: {
                 profile: {
                     ...doctor,
+                    averageRating: averageRating,   // 👈 Dynamic average rating
+                    totalReviews: reviews.length,  // 👈 Dynamic total reviews count
                     experience: `${doctor.experienceYears}+ years`,
                     workingHours: workingHoursDisplay,
                     helpWith: doctor.treatedConditions || ["Fever", "Cough", "Headache"],
@@ -136,7 +162,8 @@ const getDoctorDetails = async (req, res) => {
                     { type: 'Clinic Visit', fee: doctor.fees.clinic, active: doctor.consultationStatus.clinic },
                     { type: 'Video Consult', fee: doctor.fees.online, active: doctor.consultationStatus.online },
                     { type: 'Home Visit', fee: doctor.fees.home, active: doctor.consultationStatus.home }
-                ]
+                ],
+                recentReviews // 👈 Added live last 3 user reviews
             } 
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
@@ -791,6 +818,94 @@ const getUserVideoConsults = async (req, res) => {
     }
 };
 
+const rateDoctorAppointment = async (req, res) => {
+    try {
+        const { bookingId, rating, comment } = req.body;
+
+        // 1. Validation checks
+        if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
+            return res.status(400).json({ success: false, message: "Valid Booking ID (ObjectId) format is required." });
+        }
+
+        if (!rating || rating < 1 || rating > 5) {
+            return res.status(400).json({ success: false, message: "Valid rating (1 to 5) is required." });
+        }
+
+        // 2. Fetch the completed Doctor Appointment
+        const booking = await Appointment.findOne({ 
+            _id: new mongoose.Types.ObjectId(bookingId), 
+            userId: req.user.id, 
+            bookingType: 'Appointment' 
+        });
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Doctor appointment booking not found." });
+        }
+
+        if (booking.status !== 'Completed') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `You can only rate completed appointments. Current status is: ${booking.status}` 
+            });
+        }
+
+        // 3. Prevent duplicate reviews
+        const existingReview = await Review.findOne({ userId: req.user.id, orderId: booking._id });
+        if (existingReview) {
+            return res.status(400).json({ success: false, message: "You have already submitted a review for this appointment." });
+        }
+
+        // 4. Create Polymorphic Review
+        await Review.create({
+            userId: req.user.id,
+            userName: req.user.name || "Verified User",
+            targetId: booking.doctorId,
+            targetType: 'Doctor',
+            orderId: booking._id,
+            rating: Number(rating),
+            comment: comment || ""
+        });
+
+        // 5. Recalculate average rating
+        const stats = await Review.aggregate([
+            { 
+                $match: { 
+                    targetId: new mongoose.Types.ObjectId(booking.doctorId), 
+                    targetType: 'Doctor' 
+                } 
+            },
+            { 
+                $group: { 
+                    _id: null, 
+                    averageRating: { $avg: "$rating" }, 
+                    totalReviews: { $sum: 1 } 
+                } 
+            }
+        ]);
+
+        if (stats.length > 0) {
+            const newRating = Number(stats[0].averageRating.toFixed(1));
+            const totalReviews = stats[0].totalReviews;
+
+            await Doctor.findByIdAndUpdate(booking.doctorId, {
+                averageRating: newRating,
+                totalReviews: totalReviews
+            });
+        }
+
+        res.json({ success: true, message: "Thank you for rating your doctor consultation!" });
+    } catch (error) {
+        // 🚨 Is code ke zariye terminal ke bajay direct API response me hi poora error dikhega
+        console.error("RATE DOCTOR APPOINTMENT EXCEPTION:", error);
+        res.status(500).json({ 
+            success: false, 
+            message: "Internal Server Error: " + error.message, 
+            error_stack: error.stack // 👈 Yeh exact error trace karega
+        });
+    }
+};
+
+
 module.exports = { 
     getSpecializations, 
     searchDoctors, 
@@ -805,5 +920,5 @@ module.exports = {
     trackAppointment ,
     getMyPrescriptions,
     getAvailableSlots,getTrackingStatus,getShareableTrackingLink,
-    getUserVideoConsults
+    getUserVideoConsults, rateDoctorAppointment
 };

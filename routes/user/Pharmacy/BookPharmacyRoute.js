@@ -9,7 +9,7 @@ getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 createPrescriptionRequest,payAndConfirmOrder,verifyPrescriptionRequestPayment,
  getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices,
 
-getActiveStoreComboOffers
+getActiveStoreComboOffers,ratePharmacyOrder
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
@@ -62,6 +62,8 @@ router.get('/track-order/:orderId',protect('user'),trackOrder);
 router.get('/latest-added-medicines',getLatestAddedMedicines);
 router.get('/non-prescription-list', getNonPrescriptionMedicines);
 router.get('/highest-discount-medicines', getHighestDiscountMedicines);
+
+router.post('/rate',protect('user'),ratePharmacyOrder);
 
 
 

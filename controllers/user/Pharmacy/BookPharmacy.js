@@ -25,6 +25,7 @@ const path = require('path');
 const LabCategory = require('../../../models/LabCategory');
 const PharmacyPrescriptionRequest = require('../../../models/PharmacyPrescriptionRequest');
 const PharmacyComboOffer = require('../../../models/PharmacyComboOffer'); // Import model
+const Review = require('../../../models/Review'); // Import Review model for rating functionality
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
@@ -579,15 +580,43 @@ const getPharmacies = async (req, res) => {
 const getPharmacyDetails = async (req, res) => {
     try {
         const { id } = req.params;
+        
+        // 1. Fetch Pharmacy Basic Info (Excluding password and token)
         const pharmacy = await Pharmacy.findById(id).select('-password -token').lean();
         
         if (!pharmacy) return res.status(404).json({ message: "Pharmacy not found" });
 
+        // =========================================================================
+        // 🚨 2. DYNAMIC RATINGS & REVIEWS CALCULATOR (For Pharmacy Profile)
+        // =========================================================================
+        const reviews = await Review.find({ 
+            targetId: id, 
+            targetType: 'Pharmacy' 
+        }).select('rating').lean();
+
+        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        if (reviews.length > 0) {
+            const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
+            // Format to 1 decimal place (e.g. 4.3)
+            averageRating = Number((totalRating / reviews.length).toFixed(1)); 
+        }
+
+        // Fetch last 3 recent reviews/comments for this pharmacy
+        const recentReviews = await Review.find({ targetId: id, targetType: 'Pharmacy' })
+            .select('userName rating comment createdAt')
+            .sort({ createdAt: -1 })
+            .limit(3)
+            .lean();
+
+        // 3. Dynamic Response Payload (All old keys are completely intact)
         res.json({ 
             success: true, 
             data: {
                 ...pharmacy,
-                gallery: pharmacy.documents?.pharmacyImages || []
+                rating: averageRating,           // 👈 Dynamic calculated rating
+                totalReviews: reviews.length,    // 👈 Dynamic total reviews count
+                gallery: pharmacy.documents?.pharmacyImages || [],
+                recentReviews                    // 👈 Dynamic last 3 user reviews
             } 
         });
     } catch (error) { 
@@ -2155,11 +2184,56 @@ const getActiveStoreComboOffers = async (req, res) => {
     }
 };
 
+const ratePharmacyOrder = async (req, res) => {
+    try {
+        const { bookingId, rating, comment } = req.body;
+
+        const booking = await PharmacyBooking.findOne({ _id: bookingId, userId: req.user.id });
+        if (!booking || booking.status !== 'Delivered') {
+            return res.status(400).json({ success: false, message: "You can only rate successfully delivered medicine orders." });
+        }
+
+        const existingReview = await Review.findOne({ userId: req.user.id, orderId: bookingId });
+        if (existingReview) {
+            return res.status(400).json({ success: false, message: "You have already submitted a review for this medicine order." });
+        }
+
+        // Create Polymorphic Review
+        await Review.create({
+            userId: req.user.id,
+            userName: req.user.name || "Verified User",
+            targetId: booking.pharmacyId,
+            targetType: 'Pharmacy',
+            orderId: bookingId,
+            rating,
+            comment: comment || ""
+        });
+
+        // Recalculate average rating & sync to Pharmacy profile
+        const stats = await Review.aggregate([
+            { $match: { targetId: booking.pharmacyId, targetType: 'Pharmacy' } },
+            { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }
+        ]);
+
+        if (stats.length > 0) {
+            await Pharmacy.findByIdAndUpdate(booking.pharmacyId, {
+                rating: Number(stats[0].averageRating.toFixed(1)),
+                totalReviews: stats[0].totalReviews
+            });
+        }
+
+        res.json({ success: true, message: "Thank you for rating our pharmacy service!" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory, trackOrder,
 getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines, getActiveStoreComboOffers,
 
-createPrescriptionRequest, payAndConfirmOrder,verifyPrescriptionRequestPayment,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices
+createPrescriptionRequest, payAndConfirmOrder,verifyPrescriptionRequestPayment,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices,
+ratePharmacyOrder
 };
