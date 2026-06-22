@@ -18,7 +18,8 @@ const {
     updateDutyStatus,getMedicineList, updateClinicalSummary,
 
     requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
-    getPrintableDischargeSummary
+    getPrintableDischargeSummary,
+    doctorSelfAssignCase
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 
@@ -64,6 +65,8 @@ router.get('/case/discharge-summary/print/:id', protect('hospital-doctor'), getP
 router.get('/cases/pending-admissions', protect('hospital-doctor'), getPendingAdmissions); // 👈 ADD THIS ROUTE
 router.post('/case/take-charge', protect('hospital-doctor'), takeChargeOfAdmission);  
 router.post('/case/reject-transfer', protect('hospital-doctor'), rejectTransfer); // 👈 ADD THIS ROUTE
+
+router.post('/case/self-assign', protect('hospital-doctor'), doctorSelfAssignCase); // 👈 ADD THIS ROUTE
 
 
 

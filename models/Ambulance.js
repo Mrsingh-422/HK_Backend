@@ -102,7 +102,9 @@ const ambulanceSchema = new mongoose.Schema({
         ifscCode: { type: String, default: "" },
         upiId: { type: String, default: "" },
         isVerified: { type: Boolean, default: false }
-    }
+    },
+    averageRating: { type: Number, default: 0 }, 
+    totalReviews: { type: Number, default: 0 }  
 
 }, { timestamps: true });
 

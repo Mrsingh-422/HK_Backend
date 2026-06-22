@@ -33,7 +33,11 @@ const cartSchema = new mongoose.Schema({
             price: Number,
             quantity: { type: Number, default: 1 },
             duration: String, // "5 Days"
-            startDate: Date
+            startDate: Date,
+
+            // 🚨 ADDED: To strictly separate normal vs combo items in the same cart [1]
+            isComboApplied: { type: Boolean, default: false },
+            comboOfferId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmacyComboOffer', default: null }
 
         }]
     }

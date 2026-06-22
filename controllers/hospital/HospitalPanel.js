@@ -1420,22 +1420,34 @@ const getHospitalCaseDetails = async (req, res) => {
     }
 };
 
-// --- API: GET ALL CLINICALLY DISCHARGED CASES AWAITING BILLING (NEW API) ---
+// --- API: GET ALL CLINICALLY COMPLETED CASES AWAITING BILLING (Updated with strict caseType filters) ---
 // Endpoint: GET /hospital/panel/discharges/pending
 const getHospitalPendingDischarges = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { page = 1, limit = 10 } = req.query;
+        const { page = 1, limit = 10, caseType } = req.query; // 👈 Mapped caseType filter
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const query = {
             hospitalId,
             status: 'Discharge-Pending', // Main Doctor has clinically released the patient
             
-            // 🚀 FIX: STRICT MEDICAL LOCK
+            // STRICT MEDICAL LOCK
             // Excludes any bookings where any co-doctor/specialist in bedsideCareTeam is still active ('Pending' or 'In-Progress')
-            "bedsideCareTeam.status": { $nin: ['In-Progress'] }
+            "bedsideCareTeam.status": { $nin: ['Pending', 'In-Progress'] } // 👈 Double-Guarded with Pending as well
         };
+
+        // 1. 🚀 DYNAMIC CASE TYPE BIFURCATION FILTER FOR BILLING DESK
+        if (caseType === 'emergency') {
+            // Patients brought strictly by ambulance
+            query.ambulanceId = { $ne: null, $exists: true };
+        } else if (caseType === 'admission') {
+            // Direct bed-bookings by user (Ambulance is null or missing)
+            query.$or = [
+                { ambulanceId: null },
+                { ambulanceId: { $exists: false } }
+            ];
+        }
 
         const totalRecords = await Appointment.countDocuments(query);
 
@@ -1472,6 +1484,85 @@ const getHospitalPendingDischarges = async (req, res) => {
 };
 
 
+// --- API: REASSIGNS HOSPITAL AMBULANCE DUE TO BREAKDOWN (Strictly preserves original pricing) ---
+// Endpoint: POST /hospital/panel/ambulance/reassign-breakdown
+const reassignAmbulanceOnBreakdown = async (req, res) => {
+    try {
+        const hospitalId = req.user.id; // Logged-in Hospital Admin
+        const { bookingId, newAmbulanceId, reason } = req.body;
+
+        // 🚀 FIX: Dynamic query builder to support both Hex _id AND custom "HK-BOK-..." string bookingId
+        const isObjectId = mongoose.Types.ObjectId.isValid(bookingId);
+        let query = isObjectId 
+            ? { _id: bookingId, hospitalId } 
+            : { bookingId: bookingId, hospitalId };
+
+        // Strictly allow reassigning only during active transit journey states
+        query.status = { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] };
+
+        const booking = await AmbulanceBooking.findOne(query);
+
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Active ambulance booking not found on your fleet. Kripya check karein ki booking ka status 'Confirmed', 'Arrived', 'Picked-Up', ya 'En-Route' hai aur Hospital Token matching hai." 
+            });
+        }
+
+        const oldAmbulanceId = booking.ambulanceId;
+        if (String(oldAmbulanceId) === String(newAmbulanceId)) {
+            return res.status(400).json({ success: false, message: "Kripya dynamic reallocation ke liye koi doosri free ambulance select karein." });
+        }
+
+        // 2. Verify new ambulance is available and belongs to the same hospital
+        const newAmbulance = await Ambulance.findOne({
+            _id: newAmbulanceId,
+            hospitalId,
+            availableForEmergency: true,
+            profileStatus: 'Approved'
+        });
+
+        if (!newAmbulance) {
+            return res.status(400).json({ success: false, message: "Selected new ambulance is not available or unauthorized." });
+        }
+
+        // 3. Mark old broken ambulance as unavailable/broken (Block emergency availability)
+        if (oldAmbulanceId) {
+            await Ambulance.findByIdAndUpdate(oldAmbulanceId, {
+                $set: { availableForEmergency: false } // Locked due to breakdown/maintenance
+            });
+        }
+
+        // 4. Assign new ambulance to booking & lock its availability status
+        booking.ambulanceId = newAmbulanceId;
+        newAmbulance.availableForEmergency = false;
+        await newAmbulance.save();
+
+        // 5. Push re-assignment/breakdown log in tracking timeline
+        booking.trackingTimeline.push({
+            status: booking.status, // Preserves the current transit state (e.g., Picked-Up/En-Route)
+            timestamp: new Date(),
+            note: `Ambulance successfully reassigned. Previous vehicle broke down. Reason: ${reason || 'Mechanical Failure'}. Total Fare remains strictly identical.`
+        });
+
+        await booking.save();
+
+        res.json({
+            success: true,
+            message: "Ambulance successfully reassigned due to breakdown. Pricing remains unchanged.",
+            data: booking
+        });
+
+    } catch (error) {
+        console.error("Reassign Breakdown Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
+
+
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed, updateWardBeds,deleteSpecificBed, addHospitalService, updateHospitalService, 
@@ -1485,5 +1576,5 @@ module.exports = {
     updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings,
     updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,
-    emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges
+    emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,reassignAmbulanceOnBreakdown
 };

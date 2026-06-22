@@ -83,25 +83,27 @@ const getHospitalDetails = async (req, res) => {
             .lean();
 
         // 3. Fetch Wards, Doctors, and Admin-added Services (Figma S-29)
+        // FIX: Added 'experienceYears', 'about', and 'qualification' fields inside Doctor's select query!
         const [wards, doctors, services] = await Promise.all([
             Ward.find({ hospitalId: id, isActive: true }),
-            Doctor.find({ hospitalId: id, profileStatus: 'Approved' }).select('name speciality profileImage fees averageRating consultationStatus'),
+            Doctor.find({ hospitalId: id, profileStatus: 'Approved' })
+                .select('name speciality profileImage fees averageRating consultationStatus experienceYears about qualification'), // 👈 FIXED
             HospitalService.find({ hospitalId: id }) // Fetch Nurse, Security, etc.
         ]);
 
-        // 4. Dynamic Response Payload
+        // 4. Dynamic Response Payload (Exact same structure maintained)
         res.json({
             success: true,
             data: { 
                 hospital: {
                     ...hospital,
-                    rating: averageRating,           // 👈 Dynamic calculated rating
-                    totalReviews: reviews.length     // 👈 Dynamic total reviews count
+                    rating: averageRating,           
+                    totalReviews: reviews.length     
                 }, 
                 wards, 
                 doctors, 
                 services,
-                recentReviews                        // 👈 Added live last 3 user reviews
+                recentReviews                        
             }
         });
     } catch (error) { 

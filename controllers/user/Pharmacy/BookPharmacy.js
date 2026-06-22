@@ -26,6 +26,7 @@ const LabCategory = require('../../../models/LabCategory');
 const PharmacyPrescriptionRequest = require('../../../models/PharmacyPrescriptionRequest');
 const PharmacyComboOffer = require('../../../models/PharmacyComboOffer'); // Import model
 const Review = require('../../../models/Review'); // Import Review model for rating functionality
+const ComboOffer = require('../../../models/PharmacyComboOffer'); // Import ComboOffer model
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
@@ -36,8 +37,8 @@ const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment
 
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
 const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime) => {
-    let rawItemTotalWithoutPromo = 0; // Pure price of items before discount [1]
-    let promoDeductedTotal = 0;       // Final priced items total after BOGO reduction [1]
+    let rawItemTotalWithoutPromo = 0; 
+    let promoDeductedTotal = 0;       
     const today = new Date();
 
     for (const item of items) {
@@ -48,33 +49,36 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         // Raw total calculation
         rawItemTotalWithoutPromo += (pricePerUnit * orderedQty);
 
-        // Check if there is an active BOGO campaign running for this medicine in target pharmacy
-        const activePromo = await PharmacyComboOffer.findOne({
-            pharmacyId,
-            medicineId,
-            isActive: true,
-            startDate: { $lte: today },
-            expiryDate: { $gte: today }
-        });
+        // 🚨 STRICT CHECK: Apply BOGO only if cart item has isComboApplied set to true [1]
+        if (item.isComboApplied === true && item.comboOfferId) {
+            const activePromo = await PharmacyComboOffer.findOne({
+                _id: item.comboOfferId,
+                pharmacyId,
+                isActive: true,
+                startDate: { $lte: today },
+                expiryDate: { $gte: today }
+            });
 
-        if (activePromo) {
-            // Apply Buy X Get Y Free math rule [1]
-            const X = activePromo.buyQty;
-            const Y = activePromo.getFreeQty;
-            
-            const bundleSize = X + Y;
-            const fullBundles = Math.floor(orderedQty / bundleSize);
-            const remainingUnits = orderedQty % bundleSize;
+            if (activePromo) {
+                const X = activePromo.buyQty;
+                const Y = activePromo.getFreeQty;
+                
+                const bundleSize = X + Y;
+                const fullBundles = Math.floor(orderedQty / bundleSize);
+                const remainingUnits = orderedQty % bundleSize;
 
-            const chargeableQty = (fullBundles * X) + Math.min(remainingUnits, X);
-            promoDeductedTotal += (pricePerUnit * chargeableQty);
+                const chargeableQty = (fullBundles * X) + Math.min(remainingUnits, X);
+                promoDeductedTotal += (pricePerUnit * chargeableQty);
+            } else {
+                promoDeductedTotal += (pricePerUnit * orderedQty);
+            }
         } else {
+            // Calculated as standard non-combo medicine [1]
             promoDeductedTotal += (pricePerUnit * orderedQty);
         }
     }
 
-    // Savings calculated from the promo
-    const comboSavings = rawItemTotalWithoutPromo - promoDeductedTotal; // Saved amount [1]
+    const comboSavings = rawItemTotalWithoutPromo - promoDeductedTotal;
 
     let deliveryCharge = 0;
     let rapidCharge = 0;
@@ -117,7 +121,7 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     return { 
         itemTotal: Math.round(promoDeductedTotal), 
         originalItemTotal: Math.round(rawItemTotalWithoutPromo),
-        comboSavings: Math.round(comboSavings), // Sent to show "Saved $4.50!" on UI [1]
+        comboSavings: Math.round(comboSavings), 
         couponDiscount: Math.round(couponDiscount), 
         couponId, 
         deliveryCharge, 
@@ -1202,27 +1206,27 @@ const placeOrder = async (req, res) => {
 
         const userId = req.user.id;
         
-        // A. Cart Fetch & Population
-        const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
+        // A. Cart Fetch & Population (🚨 UPDATED: Populating medicineId AND comboOfferId)
+        const cart = await Cart.findOne({ userId })
+            .populate('pharmacyCart.items.medicineId')
+            .populate('pharmacyCart.items.comboOfferId'); // 👈 Deep populate combo offers directly [1]
+
         if (!cart || !cart.pharmacyCart.items.length) {
             return res.status(400).json({ success: false, message: "Transaction expired. Cart is empty." });
         }
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
 
-        // 🚨 B. STRICT PRESCRIPTION VALIDATION (Backend Restriction)
-        // Check if AT LEAST ONE medicine in the cart requires a prescription
+        // B. STRICT PRESCRIPTION VALIDATION
         const rxMandatory = cart.pharmacyCart.items.some(item => 
             item.medicineId?.prescription_required?.toUpperCase() === "YES"
         );
 
-        // Extract uploaded prescription images from multipart request
         let rxImages = [];
         if (req.files && req.files['prescriptionImages']) {
             rxImages = req.files['prescriptionImages'].map(f => f.path);
         }
 
-        // 👉 RULE: Agar prescription mandatory hai par images uploaded nahi hain, to block karein [1]
         if (rxMandatory && rxImages.length === 0) {
             return res.status(400).json({ 
                 success: false, 
@@ -1237,17 +1241,41 @@ const placeOrder = async (req, res) => {
             pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime
         );
 
-        // Map items exactly matching your schema
+        // --- D. UPDATED: Map Cart items dynamically, transferring saved BOGO indicators into Order Items [1] ---
         const mappedOrderItems = cart.pharmacyCart.items.map(item => {
             const masterMedsMrp = item.medicineId ? Number(item.medicineId.mrp || 0) : 0;
+            const orderedQty = Number(item.quantity || 1);
+
+            let isComboApplied = false;
+            let comboOfferId = null;
+            let freeQuantity = 0;
+
+            // Extract BOGO parameters directly from saved Cart item [1]
+            if (item.isComboApplied === true && item.comboOfferId) {
+                isComboApplied = true;
+                comboOfferId = item.comboOfferId._id;
+
+                const X = item.comboOfferId.buyQty || 2;
+                const Y = item.comboOfferId.getFreeQty || 1;
+                const bundleSize = X + Y;
+
+                const fullBundles = Math.floor(orderedQty / bundleSize);
+                freeQuantity = fullBundles * Y;
+            }
+
             return {
                 medicineId: item.medicineId._id,
                 name: item.name,
                 mrp: masterMedsMrp, 
                 price: item.price,
-                quantity: item.quantity,
+                quantity: orderedQty,
                 duration: item.duration,
-                startDate: item.startDate
+                startDate: item.startDate,
+                
+                // 🚨 Saved to order items matching schema
+                isComboApplied,
+                comboOfferId,
+                freeQuantity
             };
         });
 
@@ -1255,7 +1283,7 @@ const placeOrder = async (req, res) => {
         const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
 
-        // D. RAZORPAY INTEGRATION: Create order if online, do not touch stock yet
+        // E. RAZORPAY INTEGRATION: Create order if online, do not touch stock yet
         if (paymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
         } else {
@@ -1271,24 +1299,21 @@ const placeOrder = async (req, res) => {
             }
         }
 
-        // E. Create booking matching strictly your Schema Keys
+        // F. Create booking
         const booking = await PharmacyBooking.create({
             orderId: tempOrderId,               
             userId,
             pharmacyId,                         
             patients: await mapPatients(userId, selectedPatientIds || ['Self']),
-            items: mappedOrderItems,            
+            items: mappedOrderItems, // 👈 Saved with full BOGO flags
             collectionType,
             address: typeof address === 'string' ? JSON.parse(address) : address,
             appointmentDate,
             appointmentTime,
             billSummary: bill,
             paymentMethod: paymentMethod || 'COD',
-            // 🚨 Strict Force Enforcement of orderType & status
             orderType: isPrescriptionOrder ? 'Prescription' : 'General',
             prescriptionImages: rxImages,
-            // If COD: Prescription goes to 'Under Review', general goes to 'Placed'
-            // If Online: Always goes to 'Pending' first to wait for Razorpay verification
             status: paymentMethod === 'COD' 
                 ? (isPrescriptionOrder ? 'Under Review' : 'Placed') 
                 : 'Pending',
@@ -1302,7 +1327,7 @@ const placeOrder = async (req, res) => {
             return res.status(201).json({ success: true, data: booking });
         }
 
-        // F. Return Razorpay config to frontend for Online payment [1]
+        // Return Razorpay config to frontend for Online payment [1]
         res.status(201).json({
             success: true,
             message: "Razorpay order created for pharmacy checkout.",
@@ -1325,27 +1350,48 @@ const placeOrder = async (req, res) => {
 const verifyPharmacyPayment = async (req, res) => {
     try {
         const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+        const today = new Date();
 
         if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
             return res.status(400).json({ success: false, message: "Missing payment tokens." });
         }
 
-        // 1. Verify Signature
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
             return res.status(400).json({ success: false, message: "Signature verification failed." });
         }
 
-        // 2. Fetch pending order
         const order = await PharmacyBooking.findById(appointmentId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found." });
 
-        // 🚨 3. Fetch authentic payment details from Razorpay Server [1]
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 4. ATOMIC STOCK DEDUCTION
+        // Update items in the order to calculate dynamic combo metrics
         for (const item of order.items) {
-            if (!item.medicineId) continue;
+            const activePromo = await PharmacyComboOffer.findOne({
+                pharmacyId: order.pharmacyId,
+                medicineId: item.medicineId,
+                isActive: true,
+                startDate: { $lte: today },
+                expiryDate: { $gte: today }
+            });
+
+            if (activePromo) {
+                const X = activePromo.buyQty;
+                const Y = activePromo.getFreeQty;
+                const bundleSize = X + Y;
+
+                const fullBundles = Math.floor(item.quantity / bundleSize);
+                const freeQty = fullBundles * Y;
+                
+                if (freeQty > 0) {
+                    item.isComboApplied = true;
+                    item.comboOfferId = activePromo._id;
+                    item.freeQuantity = freeQty;
+                }
+            }
+
+            // ATOMIC STOCK DEDUCTION FOR TOTAL ORDERED QUANTITY
             const inventory = await MedicineInventory.findOne({ pharmacyId: order.pharmacyId, medicineId: item.medicineId });
             if (inventory) {
                 inventory.stock_quantity = Math.max(0, inventory.stock_quantity - item.quantity);
@@ -1354,14 +1400,12 @@ const verifyPharmacyPayment = async (req, res) => {
             }
         }
 
-        // 5. Update statuses
         order.status = order.orderType === 'Prescription' ? 'Under Review' : 'Placed';
         order.paymentStatus = 'Paid';
         order.paymentMethod = 'Online';
-        order.paymentDetails = rzpDetails; // 👈 Saved detailed payment audit logs
+        order.paymentDetails = rzpDetails; 
         await order.save();
 
-        // 6. Clear User Pharmacy Cart now
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
         res.json({
@@ -1957,61 +2001,49 @@ const payAndConfirmOrder = async (req, res) => {
     try {
         const { requestId, paymentMethod } = req.body;
         const userId = req.user.id;
+        const today = new Date();
 
-        // 🔍 DEBUG LOG: API triggered
         console.log(`\x1b[36m[DEBUG] payAndConfirmOrder: Received Request -> requestId: "${requestId}", userId: "${userId}", paymentMethod: "${paymentMethod}"\x1b[0m`);
 
-        // 🚨 STAGE 1: STRICT INPUT VALIDATION
         if (!requestId || requestId === "undefined" || requestId === "null" || requestId.trim() === "") {
-            console.warn(`\x1b[33m[DEBUG] payAndConfirmOrder: STAGE 1 FAILED -> requestId is empty or invalid string.\x1b[0m`);
             return res.status(400).json({ 
                 success: false, 
                 message: "Validation Error: 'requestId' parameter is missing, null, or undefined in the request body." 
             });
         }
 
-        // 🚨 STAGE 2: HYBRID QUERY FALLBACK (Finds by either MongoDB _id or custom requestId string dynamically)
         const cleanId = requestId.trim();
         const isObjectId = mongoose.Types.ObjectId.isValid(cleanId);
         
         const dbQuery = { userId };
         if (isObjectId) {
-            dbQuery._id = cleanId; // If 24-character hex ID is sent, match against _id
-            console.log(`[DEBUG] payAndConfirmOrder: Detected Mongoose ObjectId. Querying by _id...`);
+            dbQuery._id = cleanId;
         } else {
-            dbQuery.requestId = cleanId; // If standard REQ- code is sent, match against requestId
-            console.log(`[DEBUG] payAndConfirmOrder: Detected custom string. Querying by requestId...`);
+            dbQuery.requestId = cleanId;
         }
 
         const request = await PharmacyPrescriptionRequest.findOne(dbQuery);
         
         if (!request) {
-            console.warn(`\x1b[33m[DEBUG] payAndConfirmOrder: STAGE 2 FAILED -> No document found in DB matching query:`, dbQuery, `\x1b[0m`);
             return res.status(400).json({ 
                 success: false, 
                 message: `Business Error: No active prescription request found matching identifier: '${requestId}' for this user account.` 
             });
         }
 
-        // 🚨 STAGE 3: Status validation
         if (request.status !== 'Bill Generated') {
-            console.warn(`\x1b[33m[DEBUG] payAndConfirmOrder: STAGE 3 FAILED -> Request status is currently '${request.status}' (Expected: 'Bill Generated')\x1b[0m`);
             return res.status(400).json({ 
                 success: false, 
                 message: `Business Error: Request status is currently '${request.status}'. Payment can only be processed when status is 'Bill Generated'.` 
             });
         }
 
-        console.log(`\x1b[32m[DEBUG] payAndConfirmOrder: ALL GUARDS PASSED. Processing billing & stock reduction...\x1b[0m`);
-
         const bill = request.verifiedBill;
         const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-        // 🚨 RAZORPAY INTEGRATION: If Online payment, create order but DO NOT deduct stock or create permanent order yet
         if (paymentMethod !== 'COD') {
             const rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
             
-            // Set temporary status to prevent double payment hit
             request.status = 'Pending Payment';
             await request.save();
 
@@ -2019,13 +2051,12 @@ const payAndConfirmOrder = async (req, res) => {
                 success: true,
                 message: "Prescription checkout verified. Complete payment.",
                 key_id: process.env.RAZORPAY_KEY_ID,
-                amount: rzpOrder.amount, // in paise
+                amount: rzpOrder.amount, 
                 razorpayOrderId: rzpOrder.id,
-                appointmentId: request._id // Request ID maps to appointmentId during verify step
+                appointmentId: request._id 
             });
         }
 
-        // COD Flow logic remains strictly instant (Backward-compatibility preserved)
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
@@ -2038,14 +2069,49 @@ const payAndConfirmOrder = async (req, res) => {
             }
         }
 
-        const orderItems = (request.verifiedBill.items || []).map(item => ({
-            medicineId: item.medicineId || null,
-            name: item.name,
-            mrp: Number(item.mrp || 0),
-            price: Number(item.pricePerUnit || 0),
-            quantity: Number(item.quantity || 1),
-            duration: "15 Days"
-        }));
+        const orderItems = [];
+        for (const item of (request.verifiedBill.items || [])) {
+            const orderedQty = Number(item.quantity || 1);
+            
+            // Prescription requests are standard-billed, BOGO mapped if applied during reviewing phase [1]
+            const activePromo = await PharmacyComboOffer.findOne({
+                pharmacyId: request.pharmacyId,
+                medicineId: item.medicineId,
+                isActive: true,
+                startDate: { $lte: today },
+                expiryDate: { $gte: today }
+            });
+
+            let isComboApplied = false;
+            let comboOfferId = null;
+            let freeQuantity = 0;
+
+            if (activePromo) {
+                const X = activePromo.buyQty;
+                const Y = activePromo.getFreeQty;
+                const bundleSize = X + Y;
+
+                const fullBundles = Math.floor(orderedQty / bundleSize);
+                freeQuantity = fullBundles * Y;
+                
+                if (freeQuantity > 0) {
+                    isComboApplied = true;
+                    comboOfferId = activePromo._id;
+                }
+            }
+
+            orderItems.push({
+                medicineId: item.medicineId || null,
+                name: item.name,
+                mrp: Number(item.mrp || 0),
+                price: Number(item.pricePerUnit || 0),
+                quantity: orderedQty,
+                duration: "15 Days",
+                isComboApplied,
+                comboOfferId,
+                freeQuantity
+            });
+        }
 
         const finalOrder = await PharmacyBooking.create({
             orderId: tempOrderId,
@@ -2074,7 +2140,7 @@ const payAndConfirmOrder = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Prescription order confirmed with COD successfully!",
+            message: "Prescription order confirmed successfully!",
             data: finalOrder
         });
 
@@ -2091,6 +2157,7 @@ const payAndConfirmOrder = async (req, res) => {
 const verifyPrescriptionRequestPayment = async (req, res) => {
     try {
         const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+        const today = new Date();
 
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
@@ -2100,10 +2167,9 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
         const request = await PharmacyPrescriptionRequest.findById(appointmentId);
         if (!request) return res.status(404).json({ success: false, message: "Prescription request not found." });
 
-        // 🚨 1. Fetch authentic payment details from Razorpay Server [1]
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 2. Atomic Stock deduction
+        // Deduct inventory stock
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
@@ -2116,14 +2182,48 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             }
         }
 
-        const orderItems = (request.verifiedBill.items || []).map(item => ({
-            medicineId: item.medicineId || null,
-            name: item.name,
-            mrp: Number(item.mrp || 0),
-            price: Number(item.pricePerUnit || 0),
-            quantity: Number(item.quantity || 1),
-            duration: "15 Days"
-        }));
+        const orderItems = [];
+        for (const item of (request.verifiedBill.items || [])) {
+            const orderedQty = Number(item.quantity || 1);
+
+            const activePromo = await PharmacyComboOffer.findOne({
+                pharmacyId: request.pharmacyId,
+                medicineId: item.medicineId,
+                isActive: true,
+                startDate: { $lte: today },
+                expiryDate: { $gte: today }
+            });
+
+            let isComboApplied = false;
+            let comboOfferId = null;
+            let freeQuantity = 0;
+
+            if (activePromo) {
+                const X = activePromo.buyQty;
+                const Y = activePromo.getFreeQty;
+                const bundleSize = X + Y;
+
+                const fullBundles = Math.floor(orderedQty / bundleSize);
+                freeQuantity = fullBundles * Y;
+                
+                if (freeQuantity > 0) {
+                    isComboApplied = true;
+                    comboOfferId = activePromo._id;
+                }
+            }
+
+            orderItems.push({
+                medicineId: item.medicineId || null,
+                name: item.name,
+                mrp: Number(item.mrp || 0),
+                price: Number(item.pricePerUnit || 0),
+                quantity: orderedQty,
+                duration: "15 Days",
+                isComboApplied,
+                comboOfferId,
+                freeQuantity
+            });
+        }
 
         const finalOrder = await PharmacyBooking.create({
             orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
@@ -2145,7 +2245,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             orderType: 'Prescription',
             prescriptionImages: request.prescriptionImage ? [request.prescriptionImage] : [],
             status: 'Placed',
-            paymentDetails: rzpDetails // 👈 Saved detailed payment audit logs
+            paymentDetails: rzpDetails 
         });
 
         request.status = 'Paid';
@@ -2229,11 +2329,157 @@ const ratePharmacyOrder = async (req, res) => {
 };
 
 
+// GET ALL ACTIVE COMBO OFFERS FROM ALL APPROVED PHARMACIES (WITH PAGINATION OF 25)
+const getGlobalActiveComboOffers = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 25; // 25 key strict pagination limit
+        const skip = (page - 1) * limit;
+        const today = new Date();
+
+        const pipeline = [
+            {
+                // Step 1: Match active campaigns within current dates
+                $match: {
+                    isActive: true,
+                    startDate: { $lte: today },
+                    expiryDate: { $gte: today }
+                }
+            },
+            {
+                // Step 2: Lookup pharmacy details
+                $lookup: {
+                    from: "pharmacies", // Collection name matching MongoDB pharmacies
+                    localField: "pharmacyId",
+                    foreignField: "_id",
+                    as: "pharmacyDetails"
+                }
+            },
+            { $unwind: "$pharmacyDetails" },
+            {
+                // Step 3: Strict Filter (Only show offers from approved and active pharmacies)
+                $match: {
+                    "pharmacyDetails.profileStatus": "Approved",
+                    "pharmacyDetails.isActive": true
+                }
+            },
+            {
+                // Step 4: Lookup Medicine details
+                $lookup: {
+                    from: "medicines", // Collection name matching MongoDB medicines
+                    localField: "medicineId",
+                    foreignField: "_id",
+                    as: "medicineDetails"
+                }
+            },
+            { $unwind: "$medicineDetails" },
+            {
+                // Step 5: Format response for frontend/Flutter integration
+                $project: {
+                    _id: 1,
+                    campaignDisplayName: 1,
+                    buyQty: 1,
+                    getFreeQty: 1,
+                    startDate: 1,
+                    expiryDate: 1,
+                    projectedPromoMargin: 1,
+                    images: 1,
+                    pharmacy: {
+                        _id: "$pharmacyDetails._id",
+                        name: "$pharmacyDetails.name",
+                        profileImage: "$pharmacyDetails.profileImage",
+                        city: "$pharmacyDetails.city",
+                        state: "$pharmacyDetails.state",
+                        rating: "$pharmacyDetails.rating",
+                        totalReviews: "$pharmacyDetails.totalReviews"
+                    },
+                    medicine: {
+                        _id: "$medicineDetails._id",
+                        name: "$medicineDetails.name",
+                        image: { $arrayElemAt: ["$medicineDetails.image_url", 0] },
+                        mrp: "$medicineDetails.mrp",
+                        bestPrice: "$medicineDetails.best_price"
+                    }
+                }
+            },
+            { $sort: { createdAt: -1 } },
+            {
+                // Step 6: Multi-stage Facet for pagination metadata
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ];
+
+        const result = await PharmacyComboOffer.aggregate(pipeline);
+        
+        // Safety Fallback values checks
+        const total = result[0].metadata[0]?.total || 0;
+        const data = result[0].data || [];
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API: GET COMBO OFFER DETAILS (With Bundled Services & Applicable Coupons) ---
+const getComboOfferDetails = async (req, res) => {
+    try {
+        const { offerId } = req.params;
+
+        // Validation check for Mongo ObjectId format
+        if (!mongoose.Types.ObjectId.isValid(offerId)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid Combo Offer ID format." 
+            });
+        }
+
+        // Fetch combo offer and populate both Pharmacy and Medicine master details
+        const offer = await PharmacyComboOffer.findById(offerId)
+            .populate({
+                path: 'pharmacyId',
+                select: 'name profileImage city state address rating totalReviews isHomeDeliveryAvailable is24x7 location'
+            })
+            .populate({
+                path: 'medicineId',
+                select: 'name salt_composition mrp best_price image_url description packaging prescription_required safety_advise side_effect benefits'
+            })
+            .lean();
+
+        if (!offer) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Combo Offer not found, it might have been deleted or expired." 
+            });
+        }
+
+        res.json({
+            success: true,
+            data: offer
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
+
 
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory, trackOrder,
 getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines, getActiveStoreComboOffers,
 
 createPrescriptionRequest, payAndConfirmOrder,verifyPrescriptionRequestPayment,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices,
-ratePharmacyOrder
+ratePharmacyOrder,getGlobalActiveComboOffers,getComboOfferDetails
 };

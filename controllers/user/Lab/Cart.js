@@ -372,7 +372,17 @@ const compareCartOnMap = async (req, res) => {
 // endpoint: /user/cart/pharmacy/add
 const addToPharmacyCart = async (req, res) => {
     try {
-        const { pharmacyId, medicineId, quantity = 1, duration = "Full Course", forceReplace } = req.body;
+        // 🚨 UPDATED: Destructured BOGO indicators from request body [1]
+        const { 
+            pharmacyId, 
+            medicineId, 
+            quantity = 1, 
+            duration = "Full Course", 
+            forceReplace,
+            isComboApplied = false, // 👈 Capture combo status [1]
+            comboOfferId = null     // 👈 Capture campaign ID [1]
+        } = req.body;
+        
         const userId = req.user.id;
 
         const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId, is_available: true });
@@ -381,7 +391,7 @@ const addToPharmacyCart = async (req, res) => {
         let cart = await Cart.findOne({ userId });
         if (!cart) cart = new Cart({ userId, pharmacyCart: { items: [] } });
 
-        // IMPORTANT: "Replace Cart" logic for Pharmacy mismatch
+        // "Replace Cart" logic for Pharmacy mismatch
         if (cart.pharmacyCart.items.length > 0 && cart.pharmacyCart.pharmacyId?.toString() !== pharmacyId && !forceReplace) {
             return res.status(400).json({ 
                 success: false, 
@@ -396,31 +406,49 @@ const addToPharmacyCart = async (req, res) => {
         
         cart.pharmacyCart.pharmacyId = pharmacyId;
 
-        const itemIndex = cart.pharmacyCart.items.findIndex(i => i.medicineId.toString() === medicineId);
+        // 🚨 FIXED: findIndex now strictly checks BOTH medicineId AND isComboApplied status
+        // This stops normal & BOGO items of the same medicine from clashing/merging [1]
+        const itemIndex = cart.pharmacyCart.items.findIndex(i => 
+            i.medicineId.toString() === medicineId && 
+            i.isComboApplied === (isComboApplied === true)
+        );
+
         if (itemIndex > -1) {
             cart.pharmacyCart.items[itemIndex].quantity += Number(quantity);
             cart.pharmacyCart.items[itemIndex].duration = duration;
         } else {
             const medData = await Medicine.findById(medicineId);
+            // 🚨 UPDATED: Save BOGO indicators directly inside cart items subdocument [1]
             cart.pharmacyCart.items.push({
                 medicineId,
                 name: medData.name,
                 price: inventory.vendor_price,
                 quantity: Number(quantity),
-                duration: duration
+                duration: duration,
+                isComboApplied: isComboApplied === true,
+                comboOfferId: comboOfferId || null
             });
         }
         await cart.save();
-        res.json({ success: true, message: "Added to pharmacy cart", data: cart });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, message: "Added to pharmacy cart successfully!", data: cart });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
-// 2. UPDATE PHARMACY QUANTITY
+
+// 2. UPDATE PHARMACY QUANTITY (Strict BOGO Match)
 const updatePharmacyQuantity = async (req, res) => {
     try {
-        const { medicineId, action } = req.body; // action: 'inc', 'dec'
+        // 🚨 UPDATED: Capture combo indicator from body to target correct cart row [1]
+        const { medicineId, action, isComboApplied = false } = req.body; // action: 'inc', 'dec'
         const cart = await Cart.findOne({ userId: req.user.id });
         
-        const itemIndex = cart.pharmacyCart.items.findIndex(i => i.medicineId.toString() === medicineId);
+        // Find correct row by matching both medicine ID and BOGO state [1]
+        const itemIndex = cart.pharmacyCart.items.findIndex(i => 
+            i.medicineId.toString() === medicineId && 
+            i.isComboApplied === (isComboApplied === true)
+        );
+
         if (itemIndex > -1) {
             if (action === 'inc') cart.pharmacyCart.items[itemIndex].quantity += 1;
             else cart.pharmacyCart.items[itemIndex].quantity -= 1;
@@ -434,8 +462,11 @@ const updatePharmacyQuantity = async (req, res) => {
 
         await cart.save();
         res.json({ success: true, data: cart });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 // 1. CLEAR FULL PHARMACY CART
 // endpoint: POST /user/cart/pharmacy/clear

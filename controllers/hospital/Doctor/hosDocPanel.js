@@ -141,8 +141,25 @@ const getDocDashboard = async (req, res) => {
             active: await Appointment.countDocuments({ doctorId, status: 'In-Progress' })
         };
 
-        const emergencyCount = await Appointment.countDocuments({ doctorId, triageLevel: 'Emergency', status: 'In-Progress' });
-        const admissionCount = await Appointment.countDocuments({ doctorId, bookingType: 'Admission', status: 'In-Progress' });
+        // FIX: Emergency counts strictly tracks patients brought in by ambulances (ambulanceId is NOT null)
+        const emergencyCount = await Appointment.countDocuments({ 
+            doctorId, 
+            ambulanceId: { $ne: null, $exists: true }, // Brought strictly by Ambulance
+            status: 'In-Progress' 
+        });
+
+        // FIX: Admission counts strictly tracks direct bed-bookings by user (ambulanceId is null/missing)
+        const admissionCount = await Appointment.countDocuments({ 
+            doctorId, 
+            bookingType: 'Admission', 
+            $or: [
+                { ambulanceId: null },
+                { ambulanceId: { $exists: false } }
+            ],
+            status: 'In-Progress' 
+        });
+
+        // Incoming transfer requests headed to this doctor
         const transferCount = await Appointment.countDocuments({ doctorId, status: 'Hospital-Pending' }); 
 
         res.json({
@@ -750,67 +767,63 @@ const completeSpecialistCare = async (req, res) => {
 // --- GET DYNAMIC CASE LISTINGS (Updated with Bedside & Pending Bedside tab filters) ---
 const getAssignedCases = async (req, res) => {
     try {
-        const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'discharge', 'history', 'bedside', 'pending-bedside'
+        const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'discharge', 'history'
         let query = {};
 
-        // A. Primary active patients on my duty
+        // Case A: Active patients currently assigned to me (EXCLUDED Discharge-Pending!)
         if (tab === 'active') {
             query = { 
                 doctorId: req.user.id, 
                 pendingDoctorId: null,
-                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
+                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
             };
         } 
-        // B. Dynamic ready for discharge patients
+        // Case B: Ready for Discharge patients (Waiting for Admin Billing)
         else if (tab === 'discharge') {
             query = {
                 doctorId: req.user.id,
                 pendingDoctorId: null,
-                status: 'Discharge-Pending'
+                status: 'Discharge-Pending' 
             };
         }
-        // C. Incoming permanent handover requests waiting for my acceptance
+        // Case C: Incoming pending handover requests
         else if (tab === 'pending') {
             query = { pendingDoctorId: req.user.id };
         } 
-        // D. Active bedside cases where I am added as specialist & accepted
-        else if (tab === 'bedside') {
-            query = {
-                "bedsideCareTeam.doctorId": req.user.id,
-                "bedsideCareTeam.status": "Accepted",
-                status: { $ne: "Completed" }
-            };
-        }
-        // E. Incoming pending bedside help requests waiting for my response
-        else if (tab === 'pending-bedside') {
-            query = {
-                "bedsideCareTeam.doctorId": req.user.id,
-                "bedsideCareTeam.status": "Pending"
-            };
-        }
-        // F. My Complete treated history (Both main doctor and ever involved specialists)
+        // Case D: History Patients (Treated in past)
         else if (tab === 'history') {
             query = {
                 $and: [
-                    {
+                    { 
                         $or: [
                             { "treatmentHistory.fromDoctorId": req.user.id },
-                            { "treatmentHistory.toDoctorId": req.user.id },
-                            { "bedsideCareTeam.doctorId": req.user.id }
-                        ]
+                            { "treatmentHistory.toDoctorId": req.user.id }
+                        ] 
                     },
                     {
                         $or: [
-                            { doctorId: { $ne: req.user.id } },
-                            { status: 'Completed' }
+                            { doctorId: { $ne: req.user.id } }, // currently with another doctor
+                            { status: 'Completed' }             // fully discharged
                         ]
                     }
                 ]
             };
         }
 
-        if (type === 'Emergency') query.triageLevel = 'Emergency';
-        if (type === 'Admission') query.bookingType = 'Admission';
+        // --- FIGMA SINKING FILTERS (Strict ambulanceId presence check) ---
+        if (type === 'Emergency') {
+            // Strictly brought by Ambulance
+            query.ambulanceId = { $ne: null, $exists: true };
+        }
+        if (type === 'Admission') {
+            // Strictly direct bed-bookings (No ambulance linked)
+            query.bookingType = 'Admission';
+            query.$or = [
+                { ambulanceId: null },
+                { ambulanceId: { $exists: false } }
+            ];
+        }
+
         if (status) query.status = status;
 
         const cases = await Appointment.find(query)
@@ -1118,6 +1131,48 @@ const rejectTransfer = async (req, res) => {
     }
 };
 
+
+// --- API: DOCTOR SELF-ASSIGN UNASSIGNED CASE (NEW API) ---
+// Endpoint: POST /hospital-doctor/panel/case/self-assign
+const doctorSelfAssignCase = async (req, res) => {
+    try {
+        const { appointmentId } = req.body;
+        const doctorId = req.user.id;
+
+        // Verify patient is currently unassigned (doctorId is null) and belongs to same hospital
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            hospitalId: req.user.hospitalId,
+            doctorId: null // Checks strictly unassigned state
+        });
+
+        if (!appointment) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Self-Assign Failed: Patient already assigned to another doctor, completed, or not found." 
+            });
+        }
+
+        const now = new Date();
+
+        // Assign Doctor & Start Treatment Shift Tracking
+        appointment.doctorId = doctorId;
+        appointment.treatmentHistory.push({
+            toDoctorId: doctorId,
+            action: 'Initial-Assignment',
+            notes: `Dr. ${req.user.name} self-assigned this case.`,
+            timestamp: now,
+            startTime: now // Start shift tracking!
+        });
+
+        await appointment.save();
+        res.json({ success: true, message: "Aapne patient ka case successfully self-assign kar liya hai.", data: appointment });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     getMyDoctorProfile,
     updateDoctorProfile,
@@ -1134,5 +1189,6 @@ module.exports = {
     submitDischargeSummary,uploadPatientReports, updateDutyStatus, getMedicineList, updateClinicalSummary,
 
     requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
-    getPrintableDischargeSummary
+    getPrintableDischargeSummary,
+    doctorSelfAssignCase
 };

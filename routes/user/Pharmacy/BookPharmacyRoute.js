@@ -9,7 +9,7 @@ getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 createPrescriptionRequest,payAndConfirmOrder,verifyPrescriptionRequestPayment,
  getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices,
 
-getActiveStoreComboOffers,ratePharmacyOrder
+getActiveStoreComboOffers,getGlobalActiveComboOffers,getComboOfferDetails,ratePharmacyOrder
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
@@ -110,6 +110,17 @@ router.get(
     '/combo-offers', 
     protect('user'), 
     getActiveStoreComboOffers
+);
+router.get(
+    '/combo-offers/details/:offerId', 
+    protect('user'), 
+    getComboOfferDetails
+);
+
+router.get(
+    '/global-combo-offers', 
+    protect('user'), 
+    getGlobalActiveComboOffers
 );
 
 module.exports = router;

@@ -23,7 +23,12 @@ const pharmacyBookingSchema = new mongoose.Schema({
         price: Number,
         quantity: { type: Number, default: 1 },
         duration: String, // e.g., "5 Days"
-        startDate: Date
+        startDate: Date,
+
+         // 🚨 NEW COMBO / BOGO TRACKING FIELDS
+        isComboApplied: { type: Boolean, default: false },
+        comboOfferId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmacyComboOffer', default: null },
+        freeQuantity: { type: Number, default: 0 } // Saved units (Y)
     }],
 
     // --- LOGISTICS & SLOTS ---

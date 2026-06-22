@@ -2,6 +2,7 @@
 
 const Medicine = require('../../../models/Medicine');
 const MedicineInventory = require('../../../models/MedicineInventory');
+const mongoose = require('mongoose')
 
 // 1. Master Medicine Database mein se search karna (Inventory mein add karne ke liye)
 // Endpoint: GET /provider/pharmacy/inventory/getMaster?query=dolo&page=1
@@ -93,6 +94,68 @@ const getMyInventory = async (req, res) => {
     }
 };
 
+// 🌟 4. NEW API: GET MY NON-PRESCRIPTION INVENTORY (OTC Only)
+const getMyNonPrescriptionInventory = async (req, res) => {
+    try {
+        const pharmacyId = req.user.id;
+
+        // Using aggregate to strictly filter on database layer for performance [3]
+        const list = await MedicineInventory.aggregate([
+            {
+                $match: {
+                    pharmacyId: new mongoose.Types.ObjectId(pharmacyId)
+                }
+            },
+            {
+                $lookup: {
+                    from: "medicines", // Target medicines collection [3]
+                    localField: "medicineId",
+                    foreignField: "_id",
+                    as: "medicineDetails"
+                }
+            },
+            {
+                $unwind: "$medicineDetails"
+            },
+            {
+                // Strict regex filter matching "No" or "no" or "false" [3]
+                $match: {
+                    "medicineDetails.prescription_required": { $regex: /^(no|false)$/i }
+                }
+            },
+            {
+                // Re-structuring keys to mirror populate structure for frontend compatibility [3]
+                $project: {
+                    _id: 1,
+                    pharmacyId: 1,
+                    vendor_price: 1,
+                    stock_quantity: 1,
+                    expiry_date: 1,
+                    is_available: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    medicineId: {
+                        _id: "$medicineDetails._id",
+                        name: "$medicineDetails.name",
+                        manufacturers: "$medicineDetails.manufacturers",
+                        image_url: "$medicineDetails.image_url",
+                        salt_composition: "$medicineDetails.salt_composition",
+                        mrp: "$medicineDetails.mrp",
+                        prescription_required: "$medicineDetails.prescription_required"
+                    }
+                }
+            },
+            {
+                $sort: { updatedAt: -1 }
+            }
+        ]);
+
+        res.status(200).json({ success: true, count: list.length, data: list });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 const updateInventoryItem = async (req, res) => {
     try {
         const { vendor_price, stock_quantity } = req.body;
@@ -133,6 +196,7 @@ module.exports = {
     getMasterMedicineById, 
     addToInventory, 
     getMyInventory, 
+    getMyNonPrescriptionInventory,
     updateInventoryItem ,
     deleteInventoryItem
 };

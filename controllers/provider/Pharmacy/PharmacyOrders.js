@@ -76,6 +76,8 @@ const getPharmacyDashboardStats = async (req, res) => {
 
 // 1. DASHBOARD LISTING (Updated with Priority/Rapid Delivery Filter)
 // Endpoint: GET /provider/pharmacy/orders/list
+// 1. DASHBOARD LISTING (Enriched with Dynamic BOGO/Combo verification markers)
+// Endpoint: GET /provider/pharmacy/orders/list
 const getPharmacyOrders = async (req, res) => {
     try {
         const { orderType, status, isPriority } = req.query; 
@@ -84,22 +86,39 @@ const getPharmacyOrders = async (req, res) => {
         if (orderType) query.orderType = orderType; // 'General' or 'Prescription'
         if (status) query.status = status;
 
-        // 🚀 Priority / Rapid Delivery filter logic
+        // Priority / Rapid Delivery filter logic
         if (isPriority === 'true') {
             query['billSummary.rapidDeliveryCharge'] = { $gt: 0 };
         } else if (isPriority === 'false') {
             query['billSummary.rapidDeliveryCharge'] = 0;
         }
 
+        // Fetching orders and deeply populating BOGO campaign details per item [1]
         const orders = await PharmacyBooking.find(query)
             .populate('userId', 'name phone')
             .populate('driverId', 'name phone profilePic vehicleNumber')
-            .sort({ createdAt: -1 });
+            .populate({
+                path: 'items.comboOfferId', // 🚀 Nested populate: fetches active BOGO rule variables [1]
+                select: 'campaignDisplayName buyQty getFreeQty projectedPromoMargin'
+            })
+            .sort({ createdAt: -1 })
+            .lean(); // .lean() converts document to plain JS object for dynamic property injection
+
+        // Mapping orders to add high-level dashboard flags for easy UI badge rendering [1]
+        const enrichedOrders = orders.map(order => {
+            // Check if at-least one item in this order has BOGO/combo applied [1]
+            const hasComboApplied = order.items.some(item => item.isComboApplied === true);
+            
+            return {
+                ...order,
+                hasComboApplied // 👈 Root-level helper: returns true if any item has active BOGO [1]
+            };
+        });
 
         res.json({ 
             success: true, 
-            count: orders.length,
-            data: orders 
+            count: enrichedOrders.length,
+            data: enrichedOrders 
         });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
