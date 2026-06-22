@@ -108,18 +108,15 @@ router.post(
 
 router.get(
     '/combo-offers', 
-    protect('user'), 
     getActiveStoreComboOffers
 );
 router.get(
     '/combo-offers/details/:offerId', 
-    protect('user'), 
     getComboOfferDetails
 );
 
 router.get(
     '/global-combo-offers', 
-    protect('user'), 
     getGlobalActiveComboOffers
 );
 
