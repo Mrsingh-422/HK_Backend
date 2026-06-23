@@ -88,6 +88,10 @@ const ambulanceSchema = new mongoose.Schema({
     // --- System ---
     isPhoneVerified: { type: Boolean, default: false },
     token: { type: String, default: null },
+    fcmToken: { 
+        type: String, 
+        default: null 
+    },
     profileStatus: { 
         type: String, 
         enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 

@@ -20,6 +20,10 @@ const doctorSchema = new mongoose.Schema({
     isPhoneVerified: { type: Boolean, default: false },
     resetOTP: { type: String, default: null },
     token: { type: String, default: null },
+    fcmToken: { 
+        type: String, 
+        default: null 
+    },
     isActive: { type: Boolean, default: true },
 
     // Professional Info

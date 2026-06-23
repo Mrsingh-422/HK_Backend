@@ -912,6 +912,8 @@ const rateDoctorAppointment = async (req, res) => {
 };
 
 
+
+
 module.exports = { 
     getSpecializations, 
     searchDoctors, 

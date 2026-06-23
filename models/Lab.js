@@ -9,6 +9,10 @@
         role: { type: String, enum: ['Lab'], default: 'Lab', immutable: true }, 
         profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
         token: { type: String, default: null },
+        fcmToken: { 
+        type: String, 
+        default: null 
+    },
         isActive: { type: Boolean, default: true },
 
 

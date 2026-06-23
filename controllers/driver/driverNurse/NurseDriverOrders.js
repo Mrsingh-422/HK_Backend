@@ -117,12 +117,40 @@ const getNurseBookings = async (req, res) => {
             }
         }
 
+        // 'userId' और 'patients' को select और populate किया गया है
         const bookings = await NurseBooking.find(query)
-            .select('bookingId status schedule assessmentLocation address totalPrice createdAt cancelReason')
+            .select('bookingId status schedule assessmentLocation address totalPrice createdAt cancelReason userId patients')
+            .populate('userId', 'name phone')
             .sort({ createdAt: -1 });
 
-        res.json({ success: true, data: bookings });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // रिस्पॉन्स डेटा को फॉर्मेट करना ताकि स्ट्रक्चर बदले बिना अतिरिक्त जानकारी जोड़ी जा सके
+        const formattedBookings = bookings.map(booking => {
+            const bookingObj = booking.toObject();
+
+            // 1. User का नाम निकालना
+            const userName = bookingObj.userId ? bookingObj.userId.name : null;
+
+            // 2. Patient का नाम निकालना (पहले पेशेंट का नाम)
+            const patientName = bookingObj.patients && bookingObj.patients.length > 0 
+                ? bookingObj.patients[0].name 
+                : null;
+
+            // 3. Address से name हटाना
+            if (bookingObj.address) {
+                delete bookingObj.address.name;
+            }
+
+            return {
+                ...bookingObj,
+                userName,
+                patientName
+            };
+        });
+
+        res.json({ success: true, data: formattedBookings });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // Get Booking Detail (Figma Screen 7, 23)
@@ -134,8 +162,33 @@ const getBookingDetail = async (req, res) => {
             .populate('selectedConsumables.consumableId');
 
         if (!booking) return res.status(404).json({ message: "Booking not found" });
-        res.json({ success: true, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        const bookingObj = booking.toObject();
+
+        // 1. User का नाम निकालना
+        const userName = bookingObj.userId ? bookingObj.userId.name : null;
+
+        // 2. Patient का नाम निकालना (पहले पेशेंट का नाम)
+        const patientName = bookingObj.patients && bookingObj.patients.length > 0 
+            ? bookingObj.patients[0].name 
+            : null;
+
+        // 3. Address से name हटाना
+        if (bookingObj.address) {
+            delete bookingObj.address.name;
+        }
+
+        // स्ट्रक्चर में बिना बदलाव किए नए फील्ड्स जोड़ना
+        const updatedBooking = {
+            ...bookingObj,
+            userName,
+            patientName
+        };
+
+        res.json({ success: true, data: updatedBooking });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // Accept Assigned Booking (Figma Screen 5 popup)

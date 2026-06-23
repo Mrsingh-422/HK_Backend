@@ -9,6 +9,10 @@ const pharmacySchema = new mongoose.Schema({
     role: { type: String, enum: ['Pharmacy'], default: 'Pharmacy', immutable: true },
     profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
     token: { type: String, default: null },
+    fcmToken: { 
+        type: String, 
+        default: null 
+    },
     isActive: { type: Boolean, default: true },
 
 

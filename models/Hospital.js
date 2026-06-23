@@ -38,6 +38,10 @@ const hospitalSchema = new mongoose.Schema({
     // --- SYSTEM FIELDS ---
     role: { type: String, default: 'hospital', immutable: true },
     token: { type: String, default: null },
+    fcmToken: { 
+        type: String, 
+        default: null 
+    },
     location: {
         lat: { type: Number, default: 0 },
         lng: { type: Number, default: 0 }
