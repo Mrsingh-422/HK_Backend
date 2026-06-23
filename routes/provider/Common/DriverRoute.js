@@ -12,7 +12,9 @@ const {
     updateDriver, 
     deleteDriver,
     toggleDriverStatus,
-    vendorResetDriverPassword
+    vendorResetDriverPassword,
+    getDriverProfile
+    
 } = require('../../../controllers/provider/Common/Driver');
 
 // Base URL: /provider/driver 
@@ -30,5 +32,7 @@ router.put('/update/:id', protect('provider'), driverDocUploads, updateDriver); 
 router.delete('/delete/:id', protect('provider'), deleteDriver);
 router.patch('/status/:id', protect('provider'), toggleDriverStatus); // To change availability
 router.put('/reset-password/:id', protect('provider'), vendorResetDriverPassword);
+
+router.get('/profile', protect('driver'), getDriverProfile);
 
 module.exports = router;

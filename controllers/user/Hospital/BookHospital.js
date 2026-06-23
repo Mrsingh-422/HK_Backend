@@ -14,6 +14,8 @@ const DocReschleduleLimit = require("../../../models/DocRescheduleLimit");
 const { getDistance } = require('../../../utils/helpers');
 const crypto = require('crypto');
 const moment = require('moment');
+const mongoose = require('mongoose');
+const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 
 const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
@@ -472,10 +474,9 @@ const finalHospitalBooking = async (req, res) => {
         const {
             hospitalId, doctorId, bedId, bookingType, triageLevel,
             startDate, endDate, appointmentDate, appointmentTime, patients, pricing,
-            specialServices, couponId, couponCode, paymentMethod = 'Online' // Default to Online
+            specialServices, couponId, couponCode, paymentMethod = 'Online' 
         } = req.body;
 
-        // 1. RULE 1: Strict double-booking validation check for selected date range
         if (bedId && startDate && endDate) {
             const start = moment(startDate).startOf('day').toDate();
             const end = moment(endDate).endOf('day').toDate();
@@ -500,7 +501,6 @@ const finalHospitalBooking = async (req, res) => {
         const tempBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
 
-        // 🚨 RAZORPAY INTEGRATION: If Online payment, create order but DO NOT reserve bed/decrement ward count yet
         if (paymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(pricing.totalPayable, `receipt_${tempBookingId}`);
         }
@@ -508,20 +508,17 @@ const finalHospitalBooking = async (req, res) => {
         let wardName = "";
         let bedNumber = "";
 
-        // COD Logic remains instant (Bed reserved and Ward beds decremented immediately)
         if (paymentMethod === 'COD' && bedId) {
             const bed = await Bed.findById(bedId).populate('wardId');
             if (bed) {
                 bedNumber = bed.bedNumber;
                 if (bed.wardId) {
                     wardName = bed.wardId.name;
-                    // Ward ki total available count decrease karein
                     await Ward.findByIdAndUpdate(bed.wardId._id, { $inc: { availableBeds: -1 } });
                 }
             }
             await Bed.findByIdAndUpdate(bedId, { status: 'Reserved' }); 
         } else if (paymentMethod !== 'COD' && bedId) {
-            // For online, just fetch wardName & bedNumber to save in draft booking info
             const bed = await Bed.findById(bedId).populate('wardId');
             if (bed) {
                 bedNumber = bed.bedNumber;
@@ -529,7 +526,6 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        // Create Appointment record
         const appointment = await Appointment.create({
             userId: req.user.id,
             hospitalId,
@@ -553,7 +549,6 @@ const finalHospitalBooking = async (req, res) => {
             couponDetails: couponId ? { couponId, couponCode, discountValue: pricing.discountAmount } : undefined,
             totalAmount: pricing.totalPayable,
             bookingId: tempBookingId,
-            // If COD: Goes to Hospital-Pending. If Online: Stays 'Pending' until verification [1]
             status: paymentMethod === 'COD' ? 'Hospital-Pending' : 'Pending',
             paymentStatus: 'Pending',
             transactionId: rzpOrder ? rzpOrder.id : undefined,
@@ -561,7 +556,6 @@ const finalHospitalBooking = async (req, res) => {
             bedNumber
         });
 
-        // COD updates coupon usage immediately
         if (paymentMethod === 'COD') {
             if (couponId) {
                 const existingUsage = await Coupon.findOne({ _id: couponId, "usedBy.userId": req.user.id });
@@ -576,15 +570,24 @@ const finalHospitalBooking = async (req, res) => {
                     });
                 }
             }
+
+            // 🚨 Trigger Notification for COD Bed Admissions
+            await notifyAdminsAndVendor(
+                hospitalId,
+                'hospital',
+                "New Bed Admission requested (COD)!",
+                `COD Admission request placed for date range: ${moment(startDate).format('YYYY-MM-DD')} to ${moment(endDate).format('YYYY-MM-DD')}.`,
+                { appointmentId: appointment._id.toString(), type: 'new_admission_cod' }
+            );
+
             return res.status(201).json({ success: true, bookingId: tempBookingId, data: appointment });
         }
 
-        // Return Razorpay data to frontend for online payments
         res.status(201).json({ 
             success: true, 
             message: "Razorpay order created. Complete payment to confirm.",
             key_id: process.env.RAZORPAY_KEY_ID,
-            amount: rzpOrder.amount, // in paise
+            amount: rzpOrder.amount, 
             razorpayOrderId: rzpOrder.id,
             appointmentId: appointment._id,
             bookingId: tempBookingId
@@ -609,7 +612,6 @@ const verifyHospitalPayment = async (req, res) => {
             });
         }
 
-        // 1. Verify Signature
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
             return res.status(400).json({ 
@@ -618,16 +620,13 @@ const verifyHospitalPayment = async (req, res) => {
             });
         }
 
-        // 2. Fetch Pending Appointment
         const appointment = await Appointment.findById(appointmentId);
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 🚨 3. Fetch authentic payment details from Razorpay Server [1]
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 4. ATOMIC BED ALLOCATION & WARD DECREMENT (Done safely after payment success!)
         if (appointment.bedId) {
             const bed = await Bed.findById(appointment.bedId).populate('wardId');
             if (bed) {
@@ -638,14 +637,12 @@ const verifyHospitalPayment = async (req, res) => {
             }
         }
 
-        // 5. Update status
         appointment.status = 'Hospital-Pending';
         appointment.paymentStatus = 'Paid';
         appointment.transactionId = razorpayPaymentId;
-        appointment.paymentDetails = rzpDetails; // 👈 Saved detailed payment audit logs
+        appointment.paymentDetails = rzpDetails; 
         await appointment.save();
 
-        // 6. UPDATE COUPON USAGE HISTORY
         const couponId = appointment.couponDetails?.couponId;
         if (couponId) {
             const existingUsage = await Coupon.findOne({ _id: couponId, "usedBy.userId": req.user.id });
@@ -661,6 +658,15 @@ const verifyHospitalPayment = async (req, res) => {
             }
         }
 
+        // 🚨 Trigger Notification for Hospital & Admins on Verified Paid Admissions
+        await notifyAdminsAndVendor(
+            appointment.hospitalId,
+            'hospital',
+            "New Bed Admission Requested!",
+            `Admission request submitted for date range: ${moment(appointment.startDate).format('YYYY-MM-DD')} to ${moment(appointment.endDate).format('YYYY-MM-DD')}.`,
+            { appointmentId: appointment._id.toString(), type: 'new_admission' }
+        );
+
         res.json({
             success: true,
             message: "Payment successfully verified & Admission request submitted!",
@@ -672,6 +678,7 @@ const verifyHospitalPayment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 const cancelBedBooking = async (req, res) => {
     try {

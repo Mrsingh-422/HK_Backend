@@ -3,7 +3,7 @@ const Ambulance = require('../../models/Ambulance');
 const Appointment = require('../../models/Appointment'); // 👈 FIX 1: Added missing Appointment model import
 const crypto = require('crypto'); // 👈 FIX 2: Added missing crypto module import
 const mongoose = require('mongoose');
-const { sendPushNotification } = require('../../utils/notifaction'); // 👈 FIX 3: Added missing notification helper import
+const { sendPushNotification, notifyAdminsAndVendor } = require('../../utils/notification'); // 👈 FIX 3: Added missing notification helper import
 const Review = require('../../models/Review');
 
 
@@ -227,13 +227,12 @@ const uploadIncidentPhoto = async (req, res) => {
 // 5. FINALIZE TRIP HANDOFF & AUTO-REGISTER HOSPITAL EMERGENCY ADMISSION
 const finalizeTripHandoff = async (req, res) => {
     try {
-        const { id } = req.params; // Ambulance Booking ID
+        const { id } = req.params; 
         const { doctorName, wardName, duration, reason } = req.body;
 
         const booking = await Booking.findById(id);
         if (!booking) return res.status(404).json({ message: "Booking not found" });
 
-        // 1. Save Handoff Details
         booking.handoffDetails = {
             doctorName,
             wardName,
@@ -242,26 +241,20 @@ const finalizeTripHandoff = async (req, res) => {
             completedAt: new Date()
         };
 
-        // 2. Mark Trip as Delivered/Completed
         booking.status = 'Delivered';
         
-        // 3. Update Timeline
         booking.trackingTimeline.push({
             status: 'Patient delivered to hospital',
             timestamp: new Date(),
             note: `Handoff done to ${doctorName} in ${wardName}`
         });
 
-        // 4. Ambulance ko free karein (On Duty -> Available)
         await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
 
         await booking.save();
 
-        // 5. 🚀 AUTO-CREATE HOSPITAL ADMISSION (APPOINTMENT) RECORD
-        // Generating Unique Booking ID for Hospital Side
         const hospitalBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-        // Map Patient details from Ambulance Booking model
         const patientsData = [{
             patientName: booking.patientDetails?.name || "Emergency Patient",
             patientAge: booking.patientDetails?.age || 30,
@@ -270,23 +263,33 @@ const finalizeTripHandoff = async (req, res) => {
             reasonForVisit: reason || booking.patientDetails?.emergencyDescription || "Ambulance Emergency Drop-off"
         }];
 
-        await Appointment.create({
+        // Create Auto Hospital Admission
+        const newAdmission = await Appointment.create({
             userId: booking.userId,
-            hospitalId: booking.hospitalId, // Destination Hospital ID
-            ambulanceId: booking.ambulanceId, // Tracking Ambulance ID (Brought by Ambulance)
+            hospitalId: booking.hospitalId, 
+            ambulanceId: booking.ambulanceId, 
             bookingType: 'Admission',
-            bedBookingType: 'Emergency-Bed', // 👈 Categorized as Emergency Bed Booking
-            status: 'Hospital-Pending', // Hospital Panel me "Incoming Referral/Pending" me show hoga
+            bedBookingType: 'Emergency-Bed', 
+            status: 'Hospital-Pending', 
             bookingId: hospitalBookingId,
             triageLevel: booking.triageLevel || 'Emergency',
             patients: patientsData,
-            startDate: new Date(), // Admission starts instantly at handoff
+            startDate: new Date(), 
             pricingBreakdown: {
                 baseFee: 0,
                 subtotal: 0
             },
             totalAmount: 0
         });
+
+        // 🚨 Trigger Notification for the Destination Hospital and Admins regarding Handed-Off Emergency Patient
+        await notifyAdminsAndVendor(
+            booking.hospitalId,
+            'hospital',
+            "🚨 Emergency Handoff Patient Delivered!",
+            `An emergency transit patient has been delivered to your hospital. Bed admission ID #${hospitalBookingId} has been created.`,
+            { appointmentId: newAdmission._id.toString(), type: 'emergency_handoff_admission' }
+        );
 
         res.json({ success: true, message: "Trip Finalized & Hospital Admission Created", data: booking });
 
@@ -451,10 +454,107 @@ const getDriverTripHistory = async (req, res) => {
     }
 };
 
+// --- 1. ARRIVED AT DROP-OFF (Figma Screen 12 - Generate Hospital OTP) ---
+const arrivedAtDropOff = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const booking = await Booking.findById(id);
+        if (!booking) return res.status(404).json({ success: false, message: "Booking record not found." });
+
+        // Generate a random 4-digit OTP for the Hospital Staff to provide
+        const hospitalOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        booking.dropOffOtp = hospitalOtp;
+        booking.status = 'Arrived'; // Set back to Arrived at Hospital state
+        
+        booking.trackingTimeline.push({
+            status: 'Arrived at Dropoff',
+            timestamp: new Date(),
+            note: `Ambulance reached destination hospital (${booking.hospitalId ? 'Hospital' : 'Trauma Center'}). Awaiting handover OTP.`
+        });
+
+        await booking.save();
+
+        // Print in server log for easy testing/debugging
+        console.log(`[HANDOVER OTP] Booking ID: ${booking.bookingId} | Hospital OTP: ${hospitalOtp}`);
+
+        res.json({ 
+            success: true, 
+            message: "Arrived at hospital. Verification OTP generated.",
+            dev_otp: "1111" // Static bypass code for Sandbox
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// --- 2. VERIFY DROP-OFF OTP (Figma Screen 14 - Handover Verification) ---
+const verifyDropOffOtp = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { otp } = req.body;
+
+        const booking = await Booking.findById(id);
+        if (!booking) return res.status(404).json({ success: false, message: "Booking record not found." });
+
+        // Bypass check for development '1111'
+        const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+        const isStaticOtpMatch = isDev && String(otp).trim() === '1111';
+
+        if (!isStaticOtpMatch && String(booking.dropOffOtp).trim() !== String(otp).trim()) {
+            return res.status(400).json({ success: false, message: "Invalid Hospital OTP. Please request a new code from staff." });
+        }
+
+        booking.isDropOffVerified = true;
+        booking.status = 'En-Route'; // Proceed to Handoff screen
+        
+        booking.trackingTimeline.push({
+            status: 'Dropoff OTP Verified',
+            timestamp: new Date(),
+            note: "Hospital staff confirmed handover via OTP."
+        });
+
+        await booking.save();
+        res.json({ success: true, message: "OTP Verified. Please fill the Handoff Form.", data: booking });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// --- 3. AMBULANCE SOS TRIGGER (Figma Screen 18 - Police / Vehicle Breakdown) ---
+const triggerAmbulanceSos = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { sosType, lat, lng } = req.body; // sosType: 'Police Required', 'Vehicle Breakdown', 'Control Room'
+
+        const booking = await Booking.findById(id);
+        
+        if (booking) {
+            booking.trackingTimeline.push({
+                status: 'SOS Alert',
+                timestamp: new Date(),
+                note: `Driver triggered SOS alert: ${sosType}. Location logged at Lat: ${lat}, Lng: ${lng}`
+            });
+            await booking.save();
+        }
+
+        // Trigger push notification to System Admins regarding active SOS
+        await notifyAdminsAndVendor(
+            null,
+            'admin',
+            `🚨 AMBULANCE SOS: ${sosType}`,
+            `Driver on booking ID #${booking ? booking.bookingId : 'N/A'} requires urgent ${sosType} assistance.`
+        );
+
+        res.json({ success: true, message: `${sosType} Alert logged and control room notified.` });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
 
 
 module.exports = {getMyActiveTrip, getIncomingRequests, acceptBooking, updateTripStatus, uploadIncidentPhoto,
-    finalizeTripHandoff,verifyPickupOtp,
+    finalizeTripHandoff,verifyPickupOtp, arrivedAtDropOff, verifyDropOffOtp, triggerAmbulanceSos,
     rejectBooking, reRouteAmbulance,getDriverDashboardStats,
     getDriverTripHistory
  };

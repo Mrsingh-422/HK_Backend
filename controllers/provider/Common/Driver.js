@@ -244,10 +244,35 @@ const vendorResetDriverPassword = async (req, res) => {
     }
 };
 
+// 7. GET DRIVER PROFILE (Logged-in Driver details)
+// endpoint: GET /driver/profile
+const getDriverProfile = async (req, res) => {
+    try {
+        // req.user.id JWT token protect('driver') middleware se decode hokar aata hai
+        const driver = await Driver.findById(req.user.id).populate({
+            path: 'vendorId',
+            select: 'name email phone profileImage' // Jo details dynamic vendor model se read karni hain unhe select karein
+        });
+
+        if (!driver) {
+            return res.status(404).json({ success: false, message: "Driver profile not found" });
+        }
+
+        res.json({ 
+            success: true, 
+            data: driver 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
 
 module.exports = { 
     registerDriver, 
     loginDriver, 
+    getDriverProfile,
+
     getVendorDrivers, 
     searchDrivers, 
     getDriverById, 

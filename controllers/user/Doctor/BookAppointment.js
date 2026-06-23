@@ -17,6 +17,7 @@ const mongoose = require('mongoose');
 const Review = require('../../../models/Review'); // For dynamic ratings calculation
 
 const Bed = require('../../../models/Bed'); // For hospital admissions
+const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 
 // 1. GET ALL SPECIALIZATIONS (For dropdown)
 const getSpecializations = async (req, res) => {
@@ -450,16 +451,13 @@ const verifyDoctorPayment = async (req, res) => {
             });
         }
 
-        // 1. Verify payment signature security key
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
             return res.status(400).json({ success: false, message: "Signature verification failed." });
         }
 
-        // 🚨 2. Fetch authentic payment details from Razorpay Server [1]
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 3. Find and Confirm the Appointment record in DB
         const appointment = await Appointment.findByIdAndUpdate(
             appointmentId,
             {
@@ -467,7 +465,7 @@ const verifyDoctorPayment = async (req, res) => {
                     status: 'Confirmed',
                     paymentStatus: 'Paid',
                     transactionId: razorpayPaymentId,
-                    paymentDetails: rzpDetails // 👈 Saved detailed payment audit logs
+                    paymentDetails: rzpDetails 
                 }
             },
             { new: true }
@@ -476,6 +474,15 @@ const verifyDoctorPayment = async (req, res) => {
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Appointment record not found." });
         }
+
+        // 🚨 Trigger Notification for Doctor & Admins
+        await notifyAdminsAndVendor(
+            appointment.doctorId._id,
+            'doctor',
+            "New Appointment Confirmed!",
+            `Appointment scheduled on ${moment(appointment.appointmentDate).format('YYYY-MM-DD')} at ${appointment.appointmentTime}.`,
+            { appointmentId: appointment._id.toString(), type: 'new_appointment' }
+        );
 
         res.json({
             success: true,
@@ -488,7 +495,6 @@ const verifyDoctorPayment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 const verifyTrackingOTP = async (req, res) => {
     try {

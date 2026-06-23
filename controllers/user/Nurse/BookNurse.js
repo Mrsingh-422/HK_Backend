@@ -14,6 +14,7 @@ const moment = require('moment');
 const crypto = require('crypto');
 
 const { createRazorpayOrder, verifyRazorpaySignature , fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 
 
 // 1. LIST NURSES
@@ -508,7 +509,6 @@ const placeNurseBooking = async (req, res) => {
         const item = isPackage ? await NursePackage.findById(packageId) : await NurseService.findById(serviceId);
         const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-        // Create Razorpay Order if payment is Online
         let rzpOrder = null;
         if (paymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(priceBreakdown.totalPrice, `receipt_${bId}`);
@@ -539,12 +539,10 @@ const placeNurseBooking = async (req, res) => {
             selectedConsumables,
             paymentMethod: paymentMethod || 'COD',
             paymentStatus: 'Pending',
-            status: 'Pending' // Stays Pending until paid or confirmed [1]
+            status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending'
         });
 
-        // COD confirmed instantly
         if (paymentMethod === 'COD') {
-            // Update Coupon Usage directly for COD
             if (appliedCoupon && appliedCoupon.couponId) {
                 const coupon = await Coupon.findById(appliedCoupon.couponId);
                 if (coupon) {
@@ -557,10 +555,19 @@ const placeNurseBooking = async (req, res) => {
                     await coupon.save();
                 }
             }
+
+            // 🚨 Trigger Notification for COD Nurse Bookings
+            await notifyAdminsAndVendor(
+                nurseId,
+                'nurse',
+                "New Nurse Booking Requested (COD)!",
+                `COD Nursing service #${bId} has been requested.`,
+                { bookingId: booking._id.toString(), type: 'new_nurse_booking' }
+            );
+
             return res.status(201).json({ success: true, message: "Booking confirmed!", data: booking });
         }
 
-        // Return payment configurations for online
         res.status(201).json({
             success: true,
             message: "Razorpay order created for Nurse booking.",
@@ -585,27 +592,22 @@ const verifyNursePayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Missing payment verification keys." });
         }
 
-        // 1. Verify Signature
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
             return res.status(400).json({ success: false, message: "Invalid payment signature." });
         }
 
-        // 2. Fetch Pending Booking
         const booking = await NurseBooking.findById(appointmentId);
         if (!booking) return res.status(404).json({ success: false, message: "Nurse booking not found." });
 
-        // 🚨 3. Fetch authentic payment details from Razorpay Server [1]
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 4. Confirm Booking State
         booking.status = 'Confirmed';
         booking.paymentStatus = 'Paid';
         booking.paymentMethod = 'Online';
-        booking.paymentDetails = rzpDetails; // 👈 Saved detailed payment audit logs
+        booking.paymentDetails = rzpDetails; 
         await booking.save();
 
-        // 5. UPDATE COUPON USAGE HISTORY
         if (booking.appliedCoupon && booking.appliedCoupon.couponId) {
             const coupon = await Coupon.findById(booking.appliedCoupon.couponId);
             if (coupon) {
@@ -618,6 +620,15 @@ const verifyNursePayment = async (req, res) => {
                 await coupon.save();
             }
         }
+
+        // 🚨 Trigger Notification for Online Paid Nurse Bookings
+        await notifyAdminsAndVendor(
+            booking.nurseId,
+            'nurse',
+            "New Nurse Booking Confirmed!",
+            `Paid Nurse booking #${booking.bookingId} has been successfully verified.`,
+            { bookingId: booking._id.toString(), type: 'new_nurse_booking' }
+        );
 
         res.json({
             success: true,

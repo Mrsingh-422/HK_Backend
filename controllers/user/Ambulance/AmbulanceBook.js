@@ -7,7 +7,7 @@ const Review = require('../../../models/Review');
 const Wallet = require('../../../models/Wallet');
 const mongoose = require('mongoose');
 const { getDistance } = require('../../../utils/helpers');
-const { sendPushNotification } = require('../../../utils/notifaction');
+const { sendPushNotification,notifyAdminsAndVendor } = require('../../../utils/notification');
 const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
 const generateCaseRef = (type) => {
@@ -366,7 +366,6 @@ const calculateAmbulanceFare = async (req, res) => {
 
 const confirmAmbulanceBooking = async (req, res) => {
     try {
-        // 1. Flutter/Form-data Parsing (Handles stringified objects from mobile client)
         let body = { ...req.body };
         
         if (typeof body.pricing === 'string') {
@@ -390,10 +389,8 @@ const confirmAmbulanceBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Target Ambulance ID is required." });
         }
 
-        // 2. Calculate Fare & Validate Coupon (Shared Helper Logic)
         const fare = await getFinalFare(body, req.user.id); 
 
-        // Parse staffType to store individual selection flags in DB
         let staffList = staffType ? (typeof staffType === 'string' ? staffType.split(',') : staffType) : [];
         staffList = staffList.map(s => s.trim());
         const supportStaffSelected = {
@@ -401,24 +398,18 @@ const confirmAmbulanceBooking = async (req, res) => {
             nurse: staffList.includes('Nurse')
         };
 
-        // 3. Parsing Patient Details
         let parsedDetails = {};
         if (typeof patientDetails === 'string') {
             try { parsedDetails = JSON.parse(patientDetails || '{}'); } catch (e) { parsedDetails = {}; }
         } else { parsedDetails = patientDetails || {}; }
 
-        // 4. Handle Images (referralCard & incidentPhoto)
         let referralCardPath = req.files?.referralCard ? `/uploads/ambulances/${req.files.referralCard[0].filename}` : null;
         let incidentPhotoPath = req.files?.incidentPhoto ? `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
 
         const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
-        // =========================================================================
-        // 5. 🚨 UPGRADED HIGHLY-ROBUST LOCATION PARSER (Multer Compatibility)
-        // =========================================================================
         let finalPickupLocation = { address: "Pickup Location", lat: 30.7046, lng: 76.7179 };
 
-        // Option A: Multer automatically sends indexed fields like 'pickupLocation[address]'
         if (body['pickupLocation[address]']) {
             finalPickupLocation = {
                 address: body['pickupLocation[address]'],
@@ -426,7 +417,6 @@ const confirmAmbulanceBooking = async (req, res) => {
                 lng: Number(body['pickupLocation[lng]'] || 76.7179)
             };
         } 
-        // Option B: Flat individual keys (e.g., body.pickupAddress, body.pickupLat)
         else if (body.pickupAddress || body.pickupLocationAddress) {
             finalPickupLocation = {
                 address: body.pickupAddress || body.pickupLocationAddress,
@@ -434,7 +424,6 @@ const confirmAmbulanceBooking = async (req, res) => {
                 lng: Number(body.pickupLng || body.pickupLocationLng || 76.7179)
             };
         }
-        // Option C: Stringified JSON or nested object
         else if (body.pickupLocation) {
             if (typeof body.pickupLocation === 'string') {
                 try {
@@ -447,7 +436,6 @@ const confirmAmbulanceBooking = async (req, res) => {
                         };
                     }
                 } catch (e) {
-                    // If it is just a plain address string, fallback to default coordinates
                     finalPickupLocation = {
                         address: body.pickupLocation, 
                         lat: Number(body.lat || body.pickupLat || 30.7046),
@@ -457,8 +445,8 @@ const confirmAmbulanceBooking = async (req, res) => {
             } else if (typeof body.pickupLocation === 'object') {
                 finalPickupLocation = {
                     address: body.pickupLocation.address || body.pickupLocation.pickupAddress || "Pickup Location",
-                    lat: Number(body.pickupLocation.lat || 30.7046),
-                    lng: Number(body.pickupLocation.lng || 76.7179)
+                    lat: Number(booking.pickupLocation.lat || 30.7046),
+                    lng: Number(booking.pickupLocation.lng || 76.7179)
                 };
             }
         }
@@ -466,12 +454,10 @@ const confirmAmbulanceBooking = async (req, res) => {
         const tempBookingId = `HK-BOK-${Date.now().toString().slice(-6)}`;
         let rzpOrder = null;
 
-        // Razorpay order creation for non-free cases
         if (!fare.isFree) {
             rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
         }
 
-        // 6. Create Booking in database
         const booking = await Booking.create({
             bookingId: tempBookingId,
             caseReference: generateCaseRef(serviceType),
@@ -484,7 +470,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
             scheduledTime: appointmentTime || null,
             supportStaffSelected: supportStaffSelected,
-            pickupLocation: finalPickupLocation, // 👈 Saved with robust parsed details
+            pickupLocation: finalPickupLocation,
 
             patientDetails: {
                 ...parsedDetails,
@@ -527,6 +513,16 @@ const confirmAmbulanceBooking = async (req, res) => {
                 coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
             }
             await coupon.save();
+
+            // 🚨 Trigger Notification for Free Case Bookings
+            await notifyAdminsAndVendor(
+                ambulanceId, 
+                'ambulance', 
+                "New Booking Request (Free Case)!", 
+                `An ambulance booking #${tempBookingId} has been placed. Action required.`,
+                { bookingId: booking._id.toString(), type: 'new_booking' }
+            );
+
             return res.status(201).json({ success: true, message: "Booking Request Sent Successfully (Free Case)", booking });
         }
 
@@ -534,7 +530,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             success: true, 
             message: "Razorpay order created for ambulance. Complete payment to confirm.",
             key_id: process.env.RAZORPAY_KEY_ID,
-            amount: rzpOrder.amount, // in paise
+            amount: rzpOrder.amount, 
             razorpayOrderId: rzpOrder.id,
             appointmentId: booking._id,
             bookingId: tempBookingId
@@ -545,6 +541,7 @@ const confirmAmbulanceBooking = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
 
 
 // 🚨 NEW CONTROLLER: INITIATE PAYMENT AFTER DRIVER ACCEPTS
@@ -599,26 +596,21 @@ const verifyAmbulancePayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Missing payment tokens." });
         }
 
-        // 1. Verify Signature
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
             return res.status(400).json({ success: false, message: "Signature verification failed." });
         }
 
-        // 2. Fetch pending booking
         const booking = await Booking.findById(appointmentId);
         if (!booking) return res.status(404).json({ success: false, message: "Ambulance booking not found." });
 
-        // 3. Fetch authentic payment details from Razorpay Server
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 4. Confirm payment state
         booking.paymentStatus = 'Paid';
         booking.transactionId = razorpayPaymentId;
         booking.paymentDetails = rzpDetails; 
         await booking.save();
 
-        // 5. UPDATE COUPON USAGE HISTORY
         const couponId = booking.couponDetails?.couponId;
         if (couponId) {
             const coupon = await Coupon.findById(couponId);
@@ -633,10 +625,10 @@ const verifyAmbulancePayment = async (req, res) => {
             }
         }
 
-        // 🟢 6. NOTIFY DRIVER: Payment received, start navigation
-        await sendPushNotification(
+        // 🚨 Trigger Notification for Online Paid Bookings (Updated from previous driver-only trigger)
+        await notifyAdminsAndVendor(
             booking.ambulanceId, 
-            'driver', 
+            'ambulance', 
             "Payment Confirmed!", 
             "The patient completed the payment. You can start your trip now.",
             { bookingId: booking._id.toString(), type: 'payment_verified' }
@@ -652,6 +644,10 @@ const verifyAmbulancePayment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+
+
 
 
 
@@ -777,14 +773,13 @@ const createAccidentalBooking = async (req, res) => {
             ambulanceId, 
             pickupLocation, 
             patientRelation, 
-            emergencyDescription, // "What kind of emergency is?"
+            emergencyDescription, 
             phone 
         } = req.body;
 
         const amb = await Ambulance.findById(ambulanceId);
         if (!amb) return res.status(404).json({ message: "Ambulance not found" });
 
-        // Logic: Accidental cases are free (Figma: $0.00)
         const isFree = amb.freeServices.accidental;
 
         const booking = await Booking.create({
@@ -793,7 +788,7 @@ const createAccidentalBooking = async (req, res) => {
             userId: req.user.id,
             ambulanceId: ambulanceId,
             serviceType: 'Accident emergency',
-            triageLevel: 'Emergency', // Accidental is always Emergency
+            triageLevel: 'Emergency', 
             patientDetails: {
                 relation: patientRelation,
                 emergencyDescription: emergencyDescription
@@ -808,6 +803,15 @@ const createAccidentalBooking = async (req, res) => {
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{ status: 'Request Accepted by Driver', timestamp: new Date() }]
         });
+
+        // 🚨 Trigger Notification for Accidental emergencies
+        await notifyAdminsAndVendor(
+            ambulanceId,
+            'ambulance',
+            "🚨 Emergency Accident Booking!",
+            "An accidental emergency booking has been reported. Action required.",
+            { bookingId: booking._id.toString(), type: 'emergency_booking' }
+        );
 
         res.status(201).json({ 
             success: true, 
@@ -888,7 +892,7 @@ const createReferralBooking = async (req, res) => {
             scheduledTime,
             patientRelation,
             referralReason,
-            staffType, // 'Doctor' or 'Nurse'
+            staffType, 
             ambulanceId,
             triageLevel 
         } = req.body;
@@ -896,7 +900,6 @@ const createReferralBooking = async (req, res) => {
         const amb = await Ambulance.findById(ambulanceId);
         if (!amb) return res.status(404).json({ message: "Ambulance not found" });
 
-        // Pricing Calculation (Screen 7)
         const ambulanceCharge = amb.pricing?.fixedPrice || 2000;
         const supportingStaffCharge = staffType === 'Doctor' ? 500 : (staffType === 'Nurse' ? 300 : 0);
 
@@ -924,10 +927,18 @@ const createReferralBooking = async (req, res) => {
             status: 'Searching'
         });
 
+        // 🚨 Trigger Notification for Referral Bookings
+        await notifyAdminsAndVendor(
+            ambulanceId,
+            'ambulance',
+            "New Referral Booking Request",
+            "A referral ambulance booking has been scheduled.",
+            { bookingId: booking._id.toString(), type: 'referral_booking' }
+        );
+
         res.status(201).json({ success: true, message: "Referral Request Sent", booking });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-
 
 
 

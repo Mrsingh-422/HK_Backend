@@ -34,7 +34,7 @@ const Nurse = require('../../../models/Nurse');
 const Driver = require('../../../models/Driver');
 // end rating
 
-const { sendPushNotification } = require('../../../utils/notifaction'); // For Notifications
+const { sendPushNotification,notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 
@@ -1059,7 +1059,6 @@ const checkoutLabBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cart is empty" });
         }
 
-        // Bill Calculation logic call
         const bill = await calculateBillHelper(
             cart.labCart.labId, 
             cart.labCart, 
@@ -1074,7 +1073,6 @@ const checkoutLabBooking = async (req, res) => {
         const tempBookingId = `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
 
-        // 🚨 RAZORPAY INTEGRATION: Create Order if Payment is Online
         if (paymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
         }
@@ -1095,7 +1093,6 @@ const checkoutLabBooking = async (req, res) => {
             billSummary: bill, 
             paymentMethod,
             isRapid: isRapid || false,
-            // If payment is online, set status to 'Pending' until signature verification [1]
             status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending',
             paymentStatus: paymentMethod === 'COD' ? 'Pending' : 'Pending',
             tracking: {
@@ -1103,21 +1100,29 @@ const checkoutLabBooking = async (req, res) => {
             }
         });
 
-        // 🚨 Note: COD me cart abhi clear ho jayega, Online me verify-payment success hone par clear hoga.
         if (paymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
+
+            // 🚨 Trigger Notification for COD Lab Bookings
+            await notifyAdminsAndVendor(
+                cart.labCart.labId,
+                'lab',
+                "New Lab Booking Confirmed (COD)!",
+                `A COD lab booking #${tempBookingId} has been successfully placed.`,
+                { bookingId: booking._id.toString(), type: 'new_lab_booking' }
+            );
+
             return res.status(201).json({ success: true, message: "Booking confirmed successfully!", data: booking });
         }
 
-        // Return Razorpay data to frontend for online payments
         res.status(201).json({
             success: true,
             message: "Razorpay order created. Complete payment to confirm.",
             key_id: process.env.RAZORPAY_KEY_ID,
-            amount: rzpOrder.amount, // in paise
+            amount: rzpOrder.amount, 
             razorpayOrderId: rzpOrder.id,
             bookingId: tempBookingId,
-            appointmentId: booking._id // Mapped ID
+            appointmentId: booking._id 
         });
 
     } catch (error) { 
@@ -1147,8 +1152,6 @@ const bookLabTest = async (req, res) => {
         } = req.body;
 
         const tempBookingId = `ORD-${Date.now().toString().slice(-6)}${crypto.randomInt(100, 999)}`;
-        
-        // Dynamic bill calculation
         const bill = await calculateBill(labId, items, patients.length, collectionType, couponCode, isRapid);
 
         let rzpOrder = null;
@@ -1179,6 +1182,15 @@ const bookLabTest = async (req, res) => {
         });
 
         if (paymentMethod === 'COD') {
+            // 🚨 Trigger Notification for COD Direct Lab Bookings
+            await notifyAdminsAndVendor(
+                labId,
+                'lab',
+                "New Direct Lab Booking (COD)!",
+                `Direct COD booking #${tempBookingId} has been successfully placed.`,
+                { bookingId: booking._id.toString(), type: 'new_lab_booking' }
+            );
+
             return res.status(201).json({ success: true, data: booking });
         }
 
@@ -1202,14 +1214,12 @@ const uploadPrescriptionFlow = async (req, res) => {
 
         const images = req.files.map(f => f.path);
         
-        // 1. Prescription metadata
         const presc = await Prescription.create({
             userId: req.user.id,
             prescriptionImages: images,
             isManualUpload: true
         });
 
-        // 2. Booking in "Under Review" state
         const booking = await LabBooking.create({
             bookingId: `ORD-PR-${crypto.randomInt(1000, 9999)}`,
             userId: req.user.id,
@@ -1221,6 +1231,15 @@ const uploadPrescriptionFlow = async (req, res) => {
             bookingType: 'Prescription-Based',
             status: 'Under Review' 
         });
+
+        // 🚨 Trigger Notification for Lab Prescription reviews
+        await notifyAdminsAndVendor(
+            labId,
+            'lab',
+            "New Lab Prescription Inquiry!",
+            `Prescription upload for inquiry #${booking.bookingId} is pending manual review.`,
+            { bookingId: booking._id.toString(), type: 'lab_prescription_review' }
+        );
 
         res.json({ success: true, message: "Lab will review and suggest tests", bookingId: booking.bookingId });
     } catch (error) { res.status(500).json({ message: error.message }); }
@@ -1331,6 +1350,15 @@ const confirmPrescriptionBooking = async (req, res) => {
         await booking.save();
 
         if (paymentMethod === 'COD') {
+            // 🚨 Trigger Notification for Prescription Bookings Confirmed via COD
+            await notifyAdminsAndVendor(
+                booking.labId,
+                'lab',
+                "Prescription Booking Confirmed (COD)!",
+                `Prescription order #${booking.bookingId} has been successfully confirmed.`,
+                { bookingId: booking._id.toString(), type: 'new_lab_booking' }
+            );
+
             return res.json({ success: true, message: "Booking confirmed!", data: booking });
         }
 
@@ -1357,16 +1385,13 @@ const verifyLabPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Missing required payment tokens." });
         }
 
-        // 1. Verify Signature
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
             return res.status(400).json({ success: false, message: "Invalid transaction signature." });
         }
 
-        // 🚨 2. Fetch authentic payment details from Razorpay Server [1]
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 3. Find and update status to Confirmed & Paid
         const booking = await LabBooking.findByIdAndUpdate(
             appointmentId,
             {
@@ -1374,7 +1399,7 @@ const verifyLabPayment = async (req, res) => {
                     status: 'Confirmed',
                     paymentStatus: 'Done',
                     paymentMethod: 'UPI',
-                    paymentDetails: rzpDetails // 👈 Saved detailed payment audit logs
+                    paymentDetails: rzpDetails 
                 }
             },
             { new: true }
@@ -1384,8 +1409,16 @@ const verifyLabPayment = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 4. Clear User's Lab Cart
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
+
+        // 🚨 Trigger Notification for Paid Online Lab Bookings
+        await notifyAdminsAndVendor(
+            booking.labId,
+            'lab',
+            "New Lab Booking Confirmed!",
+            `Paid Lab booking #${booking.bookingId} has been successfully verified.`,
+            { bookingId: booking._id.toString(), type: 'new_lab_booking' }
+        );
 
         res.json({
             success: true,

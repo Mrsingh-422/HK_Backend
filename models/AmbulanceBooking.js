@@ -42,8 +42,13 @@ const ambulanceBookingSchema = new mongoose.Schema({
     },
 
     // Screen 36: Securitybelt
-    otp: { type: String }, 
+       otp: { type: String }, // Pickup OTP (Patient se lega)
     isOtpVerified: { type: Boolean, default: false },
+
+    dropOffOtp: { type: String }, // NEW: Drop-off OTP (Hospital se lega)
+    isDropOffVerified: { type: Boolean, default: false },
+
+
 
     // Tracking
     status: { 

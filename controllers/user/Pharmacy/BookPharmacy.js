@@ -29,6 +29,7 @@ const Review = require('../../../models/Review'); // Import Review model for rat
 const ComboOffer = require('../../../models/PharmacyComboOffer'); // Import ComboOffer model
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 
 
 
@@ -1206,10 +1207,9 @@ const placeOrder = async (req, res) => {
 
         const userId = req.user.id;
         
-        // A. Cart Fetch & Population (🚨 UPDATED: Populating medicineId AND comboOfferId)
         const cart = await Cart.findOne({ userId })
             .populate('pharmacyCart.items.medicineId')
-            .populate('pharmacyCart.items.comboOfferId'); // 👈 Deep populate combo offers directly [1]
+            .populate('pharmacyCart.items.comboOfferId'); 
 
         if (!cart || !cart.pharmacyCart.items.length) {
             return res.status(400).json({ success: false, message: "Transaction expired. Cart is empty." });
@@ -1217,7 +1217,6 @@ const placeOrder = async (req, res) => {
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
 
-        // B. STRICT PRESCRIPTION VALIDATION
         const rxMandatory = cart.pharmacyCart.items.some(item => 
             item.medicineId?.prescription_required?.toUpperCase() === "YES"
         );
@@ -1236,12 +1235,10 @@ const placeOrder = async (req, res) => {
 
         const isPrescriptionOrder = rxMandatory || rxImages.length > 0;
 
-        // C. Bill calculations
         const bill = await calculatePharmacyBillHelper(
             pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime
         );
 
-        // --- D. UPDATED: Map Cart items dynamically, transferring saved BOGO indicators into Order Items [1] ---
         const mappedOrderItems = cart.pharmacyCart.items.map(item => {
             const masterMedsMrp = item.medicineId ? Number(item.medicineId.mrp || 0) : 0;
             const orderedQty = Number(item.quantity || 1);
@@ -1250,7 +1247,6 @@ const placeOrder = async (req, res) => {
             let comboOfferId = null;
             let freeQuantity = 0;
 
-            // Extract BOGO parameters directly from saved Cart item [1]
             if (item.isComboApplied === true && item.comboOfferId) {
                 isComboApplied = true;
                 comboOfferId = item.comboOfferId._id;
@@ -1271,23 +1267,18 @@ const placeOrder = async (req, res) => {
                 quantity: orderedQty,
                 duration: item.duration,
                 startDate: item.startDate,
-                
-                // 🚨 Saved to order items matching schema
                 isComboApplied,
                 comboOfferId,
                 freeQuantity
             };
         });
 
-        // Unique dynamic Order ID
         const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
 
-        // E. RAZORPAY INTEGRATION: Create order if online, do not touch stock yet
         if (paymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
         } else {
-            // COD Logic: Atomic Stock Deduction instantly
             for (const item of cart.pharmacyCart.items) {
                 const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId._id });
                 if (!inventory || inventory.stock_quantity < item.quantity) {
@@ -1299,13 +1290,12 @@ const placeOrder = async (req, res) => {
             }
         }
 
-        // F. Create booking
         const booking = await PharmacyBooking.create({
             orderId: tempOrderId,               
             userId,
             pharmacyId,                         
             patients: await mapPatients(userId, selectedPatientIds || ['Self']),
-            items: mappedOrderItems, // 👈 Saved with full BOGO flags
+            items: mappedOrderItems, 
             collectionType,
             address: typeof address === 'string' ? JSON.parse(address) : address,
             appointmentDate,
@@ -1321,20 +1311,28 @@ const placeOrder = async (req, res) => {
             deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString()
         });
 
-        // COD clears cart instantly
         if (paymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
+
+            // 🚨 Trigger Notification for COD Pharmacy Bookings
+            await notifyAdminsAndVendor(
+                pharmacyId,
+                'pharmacy',
+                "New Pharmacy Order Placed (COD)!",
+                `A COD medicine order #${tempOrderId} has been successfully placed.`,
+                { bookingId: booking._id.toString(), type: 'new_pharmacy_booking' }
+            );
+
             return res.status(201).json({ success: true, data: booking });
         }
 
-        // Return Razorpay config to frontend for Online payment [1]
         res.status(201).json({
             success: true,
             message: "Razorpay order created for pharmacy checkout.",
             key_id: process.env.RAZORPAY_KEY_ID,
-            amount: rzpOrder.amount, // in paise
+            amount: rzpOrder.amount, 
             razorpayOrderId: rzpOrder.id,
-            appointmentId: booking._id // Mapped DB Id
+            appointmentId: booking._id 
         });
 
     } catch (error) {
@@ -1366,7 +1364,6 @@ const verifyPharmacyPayment = async (req, res) => {
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // Update items in the order to calculate dynamic combo metrics
         for (const item of order.items) {
             const activePromo = await PharmacyComboOffer.findOne({
                 pharmacyId: order.pharmacyId,
@@ -1391,7 +1388,6 @@ const verifyPharmacyPayment = async (req, res) => {
                 }
             }
 
-            // ATOMIC STOCK DEDUCTION FOR TOTAL ORDERED QUANTITY
             const inventory = await MedicineInventory.findOne({ pharmacyId: order.pharmacyId, medicineId: item.medicineId });
             if (inventory) {
                 inventory.stock_quantity = Math.max(0, inventory.stock_quantity - item.quantity);
@@ -1407,6 +1403,15 @@ const verifyPharmacyPayment = async (req, res) => {
         await order.save();
 
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
+
+        // 🚨 Trigger Notification for Online Paid Pharmacy Orders
+        await notifyAdminsAndVendor(
+            order.pharmacyId,
+            'pharmacy',
+            "New Pharmacy Order Confirmed!",
+            `Paid Pharmacy order #${order.orderId} has been successfully verified.`,
+            { bookingId: order._id.toString(), type: 'new_pharmacy_booking' }
+        );
 
         res.json({
             success: true,
@@ -1435,8 +1440,17 @@ const uploadPrescription = async (req, res) => {
             address,
             prescriptionImages: images,
             orderType: 'Prescription-Based',
-            status: 'Under Review' // Figma Screen: "Order Review in Progress"
+            status: 'Under Review' 
         });
+
+        // 🚨 Trigger Notification for Pharmacy Prescription inquiries
+        await notifyAdminsAndVendor(
+            pharmacyId,
+            'pharmacy',
+            "New Prescription Inquiry Placed!",
+            `Prescription inquiry #${order.orderId} is pending manual review.`,
+            { bookingId: order._id.toString(), type: 'pharmacy_prescription_review' }
+        );
 
         res.json({ success: true, message: "Pharmacist will verify your prescription", orderId: order.orderId });
     } catch (error) { res.status(500).json({ message: error.message }); }
@@ -2073,7 +2087,6 @@ const payAndConfirmOrder = async (req, res) => {
         for (const item of (request.verifiedBill.items || [])) {
             const orderedQty = Number(item.quantity || 1);
             
-            // Prescription requests are standard-billed, BOGO mapped if applied during reviewing phase [1]
             const activePromo = await PharmacyComboOffer.findOne({
                 pharmacyId: request.pharmacyId,
                 medicineId: item.medicineId,
@@ -2138,6 +2151,15 @@ const payAndConfirmOrder = async (req, res) => {
         request.status = 'Paid';
         await request.save();
 
+        // 🚨 Trigger Notification for COD Prescription Inquiry Payments
+        await notifyAdminsAndVendor(
+            request.pharmacyId,
+            'pharmacy',
+            "Prescription Order Placed (COD)!",
+            `Prescription order #${tempOrderId} has been confirmed (COD).`,
+            { bookingId: finalOrder._id.toString(), type: 'new_pharmacy_booking' }
+        );
+
         res.status(201).json({
             success: true,
             message: "Prescription order confirmed successfully!",
@@ -2149,6 +2171,7 @@ const payAndConfirmOrder = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 4. VERIFY PRESCRIPTION REQUEST PAYMENT SIGNATURE
@@ -2169,7 +2192,6 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // Deduct inventory stock
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
@@ -2250,6 +2272,15 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
 
         request.status = 'Paid';
         await request.save();
+
+        // 🚨 Trigger Notification for Online Paid Prescription Inquiry Orders
+        await notifyAdminsAndVendor(
+            request.pharmacyId,
+            'pharmacy',
+            "Prescription Order Placed!",
+            `A paid prescription order #${finalOrder.orderId} has been confirmed.`,
+            { bookingId: finalOrder._id.toString(), type: 'new_pharmacy_booking' }
+        );
 
         res.status(201).json({
             success: true,
