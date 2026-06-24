@@ -19,7 +19,11 @@ const {
     addProgressUpdate,
     submitServiceCompletion,
     verifyCompleteOtp,
-    getAdminContact
+    getAdminContact,
+    getDriverHistory,
+    getTermsAndConditions,
+    getAboutContent
+
 } = require('../../../controllers/driver/driverNurse/NurseDriverOrders');
 
 // Base URL: /driver/nurse
@@ -54,5 +58,12 @@ router.patch('/orders/progress-update/:bookingId', protect('driver'), nurseProgr
 router.post('/orders/submit-completion/:bookingId', protect('driver'), nurseProgressUpload, submitServiceCompletion);
 
 router.post('/orders/verify-complete-otp', protect('driver'), verifyCompleteOtp);
+
+// ==========================================
+// 4. HISTORY & INFORMATION
+// ==========================================
+router.get('/orders/history', protect('driver'), getDriverHistory); // My History Screen
+router.get('/terms', protect('driver'), getTermsAndConditions); // Terms page
+router.get('/about', protect('driver'), getAboutContent); // About page
 
 module.exports = router;

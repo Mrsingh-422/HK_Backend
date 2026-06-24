@@ -1559,6 +1559,85 @@ const reassignAmbulanceOnBreakdown = async (req, res) => {
     }
 };
 
+// --- API: REASSIGNS PRIMARY DOCTOR FROM ADMIN PANEL (Auto-syncs shift duration tracking logs) ---
+// Endpoint: POST /hospital/panel/admissions/reassign-doctor
+const reassignDoctorFromPanel = async (req, res) => {
+    try {
+        const hospitalId = req.user.id; // Logged-in Hospital Admin
+        const { appointmentId, newDoctorId, reason } = req.body;
+
+        // FIX: Native load Doctor model to resolve ReferenceError crashes
+        const Doctor = require('../../models/Doctor');
+
+        // 1. Verify New Doctor exists, belongs to same hospital, and is active
+        const newDoctor = await Doctor.findOne({
+            _id: newDoctorId,
+            hospitalId,
+            profileStatus: 'Approved',
+            isActive: true
+        });
+
+        if (!newDoctor) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Selected doctor is not active or unauthorized in your hospital." 
+            });
+        }
+
+        // 2. Find active Admission/Emergency record
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            hospitalId,
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } // Active journey states
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Active admission record not found." });
+        }
+
+        const oldDoctorId = appointment.doctorId;
+        if (oldDoctorId && String(oldDoctorId) === String(newDoctorId)) {
+            return res.status(400).json({ success: false, message: "Kripya reassign karne ke liye koi doosra (new) doctor select karein." });
+        }
+
+        const now = new Date();
+
+        // 3. AUTO-CLOSE OLD DOCTOR SHIFT TIMELINE (If old doctor was assigned previously)
+        if (oldDoctorId) {
+            const activeShift = appointment.treatmentHistory.find(h => 
+                h.toDoctorId && h.toDoctorId.toString() === oldDoctorId.toString() && !h.endTime
+            );
+            if (activeShift) {
+                activeShift.endTime = now;
+                activeShift.durationDisplay = calcDuration(activeShift.startTime, now); // Computes exact stay duration
+            }
+        }
+
+        // 4. Update primary doctor & Push new assignment shift to timeline history
+        appointment.doctorId = newDoctorId;
+        
+        appointment.treatmentHistory.push({
+            fromDoctorId: oldDoctorId || null,
+            toDoctorId: newDoctorId,
+            action: oldDoctorId ? 'Transfer-Accepted' : 'Initial-Assignment',
+            notes: `Doctor reassigned from Hospital Admin Panel. Reason: ${reason || 'Shift adjustment'}`,
+            timestamp: now,
+            startTime: now // Start new doctor's shift tracking instantly!
+        });
+
+        await appointment.save();
+
+        res.json({
+            success: true,
+            message: `Doctor successfully reassigned to Dr. ${newDoctor.name}`,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Reassign Doctor Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 
@@ -1576,5 +1655,5 @@ module.exports = {
     updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings,
     updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,
-    emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,reassignAmbulanceOnBreakdown
+    emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,reassignAmbulanceOnBreakdown,reassignDoctorFromPanel
 };

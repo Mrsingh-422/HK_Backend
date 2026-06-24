@@ -2,6 +2,7 @@ const NurseBooking = require('../../../models/NurseBooking');
 const Driver = require('../../../models/Driver');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const moment = require('moment');
 
 // ==========================================
 // 1. LOGIN & FORGOT PASSWORD FLOW
@@ -415,6 +416,106 @@ const getAdminContact = async (req, res) => {
     });
 };
 
+// A. Get Driver Completed/Cancelled History (Figma Screen 13)
+const getDriverHistory = async (req, res) => {
+    try {
+        const staffId = req.user.id;
+
+        // Drawer History tab ke liye completed aur cancelled bookings fetch karna
+        const bookings = await NurseBooking.find({
+            assignedStaffId: staffId,
+            status: { $in: ['Completed', 'Cancelled'] }
+        })
+        .populate('userId', 'name phone')
+        .sort({ updatedAt: -1 });
+
+        // Figma Screen 13 ke format me map karna
+        const formattedHistory = bookings.map(b => {
+            const bObj = b.toObject();
+            
+            // Format dynamic values
+            const formattedDate = bObj.schedule && bObj.schedule.startDate 
+                ? moment(bObj.schedule.startDate).format('DD-MMMM-YYYY') 
+                : "";
+                
+            const formattedTime = bObj.schedule 
+                ? `${bObj.schedule.startTime} - ${bObj.schedule.endTime}` 
+                : "";
+
+            return {
+                bookingId: bObj._id,
+                orderId: bObj.bookingId || "N/A",
+                patientName: bObj.patients && bObj.patients.length > 0 ? bObj.patients[0].name : "Self",
+                mobileNo: bObj.address ? bObj.address.phone : (bObj.userId ? bObj.userId.phone : ""),
+                location: bObj.address 
+                    ? `${bObj.address.houseNo}, ${bObj.address.sector}, ${bObj.address.city}` 
+                    : "N/A",
+                date: formattedDate,
+                time: formattedTime,
+                status: bObj.status,
+                totalPrice: bObj.totalPrice,
+                cancelReason: bObj.cancelReason || null
+            };
+        });
+
+        res.json({
+            success: true,
+            totalOrders: formattedHistory.length, // Figma: "2 Orders" count header
+            data: formattedHistory
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// B. Get Terms & Conditions Page Document (Figma Screen 17)
+const getTermsAndConditions = async (req, res) => {
+    try {
+        // Figma legal document template layout data
+        const termsText = `
+            The Detroit Medical Center
+            STANDARD TERMS AND CONDITIONS
+
+            1. Incorporation Into Agreements: These DMC Standard Terms and Conditions are incorporated into any arrangement entered into between the recipient of these Standard Terms and the Vendor...
+            
+            2. New Participants: Any new participants joining the DMC after initiation of this contract shall automatically be accorded the rights of this contract...
+
+            3. Vendor Selection: The DMC reserves the right to reject any and all proposals and to waive any or all formalities in connection with bidding and selection of a Vendor...
+        `;
+        
+        res.json({
+            success: true,
+            title: "Terms & Conditions",
+            content: termsText
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// C. Get About Page Document (Figma Screen 15)
+const getAboutContent = async (req, res) => {
+    try {
+        // Figma About Us learning history text
+        const aboutText = `
+            Beds and Britches, Etc. (B.A.B.E.)
+            Learning History
+
+            Organizations like ours try to learn from our experiences, both the successful and not so successful ones. This is a way of assessing our effectiveness and sharing information. It is an important process for the growth of any organization...
+        `;
+
+        res.json({
+            success: true,
+            title: "About Us",
+            content: aboutText
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+
 module.exports = {
     forgotPassword,
     verifyForgotOtp,
@@ -431,5 +532,8 @@ module.exports = {
     addProgressUpdate,
     submitServiceCompletion,
     verifyCompleteOtp,
-    getAdminContact
+    getAdminContact,
+    getDriverHistory,
+    getTermsAndConditions,
+    getAboutContent
 };

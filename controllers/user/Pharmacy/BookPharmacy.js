@@ -1841,20 +1841,47 @@ const getUserPrescriptionRequests = async (req, res) => {
         const limit = 20;
         const skip = (page - 1) * limit;
 
+        // Fetch requests and populate deep pharmacy profile metrics safely
         const requests = await PharmacyPrescriptionRequest.find({ userId })
-            .populate('pharmacyId', 'name profileImage city state')
+            .populate(
+                'pharmacyId', 
+                'name phone address profileImage city state country rating totalReviews isHomeDeliveryAvailable is24x7 location'
+            )
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
 
         const total = await PharmacyPrescriptionRequest.countDocuments({ userId });
 
+        // Formatting response to normalize paths & apply secure validation fallbacks
+        const formattedRequests = requests.map(reqDoc => {
+            const requestObj = reqDoc.toObject();
+            
+            // Normalize path slashes for image loading safety
+            if (requestObj.prescriptionImage) {
+                requestObj.prescriptionImage = requestObj.prescriptionImage.replace(/\\/g, "/");
+            }
+
+            // Safe fallback mappings for items array to prevent GET lists from crashing
+            if (requestObj.verifiedBill && requestObj.verifiedBill.items) {
+                requestObj.verifiedBill.items = requestObj.verifiedBill.items.map(item => ({
+                    ...item,
+                    medicineId: item.medicineId || null,
+                    mrp: Number(item.mrp || 0),
+                    pricePerUnit: Number(item.pricePerUnit || 0),
+                    totalPrice: Number(item.totalPrice || 0)
+                }));
+            }
+            
+            return requestObj;
+        });
+
         res.json({
             success: true,
-            count: requests.length,
+            count: formattedRequests.length,
             totalPages: Math.ceil(total / limit),
             currentPage: page,
-            data: requests
+            data: formattedRequests
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

@@ -945,7 +945,7 @@ const getMyHospitalBookings = async (req, res) => {
                     select: 'name type'
                 }
             })
-            .sort({ appointmentDate: 1 })
+            .sort({ createdAt: -1 }) 
             .skip(skip)
             .limit(limit);
 
