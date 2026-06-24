@@ -18,7 +18,10 @@ const {
     verifyOtpAndDeliver, 
     returnOrder,
     getAdminContact,
-    reassignOrderDueToEmergency
+    reassignOrderDueToEmergency,
+    getDriverHistory,
+    getTermsAndConditions,
+    getAboutContent
 } = require('../../../controllers/driver/driverPharmacy/Orders');
 
 // Base URL: /driver/pharmacy
@@ -50,5 +53,12 @@ router.post('/orders/verify-otp', protect('driver'), pharmacyDeliveryUpload, ver
 router.post('/orders/return/:orderId', protect('driver'), returnOrder);
 
 router.post('/orders/reassign-emergency', protect('driver'), reassignOrderDueToEmergency);
+
+// ==========================================
+// 3. HISTORY & INFORMATION
+// ==========================================
+router.get('/orders/history', protect('driver'), getDriverHistory); // My History Screen
+router.get('/terms', protect('driver'), getTermsAndConditions); // Terms page
+router.get('/about', protect('driver'), getAboutContent); // About page
 
 module.exports = router;

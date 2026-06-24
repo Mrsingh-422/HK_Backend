@@ -22,7 +22,11 @@ const {
     addFamilyToBooking,
     appendItemsToBooking,
     getAdminContact,
-    reassignLabOrderDueToEmergency
+    reassignLabOrderDueToEmergency,
+    getDriverHistory,
+    getTermsAndConditions,
+    getAboutContent
+
 } = require('../../../controllers/driver/driverLab/LabDriverOrders');
 
 // Base URL: /driver/lab
@@ -60,5 +64,13 @@ router.post('/orders/add-family/:bookingId', protect('driver'), addFamilyToBooki
 router.patch('/orders/add-items/:bookingId', protect('driver'), appendItemsToBooking); // Append Tests/Packages
 
 router.post('/orders/reassign-emergency', protect('driver'), reassignLabOrderDueToEmergency);
+
+// ==========================================
+// 4. HISTORY & INFORMATION
+// ==========================================
+
+router.get('/orders/history', protect('driver'), getDriverHistory);
+router.get('/terms', protect('driver'), getTermsAndConditions);
+router.get('/about', protect('driver'), getAboutContent);
 
 module.exports = router;

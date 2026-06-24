@@ -284,6 +284,100 @@ const reassignOrderDueToEmergency = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// ==========================================
+// 4. MISSING HISTORY & LEGAL APIs (Figma Sidebar Screens)
+// ==========================================
+
+// A. Get Pharmacy Driver Delivery History
+const getDriverHistory = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+
+        // Delivered aur Cancelled bookings fetch karna
+        const bookings = await PharmacyBooking.find({
+            driverId,
+            status: { $in: ['Delivered', 'Cancelled'] }
+        })
+        .populate('userId', 'name phone')
+        .sort({ updatedAt: -1 });
+
+        const formattedHistory = bookings.map(b => {
+            const bObj = b.toObject();
+            
+            const formattedDate = bObj.createdAt 
+                ? moment(bObj.createdAt).format('DD-MMMM-YYYY') 
+                : "";
+
+            return {
+                bookingId: bObj._id,
+                orderId: bObj.orderId || "N/A",
+                patientName: bObj.address ? bObj.address.name : (bObj.userId ? bObj.userId.name : "Self"),
+                mobileNo: bObj.address ? bObj.address.phone : (bObj.userId ? bObj.userId.phone : ""),
+                location: bObj.address 
+                    ? `${bObj.address.houseNo}, ${bObj.address.sector}, ${bObj.address.city}` 
+                    : "N/A",
+                date: formattedDate,
+                time: bObj.appointmentTime || "",
+                status: bObj.status,
+                totalPrice: bObj.billSummary ? bObj.billSummary.totalAmount : 0,
+                cancelReason: bObj.returnReason || bObj.cancelReason || null
+            };
+        });
+
+        res.json({
+            success: true,
+            totalOrders: formattedHistory.length, // Figma list header
+            data: formattedHistory
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// B. Get Terms & Conditions Document
+const getTermsAndConditions = async (req, res) => {
+    try {
+        const termsText = `
+            The Detroit Medical Center
+            STANDARD TERMS AND CONDITIONS
+
+            1. Incorporation Into Agreements: These DMC Standard Terms and Conditions are incorporated into any arrangement entered into between the recipient of these Standard Terms and the Vendor...
+            
+            2. New Participants: Any new participants joining the DMC after initiation of this contract shall automatically be accorded the rights of this contract...
+
+            3. Vendor Selection: The DMC reserves the right to reject any and all proposals and to waive any or all formalities in connection with bidding and selection of a Vendor...
+        `;
+        
+        res.json({
+            success: true,
+            title: "Terms & Conditions",
+            content: termsText
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// C. Get About Page Document
+const getAboutContent = async (req, res) => {
+    try {
+        const aboutText = `
+            Health Kangaroo - One Stop Healthcare Solution
+            
+            Our Pharmacy Delivery panel handles secure door-to-door medicine drops, customer signature verifications, dynamic trip routing, and return order management.
+        `;
+
+        res.json({
+            success: true,
+            title: "About Us",
+            content: aboutText
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
 module.exports = { 
     forgotPassword,
     verifyForgotOtp,
@@ -299,5 +393,8 @@ module.exports = {
     verifyOtpAndDeliver, 
     returnOrder,
     getAdminContact,
-    reassignOrderDueToEmergency
+    reassignOrderDueToEmergency,
+    getDriverHistory,
+    getTermsAndConditions,
+    getAboutContent
 };

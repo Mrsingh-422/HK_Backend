@@ -397,6 +397,99 @@ const reassignLabOrderDueToEmergency = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// ==========================================
+// 4. MISSING HISTORY & LEGAL APIs (Figma Sidebar Screens)
+// ==========================================
+
+// A. Get Phlebotomist Service History (Figma Screen 13 style)
+const getDriverHistory = async (req, res) => {
+    try {
+        const phlebotomistId = req.user.id;
+
+        // Completed (Sample Deposited) aur Cancelled bookings fetch karna
+        const bookings = await LabBooking.find({
+            phlebotomistId,
+            status: { $in: ['Sample Deposited', 'Completed', 'Cancelled'] }
+        })
+        .populate('userId', 'name phone')
+        .sort({ updatedAt: -1 });
+
+        const formattedHistory = bookings.map(b => {
+            const bObj = b.toObject();
+            
+            const formattedDate = bObj.appointmentDate 
+                ? moment(bObj.appointmentDate).format('DD-MMMM-YYYY') 
+                : "";
+
+            return {
+                bookingId: bObj._id,
+                orderId: bObj.bookingId || "N/A",
+                patientName: bObj.patients && bObj.patients.length > 0 ? bObj.patients[0].name : "Self",
+                mobileNo: bObj.address ? bObj.address.phone : (bObj.userId ? bObj.userId.phone : ""),
+                location: bObj.address 
+                    ? `${bObj.address.houseNo}, ${bObj.address.city}, ${bObj.address.pincode}` 
+                    : "N/A",
+                date: formattedDate,
+                time: bObj.appointmentTime || "",
+                status: bObj.status,
+                totalPrice: bObj.totalPrice || 0,
+                cancelReason: bObj.cancelReason || bObj.noShowComments || null
+            };
+        });
+
+        res.json({
+            success: true,
+            totalOrders: formattedHistory.length, // Figma history count header
+            data: formattedHistory
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// B. Get Terms & Conditions Document
+const getTermsAndConditions = async (req, res) => {
+    try {
+        const termsText = `
+            The Detroit Medical Center
+            STANDARD TERMS AND CONDITIONS
+
+            1. Incorporation Into Agreements: These DMC Standard Terms and Conditions are incorporated into any arrangement entered into between the recipient of these Standard Terms and the Vendor...
+            
+            2. New Participants: Any new participants joining the DMC after initiation of this contract shall automatically be accorded the rights of this contract...
+
+            3. Vendor Selection: The DMC reserves the right to reject any and all proposals and to waive any or all formalities in connection with bidding and selection of a Vendor...
+        `;
+        
+        res.json({
+            success: true,
+            title: "Terms & Conditions",
+            content: termsText
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// C. Get About Page Document
+const getAboutContent = async (req, res) => {
+    try {
+        const aboutText = `
+            Health Kangaroo - One Stop Healthcare Solution
+            
+            Our Phlebotomist panel ensures seamless home diagnostic collections with dynamic tracking systems, verified OTP validations, and automated laboratory deposits workflows.
+        `;
+
+        res.json({
+            success: true,
+            title: "About Us",
+            content: aboutText
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     forgotPassword,
     verifyForgotOtp,
@@ -416,5 +509,8 @@ module.exports = {
     addFamilyToBooking,
     appendItemsToBooking,
     getAdminContact,
-    reassignLabOrderDueToEmergency
+    reassignLabOrderDueToEmergency,
+    getDriverHistory,
+    getTermsAndConditions,
+    getAboutContent
 };
