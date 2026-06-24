@@ -466,8 +466,53 @@ const rejectPrescriptionRequest = async (req, res) => {
     }
 };
 
+// =========================================================================
+// 🚀 NEW: TRACK ALL PHARMACY DRIVERS & THEIR LIVE ACTIVE ORDERS
+// Endpoint: GET /provider/pharmacy/orders/track-drivers
+// =========================================================================
+const trackPharmacyDrivers = async (req, res) => {
+    try {
+        const pharmacyId = req.user.id;
+
+        // 1. Fetch all drivers linked to this pharmacy store
+        const drivers = await Driver.find({ vendorId: pharmacyId }).lean();
+
+        const driversTrackingData = [];
+
+        for (let driver of drivers) {
+            let currentActiveOrder = null;
+
+            // If driver status is 'Busy', find the active delivery order they are working on
+            if (driver.status === 'Busy') {
+                currentActiveOrder = await PharmacyBooking.findOne({
+                    pharmacyId,
+                    driverId: driver._id,
+                    status: { $in: ['Packed', 'Shipped', 'Accepted', 'OutForDelivery'] } // Active delivery states
+                })
+                .populate('userId', 'name phone')
+                .select('orderId status deliveryStatus address billSummary createdAt')
+                .lean();
+            }
+
+            driversTrackingData.push({
+                ...driver,
+                currentActiveOrder: currentActiveOrder || null // 👈 Will bind active order details or null
+            });
+        }
+
+        res.json({
+            success: true,
+            count: driversTrackingData.length,
+            data: driversTrackingData
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = { getPharmacyDashboardStats, getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
 
-    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest
+    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers
  };
