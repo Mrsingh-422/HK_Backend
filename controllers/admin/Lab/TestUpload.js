@@ -6,6 +6,12 @@ const LabCategory = require('../../../models/LabCategory');
 const { deleteFile } = require('../../../utils/fileHandler');
 const Medicine = require('../../../models/Medicine');
 
+// --- 1. UPLOAD CSV / EXCEL (Optimized for 150MB+ Files & 8 Lakh Data) ---
+const csv = require('csv-parser');
+const fs = require('fs');
+const path = require('path');
+const MasterReportTemplate = require('../../../models/MasterReportTemplate'); 
+
 // upload master tests // Example CSV Format: 
 // endpoint: POST /admin/lab/tests/upload
 // testName: CBC, parameters: Hb||WBC||RBC, faqs: What is CBC?:It is blood test||Why do it?:To check health
@@ -371,9 +377,157 @@ const getPharmacyCategories = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
+
+
+
+
+
+// 6. UPLOAD MASTER TEMPLATES VIA CSV
+// POST: /api/admin/wallet/upload-templates-csv
+// 1. BULK UPLOAD REPORT TEMPLATES VIA CSV
+const uploadTemplatesCSV = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: "Please upload a valid CSV file." });
+        }
+
+        const results = [];
+
+        fs.createReadStream(req.file.path)
+            .pipe(csv())
+            .on('data', (data) => results.push(data))
+            .on('end', async () => {
+                const groups = {};
+
+                results.forEach(row => {
+                    const testName = row.testName?.trim();
+                    const parameterName = row.parameterName?.trim();
+                    // 👈 Capture column named 'Interpretation(s)' or 'interpretation' dynamically
+                    const interpText = (row.interpretation || row['Interpretation(s)'] || "").trim();
+
+                    if (!testName || !parameterName) return; 
+
+                    if (!groups[testName]) {
+                        groups[testName] = {
+                            interpretation: interpText, // Save first parameter row interpretation [1]
+                            parameters: []
+                        };
+                    }
+
+                    // Fallback: If first row was empty but later row has it, capture it
+                    if (!groups[testName].interpretation && interpText) {
+                        groups[testName].interpretation = interpText;
+                    }
+
+                    groups[testName].parameters.push({
+                        name: parameterName,
+                        unit: row.unit?.trim() || "",
+                        minRef: row.minRef?.trim() || "",
+                        maxRef: row.maxRef?.trim() || "",
+                        method: row.method?.trim() || "N/A",
+                        machine: row.machine?.trim() || "Automated Analyzer"
+                    });
+                });
+
+                // Bulk upsert with parent level interpretation mapping [1]
+                for (const testName of Object.keys(groups)) {
+                    await MasterReportTemplate.findOneAndUpdate(
+                        { testName },
+                        { 
+                            $set: { 
+                                parameters: groups[testName].parameters,
+                                interpretation: groups[testName].interpretation // 👈 Parent level updated
+                            } 
+                        },
+                        { upsert: true, new: true } 
+                    );
+                }
+
+                try {
+                    fs.unlinkSync(req.file.path);
+                } catch (unlinkErr) {
+                    console.error("Temporary file delete failed:", unlinkErr.message);
+                }
+
+                res.json({
+                    success: true,
+                    message: `Successfully processed ${Object.keys(groups).length} test templates from CSV. Database updated.`
+                });
+            });
+
+    } catch (error) {
+        console.error("CSV Upload Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. MANUAL CREATE REPORT TEMPLATE (Admin Panel)
+const createReportTemplate = async (req, res) => {
+    try {
+        const { testName, parameters, interpretation } = req.body; // 👈 interpretation added
+
+        if (!testName || !parameters || !Array.isArray(parameters) || parameters.length === 0) {
+            return res.status(400).json({ success: false, message: "testName and parameters array are required." });
+        }
+
+        const exists = await MasterReportTemplate.findOne({ testName });
+        if (exists) {
+            return res.status(400).json({ success: false, message: "A template with this test name already exists." });
+        }
+
+        const newTemplate = await MasterReportTemplate.create({ 
+            testName, 
+            parameters,
+            interpretation: interpretation || "" // Saved successfully
+        });
+        
+        res.status(201).json({ success: true, message: "Template created manually successfully", data: newTemplate });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3. MANUAL EDIT REPORT TEMPLATE
+const editReportTemplate = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updated = await MasterReportTemplate.findByIdAndUpdate(id, req.body, { new: true });
+        
+        if (!updated) {
+            return res.status(404).json({ success: false, message: "Report template not found." });
+        }
+        res.json({ success: true, message: "Template updated successfully", data: updated });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 4. MANUAL DELETE REPORT TEMPLATE
+const deleteReportTemplate = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deleted = await MasterReportTemplate.findByIdAndDelete(id);
+        
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: "Report template not found." });
+        }
+        res.json({ success: true, message: "Report template deleted successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
+
+
+
     
 module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
                     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest, updateCategoryImage, updatePharmacyCategoryImage,
-                    getLabCategories, getPharmacyCategories
+                    getLabCategories, getPharmacyCategories,
+
+                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate
  }; 

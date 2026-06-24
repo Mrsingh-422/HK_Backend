@@ -5,7 +5,9 @@ const { uploadExcel, categoryTestUploads } = require('../../../middleware/multer
 const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest, updateCategoryImage,updatePharmacyCategoryImage,
-                    getLabCategories, getPharmacyCategories
+                    getLabCategories, getPharmacyCategories,
+
+                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate
 
  } = require('../../../controllers/admin/Lab/TestUpload');
 
@@ -34,5 +36,12 @@ router.post('/update-pharmacy-category-image', categoryTestUploads, protect('adm
 
 router.get('/lab-categories', protect('admin'), checkRoleAccess(29), getLabCategories);
 router.get('/pharmacy-categories', protect('admin'), checkRoleAccess(29), getPharmacyCategories);
+
+
+// Report Templates
+router.post('/upload-templates', protect('admin'), uploadExcel.single('file'), checkRoleAccess(29), uploadTemplatesCSV); // CSV Bulk Upload [1]
+router.post('/create-template', protect('admin'), checkRoleAccess(29), createReportTemplate); // Manual Create [1]
+router.put('/edit-template/:id', protect('admin'), checkRoleAccess(29), editReportTemplate); // Manual Edit [1]
+router.delete('/delete-template/:id', protect('admin'), checkRoleAccess(29), deleteReportTemplate); // Manual Delete [1]
 
 module.exports = router;

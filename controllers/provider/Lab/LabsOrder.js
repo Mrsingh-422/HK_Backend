@@ -2,10 +2,12 @@
 
 const LabBooking = require('../../../models/LabBooking');
 const Wallet = require('../../../models/Wallet');
+const MasterReportTemplate = require('../../../models/MasterReportTemplate'); // 👈 Imported Template Model
 const moment = require('moment');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+
 
 
 // 1. GET DASHBOARD STATS (Updated with Priority Count)
@@ -158,8 +160,42 @@ const uploadReport = async (req, res) => {
 };
 
 
-// POST /provider/labs/generate-report/:orderId
-// Replace this function inside controllers/provider/Lab/LabsOrder.js
+// ==========================================
+// 7. GET REPORT TEMPLATES (Fully Database-Driven & Lightweight)
+// endpoint: GET /provider/labs/report-templates
+// ==========================================
+const getReportTemplates = async (req, res) => {
+    try {
+        const { testNames } = req.query;
+        let query = {};
+        
+        if (testNames) {
+            const requestedList = testNames.split(',').map(name => name.trim());
+            query.testName = { $in: requestedList };
+        }
+
+        const templates = await MasterReportTemplate.find(query).lean();
+
+        const formattedTemplates = {};
+        templates.forEach(template => {
+            formattedTemplates[template.testName] = template.parameters;
+        });
+
+        res.json({ 
+            success: true, 
+            count: templates.length,
+            data: formattedTemplates 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 8. GENERATE SMART REPORT PDF (Dynamic Quantitative & Qualitative Evaluator)
+// endpoint: POST /provider/labs/generate-report/:orderId
+// ==========================================
 const generateAndUploadSmartReport = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -180,7 +216,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         const patient = booking.patients[0] || { name: booking.userId?.name || "Patient", age: 30, gender: "Female" };
         const isFemale = patient.gender?.toLowerCase() === 'female';
 
-        // 🚨 DYNAMIC HEALTH SCORE & CLINICAL INTERPRETATION ENGINE [2]
+        // Dynamic Calculations
         let healthScore = 100;
         const processedParametersList = [];
         
@@ -191,7 +227,6 @@ const generateAndUploadSmartReport = async (req, res) => {
             supplements: []
         };
 
-        // Loop through all tests & packages submitted by Lab Tech
         testValues.forEach(testGroup => {
             const groupName = testGroup.testName;
             
@@ -204,28 +239,22 @@ const generateAndUploadSmartReport = async (req, res) => {
                 
                 let status = 'Everything looks good';
                 
-                // 🚨 HYBRID VALIDATOR: Numeric vs Qualitative string parser
                 if (!isNaN(numValue)) {
-                    // CASE A: Quantitative/Numeric Test (e.g. Hemoglobin, Vitamin D) [1]
                     if ((!isNaN(minRef) && numValue < minRef) || (!isNaN(maxRef) && numValue > maxRef)) {
                         status = 'Concern';
-                        healthScore -= 8; // Deduct score dynamically [2]
+                        healthScore -= 8; 
                     }
                 } else {
-                    // CASE B: Qualitative/Text-Based Test (e.g. Urine Protein, Nitrite, Pus Cells) [1]
                     const cleanVal = String(rawValue).trim().toLowerCase();
                     const cleanRef = String(param.minRef || "negative").trim().toLowerCase();
-                    
-                    // Standard normal values for text tests
                     const isNormalValue = ["negative", "normal", "clear", "pale yellow", "absent", "nil"].includes(cleanVal);
                     
                     if (cleanVal !== cleanRef && !isNormalValue) {
                         status = 'Concern';
-                        healthScore -= 5; // Deduct slightly lower score for qualitative warnings [2]
+                        healthScore -= 5; 
                     }
                 }
 
-                // Push to flat array for PDF rendering
                 processedParametersList.push({
                     testGroup: groupName || "General",
                     parameterName: param.name,
@@ -237,7 +266,6 @@ const generateAndUploadSmartReport = async (req, res) => {
                     machine: param.machine || "Automated Analyzer"
                 });
 
-                // Keyword Matching for Advisory generation [2]
                 const nameLower = param.name.toLowerCase();
                 if (nameLower.includes("hemoglobin") && status === 'Concern') {
                     advisory.nutritions.push("Take iron-rich foods like spinach, beetroot, dates, and green leafy vegetables.");
@@ -268,6 +296,10 @@ const generateAndUploadSmartReport = async (req, res) => {
         advisory.lifestyles = [...new Set(advisory.lifestyles)];
         advisory.futureTests = [...new Set(advisory.futureTests)];
 
+        // Fetch matching Master templates to extract parent-level dynamic interpretations [1]
+        const testNames = testValues.map(tg => tg.testName);
+        const templates = await MasterReportTemplate.find({ testName: { $in: testNames } }).lean();
+
         // PDF Generation Engine (HealthKangaroo Branded)
         const doc = new PDFDocument({ margin: 50, size: 'A4' });
         const reportFileName = `report-${booking.bookingId}.pdf`;
@@ -278,10 +310,9 @@ const generateAndUploadSmartReport = async (req, res) => {
         const stream = fs.createWriteStream(reportPath);
         doc.pipe(stream);
 
-        // Colors Palette (HealthKangaroo Theme)
-        const primaryColor = "#00a896"; // Brand Teal
-        const warningColor = "#D32F2F"; // Concern Red
-        const successColor = "#388E3C"; // Normal Green
+        const primaryColor = "#00a896"; 
+        const warningColor = "#D32F2F"; 
+        const successColor = "#388E3C"; 
         const textColor = "#212121";
 
         // ==========================================
@@ -310,7 +341,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor("#757575").fontSize(8).font('Helvetica').text("Scan the report's QR code on our app to verify the machine-generated authenticity of your results.", 70, 690);
 
         // ==========================================
-        // PAGE 2: PERSONALIZED summary & VITAL PARAMETERS
+        // PAGE 2: PERSONALIZED SUMMARY & VITALS
         // ==========================================
         doc.addPage();
         doc.rect(0, 0, 595.28, 20).fill(primaryColor);
@@ -341,7 +372,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         });
 
         // ==========================================
-        // PAGE 3: DYNAMIC DETAILED REPORT TABLES (Automatic Page breaks)
+        // PAGE 3: DYNAMIC DETAILED REPORT TABLES (With Pagebreaks)
         // ==========================================
         doc.addPage();
         doc.rect(0, 0, 595.28, 20).fill(primaryColor);
@@ -366,7 +397,6 @@ const generateAndUploadSmartReport = async (req, res) => {
         let currentGroup = "";
 
         for (let item of processedParametersList) {
-            // Safe Overflow check at 700 units height
             if (tableY > 700) {
                 doc.addPage();
                 doc.rect(0, 0, 595.28, 20).fill(primaryColor);
@@ -396,7 +426,46 @@ const generateAndUploadSmartReport = async (req, res) => {
         }
 
         // ==========================================
-        // PAGE 4: HEALTH ADVISORY & SUGGESTIONS
+        // 🚨 PAGE 4: CLINICAL INTERPRETATIONS & NOTES (Dynamic Content) [1]
+        // ==========================================
+        let hasInterpretations = templates.some(t => t.interpretation && t.interpretation.trim().length > 0);
+        
+        if (hasInterpretations) {
+            doc.addPage();
+            doc.rect(0, 0, 595.28, 20).fill(primaryColor);
+            doc.fillColor(primaryColor).fontSize(14).font('Helvetica-Bold').text("CLINICAL INTERPRETATIONS & NOTES", 50, 40);
+            doc.moveTo(50, 60).lineTo(545, 60).strokeColor("#e0e0e0").lineWidth(1).stroke();
+
+            let interpY = 80;
+            templates.forEach(t => {
+                if (t.interpretation && t.interpretation.trim().length > 0) {
+                    
+                    // Safety check to add a new page if the interpretation text overflows the bottom of A4 (792 height) [1]
+                    if (interpY > 680) {
+                        doc.addPage();
+                        doc.rect(0, 0, 595.28, 20).fill(primaryColor);
+                        interpY = 40;
+                    }
+
+                    doc.fillColor(primaryColor).fontSize(11).font('Helvetica-Bold').text(t.testName.toUpperCase(), 50, interpY);
+                    interpY += 18;
+
+                    // Justify aligned clinical text rendering
+                    doc.fillColor("#424242").fontSize(8.5).font('Helvetica').text(t.interpretation, 50, interpY, {
+                        width: 495,
+                        align: 'justify',
+                        lineGap: 2
+                    });
+                    
+                    // 👈 DYNAMIC HEIGHT CALCULATION: Prevents any overlaps or text clipping completely! [1]
+                    const textHeight = doc.heightOfString(t.interpretation, { width: 495, lineGap: 2 });
+                    interpY += textHeight + 20;
+                }
+            });
+        }
+
+        // ==========================================
+        // PAGE 5: HEALTH ADVISORY & SUGGESTIONS [2]
         // ==========================================
         doc.addPage();
         doc.rect(0, 0, 595.28, 20).fill(primaryColor);
@@ -459,104 +528,109 @@ const generateAndUploadSmartReport = async (req, res) => {
 };
 
 
-// 8. NEW: GET REPORT TEMPLATES (For Frontend Dynamic Form Rendering)
-// endpoint: GET /provider/labs/report-templates
-const getReportTemplates = async (req, res) => {
+// 9. NEW: GET REPORT TEMPLATES FOR DROPDOWN (Name & ID only)
+// endpoint: GET /provider/labs/report-templates/dropdown
+const getReportTemplatesDropdown = async (req, res) => {
     try {
-        // Master templates mapping for 10 most common diagnostic tests [1]
-        const MASTER_REPORT_TEMPLATES = {
-            "Complete Blood Count (CBC)": [
-                { "name": "Haemoglobin (HB)", "unit": "g/dL", "minRef": 12.0, "maxRef": 15.0, "type": "numeric", "machine": "Yumizen H2500", "method": "Spectrophotometry" },
-                { "name": "Total Leucocyte Count (TLC)", "unit": "10^3/uL", "minRef": 4.0, "maxRef": 10.0, "type": "numeric", "machine": "Yumizen H2500", "method": "Impedance" },
-                { "name": "Red Blood Cell Count (RBC)", "unit": "10^6/uL", "minRef": 3.80, "maxRef": 4.80, "type": "numeric", "machine": "Yumizen H2500", "method": "Impedance" },
-                { "name": "Mean Corp Volume (MCV)", "unit": "fL", "minRef": 83.0, "maxRef": 101.0, "type": "numeric", "machine": "Yumizen H2500", "method": "Derived from RBC Histogram" },
-                { "name": "Neutrophils", "unit": "%", "minRef": 40.0, "maxRef": 80.0, "type": "numeric", "machine": "Yumizen H2500", "method": "Flow-Cytometry DHSS" },
-                { "name": "Lymphocytes", "unit": "%", "minRef": 20.0, "maxRef": 40.0, "type": "numeric", "machine": "Yumizen H2500", "method": "Flow-Cytometry DHSS" },
-                { "name": "Platelet Count (PLT)", "unit": "10^3/uL", "minRef": 150.0, "maxRef": 410.0, "type": "numeric", "machine": "Yumizen H2500", "method": "Impedance" }
-            ],
-            "Liver Function Test (LFT)": [
-                { "name": "Serum Bilirubin, (Total)", "unit": "mg/dl", "minRef": 0.3, "maxRef": 1.2, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Diazonium Ion" },
-                { "name": "Serum Bilirubin, (Direct)", "unit": "mg/dl", "minRef": 0.0, "maxRef": 0.2, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Diazotization" },
-                { "name": "Aspartate Aminotransferase (AST/SGOT)", "unit": "U/L", "minRef": 3.0, "maxRef": 35.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "UV with P5P" },
-                { "name": "Alanine Aminotransferase (ALT/SGPT)", "unit": "U/L", "minRef": 3.0, "maxRef": 35.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "UV without P5P" },
-                { "name": "Alkaline Phosphatase (ALP)", "unit": "U/L", "minRef": 33.0, "maxRef": 98.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "IFCC AMP Buffer" },
-                { "name": "Serum Total Protein", "unit": "gm/dl", "minRef": 6.6, "maxRef": 8.3, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Biuret" },
-                { "name": "Serum Albumin", "unit": "g/dl", "minRef": 3.5, "maxRef": 5.2, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Bromo Cresol Green(BCG)" }
-            ],
-            "Kidney Function Test Advance (KFT)": [
-                { "name": "Serum Creatinine", "unit": "mg/dl", "minRef": 0.3, "maxRef": 1.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Jaffes Kinetic" },
-                { "name": "Serum Uric Acid", "unit": "mg/dl", "minRef": 2.6, "maxRef": 6.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Uricase" },
-                { "name": "Serum Calcium", "unit": "mg/dl", "minRef": 8.8, "maxRef": 10.6, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Arsenazo III" },
-                { "name": "Serum Phosphorus", "unit": "mg/dl", "minRef": 2.5, "maxRef": 4.5, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Phosphomolybdate complex" },
-                { "name": "Serum Sodium", "unit": "mmol/L", "minRef": 136, "maxRef": 146, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "ISE (Indirect)" },
-                { "name": "Serum Chloride", "unit": "mmol/L", "minRef": 101, "maxRef": 109, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "ISE (Indirect)" },
-                { "name": "Blood Urea", "unit": "mg/dl", "minRef": 17.0, "maxRef": 43.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Urease" },
-                { "name": "Blood Urea Nitrogen (BUN)", "unit": "mg/dl", "minRef": 8.0, "maxRef": 20.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Calculated" }
-            ],
-            "Lipid Profile": [
-                { "name": "Total Cholesterol", "unit": "mg/dL", "minRef": 100.0, "maxRef": 200.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Cholesterol Oxidase" },
-                { "name": "Serum Triglycerides", "unit": "mg/dl", "minRef": 50.0, "maxRef": 150.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Enzymatic" },
-                { "name": "Serum HDL Cholesterol", "unit": "mg/dl", "minRef": 40.0, "maxRef": 60.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Direct measure" },
-                { "name": "LDL Cholesterol", "unit": "mg/dl", "minRef": 50.0, "maxRef": 100.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Calculated" },
-                { "name": "VLDL Cholesterol", "unit": "mg/dl", "minRef": 5.0, "maxRef": 30.0, "type": "numeric", "machine": "BECKMAN COULTER AU 5801", "method": "Calculated" }
-            ],
-            "Fasting Blood Sugar": [
-                { "name": "Glucose, Fasting", "unit": "mg/dl", "minRef": 70.0, "maxRef": 100.0, "type": "numeric", "machine": "BECKMAN COULTER DxC 700 AU", "method": "Hexokinase" }
-            ],
-            "HbA1c (Glycated Hemoglobin)": [
-                { "name": "HbA1c Percentage", "unit": "%", "minRef": 4.0, "maxRef": 5.6, "type": "numeric", "machine": "BIO-RAD D-10", "method": "HPLC" },
-                { "name": "Estimated Average Glucose (eAG)", "unit": "mg/dl", "minRef": 70, "maxRef": 115, "type": "numeric", "machine": "BIO-RAD D-10", "method": "Calculated" }
-            ],
-            "Thyroid Profile": [
-                { "name": "Total Triiodothyronine (T3)", "unit": "ng/mL", "minRef": 0.8, "maxRef": 2.0, "type": "numeric", "machine": "BECKMAN COULTER DxI800", "method": "CLIA" },
-                { "name": "Total Thyroxine (T4)", "unit": "µg/dL", "minRef": 4.8, "maxRef": 11.6, "type": "numeric", "machine": "BECKMAN COULTER DxI800", "method": "CLIA" },
-                { "name": "Thyroid Stimulating Hormone (TSH)-Ultrasensitive", "unit": "µIU/mL", "minRef": 0.38, "maxRef": 5.33, "type": "numeric", "machine": "BECKMAN COULTER DxI800", "method": "CLIA" }
-            ],
-            "Vitamin Profile": [
-                { "name": "Vitamin D, 25-Hydroxy", "unit": "ng/ml", "minRef": 30.0, "maxRef": 100.0, "type": "numeric", "machine": "BECKMAN COULTER DxI800", "method": "CLIA" },
-                { "name": "Vitamin B12", "unit": "pg/mL", "minRef": 211, "maxRef": 911, "type": "numeric", "machine": "BECKMAN COULTER DxI800", "method": "CLIA" }
-            ],
-            "Urine Routine & Microscopy Extended": [
-                { "name": "Colour", "unit": "", "minRef": "Pale Yellow", "maxRef": "", "type": "text", "machine": "Visual Examination", "method": "Visual" },
-                { "name": "Specific Gravity", "unit": "", "minRef": "1.001", "maxRef": "1.035", "type": "numeric", "machine": "Urometer", "method": "Dipstick" },
-                { "name": "pH", "unit": "", "minRef": "4.5", "maxRef": "7.5", "type": "numeric", "machine": "Double indicator", "method": "Double indicator" },
-                { "name": "Urine Protein", "unit": "", "minRef": "Negative", "maxRef": "", "type": "text", "machine": "Dipstick", "method": "Dipstick" },
-                { "name": "Nitrite", "unit": "", "minRef": "Negative", "maxRef": "", "type": "text", "machine": "Dipstick", "method": "Dipstick" },
-                { "name": "Pus Cells", "unit": "/HPF", "minRef": "0", "maxRef": "5", "type": "numeric", "machine": "Microscopic", "method": "Microscopic" },
-                { "name": "Epithelial cells", "unit": "/HPF", "minRef": "0", "maxRef": "5", "type": "numeric", "machine": "Microscopic", "method": "Microscopic" },
-                { "name": "Bacteria", "unit": "", "minRef": "Absent", "maxRef": "", "type": "text", "machine": "Microscopic", "method": "Microscopic" }
-            ],
-            "Dengue Serology Panel": [
-                { "name": "Dengue NS1 Antigen", "unit": "", "minRef": "Negative", "maxRef": "", "type": "text", "machine": "ELISA", "method": "ELISA" },
-                { "name": "Dengue IgM", "unit": "", "minRef": "Negative", "maxRef": "", "type": "text", "machine": "ELISA", "method": "ELISA" },
-                { "name": "Dengue IgG", "unit": "", "minRef": "Negative", "maxRef": "", "type": "text", "machine": "ELISA", "method": "ELISA" }
-            ]
-        };
-
-        // Frontend dynamically requested tests nikalna (Optional filter)
-        // e.g. GET /report-templates?testNames=Complete Blood Count (CBC),Lipid Profile
-        const { testNames } = req.query;
+        // Fetch only template names and IDs for fast dropdown rendering
+        const templates = await MasterReportTemplate.find().select('testName').sort({ testName: 1 });
         
-        if (testNames) {
-            const requestedList = testNames.split(',').map(name => name.trim());
-            const filteredTemplates = {};
-            
-            requestedList.forEach(name => {
-                if (MASTER_REPORT_TEMPLATES[name]) {
-                    filteredTemplates[name] = MASTER_REPORT_TEMPLATES[name];
-                }
-            });
-            
-            return res.json({ success: true, data: filteredTemplates });
-        }
-
-        // Default: Poore 10 templates bhej do
-        res.json({ success: true, data: MASTER_REPORT_TEMPLATES });
-
+        res.json({ 
+            success: true, 
+            count: templates.length, 
+            data: templates 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// 10. NEW: AUTO-RESOLVE TEMPLATES FOR SPECIFIC BOOKING (Smart Handshake)
+// endpoint: GET /provider/labs/report-templates/booking/:orderId
+const getReportTemplatesForBooking = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        
+        const booking = await LabBooking.findById(orderId);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found." });
+        }
+
+        // Booking me booked tests/packages ke names extract karein [1]
+        const testNames = booking.items.tests.map(t => t.name);
+        const packageNames = booking.items.packages.map(p => p.name);
+        const allBookedNames = [...testNames, ...packageNames];
+
+        // Database se strictly wahi templates fetch karein jo is booking ke liye zaroori hain [1]
+        const templates = await MasterReportTemplate.find({ testName: { $in: allBookedNames } }).lean();
+
+        const formattedTemplates = {};
+        templates.forEach(t => {
+            formattedTemplates[t.testName] = t.parameters;
+        });
+
+        res.json({ 
+            success: true, 
+            count: templates.length, 
+            data: formattedTemplates 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 11. NEW: SAVE DRAFT RESULTS (Save intermediate progress before final print)
+// endpoint: POST /provider/labs/save-draft/:orderId
+const saveDraftResults = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { testValues } = req.body;
+
+        if (!testValues) {
+            return res.status(400).json({ success: false, message: "testValues payload is required." });
+        }
+
+        // Save raw parameters in testResults and transition state to 'Testing'
+        const booking = await LabBooking.findByIdAndUpdate(
+            orderId,
+            { $set: { testResults: testValues, status: 'Testing' } },
+            { new: true }
+        );
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found." });
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Draft report results saved successfully.", 
+            data: booking.testResults 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 12. NEW: FETCH SAVED DRAFT RESULTS (To pre-populate form on screen reload)
+// endpoint: GET /provider/labs/get-draft/:orderId
+const getDraftResults = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
+        const booking = await LabBooking.findById(orderId).select('testResults');
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found." });
+        }
+
+        res.json({ 
+            success: true, 
+            data: booking.testResults || null // Returns null if no draft was saved before
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 module.exports = { 
@@ -566,6 +640,12 @@ module.exports = {
     assignStaff, 
     updateProgressStatus, 
     uploadReport ,
+
+    // New endpoints
     generateAndUploadSmartReport,
-    getReportTemplates
+    getReportTemplates,
+    getReportTemplatesDropdown, // 👈 Added
+    getReportTemplatesForBooking, // 👈 Added
+    saveDraftResults, // 👈 Added
+    getDraftResults // 👈 Added
 };

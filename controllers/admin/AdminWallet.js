@@ -256,4 +256,4 @@ const getAdminWalletDashboardStats = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-module.exports = { getPendingWithdrawals, approveWithdrawal, rejectWithdrawal, verifyVendorBankDetails, getPendingBankVerifications, getAdminWalletDashboardStats };
+module.exports = { getPendingWithdrawals, approveWithdrawal, rejectWithdrawal, verifyVendorBankDetails, getPendingBankVerifications, getAdminWalletDashboardStats }; 

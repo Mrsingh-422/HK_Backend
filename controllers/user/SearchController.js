@@ -25,6 +25,10 @@ const Ward = require('../../models/Ward');
 const Bed = require('../../models/Bed');
 const Review = require('../../models/Review');
 
+
+// --- COUPON MODEL IMPORT ---
+const Coupon = require('../../models/Coupon');
+
 // --- HELPER FUNCTION: CONTEXT INJECTOR ENGINE (Token & Cost Highly Optimized) ---
 const getLocalDatabaseContext = async (message, userId) => {
     const text = message.toLowerCase();
@@ -430,8 +434,61 @@ const handleChatBotMessage = async (req, res) => {
     }
 };
 
+
+
+
+
+
+// --- GET ALL ACTIVE COUPONS (Grouped by Category/Vendor Type) ---
+const getUserCoupons = async (req, res) => {
+    try {
+        const today = new Date();
+
+        // केवल वही कूपन्स निकालें जो एक्टिव हैं और जिनकी तारीख वैलिड है
+        const coupons = await Coupon.find({
+            isActive: true,
+            startDate: { $lte: today },
+            expiryDate: { $gte: today }
+        }).sort({ createdAt: -1 }).lean();
+
+        // कूपन्स को उनके टाइप के अनुसार ग्रुप करने के लिए इनिशियलाइज़ेशन
+        const groupedCoupons = {
+            General: [], // Admin created global coupons (vendorType: 'All')
+            Pharmacy: [],
+            Nurse: [],
+            Lab: [],
+            Hospital: [],
+            Ambulance: [],
+            Doctor: []
+        };
+
+        coupons.forEach(coupon => {
+            if (coupon.isAdminCreated && coupon.vendorType === 'All') {
+                groupedCoupons.General.push(coupon);
+            } else if (groupedCoupons[coupon.vendorType] !== undefined) {
+                groupedCoupons[coupon.vendorType].push(coupon);
+            } else {
+                // अगर कोई नया टाइप आता है तो उसके लिए डायनामिक एरे
+                if (!groupedCoupons[coupon.vendorType]) {
+                    groupedCoupons[coupon.vendorType] = [];
+                }
+                groupedCoupons[coupon.vendorType].push(coupon);
+            }
+        });
+
+        res.json({
+            success: true,
+            count: coupons.length,
+            data: groupedCoupons
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getHomepageSuggestions,
     searchHomepage,
-    handleChatBotMessage
+    handleChatBotMessage,
+    getUserCoupons
 };
