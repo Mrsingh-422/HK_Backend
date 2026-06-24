@@ -23,20 +23,18 @@
 </head>
 <body class="bg-slate-50 min-h-screen font-sans text-slate-800">
 
-    <!-- 1. TOP SETTINGS BAR (Token & Base URL configuration) -->
+    <!-- 1. TOP SETTINGS BAR -->
     <header class="bg-kangarooDark text-white shadow-md p-4 sticky top-0 z-50">
         <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
             <div class="flex items-center gap-2">
                 <span class="text-2xl font-black tracking-wider">HealthKangaroo</span>
-                <span class="bg-kangarooTeal text-xs font-bold px-2 py-0.5 rounded-full">LIMS v3.0</span>
+                <span class="bg-kangarooTeal text-xs font-bold px-2 py-0.5 rounded-full">LIMS v3.2</span>
             </div>
             
             <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-                <!-- Base URL Input -->
                 <input type="text" id="baseUrlInput" placeholder="Base URL" 
                        class="px-3 py-1.5 rounded text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-kangarooTeal" />
                 
-                <!-- Token Input (Variable placeholder) -->
                 <input type="password" id="tokenInput" placeholder="Enter Provider JWT Token" 
                        class="px-3 py-1.5 rounded text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-kangarooTeal w-full sm:w-64" />
                 
@@ -56,38 +54,36 @@
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-bold text-slate-800">Lab Orders / Bookings</h2>
                 <button onclick="fetchIncomingOrders()" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-md font-semibold transition">
-                    🔄 Refresh
+                    🔄 Refresh List
                 </button>
             </div>
 
-            <!-- List Loader -->
             <div id="ordersLoader" class="hidden text-center text-sm text-slate-500 py-10">Fetching bookings...</div>
 
-            <!-- Dynamic Orders Target List -->
             <div id="ordersContainer" class="space-y-3 max-h-[600px] overflow-y-auto pr-1">
                 <p class="text-xs text-slate-500 text-center py-10">Connect server & authorize to load active bookings.</p>
             </div>
-        </p>
+        </section>
 
-        <!-- ==========================================
-             RIGHT COLUMN: SMART REPORT DYNAMIC FORM
-        ========================================== -->
+        <!-- ========================================== -->
+        <!-- RIGHT COLUMN: SMART REPORT DYNAMIC FORM   -->
+        <!-- ========================================== -->
         <section class="lg:col-span-7 space-y-6">
             
-            <!-- 2. Dynamic Form Card -->
             <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-6 relative">
                 
                 <!-- Active Order Header Info -->
-                <div class="border-b border-slate-100 pb-4 mb-4 flex justify-between items-start">
+                <div class="border-b border-slate-100 pb-4 mb-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div>
-                        <h2 class="text-lg font-bold text-slate-800">Dynamic Patient Diagnostic Form</h2>
-                        <p id="activeOrderDisplay" class="text-xs text-slate-500 font-semibold mt-1">No booking selected. Select an order from left to resolve templates.</p>
+                        <h2 class="text-lg font-bold text-slate-800">Patient Diagnostic Form</h2>
+                        <p id="activeOrderDisplay" class="text-xs text-slate-500 font-semibold mt-1">No booking selected. Select an order to resolve templates.</p>
                     </div>
                     
-                    <!-- Fallback Custom Templates Dropdown -->
-                    <div class="hidden" id="dropdownContainer">
-                        <select id="templateDropdown" onchange="loadCustomTemplate(this.value)" class="text-xs bg-slate-100 border border-slate-200 p-2 rounded focus:outline-none">
-                            <option value="">-- Manual Template Dropdown --</option>
+                    <!-- 🚨 MANUAL TEMPLATE SELECT DROPDOWN (Always Visible & Self-Healing) [1] -->
+                    <div class="flex items-center gap-1.5 bg-slate-50 p-2 rounded-lg border border-slate-200" id="dropdownContainer">
+                        <label class="text-[10px] font-bold text-slate-500">Manual Override:</label>
+                        <select id="templateDropdown" onchange="loadCustomTemplate(this.value)" class="text-xs bg-white border border-slate-200 p-1.5 rounded font-bold focus:ring-1 focus:ring-kangarooTeal">
+                            <option value="">-- Load Template --</option>
                         </select>
                     </div>
                 </div>
@@ -102,13 +98,13 @@
                 <!-- Dynamic Input Form Container -->
                 <form id="dynamicReportForm" class="space-y-6 max-h-[500px] overflow-y-auto pr-2">
                     <div class="text-center py-20 text-slate-400 text-sm">
-                        Select a patient booking to auto-generate the correct clinical forms [1].
+                        Select a patient booking from the left panel to auto-generate form fields [1].
                     </div>
                 </form>
 
                 <!-- Action Footer (Save Draft & Final PDF) -->
                 <div class="hidden border-t border-slate-100 pt-4 mt-6 flex flex-col sm:flex-row justify-between items-center gap-4" id="formActions">
-                    <p class="text-xs text-slate-400 font-medium">Verify values before final submission.</p>
+                    <p class="text-xs text-slate-400 font-medium">Verify values and clinical interpretations before printing.</p>
                     
                     <div class="flex items-center gap-2 w-full sm:w-auto">
                         <button type="button" onclick="saveDraft()" class="w-full sm:w-auto bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm px-5 py-2.5 rounded-lg transition-all">
@@ -126,8 +122,8 @@
                         <div class="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
                             <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
                         </div>
-                        <h3 class="text-xl font-bold text-slate-800">Report Compiled Successfully!</h3>
-                        <p class="text-sm text-slate-500 mt-2 max-w-md mx-auto">HealthKangaroo dynamic smart report has been generated. Patient notified.</p>
+                        <h3 class="text-xl font-bold text-slate-800">Smart Report Compiled!</h3>
+                        <p class="text-sm text-slate-500 mt-2 max-w-md mx-auto">HealthKangaroo dynamic smart report has been generated successfully with clinical interpretations [1, 2].</p>
                         
                         <a id="pdfOpenBtn" href="#" target="_blank" class="inline-block bg-successGreen hover:bg-emerald-700 text-white font-bold text-sm px-8 py-3 rounded-lg shadow-md mt-6 transition-all">
                             👉 Open Branded Smart Report PDF
@@ -146,15 +142,12 @@
 
     <!-- JS API Implementation Engine -->
     <script>
-        // ==========================================
-        // 🚨 CONFIGURATION VARIABLES (Set defaults here)
-        // ==========================================
-        let BASE_URL = "http://192.168.1.26:5002"; // Change to your local backend IP
-        let JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YmE1MDQyYTdhZGNlNjhhOTBmMDFkZCIsInJvbGUiOiJMYWIiLCJpYXQiOjE3NzM4MTc5MjIsImV4cCI6NDkyNzQxNzkyMn0.bEsk85nbpclCoskvY7F4Fzdi1PvEvPfRPQLgcOTaBlQ"; // Set your token directly
+        let BASE_URL = "http://192.168.1.26:5002"; 
+        let JWT_TOKEN = ""; 
         let activeOrderId = "";
         let activeBookingTests = [];
 
-        // Load configs from localStorage if available
+        // Load configs from localStorage
         if (typeof window !== "undefined") {
             const savedUrl = localStorage.getItem('lims_base_url');
             const savedToken = localStorage.getItem('lims_jwt_token');
@@ -177,7 +170,6 @@
             loadDropdownTemplates();
         };
 
-        // Header fetch setup helper
         const getFetchHeaders = () => {
             return {
                 "Content-Type": "application/json",
@@ -185,9 +177,7 @@
             };
         };
 
-        // ==========================================
-        // 📄 API 1: FETCH ORDERS LIST
-        // ==========================================
+        // Fetch Bookings List
         const fetchIncomingOrders = async () => {
             const loader = document.getElementById('ordersLoader');
             const container = document.getElementById('ordersContainer');
@@ -196,7 +186,6 @@
             container.innerHTML = "";
 
             try {
-                // Fetching both Confirmed and Testing orders to perform evaluations
                 const res = await fetch(`${BASE_URL}/provider/labs/orders`, {
                     method: 'GET',
                     headers: getFetchHeaders()
@@ -210,7 +199,6 @@
                     return;
                 }
 
-                // Filter only 'Confirmed' or 'Testing' state orders
                 const filterOrders = json.data.filter(o => ['Confirmed', 'Testing', 'Report Generated'].includes(o.status));
 
                 if (filterOrders.length === 0) {
@@ -226,7 +214,7 @@
                     ];
 
                     const card = document.createElement('div');
-                    card.className = `p-4 border rounded-xl cursor-pointer transition-all hover:shadow-md ${activeOrderId === order._id ? 'border-kangarooTeal bg-teal-50/30' : 'border-slate-100 bg-white'}`;
+                    card.className = `p-4 border rounded-xl cursor-pointer transition-all hover:shadow-md ${activeOrderId === order._id ? 'border-kangarooTeal bg-teal-50/30 shadow-sm' : 'border-slate-100 bg-white'}`;
                     card.onclick = () => selectOrder(order._id, testNames, patient.name, order.bookingId);
                     
                     card.innerHTML = `
@@ -246,24 +234,20 @@
             }
         };
 
-        // ==========================================
-        // 📄 API 2: FETCH DROPDOWN TEMPLATES LIST
-        // ==========================================
+        // 🚨 SELF-HEALING DROPDOWN LOADER (Reads keys dynamically from report-templates)
         const loadDropdownTemplates = async () => {
             const dropdown = document.getElementById('templateDropdown');
-            const container = document.getElementById('dropdownContainer');
-
             try {
-                const res = await fetch(`${BASE_URL}/provider/labs/report-templates/dropdown`, {
+                const res = await fetch(`${BASE_URL}/provider/labs/report-templates`, {
                     headers: getFetchHeaders()
                 });
                 const json = await res.json();
                 
-                if (json.success && json.data.length > 0) {
-                    container.classList.remove('hidden');
-                    dropdown.innerHTML = `<option value="">-- Manual Template Dropdown --</option>`;
-                    json.data.forEach(t => {
-                        dropdown.innerHTML += `<option value="${t.testName}">${t.testName}</option>`;
+                if (json.success && json.data) {
+                    dropdown.innerHTML = `<option value="">-- Load Template --</option>`;
+                    const keys = Object.keys(json.data);
+                    keys.forEach(testName => {
+                        dropdown.innerHTML += `<option value="${testName}">${testName}</option>`;
                     });
                 }
             } catch (err) {
@@ -271,41 +255,21 @@
             }
         };
 
-        // Trigger manual template selection
-        const loadCustomTemplate = async (testName) => {
-            if (!testName) return;
-            document.getElementById('activeOrderDisplay').innerText = `Manual Mode: Testing Template "${testName}" [Unassigned]`;
-            
-            try {
-                const res = await fetch(`${BASE_URL}/provider/labs/report-templates?testNames=${encodeURIComponent(testName)}`, {
-                    headers: getFetchHeaders()
-                });
-                const json = await res.json();
-                if (json.success) {
-                    renderFormInputs(json.data);
-                }
-            } catch (err) {
-                alert("Failed to fetch template detail: " + err.message);
-            }
-        };
-
-        // ==========================================
-        // 📄 API 3: AUTO-RESOLVE TEMPLATES FOR BOOKING
-        // ==========================================
+        // Select Booking and Auto-Resolve Templates
         const selectOrder = async (id, tests, patientName, bookingId) => {
             activeOrderId = id;
             activeBookingTests = tests;
             
             document.getElementById('activeOrderDisplay').innerText = `Active Patient: ${patientName} | Booking ID: ${bookingId}`;
             
-            // Highlight card
+            // Re-render highlights
             fetchIncomingOrders();
 
             const form = document.getElementById('dynamicReportForm');
             form.innerHTML = `<div class="text-center py-20 text-slate-500 text-sm">Auto-resolving templates for booked tests...</div>`;
 
             try {
-                // Calling dynamic auto-resolver endpoint [1]
+                // Calling auto-resolver endpoint [1]
                 const res = await fetch(`${BASE_URL}/provider/labs/report-templates/booking/${id}`, {
                     method: 'GET',
                     headers: getFetchHeaders()
@@ -313,10 +277,12 @@
                 const json = await res.json();
 
                 if (!json.success || Object.keys(json.data).length === 0) {
+                    // Show a helpful error block WITH inline dropdown trigger!
                     form.innerHTML = `
-                        <div class="text-center py-20 text-warningRed text-sm">
-                            No master templates found matching this booking's tests. <br>
-                            <span class="text-xs text-slate-500">Please seed report_templates.csv or select template manually.</span>
+                        <div class="text-center py-16 text-warningRed text-sm">
+                            <svg class="w-12 h-16 mx-auto mb-2 text-warningRed/80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                            <span class="font-bold">No exact master template matched "${tests.join(', ')}".</span><br>
+                            <span class="text-xs text-slate-500">Mismatched names? Select template manually from the dropdown at the top-right.</span>
                         </div>`;
                     return;
                 }
@@ -328,7 +294,28 @@
             }
         };
 
-        // Render form input elements dynamically [1]
+        // Manual Selection Load
+        const loadCustomTemplate = async (testName) => {
+            if (!testName) return;
+            
+            const form = document.getElementById('dynamicReportForm');
+            form.innerHTML = `<div class="text-center py-20 text-slate-500 text-sm">Loading custom template "${testName}"...</div>`;
+
+            try {
+                const res = await fetch(`${BASE_URL}/provider/labs/report-templates?testNames=${encodeURIComponent(testName)}`, {
+                    headers: getFetchHeaders()
+                });
+                const json = await res.json();
+                
+                if (json.success && json.data) {
+                    renderFormInputs(json.data);
+                }
+            } catch (err) {
+                form.innerHTML = `<div class="text-center py-20 text-red-500 text-sm">Failed: ${err.message}</div>`;
+            }
+        };
+
+        // Render Dynamic Form Inputs [1]
         const renderFormInputs = (templatesMap) => {
             const form = document.getElementById('dynamicReportForm');
             form.innerHTML = "";
@@ -337,13 +324,31 @@
             document.getElementById('formActions').classList.remove('hidden');
 
             Object.keys(templatesMap).forEach(testGroup => {
-                const parameters = templatesMap[testGroup];
-                
+                const groupData = templatesMap[testGroup];
+                const parameters = groupData.parameters || groupData; 
+                const interpretationVal = groupData.interpretation || "";
+
                 const groupSection = document.createElement('div');
                 groupSection.className = "space-y-4 border-b border-slate-100 pb-6 last:border-b-0";
                 
                 groupSection.innerHTML = `
-                    <h3 class="text-sm font-bold text-kangarooDark bg-teal-50/50 px-3 py-2 rounded-lg border border-teal-100/50 uppercase tracking-wider">${testGroup}</h3>
+                    <div class="flex justify-between items-center bg-teal-50/50 px-3 py-2 rounded-lg border border-teal-100/50">
+                        <h3 class="text-sm font-bold text-kangarooDark uppercase tracking-wider">${testGroup}</h3>
+                        <span class="text-[10px] bg-kangarooTeal/10 text-kangarooTeal px-2 py-0.5 rounded font-bold">Template Loaded</span>
+                    </div>
+
+                    <!-- CLINICAL INTERPRETATION EDITABLE TEXTAREA [1] -->
+                    <div class="flex flex-col gap-1.5 bg-slate-50 p-4 rounded-lg border border-slate-200/60">
+                        <label class="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                            <span>📝 Clinical Interpretation(s) / Section Notes</span>
+                            <span class="text-[9px] text-slate-400 font-medium">(Will be saved in parameters[0])</span>
+                        </label>
+                        <textarea class="interpretation-input w-full p-2.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-kangarooTeal h-24"
+                                  placeholder="Enter standard clinical physiological guidelines for ${testGroup}..."
+                                  data-test-name="${testGroup}">${interpretationVal}</textarea>
+                    </div>
+
+                    <!-- Parameters Input Grid -->
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="group_${testGroup.replace(/\s+/g, '_')}"></div>
                 `;
                 form.appendChild(groupSection);
@@ -391,13 +396,13 @@
                 const res = await fetch(`${BASE_URL}/provider/labs/save-draft/${activeOrderId}`, {
                     method: 'POST',
                     headers: getFetchHeaders(),
-                    body: JSON.stringify({ testValues: payload }) // Maps to backend expected key
+                    body: JSON.stringify({ testValues: payload }) 
                 });
 
                 const json = await res.json();
                 if (json.success) {
-                    alert("💾 Draft progress saved to database successfully!");
-                    fetchIncomingOrders(); // refresh statuses
+                    alert("💾 Draft progress and interpretations saved successfully!");
+                    fetchIncomingOrders(); 
                 } else {
                     alert("Failed to save draft: " + json.message);
                 }
@@ -424,9 +429,13 @@
                     return;
                 }
 
-                // Pre-populate input values on screen [1]
                 const draft = json.data;
                 draft.forEach(group => {
+                    const textarea = document.querySelector(`textarea[data-test-name="${group.testName}"]`);
+                    if (textarea && group.interpretation) {
+                        textarea.value = group.interpretation;
+                    }
+
                     group.parameters.forEach(param => {
                         const selector = `input[data-test-name="${group.testName}"][data-param-name="${param.name}"]`;
                         const input = document.querySelector(selector);
@@ -435,7 +444,7 @@
                         }
                     });
                 });
-                alert("📥 Draft results pre-populated on form successfully!");
+                alert("📥 Draft results & clinical interpretations pre-populated successfully!");
 
             } catch (err) {
                 alert("Failed to load draft values: " + err.message);
@@ -451,7 +460,7 @@
             const payload = collectFormValues();
             if (payload.length === 0) return alert("Please fill parameters observed values first.");
 
-            const confirmPrint = confirm("Are you sure you want to finalize and compile the PDF? This will change booking status to Completed [1].");
+            const confirmPrint = confirm("Are you sure you want to finalize and compile the PDF Smart Report with interpretations [1, 2]?");
             if (!confirmPrint) return;
 
             try {
@@ -463,7 +472,6 @@
 
                 const json = await res.json();
                 if (json.success) {
-                    // Show PDF success modal
                     document.getElementById('pdfOpenBtn').href = `${BASE_URL}${json.reportUrl}`;
                     document.getElementById('reportSuccessModal').classList.remove('hidden');
                 } else {
@@ -474,9 +482,9 @@
             }
         };
 
-        // Helper to collect all form inputs and construct the hierarchical JSON payload [1]
         const collectFormValues = () => {
             const map = {};
+            
             document.querySelectorAll('.param-input').forEach(input => {
                 const testName = input.getAttribute('data-test-name');
                 const paramName = input.getAttribute('data-param-name');
@@ -487,12 +495,12 @@
                 const method = input.getAttribute('data-method');
                 const val = input.value.trim();
 
-                if (!val) return; // skip empty values
+                if (!val) return; 
 
                 if (!map[testName]) {
-                    map[testName] = [];
+                    map[testName] = { interpretation: "", parameters: [] };
                 }
-                map[testName].push({
+                map[testName].parameters.push({
                     name: paramName,
                     value: val,
                     unit,
@@ -503,19 +511,28 @@
                 });
             });
 
-            // Map key-value map to backend expected hierarchical schema
+            document.querySelectorAll('.interpretation-input').forEach(textarea => {
+                const testName = textarea.getAttribute('data-test-name');
+                const text = textarea.value.trim();
+                
+                if (map[testName]) {
+                    map[testName].interpretation = text;
+                }
+            });
+
             return Object.keys(map).map(testName => ({
                 testName,
-                parameters: map[testName]
+                interpretation: map[testName].interpretation, 
+                parameters: map[testName].parameters
             }));
         };
 
         const closeSuccessModal = () => {
             document.getElementById('reportSuccessModal').classList.add('hidden');
-            fetchIncomingOrders(); // reload lists
+            fetchIncomingOrders(); 
         };
 
-        // Initialize on bootup
+        // Bootup initialization
         fetchIncomingOrders();
         loadDropdownTemplates();
     </script>

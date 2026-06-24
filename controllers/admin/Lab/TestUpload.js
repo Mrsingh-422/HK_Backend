@@ -389,72 +389,71 @@ const getPharmacyCategories = async (req, res) => {
 const uploadTemplatesCSV = async (req, res) => {
     try {
         if (!req.file) {
-            return res.status(400).json({ success: false, message: "Please upload a valid CSV file." });
+            return res.status(400).json({ success: false, message: "Please upload a valid CSV/Excel file." });
         }
 
-        const results = [];
+        // 🚨 1. USE XLSX library to parse (Automatically strips carriage returns and handles both CSV & Excel!)
+        const workbook = xlsx.readFile(req.file.path);
+        const sheetName = workbook.SheetNames[0];
+        const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-        fs.createReadStream(req.file.path)
-            .pipe(csv())
-            .on('data', (data) => results.push(data))
-            .on('end', async () => {
-                const groups = {};
+        const groups = {};
 
-                results.forEach(row => {
-                    const testName = row.testName?.trim();
-                    const parameterName = row.parameterName?.trim();
-                    // 👈 Capture column named 'Interpretation(s)' or 'interpretation' dynamically
-                    const interpText = (row.interpretation || row['Interpretation(s)'] || "").trim();
-
-                    if (!testName || !parameterName) return; 
-
-                    if (!groups[testName]) {
-                        groups[testName] = {
-                            interpretation: interpText, // Save first parameter row interpretation [1]
-                            parameters: []
-                        };
-                    }
-
-                    // Fallback: If first row was empty but later row has it, capture it
-                    if (!groups[testName].interpretation && interpText) {
-                        groups[testName].interpretation = interpText;
-                    }
-
-                    groups[testName].parameters.push({
-                        name: parameterName,
-                        unit: row.unit?.trim() || "",
-                        minRef: row.minRef?.trim() || "",
-                        maxRef: row.maxRef?.trim() || "",
-                        method: row.method?.trim() || "N/A",
-                        machine: row.machine?.trim() || "Automated Analyzer"
-                    });
-                });
-
-                // Bulk upsert with parent level interpretation mapping [1]
-                for (const testName of Object.keys(groups)) {
-                    await MasterReportTemplate.findOneAndUpdate(
-                        { testName },
-                        { 
-                            $set: { 
-                                parameters: groups[testName].parameters,
-                                interpretation: groups[testName].interpretation // 👈 Parent level updated
-                            } 
-                        },
-                        { upsert: true, new: true } 
-                    );
-                }
-
-                try {
-                    fs.unlinkSync(req.file.path);
-                } catch (unlinkErr) {
-                    console.error("Temporary file delete failed:", unlinkErr.message);
-                }
-
-                res.json({
-                    success: true,
-                    message: `Successfully processed ${Object.keys(groups).length} test templates from CSV. Database updated.`
-                });
+        data.forEach(row => {
+            // 🚨 2. KEY NORMALIZATION: Remove \r, spaces and convert to lowercase [3]
+            const normalizedRow = {};
+            Object.keys(row).forEach(key => {
+                const cleanKey = key.replace(/\r/g, '').trim().toLowerCase();
+                normalizedRow[cleanKey] = row[key];
             });
+
+            const testName = (normalizedRow['testname'] || "").trim();
+            const parameterName = (normalizedRow['parametername'] || "").trim();
+            
+            // 🚨 3. SMART COLUMN RESOLVER: Auto-detect any column containing 'interpret'
+            const interpretationKey = Object.keys(normalizedRow).find(k => k.includes('interpret'));
+            const interpText = interpretationKey ? String(normalizedRow[interpretationKey] || "").trim() : "";
+
+            if (!testName || !parameterName) return; // Skip empty rows
+
+            if (!groups[testName]) {
+                groups[testName] = [];
+            }
+
+            // Only the very first parameter (index 0) gets the interpretation [1]
+            const isFirstParam = groups[testName].length === 0;
+
+            groups[testName].push({
+                name: parameterName,
+                unit: normalizedRow['unit'] ? String(normalizedRow['unit']).trim() : "",
+                minRef: normalizedRow['minref'] ? String(normalizedRow['minref']).trim() : "",
+                maxRef: normalizedRow['maxref'] ? String(normalizedRow['maxref']).trim() : "",
+                method: normalizedRow['method'] ? String(normalizedRow['method']).trim() : "N/A",
+                machine: normalizedRow['machine'] ? String(normalizedRow['machine']).trim() : "Automated Analyzer",
+                interpretation: isFirstParam ? interpText : "" // 👈 Strictly saves only in first parameter! [1]
+            });
+        });
+
+        // 🚨 4. Bulk upsert directly into MongoDB
+        for (const testName of Object.keys(groups)) {
+            await MasterReportTemplate.findOneAndUpdate(
+                { testName },
+                { $set: { parameters: groups[testName] } }, // parameters array has the nested interpretation!
+                { upsert: true, new: true } 
+            );
+        }
+
+        // Delete temporary file safely
+        try {
+            fs.unlinkSync(req.file.path);
+        } catch (unlinkErr) {
+            console.error("Temporary file delete failed:", unlinkErr.message);
+        }
+
+        res.json({
+            success: true,
+            message: `Successfully processed ${Object.keys(groups).length} test templates. Database updated.`
+        });
 
     } catch (error) {
         console.error("CSV Upload Error:", error);

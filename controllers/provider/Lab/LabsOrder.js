@@ -216,7 +216,6 @@ const generateAndUploadSmartReport = async (req, res) => {
         const patient = booking.patients[0] || { name: booking.userId?.name || "Patient", age: 30, gender: "Female" };
         const isFemale = patient.gender?.toLowerCase() === 'female';
 
-        // Dynamic Calculations
         let healthScore = 100;
         const processedParametersList = [];
         
@@ -296,7 +295,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         advisory.lifestyles = [...new Set(advisory.lifestyles)];
         advisory.futureTests = [...new Set(advisory.futureTests)];
 
-        // Fetch matching Master templates to extract parent-level dynamic interpretations [1]
+        // Fetch matching Master templates to extract interpretations from first parameter [1]
         const testNames = testValues.map(tg => tg.testName);
         const templates = await MasterReportTemplate.find({ testName: { $in: testNames } }).lean();
 
@@ -341,7 +340,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor("#757575").fontSize(8).font('Helvetica').text("Scan the report's QR code on our app to verify the machine-generated authenticity of your results.", 70, 690);
 
         // ==========================================
-        // PAGE 2: PERSONALIZED SUMMARY & VITALS
+        // PAGE 2: PERSONALIZED summary & VITAL PARAMETERS
         // ==========================================
         doc.addPage();
         doc.rect(0, 0, 595.28, 20).fill(primaryColor);
@@ -372,7 +371,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         });
 
         // ==========================================
-        // PAGE 3: DYNAMIC DETAILED REPORT TABLES (With Pagebreaks)
+        // PAGE 3: DYNAMIC DETAILED REPORT TABLES (Automatic Page breaks)
         // ==========================================
         doc.addPage();
         doc.rect(0, 0, 595.28, 20).fill(primaryColor);
@@ -426,9 +425,10 @@ const generateAndUploadSmartReport = async (req, res) => {
         }
 
         // ==========================================
-        // 🚨 PAGE 4: CLINICAL INTERPRETATIONS & NOTES (Dynamic Content) [1]
+        // 🚨 PAGE 4: CLINICAL INTERPRETATIONS (Dynamic Content extracted from parameters[0]) [1]
         // ==========================================
-        let hasInterpretations = templates.some(t => t.interpretation && t.interpretation.trim().length > 0);
+        // Check if any loaded template has interpretation saved in parameters[0]
+        let hasInterpretations = templates.some(t => t.parameters?.[0]?.interpretation && t.parameters[0].interpretation.trim().length > 0);
         
         if (hasInterpretations) {
             doc.addPage();
@@ -438,9 +438,9 @@ const generateAndUploadSmartReport = async (req, res) => {
 
             let interpY = 80;
             templates.forEach(t => {
-                if (t.interpretation && t.interpretation.trim().length > 0) {
-                    
-                    // Safety check to add a new page if the interpretation text overflows the bottom of A4 (792 height) [1]
+                const interpText = t.parameters?.[0]?.interpretation; // 👈 Extracts strictly from first parameter! [1]
+                
+                if (interpText && interpText.trim().length > 0) {
                     if (interpY > 680) {
                         doc.addPage();
                         doc.rect(0, 0, 595.28, 20).fill(primaryColor);
@@ -450,15 +450,13 @@ const generateAndUploadSmartReport = async (req, res) => {
                     doc.fillColor(primaryColor).fontSize(11).font('Helvetica-Bold').text(t.testName.toUpperCase(), 50, interpY);
                     interpY += 18;
 
-                    // Justify aligned clinical text rendering
-                    doc.fillColor("#424242").fontSize(8.5).font('Helvetica').text(t.interpretation, 50, interpY, {
+                    doc.fillColor("#424242").fontSize(8.5).font('Helvetica').text(interpText, 50, interpY, {
                         width: 495,
                         align: 'justify',
                         lineGap: 2
                     });
                     
-                    // 👈 DYNAMIC HEIGHT CALCULATION: Prevents any overlaps or text clipping completely! [1]
-                    const textHeight = doc.heightOfString(t.interpretation, { width: 495, lineGap: 2 });
+                    const textHeight = doc.heightOfString(interpText, { width: 495, lineGap: 2 });
                     interpY += textHeight + 20;
                 }
             });
@@ -556,17 +554,31 @@ const getReportTemplatesForBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // Booking me booked tests/packages ke names extract karein [1]
         const testNames = booking.items.tests.map(t => t.name);
         const packageNames = booking.items.packages.map(p => p.name);
         const allBookedNames = [...testNames, ...packageNames];
 
-        // Database se strictly wahi templates fetch karein jo is booking ke liye zaroori hain [1]
-        const templates = await MasterReportTemplate.find({ testName: { $in: allBookedNames } }).lean();
+        // 🚨 RELAXED FUZZY MATCHING: Checks for partial words to resolve name mismatches [1]
+        // e.g. "Kidney Function Test" matches "Kidney Function Test Advance (KFT)"
+        const regexQueries = allBookedNames.map(name => {
+            const cleanName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&').trim();
+            const words = cleanName.split(/\s+/).filter(w => w.length > 2); // Match words length > 2
+            return new RegExp(words.join('.*'), 'i');
+        });
+
+        const templates = await MasterReportTemplate.find({
+            $or: [
+                { testName: { $in: allBookedNames } },
+                { testName: { $in: regexQueries } } // 👈 Fuzzy matched query
+            ]
+        }).lean();
 
         const formattedTemplates = {};
         templates.forEach(t => {
-            formattedTemplates[t.testName] = t.parameters;
+            formattedTemplates[t.testName] = {
+                interpretation: t.parameters?.[0]?.interpretation || "", // Pulls from first param [1]
+                parameters: t.parameters
+            };
         });
 
         res.json({ 
