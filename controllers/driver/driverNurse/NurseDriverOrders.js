@@ -100,6 +100,38 @@ const toggleDriverStatus = async (req, res) => {
 // 3. BOOKING ACTIONS & STATES
 // ==========================================
 
+const getNurseDashboard = async (req, res) => {
+    try {
+        const staffId = req.user.id;
+
+        // 1. Fetch Staff Driver Details
+        const driver = await Driver.findById(staffId);
+        if (!driver) return res.status(404).json({ success: false, message: "Staff account not found" });
+
+        // 2. Count active assigned services
+        const activeCount = await NurseBooking.countDocuments({
+            assignedStaffId: staffId,
+            status: { $in: ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started'] }
+        });
+
+        res.json({
+            success: true,
+            data: {
+                driver: {
+                    name: driver.name,
+                    address: driver.address || "Tdi City Mohali, Punjab",
+                    profilePic: driver.profilePic,
+                    isOnline: driver.status !== 'Offline', // Available aur Busy are considered Online
+                    status: driver.status
+                },
+                activeServicesCount: activeCount // Figma: "My Services" button inside 2
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // Get Services List with Status Tabs (Figma Screen 5)
 const getNurseBookings = async (req, res) => {
     try {
@@ -523,6 +555,7 @@ module.exports = {
     changePassword,
     updateProfile,
     toggleDriverStatus,
+    getNurseDashboard,
     getNurseBookings,
     getBookingDetail,
     respondToBooking,

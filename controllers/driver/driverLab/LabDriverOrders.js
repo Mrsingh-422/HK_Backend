@@ -93,6 +93,39 @@ const toggleDriverStatus = async (req, res) => {
 // 2. WORKFLOW & DIAGNOSTIC MANAGEMENT
 // ==========================================
 
+// Get Lab Phlebotomist Dashboard Overview (Figma Screen 2, 3 Map Card)
+const getLabDashboard = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+
+        const driver = await Driver.findById(driverId);
+        if (!driver) return res.status(404).json({ success: false, message: "Phlebotomist account not found" });
+
+        // Count active collections (Sample collected are not yet deposited, hence active)
+        const activeCount = await LabBooking.countDocuments({
+            phlebotomistId: driverId,
+            status: { $in: ['Phlebotomist Assigned', 'Sample Collected'] }
+        });
+
+        res.json({
+            success: true,
+            data: {
+                driver: {
+                    name: driver.name,
+                    address: driver.address || "Tdi City Mohali, Punjab",
+                    profilePic: driver.profilePic,
+                    isOnline: driver.status !== 'Offline',
+                    status: driver.status
+                },
+                activeServicesCount: activeCount
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 // Get All Lab Assigned Orders (Figma Screen 9)
 const getDriverOrders = async (req, res) => {
     try {
@@ -498,6 +531,7 @@ module.exports = {
     changePassword,
     updateProfile,
     toggleDriverStatus,
+    getLabDashboard,
     getDriverOrders,
     getOrderDetail,
     respondToOrder,

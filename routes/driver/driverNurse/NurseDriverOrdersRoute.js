@@ -4,6 +4,7 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { nurseProgressUpload } = require('../../../middleware/multer'); 
 
 const { 
+    getNurseDashboard,
     getNurseBookings, 
     getBookingDetail,
     respondToBooking, 
@@ -46,6 +47,7 @@ router.get('/contact-admin', protect('driver'), getAdminContact);
 // ==========================================
 // 3. SERVICE WORKFLOW & BOOKING MANAGEMENT
 // ==========================================
+router.get('/dashboard', protect('driver'), getNurseDashboard);
 router.get('/orders/list', protect('driver'), getNurseBookings);
 router.get('/orders/detail/:bookingId', protect('driver'), getBookingDetail);
 router.patch('/orders/respond/:bookingId', protect('driver'), respondToBooking);

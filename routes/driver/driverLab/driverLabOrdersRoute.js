@@ -10,6 +10,7 @@ const {
     changePassword,
     updateProfile,
     toggleDriverStatus,
+    getLabDashboard,
     getDriverOrders,
     getOrderDetail,
     respondToOrder,
@@ -45,6 +46,7 @@ router.get('/contact-admin', protect('driver'), getAdminContact);
 // ==========================================
 // 2. DIAGNOSTIC WORKFLOWS
 // ==========================================
+router.get('/dashboard', protect('driver'), getLabDashboard);
 router.get('/orders/list', protect('driver'), getDriverOrders);
 router.get('/orders/detail/:bookingId', protect('driver'), getOrderDetail);
 router.post('/orders/respond/:orderId', protect('driver'), respondToOrder);

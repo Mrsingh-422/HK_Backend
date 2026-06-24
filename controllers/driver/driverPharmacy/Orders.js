@@ -92,6 +92,37 @@ const toggleDriverStatus = async (req, res) => {
 // ==========================================
 // 2. ORDER WORKFLOW MANAGEMENT
 // ==========================================
+// Get Pharmacy Driver Dashboard Overview (Figma Screen 2, 3 Map Card)
+const getPharmacyDashboard = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+
+        const driver = await Driver.findById(driverId);
+        if (!driver) return res.status(404).json({ success: false, message: "Pharmacy driver account not found" });
+
+        // Count active deliveries (Delivered are completed, hence not counted in active)
+        const activeCount = await PharmacyBooking.countDocuments({
+            driverId,
+            deliveryStatus: { $in: ['Accepted', 'OutForDelivery', 'ReachedLocation'] }
+        });
+
+        res.json({
+            success: true,
+            data: {
+                driver: {
+                    name: driver.name,
+                    address: driver.address || "Tdi City Mohali, Punjab",
+                    profilePic: driver.profilePic,
+                    isOnline: driver.status !== 'Offline',
+                    status: driver.status
+                },
+                activeServicesCount: activeCount
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 // Get Orders List with Status Filters (Figma Screen 6)
 const getDriverOrders = async (req, res) => {
@@ -386,6 +417,7 @@ module.exports = {
     changePassword,
     updateProfile,
     toggleDriverStatus,
+    getPharmacyDashboard,
     getDriverOrders, 
     getOrderDetail, 
     respondToOrder, 

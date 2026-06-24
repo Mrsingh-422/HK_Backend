@@ -10,6 +10,7 @@ const {
     changePassword,
     updateProfile,
     toggleDriverStatus,
+    getPharmacyDashboard,
     getDriverOrders, 
     getOrderDetail, 
     respondToOrder, 
@@ -40,6 +41,7 @@ router.get('/contact-admin', protect('driver'), getAdminContact);
 // ==========================================
 // 2. ORDER TRIP WORKFLOWS
 // ==========================================
+router.get('/dashboard', protect('driver'), getPharmacyDashboard); 
 router.get('/orders/list', protect('driver'), getDriverOrders);
 router.get('/orders/detail/:orderId', protect('driver'), getOrderDetail);
 router.post('/orders/respond', protect('driver'), respondToOrder);
