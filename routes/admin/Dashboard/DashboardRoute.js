@@ -2,7 +2,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../../middleware/authMiddleware');
+const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 const { 
     getDashboardOrderStats, 
     getLiveOrdersFeed ,
@@ -12,15 +12,15 @@ const {
 // Base URL: /admin/dashboard
 
 // Summary cards details (Lab, Pharmacy, Nurse, Hospital, Ambulance)
-router.get('/order-stats', protect('admin'), getDashboardOrderStats);
+router.get('/order-stats', protect('admin'),checkRoleAccess(5), getDashboardOrderStats);
 
 // Live Orders Feed list with pagination
-router.get('/live-feed', protect('admin'), getLiveOrdersFeed);
+router.get('/live-feed', protect('admin'), checkRoleAccess(5), getLiveOrdersFeed);
 
 // --- NAYA DYNAMIC DETAIL ROUTE ---
-router.get('/order-details/:id', protect('admin'), getOrderDetail);
+router.get('/order-details/:id', protect('admin'), checkRoleAccess(5), getOrderDetail);
 
-router.get('/stats', protect('admin'), getAdminDashboardStats);
+router.get('/stats', protect('admin'), checkRoleAccess(5), getAdminDashboardStats);
 
 
 module.exports = router;

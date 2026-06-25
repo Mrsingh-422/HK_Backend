@@ -197,9 +197,16 @@ const editMasterData = async (req, res) => {
 // endpoint: GET /admin/lab/tests/requests/pending
 const getPendingRequests = async (req, res) => {
     try {
-        const requests = await MasterRequest.find({ status: 'Pending' }).populate('vendorId', 'name');
+        // Medicine या अन्य प्रदाताओं की रिक्वेस्ट्स को रोकने के लिए 'vendorType: "Lab"' फ़िल्टर जोड़ा गया है
+        const requests = await MasterRequest.find({ 
+            status: 'Pending',
+            vendorType: 'Lab' // 👈 सिर्फ लैब वाले रिक्वेस्ट्स लोड होंगे
+        }).populate('vendorId', 'name');
+
         res.json({ success: true, data: requests });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 6. APPROVE REQUEST (Moves data to Master Collection)
@@ -253,6 +260,28 @@ const getMasterPackages = async (req, res) => {
         res.json({ success: true, data: list });
     } catch (error) {
         res.status(500).json({ message: error.message });
+    }
+};
+
+// DELETE MASTER DATA (Admin) || req.params => type: 'test' or 'package', id
+const deleteMasterData = async (req, res) => {
+    try {
+        const { type, id } = req.params;
+        const Model = type === 'test' ? MasterLabTest : MasterLabPackage;
+
+        const deleted = await Model.findByIdAndDelete(id);
+        if (!deleted) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `${type === 'test' ? 'Test' : 'Package'} not found.` 
+            });
+        }
+        res.json({ 
+            success: true, 
+            message: `${type === 'test' ? 'Test' : 'Package'} deleted successfully.` 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
     }
 };
 
@@ -575,7 +604,7 @@ const getReportTemplateDetailsAdmin = async (req, res) => {
 
 
     
-module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
+module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,deleteMasterData,
                     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest, updateCategoryImage, updatePharmacyCategoryImage,
                     getLabCategories, getPharmacyCategories,

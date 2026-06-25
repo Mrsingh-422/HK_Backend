@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../../middleware/authMiddleware');
+const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 const { careCSVUpload } = require('../../../middleware/multer');
 const { 
     uploadCareCSV, 
@@ -14,12 +14,12 @@ const {
 
 // --- ADMIN UPLOAD ROUTES ---
 // Postman Key for both: 'file'
-router.post('/upload-services', protect('admin'), careCSVUpload, uploadCareCSV);
-router.post('/upload-consumables', protect('admin'), careCSVUpload, uploadMasterConsumables);
+router.post('/upload-services', protect('admin'), checkRoleAccess(36),careCSVUpload, uploadCareCSV);
+router.post('/upload-consumables', protect('admin'), checkRoleAccess(36), careCSVUpload, uploadMasterConsumables);
 
 // --- USER/NURSE LINKED ROUTES ---
-router.get('/categories', getCareCategories);
-router.get('/sub-categories', getCareSubCategories);
-router.get('/details', getCareDetails);
+router.get('/categories', protect('admin'), checkRoleAccess(36), getCareCategories);
+router.get('/sub-categories', protect('admin'), checkRoleAccess(36), getCareSubCategories);
+router.get('/details', protect('admin'), checkRoleAccess(36), getCareDetails);
 
 module.exports = router;

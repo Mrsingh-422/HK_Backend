@@ -2,6 +2,7 @@
 
 const Medicine = require('../../../models/Medicine');
 const MedicineInventory = require('../../../models/MedicineInventory');
+const MasterRequest = require('../../../models/MasterRequest');
 const mongoose = require('mongoose')
 
 // 1. Master Medicine Database mein se search karna (Inventory mein add karne ke liye)
@@ -191,6 +192,49 @@ const deleteInventoryItem = async (req, res) => {
 };
 
 
+// Request to add a new medicine to Master Database
+// Endpoint: POST /provider/pharmacy/inventory/request-add
+const requestNewMedicineAdd = async (req, res) => {
+    try {
+        const pharmacyId = req.user.id;
+        const { name, manufacturers, salt_composition, packaging, mrp, best_price, description, prescription_required, image_url } = req.body;
+
+        if (!name) {
+            return res.status(400).json({ success: false, message: "Medicine name is required" });
+        }
+
+        // Medicine डेटा तैयार करें
+        const medicineData = {
+            name,
+            manufacturers,
+            salt_composition,
+            packaging,
+            mrp,
+            best_price,
+            description,
+            prescription_required: prescription_required || "No",
+            image_url: Array.isArray(image_url) ? image_url : (image_url ? [image_url] : [])
+        };
+
+        // Master Request क्रिएट करें
+        const newRequest = await MasterRequest.create({
+            vendorId: pharmacyId,
+            vendorType: 'Pharmacy',
+            requestType: 'Medicine',
+            data: medicineData
+        });
+
+        res.status(201).json({ 
+            success: true, 
+            message: "Request to add new medicine submitted successfully!", 
+            data: newRequest 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     searchMasterMedicines, 
     getMasterMedicineById, 
@@ -198,5 +242,6 @@ module.exports = {
     getMyInventory, 
     getMyNonPrescriptionInventory,
     updateInventoryItem ,
-    deleteInventoryItem
+    deleteInventoryItem,
+    requestNewMedicineAdd
 };

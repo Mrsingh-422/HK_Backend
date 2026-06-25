@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 const { uploadExcel, categoryTestUploads } = require('../../../middleware/multer'); 
-const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,
+const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,deleteMasterData,
     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest, updateCategoryImage,updatePharmacyCategoryImage,
                     getLabCategories, getPharmacyCategories,
@@ -22,6 +22,7 @@ router.get('/list/:type', protect('admin'), checkRoleAccess(29), listMasterData)
 router.post('/search', protect('admin'), checkRoleAccess(29), searchMasterData); // type: test/package
 router.post('/create', protect('admin'), checkRoleAccess(29), createMasterData); // type: test/package
 router.put('/edit/:type/:id', protect('admin'), checkRoleAccess(29), editMasterData);
+router.delete('/delete/:type/:id', protect('admin'), checkRoleAccess(29), deleteMasterData);
 
 // Approval System
 router.get('/requests/pending', protect('admin'), checkRoleAccess(29), getPendingRequests);

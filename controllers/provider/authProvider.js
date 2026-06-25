@@ -4,7 +4,8 @@ const Nurse = require('../../models/Nurse');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto'); 
-const sendEmailOTP = require('../../utils/emailService'); // Email sending utility
+const sendEmailOTP = require('../../utils/emailService'); 
+const { deleteFile } = require('../../utils/fileHandler'); // <-- File handler पहले से इम्पोर्टेड है
 
 // Helper: Token Generation (Lifetime for Dev, 30d for Prod)
 const generateToken = (id, role) => {
@@ -52,7 +53,7 @@ const registerProvider = async (req, res) => {
             category,
             role: category, 
             country, state, city,
-            profileStatus: 'Incomplete' // Matches Hospital Flow
+            profileStatus: 'Incomplete'
         });
 
         const token = generateToken(newProvider._id, category);
@@ -63,7 +64,7 @@ const registerProvider = async (req, res) => {
             success: true, 
             message: 'Registered successfully. Please login to upload documents.', 
             token,
-category,
+            category,
             profileStatus: 'Incomplete' 
         });
     } catch (error) {
@@ -90,10 +91,8 @@ const loginProvider = async (req, res) => {
         }
 
         // ------------------------------------------------------------
-        // 🚀 STATUS BASED FLOW (Hospital Style)
+        // 🚀 STATUS BASED FLOW
         // ------------------------------------------------------------
-        
-        // A. PENDING: Under Review (No dashboard access)
         if (provider.profileStatus === 'Pending') {
             return res.status(200).json({ 
                 success: true, 
@@ -103,7 +102,6 @@ const loginProvider = async (req, res) => {
             });
         }
 
-        // B. INCOMPLETE: Needs to upload docs (Give token)
         if (provider.profileStatus === 'Incomplete') {
             const token = provider.token || generateToken(provider._id, category);
             return res.status(200).json({ 
@@ -115,7 +113,6 @@ const loginProvider = async (req, res) => {
             });
         }
 
-        // C. REJECTED: Give token to allow re-upload
         if (provider.profileStatus === 'Rejected') {
             const token = provider.token || generateToken(provider._id, category);
             return res.status(200).json({ 
@@ -128,7 +125,6 @@ const loginProvider = async (req, res) => {
             });
         }
 
-        // D. APPROVED: Full Login
         let token = null;
         if (process.env.NODE_ENV === 'development' && provider.token) {
             try {
@@ -167,7 +163,13 @@ const uploadLabDocs = async (req, res) => {
         const { documentState, issuingAuthority, gstNumber, experience, drugLicenseType, about } = req.body;
         const files = req.files;
 
-        // 1. Pehle pura documents object taiyar karein (Dot notation ki jagah nested object)
+        // Purane documents lookup aur delete karne ke liye load karein
+        const existingLab = await Lab.findById(labId);
+        if (!existingLab) {
+            return res.status(404).json({ success: false, message: "Lab not found." });
+        }
+
+        // Pura documents object taiyar karein
         const documentsObj = {
             documentState,
             issuingAuthority,
@@ -182,7 +184,30 @@ const uploadLabDocs = async (req, res) => {
             otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
         };
 
-        // 2. Database update
+        // ==========================================
+        // 💾 DELETE OLD FILES (LAB CLEANUP)
+        // ==========================================
+        if (files?.profileImage && existingLab.profileImage) {
+            deleteFile(existingLab.profileImage);
+        }
+
+        if (existingLab.documents) {
+            const documentFields = [
+                'labImages', 'labCertificates', 'labLicenses', 
+                'gstCertificates', 'drugLicenses', 'otherCertificates'
+            ];
+
+            documentFields.forEach(field => {
+                const oldFileList = existingLab.documents[field];
+                if (Array.isArray(oldFileList)) {
+                    oldFileList.forEach(filePath => {
+                        if (filePath) deleteFile(filePath);
+                    });
+                }
+            });
+        }
+        // ==========================================
+
         const updatedLab = await Lab.findByIdAndUpdate(
             labId, 
             { 
@@ -190,7 +215,7 @@ const uploadLabDocs = async (req, res) => {
                     about,
                     profileStatus: 'Pending',
                     rejectionReason: null,
-                    documents: documentsObj, // 👈 Pura object replace hoga, array conflict khatam
+                    documents: documentsObj,
                     ...(files?.profileImage && { profileImage: files.profileImage[0].path })
                 } 
             }, 
@@ -213,7 +238,11 @@ const uploadPharmacyDocs = async (req, res) => {
         const { documentState, issuingAuthority, gstNumber, drugLicenseType, about, isHomeDeliveryAvailable, is24x7 } = req.body;
         const files = req.files;
 
-        // 1. Prepare entire documents object (Overwrites any old array)
+        const existingPharmacy = await Pharmacy.findById(pharmacyId);
+        if (!existingPharmacy) {
+            return res.status(404).json({ success: false, message: "Pharmacy not found." });
+        }
+
         const documentsObj = {
             documentState,
             issuingAuthority,
@@ -227,7 +256,30 @@ const uploadPharmacyDocs = async (req, res) => {
             otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
         };
 
-        // 2. Perform Atomic update
+        // ==========================================
+        // 💾 DELETE OLD FILES (PHARMACY CLEANUP)
+        // ==========================================
+        if (files?.profileImage && existingPharmacy.profileImage) {
+            deleteFile(existingPharmacy.profileImage);
+        }
+
+        if (existingPharmacy.documents) {
+            const documentFields = [
+                'pharmacyImages', 'pharmacyCertificates', 'pharmacyLicenses', 
+                'gstCertificates', 'drugLicenses', 'otherCertificates'
+            ];
+
+            documentFields.forEach(field => {
+                const oldFileList = existingPharmacy.documents[field];
+                if (Array.isArray(oldFileList)) {
+                    oldFileList.forEach(filePath => {
+                        if (filePath) deleteFile(filePath);
+                    });
+                }
+            });
+        }
+        // ==========================================
+
         const updatedPharmacy = await Pharmacy.findByIdAndUpdate(
             pharmacyId, 
             { 
@@ -263,7 +315,13 @@ const uploadNurseDocs = async (req, res) => {
         } = req.body;
         const files = req.files;
 
-        // 1. Prepare entire documents object as per Figma Labels
+        // Purane files lookup karne ke liye details fetch karein
+        const existingNurse = await Nurse.findById(nurseId);
+        if (!existingNurse) {
+            return res.status(404).json({ success: false, message: "Nurse not found." });
+        }
+
+        // Prepare documents object matching Nurse Schemas
         const documentsObj = {
             documentState,
             issuingAuthority,
@@ -276,7 +334,30 @@ const uploadNurseDocs = async (req, res) => {
             otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
         };
 
-        // 2. Atomic update: Overwrite 'documents' field to convert from Array to Object
+        // ==========================================
+        // 💾 DELETE OLD FILES (NURSE CLEANUP)
+        // ==========================================
+        if (files?.profileImage && existingNurse.profileImage) {
+            deleteFile(existingNurse.profileImage);
+        }
+
+        if (existingNurse.documents) {
+            const documentFields = [
+                'nursingCertificates', 'licensePhotos', 'gstCertificates', 
+                'experienceCertificates', 'otherCertificates'
+            ];
+
+            documentFields.forEach(field => {
+                const oldFileList = existingNurse.documents[field];
+                if (Array.isArray(oldFileList)) {
+                    oldFileList.forEach(filePath => {
+                        if (filePath) deleteFile(filePath);
+                    });
+                }
+            });
+        }
+        // ==========================================
+
         const updatedNurse = await Nurse.findByIdAndUpdate(
             nurseId, 
             { 
@@ -322,7 +403,6 @@ const forgotPasswordProvider = async (req, res) => {
 
         const { provider } = result;
 
-        // OTP Logic (Development vs Production)
         let otp = process.env.NODE_ENV === 'development' ? '1111' : Math.floor(100000 + Math.random() * 900000).toString();
 
         provider.resetPasswordOtp = otp;
@@ -367,8 +447,8 @@ const resetPasswordProvider = async (req, res) => {
 // ==========================================
 const getProviderProfile = async (req, res) => {
     try {
-        const { id, role } = req.user; // Auth Middleware se mil raha hai
-        const Model = getModelByCategory(role); // Aapka pehle se defined helper
+        const { id, role } = req.user; 
+        const Model = getModelByCategory(role); 
 
         if (!Model) return res.status(400).json({ message: "Invalid Provider Role" });
 
@@ -384,4 +464,14 @@ const getProviderProfile = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-module.exports = { registerProvider, loginProvider, uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs,forgotPasswordProvider, resetPasswordProvider, getProviderProfile };
+
+module.exports = { 
+    registerProvider, 
+    loginProvider, 
+    uploadLabDocs, 
+    uploadPharmacyDocs, 
+    uploadNurseDocs,
+    forgotPasswordProvider, 
+    resetPasswordProvider, 
+    getProviderProfile 
+};

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
-const { registerSuperAdmin, loginAdmin, createSubAdmin, updateAdminProfile,getAdminsList } = require('../../controllers/admin/authAdmin.js');
+const { registerSuperAdmin, loginAdmin, createSubAdmin, updateAdminProfile,getAdminsList ,editSubadmin} = require('../../controllers/admin/authAdmin.js');
 
 // Base route: /api/auth/admin (server.js me define hoga)
 
@@ -13,6 +13,6 @@ router.post('/login', loginAdmin); // Maine isko 'login' kar diya hai taaki '/ap
 router.put('/update', protect('admin'), updateAdminProfile);
 router.post('/create-subadmin', protect('admin'), createSubAdmin);
 router.get('/manage-admins', protect('admin'), getAdminsList);
- 
+ router.put('/subadmins/:id', protect('admin'), editSubadmin);
 
 module.exports = router;

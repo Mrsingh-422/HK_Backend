@@ -214,38 +214,47 @@ const protect = (modelType) => async (req, res, next) => {
 const checkRoleAccess = (tabId) => {
     return async (req, res, next) => {
         try {
+           
             if (req.user.role === 'superadmin') return next();
-
-            // 1. Global Check
+ 
+       
+            const Tab = require('../models/Tab');
             const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
-            if (!globalTab) return res.status(403).json({ message: "...disabled by Admin" });
-
-            // 2. Role Check
-            const roleType = req.user.roleType;
-            
-            // --- DEBUG LOG START ---
-            console.log("Admin Name:", req.user.name);
-            console.log("Checking for TabId:", tabId);
-            console.log("Admin's Assigned Permissions (tabIds):", roleType ? roleType.tabIds : "No Role Found");
-            // --- DEBUG LOG END ---
-
-            if (!roleType || !roleType.tabIds) {
+            if (!globalTab) return res.status(403).json({ message: "This module is temporarily disabled by Admin" });
+ 
+       
+            const roleTypes = req.user.roleType;
+           
+       
+            if (!roleTypes || !Array.isArray(roleTypes) || roleTypes.length === 0) {
                 return res.status(403).json({ message: "Access Denied: No Role Assigned" });
             }
-
-            // includes() check
-            const hasAccess = roleType.tabIds.includes(Number(tabId));
-            
+ 
+           
+            let allAllowedTabs = [];
+            roleTypes.forEach(role => {
+                if (role && role.tabIds) {
+                    allAllowedTabs.push(...role.tabIds);
+                }
+            });
+ 
+       
+            const hasAccess = allAllowedTabs.includes(Number(tabId));
+           
             if (!hasAccess) {
-                return res.status(403).json({ 
-                    success: false, 
-                    message: "Access Denied: You do not have permission for this module." 
+                return res.status(403).json({
+                    success: false,
+                    message: "Access Denied: You do not have permission for this module."
                 });
             }
-            next();
-        } catch (error) { res.status(500).json({ message: error.message }); }
+           
+            next(); // Access Granted!
+        } catch (error) {
+            res.status(500).json({ message: error.message });
+        }
     };
 };
+ 
 
 // 3. Location Filter Helper (For Controller use)
 const getLocationFilter = (req) => {

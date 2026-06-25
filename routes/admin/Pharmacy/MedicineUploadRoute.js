@@ -13,7 +13,11 @@ const {
     createMedicine, 
     updateMedicine, 
     deleteMedicine, 
-    getMedicineDetails 
+    getMedicineDetails,
+
+    getPendingMedicineRequests, 
+    approveMedicineRequest,     
+    rejectMedicineRequest 
 } = require('../../../controllers/admin/Pharmacy/MedicineUpload');
 
 // base URL: /admin/pharmacy/medicine
@@ -39,5 +43,11 @@ router.post('/search', searchMedicines);
 // --- Update & Delete ---
 router.put('/update/:id', protect('admin'), checkRoleAccess(28), updateMedicine);
 router.delete('/delete/:id', protect('admin'), checkRoleAccess(28), deleteMedicine);
+
+
+// --- Approval System for New Medicine Requests ---
+router.get('/requests/pending', protect('admin'), checkRoleAccess(28), getPendingMedicineRequests);
+router.put('/requests/approve/:requestId', protect('admin'), checkRoleAccess(28), approveMedicineRequest);
+router.put('/requests/reject/:requestId', protect('admin'), checkRoleAccess(28), rejectMedicineRequest);
 
 module.exports = router;

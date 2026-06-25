@@ -3,8 +3,7 @@ const mongoose = require('mongoose');
 const masterRequestSchema = new mongoose.Schema({
     vendorId: { type: mongoose.Schema.Types.ObjectId, required: true, refPath: 'vendorType' },
     vendorType: { type: String, enum: ['Lab', 'Pharmacy', 'Nurse'], required: true },
-    requestType: { type: String, enum: ['Test', 'Package'], required: true },
-    
+requestType: { type: String, enum: ['Test', 'Package', 'Medicine'], required: true },    
     // Naya data jo Master schema me jayega
     data: { type: Object, required: true }, 
     

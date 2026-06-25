@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../../middleware/authMiddleware');
+const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 const { 
     adminGetNurseBookings,
     adminGetApprovedNurses
@@ -8,7 +8,7 @@ const {
 
 // Base URL: /admin/nurse
 
-router.get('/approved-list', protect('admin'), adminGetApprovedNurses);
-router.get('/bookings', adminGetNurseBookings);
+router.get('/approved-list', protect('admin'), checkRoleAccess(5), adminGetApprovedNurses);
+router.get('/bookings', protect('admin'), checkRoleAccess(5), adminGetNurseBookings);
 
 module.exports = router;

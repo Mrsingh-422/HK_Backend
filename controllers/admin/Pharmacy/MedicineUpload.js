@@ -1,4 +1,5 @@
 const Medicine = require('../../../models/Medicine');
+const MasterRequest = require('../../../models/MasterRequest');
 const fs = require('fs');
 const csv = require('csv-parser'); // xlsx ki jagah csv-parser use karenge for large files
 
@@ -245,6 +246,83 @@ const getMedicineDetails = async (req, res) => {
     }
 };
 
+
+
+
+
+
+
+
+
+// --- 8. GET ALL PENDING MEDICINE REQUESTS (Pharmacy Vendors) ---
+// Endpoint: GET /admin/pharmacy/medicine/requests/pending
+const getPendingMedicineRequests = async (req, res) => {
+    try {
+        const requests = await MasterRequest.find({ 
+            vendorType: 'Pharmacy', 
+            requestType: 'Medicine', 
+            status: 'Pending' 
+        }).populate('vendorId', 'name email phone');
+
+        res.json({ success: true, count: requests.length, data: requests });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 9. APPROVE MEDICINE REQUEST (Moves data to Master Collection) ---
+// Endpoint: PUT /admin/pharmacy/medicine/requests/approve/:requestId
+const approveMedicineRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const request = await MasterRequest.findById(requestId);
+
+        if (!request) return res.status(404).json({ success: false, message: "Request not found" });
+        if (request.requestType !== 'Medicine') return res.status(400).json({ success: false, message: "Invalid request type" });
+
+        // Unique ID के साथ मास्टर मेडिसिन का डेटा तैयार करें
+        const medicinePayload = {
+            ...request.data,
+            Id: "MANUAL-" + Date.now()
+        };
+
+        // मास्टर कलेक्शन में सेव करें
+        const newMasterMedicine = await Medicine.create(medicinePayload);
+
+        // रिक्वेस्ट स्टेटस अपडेट करें
+        request.status = 'Approved';
+        await request.save();
+
+        res.json({ 
+            success: true, 
+            message: "Medicine request approved and added to Master database successfully!", 
+            data: newMasterMedicine 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 10. REJECT MEDICINE REQUEST ---
+// Endpoint: PUT /admin/pharmacy/medicine/requests/reject/:requestId
+const rejectMedicineRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { adminComment } = req.body;
+
+        const request = await MasterRequest.findById(requestId);
+        if (!request) return res.status(404).json({ success: false, message: "Request not found" });
+
+        request.status = 'Rejected';
+        request.adminComment = adminComment || "Rejected by Admin";
+        await request.save();
+
+        res.json({ success: true, message: "Medicine request rejected successfully", data: request });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     uploadMedicinesCSV,
     getMedicinesList,
@@ -252,5 +330,9 @@ module.exports = {
     createMedicine,
     updateMedicine,
     deleteMedicine,
-    getMedicineDetails
+    getMedicineDetails,
+
+    getPendingMedicineRequests, 
+    approveMedicineRequest,     
+    rejectMedicineRequest 
 };

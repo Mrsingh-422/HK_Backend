@@ -39,54 +39,59 @@ const registerSuperAdmin = async (req, res) => {
     }
 };
 
-// --- 2. ADMIN LOGIN (Updated for Email OR Phone) ---
 const loginAdmin = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
-
-        // Dynamic Query Builder
+ 
         let query = {};
         if (email) query = { email };
         else if (phone) query = { phone };
         else return res.status(400).json({ message: 'Provide Email or Phone' });
-
-        // 1. Admin Find & Check Password
-        const admin = await Admin.findOne(query).select('+password');
-        
+ 
+        // DATABASE SE DATA NIKAL RAHE HAIN
+        const admin = await Admin.findOne(query).select('+password').populate('roleType');
+       
         if (!admin || !(await bcrypt.compare(password, admin.password))) {
             return res.status(400).json({ message: 'Invalid Admin Credentials' });
         }
         if (!admin.isActive) return res.status(403).json({ message: 'Account Deactivated' });
-
+ 
+        // TERMINAL MEIN PRINT KARKE DEKHENGE KI DATA KYA AAYA
+        console.log("===== LOGIN DEBUG =====");
+        console.log("Admin Name:", admin.name);
+        console.log("Populated RoleType:", admin.roleType);
+ 
         let token = null;
-
-        // --- DEVELOPMENT MODE LOGIC (Same as you requested) ---
-        if (process.env.NODE_ENV === 'development') {
-            if (admin.token) {
-                try {
-                    jwt.verify(admin.token, process.env.JWT_SECRET);
-                    token = admin.token;
-                    console.log("Development Mode: Using Existing Token");
-                } catch (err) {
-                    token = null;
-                }
-            }
-        }
-
-        // --- TOKEN GENERATION ---
         if (!token) {
-            token = jwt.sign(
-                { id: admin._id, role: admin.role }, 
-                process.env.JWT_SECRET, 
-                { expiresIn: '30d' }
-            );
-
-            // Token saving logic
+            token = jwt.sign({ id: admin._id, role: admin.role }, process.env.JWT_SECRET, { expiresIn: '30d' });
             admin.token = token;
             await admin.save();
-            console.log("New Token Generated");
         }
-
+ 
+        // TABS NIKALNE KA LOGIC
+        let allowedTabs = [];
+       
+        if (admin.role === 'superadmin') {
+            allowedTabs = ['ALL'];
+        } else if (admin.roleType && Array.isArray(admin.roleType)) {
+            admin.roleType.forEach(role => {
+                // Role model me jo bhi naam ho, sab check kar lenge
+                const tabs = role.tabIds || role.tabs || role.permissions || [];
+                if (tabs.length > 0) {
+                    allowedTabs = [...allowedTabs, ...tabs];
+                }
+            });
+            allowedTabs = [...new Set(allowedTabs)];
+        } else if (admin.roleType) {
+            // Agar array nahi, single object hai
+            const tabs = admin.roleType.tabIds || admin.roleType.tabs || admin.roleType.permissions || [];
+            allowedTabs = [...tabs];
+        }
+ 
+        console.log("Final Allowed Tabs Jo Frontend jayenge:", allowedTabs);
+        console.log("=======================");
+ 
+        // RESPONSE TO FRONTEND
         res.json({
             success: true,
             token,
@@ -94,43 +99,57 @@ const loginAdmin = async (req, res) => {
                 id: admin._id,
                 name: admin.name,
                 role: admin.role,
-                permissions: admin.permissions 
+                allowedTabs: allowedTabs
             }
         });
-
+ 
     } catch (error) {
+        console.error("Login Error:", error);
         res.status(500).json({ message: error.message });
     }
 };
-
-// --- 3. CREATE SUB-ADMIN (Updated) ---
+ 
+ 
+// --- 3. CREATE SUB-ADMIN (Updated for Multiple Roles) ---
 const createSubAdmin = async (req, res) => {
     try {
         const { name, email, phone, password, roleTypeId, locationAccess } = req.body;
-
-        if (!email && !phone) return res.status(400).json({ message: 'Email or Phone required' });
-
+ 
+        if (!email && !phone) {
+            return res.status(400).json({ message: 'Email or Phone required' });
+        }
+ 
+        // Check if roleTypeId is provided and is an array
+        if (!roleTypeId || !Array.isArray(roleTypeId) || roleTypeId.length === 0) {
+            return res.status(400).json({ message: 'At least one Authority Role must be selected' });
+        }
+ 
         const hashedPassword = await bcrypt.hash(password, 10);
-
+ 
         const subAdmin = await Admin.create({
             name,
             email: email || undefined,
             phone: phone || undefined,
             password: hashedPassword,
             role: 'subadmin',
-            roleType: roleTypeId, // Role model की ID
+            roleType: roleTypeId, // Frontend se array aayega ['id1', 'id2'] aur direct save ho jayega
             locationAccess: {
                 country: locationAccess?.country || null,
                 state: locationAccess?.state || null,
                 city: locationAccess?.city || null
             }
         });
-
-        res.status(201).json({ success: true, message: 'Sub-Admin created with specific Role & Location' });
+ 
+        res.status(201).json({ success: true, message: 'Sub-Admin created with specific Roles & Location' });
     } catch (error) {
+        // Handle unique email/phone error from MongoDB
+        if (error.code === 11000) {
+            return res.status(400).json({ message: 'Email or Phone already exists' });
+        }
         res.status(500).json({ message: error.message });
     }
 };
+ 
 
 // --- 4. UPDATE ADMIN PROFILE (NEW) ---
 // Admin khud login hone ke baad apna missing Email/Phone add kar sake
@@ -215,7 +234,52 @@ const getAdminsList = async (req, res) => {
     }
 };
  
+const editSubadmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, email, phone, password, roleTypeId, locationAccess } = req.body;
+ 
+        // Duplicate Email Check (lekin khud ki ID chhodkar)
+        if (email) {
+            const emailExists = await Admin.findOne({ email, _id: { $ne: id } });
+            if (emailExists) return res.status(400).json({ message: 'Email already in use by another admin' });
+        }
+ 
+        // Duplicate Phone Check
+        if (phone) {
+            const phoneExists = await Admin.findOne({ phone, _id: { $ne: id } });
+            if (phoneExists) return res.status(400).json({ message: 'Phone already in use by another admin' });
+        }
+ 
+        const updateData = {
+            name,
+            email: email || undefined,
+            phone: phone || undefined,
+            roleType: roleTypeId, // Updated Array of Roles
+            locationAccess: {
+                country: locationAccess?.country || null,
+                state: locationAccess?.state || null,
+                city: locationAccess?.city || null
+            }
+        };
+ 
+        // Agar password naya dala hai, toh usko encrypt karke save karo
+        if (password && password.trim() !== "") {
+            updateData.password = await bcrypt.hash(password, 10);
+        }
+ 
+        const updatedAdmin = await Admin.findByIdAndUpdate(id, updateData, { new: true });
+       
+        if (!updatedAdmin) {
+            return res.status(404).json({ message: 'Subadmin not found' });
+        }
+ 
+        res.json({ success: true, message: 'Subadmin updated successfully', data: updatedAdmin });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+ 
 
 
-
-module.exports = { registerSuperAdmin, loginAdmin, createSubAdmin, updateAdminProfile ,getAdminsList};
+module.exports = { registerSuperAdmin, loginAdmin, createSubAdmin, updateAdminProfile ,getAdminsList, editSubadmin  };
