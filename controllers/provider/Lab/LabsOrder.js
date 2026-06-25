@@ -65,6 +65,15 @@ const getOrders = async (req, res) => {
         const orders = await LabBooking.find(query)
             .populate('userId', 'name phone address')
             .populate('phlebotomistId', 'name phone')
+            .populate({
+                path: 'items.packages.packageId',
+                select: 'packageName tests', // Select package fields
+                populate: {
+                    path: 'tests', // Populate nested MasterLabTest array
+                    model: 'MasterLabTest',
+                    select: 'testName' // Select only testName field
+                }
+            })
             .sort({ createdAt: -1 });
 
         res.json({ success: true, count: orders.length, data: orders });
@@ -160,65 +169,106 @@ const uploadReport = async (req, res) => {
 };
 
 
-// ==========================================
-// 7. GET REPORT TEMPLATES (Fully Database-Driven & Lightweight)
+// 7. GET REPORT TEMPLATES (Optimized: Strictly requires testNames to avoid 1000+ database dumps)
 // endpoint: GET /provider/labs/report-templates
-// ==========================================
 const getReportTemplates = async (req, res) => {
     try {
         const { testNames } = req.query;
-        let query = {};
         
-        if (testNames) {
-            const requestedList = testNames.split(',').map(name => name.trim());
-            query.testName = { $in: requestedList };
+        // 🚨 SECURITY/PERFORMANCE GUARD: Prevent massive data dump
+        if (!testNames) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Query parameter 'testNames' (comma-separated list) is required to fetch detailed parameters. Database dump is blocked." 
+            });
         }
 
-        const templates = await MasterReportTemplate.find(query).lean();
+        const requestedList = testNames.split(',').map(name => name.trim());
+        
+        // Only fetch requested templates from database
+        const templates = await MasterReportTemplate.find({ testName: { $in: requestedList } }).lean();
 
         const formattedTemplates = {};
-        templates.forEach(template => {
-            formattedTemplates[template.testName] = template.parameters;
+        templates.forEach(t => {
+            formattedTemplates[t.testName] = {
+                interpretation: t.parameters?.[0]?.interpretation || "",
+                parameters: t.parameters
+            };
         });
 
         res.json({ 
             success: true, 
-            count: templates.length,
+            count: templates.length, 
             data: formattedTemplates 
         });
-
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
+
+
+
+// 8. GET REPORT TEMPLATES FOR DROPDOWN (Highly Optimized: Name & ID only with Limit 50)
+// endpoint: GET /provider/labs/report-templates/dropdown
+const getReportTemplatesDropdown = async (req, res) => {
+    try {
+        const { search } = req.query; // Optional search to filter dropdown values on typing
+
+        let query = {};
+        if (search) {
+            query.testName = { $regex: search, $options: 'i' };
+        }
+
+        // 🚨 PERFORMANCE OPTIMIZATION: Only select 'testName' and limit results to 50
+        const templates = await MasterReportTemplate.find(query)
+            .select('testName')
+            .sort({ testName: 1 })
+            .limit(50); // Prevents rendering bottleneck of 1000+ rows
+        
+        res.json({ 
+            success: true, 
+            count: templates.length, 
+            data: templates 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+}; 
 // ==========================================
-// 8. GENERATE SMART REPORT PDF (Dynamic Quantitative & Qualitative Evaluator)
-// endpoint: POST /provider/labs/generate-report/:orderId
+// 6. GENERATE PATIENT SMART REPORT (Dynamic Multi-Patient Multi-Test Engine)
+// Replacing generateAndUploadSmartReport inside controllers/provider/Lab/LabsOrder.js
 // ==========================================
 const generateAndUploadSmartReport = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { testValues } = req.body; 
+        const { testValues, patientId } = req.body; // 👈 Process specifically for this patientId [1]
 
-        if (!testValues || !Array.isArray(testValues) || testValues.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Please provide valid testValues array." 
-            });
+        if (!testValues || !patientId) {
+            return res.status(400).json({ success: false, message: "Both 'testValues' and 'patientId' are required." });
         }
 
-        const booking = await LabBooking.findById(orderId).populate('userId');
+        const booking = await LabBooking.findById(orderId);
         if (!booking) {
             return res.status(404).json({ success: false, message: "Lab booking not found." });
         }
 
-        const patient = booking.patients[0] || { name: booking.userId?.name || "Patient", age: 30, gender: "Female" };
+        // Find the specific target patient within the booking
+        const patient = booking.patients.find(p => 
+            String(p.patientId) === String(patientId) || 
+            String(p._id) === String(patientId) ||
+            (patientId === 'Self' && p.relation === 'Self')
+        );
+
+        if (!patient) {
+            return res.status(404).json({ success: false, message: "Target patient not found in this booking." });
+        }
+
         const isFemale = patient.gender?.toLowerCase() === 'female';
 
+        // Health Score & Interpretations
         let healthScore = 100;
         const processedParametersList = [];
-        
         const advisory = {
             nutritions: ["Have a balanced diet that includes whole grains, pulses, dairy, and healthy fruits."],
             lifestyles: ["Maintain ideal weight and have regular physical activity of 30 mins daily."],
@@ -295,13 +345,16 @@ const generateAndUploadSmartReport = async (req, res) => {
         advisory.lifestyles = [...new Set(advisory.lifestyles)];
         advisory.futureTests = [...new Set(advisory.futureTests)];
 
-        // Fetch matching Master templates to extract interpretations from first parameter [1]
+        // Fetch matching Master templates
         const testNames = testValues.map(tg => tg.testName);
         const templates = await MasterReportTemplate.find({ testName: { $in: testNames } }).lean();
 
-        // PDF Generation Engine (HealthKangaroo Branded)
+        // PDF Generation Engine (Branded with Patient Specific details) [2]
         const doc = new PDFDocument({ margin: 50, size: 'A4' });
-        const reportFileName = `report-${booking.bookingId}.pdf`;
+        
+        // Save PDF with Unique Patient Marker to prevent over-writing
+        const cleanPatientName = patient.name.replace(/\s+/g, '_');
+        const reportFileName = `report-${booking.bookingId}-${cleanPatientName}.pdf`;
         const reportPath = path.join(process.cwd(), 'public', 'uploads', 'user_reports', reportFileName);
 
         fs.mkdirSync(path.dirname(reportPath), { recursive: true });
@@ -340,7 +393,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor("#757575").fontSize(8).font('Helvetica').text("Scan the report's QR code on our app to verify the machine-generated authenticity of your results.", 70, 690);
 
         // ==========================================
-        // PAGE 2: PERSONALIZED summary & VITAL PARAMETERS
+        // PAGE 2: PERSONALIZED SUMMARY & VITALS
         // ==========================================
         doc.addPage();
         doc.rect(0, 0, 595.28, 20).fill(primaryColor);
@@ -425,9 +478,8 @@ const generateAndUploadSmartReport = async (req, res) => {
         }
 
         // ==========================================
-        // 🚨 PAGE 4: CLINICAL INTERPRETATIONS (Dynamic Content extracted from parameters[0]) [1]
+        // PAGE 4: CLINICAL INTERPRETATIONS (Dynamic Content extracted from parameters[0])
         // ==========================================
-        // Check if any loaded template has interpretation saved in parameters[0]
         let hasInterpretations = templates.some(t => t.parameters?.[0]?.interpretation && t.parameters[0].interpretation.trim().length > 0);
         
         if (hasInterpretations) {
@@ -438,7 +490,7 @@ const generateAndUploadSmartReport = async (req, res) => {
 
             let interpY = 80;
             templates.forEach(t => {
-                const interpText = t.parameters?.[0]?.interpretation; // 👈 Extracts strictly from first parameter! [1]
+                const interpText = t.parameters?.[0]?.interpretation; 
                 
                 if (interpText && interpText.trim().length > 0) {
                     if (interpY > 680) {
@@ -507,14 +559,37 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.end();
 
         stream.on('finish', async () => {
-            booking.reportFile = `/uploads/user_reports/${reportFileName}`;
-            booking.status = 'Completed';
+            // 🚨 MULTI-PATIENT SYNC (Bypassing Mongoose strict mode constraints safely)
+            if (!booking.patientReports) booking.patientReports = [];
+
+            // Purani generated patient report remove karein (if re-triggered)
+            booking.patientReports = booking.patientReports.filter(r => String(r.patientId) !== String(patientId));
+
+            const finalReportFile = `/uploads/user_reports/${reportFileName}`;
+
+            booking.patientReports.push({
+                patientId: patient.patientId || patient._id || "Self",
+                patientName: patient.name,
+                reportFile: finalReportFile
+            });
+
+            // Status check: Kya booking ke sabhi patients ke report card generate ho chuke hain?
+            const allCompleted = booking.patients.every(p => {
+                const targetId = p.patientId || p._id || "Self";
+                return booking.patientReports.some(r => String(r.patientId) === String(targetId));
+            });
+
+            booking.status = allCompleted ? 'Completed' : 'Testing';
+            booking.reportFile = finalReportFile; // Fallback main reference
+            
+            // Mark modified and save
+            booking.markModified('patientReports');
             await booking.save();
 
             res.status(200).json({
                 success: true,
-                message: "Dynamic Smart Report generated successfully!",
-                reportUrl: booking.reportFile,
+                message: `Dynamic report for ${patient.name} generated successfully!`,
+                reportUrl: finalReportFile,
                 data: booking
             });
         });
@@ -525,58 +600,63 @@ const generateAndUploadSmartReport = async (req, res) => {
     }
 };
 
-
-// 9. NEW: GET REPORT TEMPLATES FOR DROPDOWN (Name & ID only)
-// endpoint: GET /provider/labs/report-templates/dropdown
-const getReportTemplatesDropdown = async (req, res) => {
-    try {
-        // Fetch only template names and IDs for fast dropdown rendering
-        const templates = await MasterReportTemplate.find().select('testName').sort({ testName: 1 });
-        
-        res.json({ 
-            success: true, 
-            count: templates.length, 
-            data: templates 
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
 // 10. NEW: AUTO-RESOLVE TEMPLATES FOR SPECIFIC BOOKING (Smart Handshake)
 // endpoint: GET /provider/labs/report-templates/booking/:orderId
 const getReportTemplatesForBooking = async (req, res) => {
     try {
         const { orderId } = req.params;
         
-        const booking = await LabBooking.findById(orderId);
+        // 🚨 DEEP POPULATION: Resolves packages and their nested clinical tests dynamically! [1]
+        const booking = await LabBooking.findById(orderId)
+            .populate({
+                path: 'items.packages.packageId',
+                populate: {
+                    path: 'tests',
+                    model: 'MasterLabTest',
+                    select: 'testName'
+                }
+            });
+
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
+        // A. Extract standalone test names
         const testNames = booking.items.tests.map(t => t.name);
-        const packageNames = booking.items.packages.map(p => p.name);
-        const allBookedNames = [...testNames, ...packageNames];
+        
+        // B. 🚨 PACKAGE EXTRACTOR: Loop through packages and extract nested testName strings [1]
+        const packageTestNames = [];
+        if (booking.items?.packages) {
+            booking.items.packages.forEach(p => {
+                if (p.packageId && p.packageId.tests) {
+                    p.packageId.tests.forEach(nt => {
+                        packageTestNames.push(nt.testName); // 👈 Nested test name [1]
+                    });
+                }
+            });
+        }
 
-        // 🚨 RELAXED FUZZY MATCHING: Checks for partial words to resolve name mismatches [1]
-        // e.g. "Kidney Function Test" matches "Kidney Function Test Advance (KFT)"
+        // Combine standalone and package-based tests into a single query array
+        const allBookedNames = [...testNames, ...packageTestNames];
+
+        // Fuzzy regex matching
         const regexQueries = allBookedNames.map(name => {
             const cleanName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&').trim();
-            const words = cleanName.split(/\s+/).filter(w => w.length > 2); // Match words length > 2
+            const words = cleanName.split(/\s+/).filter(w => w.length > 2);
             return new RegExp(words.join('.*'), 'i');
         });
 
         const templates = await MasterReportTemplate.find({
             $or: [
                 { testName: { $in: allBookedNames } },
-                { testName: { $in: regexQueries } } // 👈 Fuzzy matched query
+                { testName: { $in: regexQueries } }
             ]
         }).lean();
 
         const formattedTemplates = {};
         templates.forEach(t => {
             formattedTemplates[t.testName] = {
-                interpretation: t.parameters?.[0]?.interpretation || "", // Pulls from first param [1]
+                interpretation: t.parameters?.[0]?.interpretation || "",
                 parameters: t.parameters
             };
         });
@@ -591,57 +671,78 @@ const getReportTemplatesForBooking = async (req, res) => {
     }
 };
 
-// 11. NEW: SAVE DRAFT RESULTS (Save intermediate progress before final print)
-// endpoint: POST /provider/labs/save-draft/:orderId
+// ==========================================
+// 4. SAVE DRAFT RESULTS (Partitioned by Patient ID)
+// Replacing saveDraftResults inside controllers/provider/Lab/LabsOrder.js
+// ==========================================
 const saveDraftResults = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { testValues } = req.body;
+        const { testValues, patientId } = req.body; // 👈 Partitioned by patientId
 
-        if (!testValues) {
-            return res.status(400).json({ success: false, message: "testValues payload is required." });
+        if (!testValues || !patientId) {
+            return res.status(400).json({ success: false, message: "Both 'testValues' and 'patientId' are required." });
         }
 
-        // Save raw parameters in testResults and transition state to 'Testing'
-        const booking = await LabBooking.findByIdAndUpdate(
-            orderId,
-            { $set: { testResults: testValues, status: 'Testing' } },
-            { new: true }
-        );
+        const booking = await LabBooking.findById(orderId);
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking not found." });
+        // Initialize object if null/empty
+        if (!booking.testResults || typeof booking.testResults !== 'object') {
+            booking.testResults = {};
         }
+
+        // Save progress specifically under this patient's key [1]
+        booking.testResults[patientId] = testValues;
+
+        // Force Mongoose to save mixed type changes
+        booking.markModified('testResults');
+        booking.status = 'Testing';
+
+        await booking.save();
 
         res.json({ 
             success: true, 
-            message: "Draft report results saved successfully.", 
-            data: booking.testResults 
+            message: "Draft saved for this patient successfully.", 
+            data: booking.testResults[patientId] 
         });
     } catch (error) {
+        console.error("saveDraftResults Error:", error.message);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 12. NEW: FETCH SAVED DRAFT RESULTS (To pre-populate form on screen reload)
-// endpoint: GET /provider/labs/get-draft/:orderId
+// ==========================================
+// 5. FETCH SAVED DRAFT RESULTS (Partitioned by Patient ID)
+// Replacing getDraftResults inside controllers/provider/Lab/LabsOrder.js
+// ==========================================
 const getDraftResults = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const { patientId } = req.query; // 👈 Fetch specifically for this patient
 
-        const booking = await LabBooking.findById(orderId).select('testResults');
+        if (!patientId) {
+            return res.status(400).json({ success: false, message: "Query parameter 'patientId' is required." });
+        }
+
+        const booking = await LabBooking.findById(orderId).lean();
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
+        // Extract draft specifically for this patient
+        const draft = booking.testResults ? booking.testResults[patientId] : null;
+
         res.json({ 
             success: true, 
-            data: booking.testResults || null // Returns null if no draft was saved before
+            data: draft || null 
         });
     } catch (error) {
+        console.error("getDraftResults Error:", error.message);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+ 
 
 
 

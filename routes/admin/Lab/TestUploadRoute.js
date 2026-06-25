@@ -6,6 +6,8 @@ const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackage
     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest, updateCategoryImage,updatePharmacyCategoryImage,
                     getLabCategories, getPharmacyCategories,
+                                        listReportTemplatesAdmin, getReportTemplateDetailsAdmin,
+
 
                     uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate
 
@@ -39,6 +41,8 @@ router.get('/pharmacy-categories', protect('admin'), checkRoleAccess(29), getPha
 
 
 // Report Templates
+router.get('/report-templates', protect('admin'), checkRoleAccess(29), listReportTemplatesAdmin); // List all report templates
+router.get('/report-templates/details/:id', protect('admin'), checkRoleAccess(29), getReportTemplateDetailsAdmin); // Fetch single template details
 router.post('/upload-templates', protect('admin'), uploadExcel.single('file'), checkRoleAccess(29), uploadTemplatesCSV); // CSV Bulk Upload [1]
 router.post('/create-template', protect('admin'), checkRoleAccess(29), createReportTemplate); // Manual Create [1]
 router.put('/edit-template/:id', protect('admin'), checkRoleAccess(29), editReportTemplate); // Manual Edit [1]

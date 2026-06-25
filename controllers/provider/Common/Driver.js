@@ -14,34 +14,72 @@ const generateToken = (id, role) => {
 const registerDriver = async (req, res) => {
     try {
         const vendorId = req.user.id; 
-        const vendorType = req.user.role; 
         const { name, phone, password, username, ...details } = req.body;
         const files = req.files;
 
-        // Phone aur Username dono ka duplicate check
-        const exists = await Driver.findOne({ $or: [{ username }, { phone }] });
-        if (exists) {
-            if (exists.username === username) return res.status(400).json({ message: "Username already taken" });
-            if (exists.phone === phone) return res.status(400).json({ message: "Phone number already registered" });
+        // 1. JWT Role value ko strict Schema Enum casing me normalize karna (Casing Fix)
+        const roleMapping = {
+            'lab': 'Lab', 'pharmacy': 'Pharmacy', 'nurse': 'Nurse', 'hospital': 'Hospital', 'ambulance': 'Ambulance',
+            'Lab': 'Lab', 'Pharmacy': 'Pharmacy', 'Nurse': 'Nurse', 'Hospital': 'Hospital', 'Ambulance': 'Ambulance'
+        };
+        const vendorType = roleMapping[req.user.role] || req.user.role;
+
+        // Validation: Required fields check
+        if (!name || !phone || !password || !username) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Name, Phone, Password, and Username are required fields" 
+            });
+        }
+
+        // 2. Dynamic query array setup to prevent undefined null match bugs (Mongoose Duplicate Query Fix)
+        const queryConditions = [];
+        if (username) queryConditions.push({ username });
+        if (phone) queryConditions.push({ phone });
+
+        if (queryConditions.length > 0) {
+            const exists = await Driver.findOne({ $or: queryConditions });
+            if (exists) {
+                if (username && exists.username === username) {
+                    return res.status(400).json({ success: false, message: "Username already taken" });
+                }
+                if (phone && exists.phone === phone) {
+                    return res.status(400).json({ success: false, message: "Phone number already registered" });
+                }
+            }
         }
 
         const hashedPassword = await bcrypt.hash(String(password), 10);
 
+        // Files reference safety check
+        const profilePicPath = files?.profilePic ? files.profilePic[0].path : null;
+        const certPath = files?.certificate ? files.certificate[0].path : null;
+        const licensePath = files?.license ? files.license[0].path : null;
+        const rcPath = files?.rcImage ? files.rcImage[0].path : null;
+
         const driver = await Driver.create({
-            vendorId, vendorType, name, phone,
+            vendorId, 
+            vendorType, 
+            name, 
+            phone,
             password: hashedPassword,
             username,
             ...details,
-            profilePic: files?.profilePic ? files.profilePic[0].path : null,
+            profilePic: profilePicPath,
             documents: {
-                certificate: files?.certificate ? files.certificate[0].path : null,
-                license: files?.license ? files.license[0].path : null,
-                rcImage: files?.rcImage ? files.rcImage[0].path : null
+                certificate: certPath,
+                license: licensePath,
+                rcImage: rcPath
             }
         });
 
+        // Hide password in response
+        driver.password = undefined;
+
         res.status(201).json({ success: true, message: "Driver added successfully", data: driver });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // // LOGIN DRIVER (Username ya Phone dono se login possible hai)

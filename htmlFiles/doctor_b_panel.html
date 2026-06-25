@@ -1,3 +1,4 @@
+<!-- Full updated provider-lims.html file with package test extractor enabled -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -79,13 +80,18 @@
                         <p id="activeOrderDisplay" class="text-xs text-slate-500 font-semibold mt-1">No booking selected. Select an order to resolve templates.</p>
                     </div>
                     
-                    <!-- 🚨 MANUAL TEMPLATE SELECT DROPDOWN (Always Visible & Self-Healing) [1] -->
+                    <!-- MANUAL TEMPLATE SELECT DROPDOWN -->
                     <div class="flex items-center gap-1.5 bg-slate-50 p-2 rounded-lg border border-slate-200" id="dropdownContainer">
                         <label class="text-[10px] font-bold text-slate-500">Manual Override:</label>
                         <select id="templateDropdown" onchange="loadCustomTemplate(this.value)" class="text-xs bg-white border border-slate-200 p-1.5 rounded font-bold focus:ring-1 focus:ring-kangarooTeal">
                             <option value="">-- Load Template --</option>
                         </select>
                     </div>
+                </div>
+
+                <!-- MULTI-PATIENT NAVIGATION TAB BAR -->
+                <div id="patientTabBar" class="hidden flex gap-2 mb-4 border-b border-slate-100 pb-2">
+                    <!-- Patient tabs will render here dynamically -->
                 </div>
 
                 <!-- Form Controls & Draft Helpers -->
@@ -143,7 +149,7 @@
     <!-- JS API Implementation Engine -->
     <script>
         let BASE_URL = "http://192.168.1.26:5002"; 
-        let JWT_TOKEN = ""; 
+        let JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YmE1MDQyYTdhZGNlNjhhOTBmMDFkZCIsInJvbGUiOiJMYWIiLCJpYXQiOjE3NzM4MTc5MjIsImV4cCI6NDkyNzQxNzkyMn0.bEsk85nbpclCoskvY7F4Fzdi1PvEvPfRPQLgcOTaBlQ"; 
         let activeOrderId = "";
         let activeBookingTests = [];
 
@@ -167,7 +173,6 @@
             
             alert("Configurations saved successfully! Reloading lists...");
             fetchIncomingOrders();
-            loadDropdownTemplates();
         };
 
         const getFetchHeaders = () => {
@@ -208,14 +213,32 @@
 
                 filterOrders.forEach(order => {
                     const patient = order.patients[0] || { name: "Patient" };
+                    
+                    // A. Standalone tests
                     const testNames = [
-                        ...order.items.tests.map(t => t.name),
-                        ...order.items.packages.map(p => p.name)
+                        ...order.items.tests.map(t => t.name)
                     ];
+
+                    // B. 🚨 NESTED TESTS IN PACKAGES: Extract dynamic testName values from deep populated array! [1]
+                    if (order.items.packages && order.items.packages.length > 0) {
+                        order.items.packages.forEach(p => {
+                            if (p.packageId && p.packageId.tests) {
+                                p.packageId.tests.forEach(nt => {
+                                    testNames.push(nt.testName); // 👈 Nested test name inside package
+                                });
+                            } else {
+                                testNames.push(p.name); // Fallback
+                            }
+                        });
+                    }
 
                     const card = document.createElement('div');
                     card.className = `p-4 border rounded-xl cursor-pointer transition-all hover:shadow-md ${activeOrderId === order._id ? 'border-kangarooTeal bg-teal-50/30 shadow-sm' : 'border-slate-100 bg-white'}`;
-                    card.onclick = () => selectOrder(order._id, testNames, patient.name, order.bookingId);
+                    
+                    const patientsJSON = encodeURIComponent(JSON.stringify(order.patients));
+                    const testsListJSON = encodeURIComponent(JSON.stringify(testNames)); // 👈 Carry full solved array to selectOrder
+                    
+                    card.onclick = () => selectOrder(order._id, testsListJSON, patient.name, order.bookingId, patientsJSON);
                     
                     card.innerHTML = `
                         <div class="flex justify-between items-start mb-2">
@@ -234,50 +257,69 @@
             }
         };
 
-        // 🚨 SELF-HEALING DROPDOWN LOADER (Reads keys dynamically from report-templates)
-        const loadDropdownTemplates = async () => {
-            const dropdown = document.getElementById('templateDropdown');
-            try {
-                const res = await fetch(`${BASE_URL}/provider/labs/report-templates`, {
-                    headers: getFetchHeaders()
-                });
-                const json = await res.json();
-                
-                if (json.success && json.data) {
-                    dropdown.innerHTML = `<option value="">-- Load Template --</option>`;
-                    const keys = Object.keys(json.data);
-                    keys.forEach(testName => {
-                        dropdown.innerHTML += `<option value="${testName}">${testName}</option>`;
-                    });
-                }
-            } catch (err) {
-                console.error("Dropdown templates load failed:", err);
-            }
+        // Select Booking and Auto-Resolve Templates
+        const selectOrder = async (id, testsJSON, patientName, bookingId, patientsJSON) => {
+            activeOrderId = id;
+            activeBookingTests = JSON.parse(decodeURIComponent(testsJSON)); // 👈 Deep solved tests list! [1]
+            
+            // MULTI-PATIENT PARSING
+            currentBookingPatientsList = JSON.parse(decodeURIComponent(patientsJSON));
+            const firstPatient = currentBookingPatientsList[0];
+            activePatientId = firstPatient.patientId || firstPatient._id || "Self";
+
+            document.getElementById('activeOrderDisplay').innerText = `Active Booking: ${bookingId}`;
+            
+            // Render Tabs
+            renderPatientTabs();
+
+            // Load data
+            await triggerHandshake(activeBookingTests);
         };
 
-        // Select Booking and Auto-Resolve Templates
-        const selectOrder = async (id, tests, patientName, bookingId) => {
-            activeOrderId = id;
-            activeBookingTests = tests;
-            
-            document.getElementById('activeOrderDisplay').innerText = `Active Patient: ${patientName} | Booking ID: ${bookingId}`;
-            
-            // Re-render highlights
-            fetchIncomingOrders();
+        // Render Patient Tabs dynamically [1]
+        const renderPatientTabs = () => {
+            const tabBar = document.getElementById('patientTabBar');
+            tabBar.innerHTML = "";
 
+            if (currentBookingPatientsList.length <= 1) {
+                tabBar.classList.add('hidden');
+                return;
+            }
+
+            tabBar.classList.remove('hidden');
+
+            currentBookingPatientsList.forEach(p => {
+                const pId = p.patientId || p._id || "Self";
+                const isSelected = String(activePatientId) === String(pId);
+                
+                const tab = document.createElement('button');
+                tab.className = `text-xs px-4 py-2 font-bold rounded-lg border transition ${isSelected ? 'bg-kangarooTeal text-white border-kangarooTeal shadow-sm' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`;
+                tab.innerText = `${p.patientName} (${p.relation})`;
+                tab.onclick = () => switchPatientTab(pId);
+                
+                tabBar.appendChild(tab);
+            });
+        };
+
+        const switchPatientTab = async (pId) => {
+            activePatientId = pId;
+            renderPatientTabs();
+            await triggerHandshake(activeBookingTests);
+        };
+
+        const triggerHandshake = async (tests) => {
             const form = document.getElementById('dynamicReportForm');
-            form.innerHTML = `<div class="text-center py-20 text-slate-500 text-sm">Auto-resolving templates for booked tests...</div>`;
+            form.innerHTML = `<div class="text-center py-20 text-slate-500 text-sm">Auto-resolving templates...</div>`;
 
             try {
                 // Calling auto-resolver endpoint [1]
-                const res = await fetch(`${BASE_URL}/provider/labs/report-templates/booking/${id}`, {
+                const res = await fetch(`${BASE_URL}/provider/labs/report-templates/booking/${activeOrderId}`, {
                     method: 'GET',
                     headers: getFetchHeaders()
                 });
                 const json = await res.json();
 
                 if (!json.success || Object.keys(json.data).length === 0) {
-                    // Show a helpful error block WITH inline dropdown trigger!
                     form.innerHTML = `
                         <div class="text-center py-16 text-warningRed text-sm">
                             <svg class="w-12 h-16 mx-auto mb-2 text-warningRed/80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
@@ -288,34 +330,14 @@
                 }
 
                 renderFormInputs(json.data);
+                await loadDraftResults(true); // silent load
 
             } catch (err) {
                 form.innerHTML = `<div class="text-center py-20 text-red-500 text-sm">Failed to connect server: ${err.message}</div>`;
             }
         };
 
-        // Manual Selection Load
-        const loadCustomTemplate = async (testName) => {
-            if (!testName) return;
-            
-            const form = document.getElementById('dynamicReportForm');
-            form.innerHTML = `<div class="text-center py-20 text-slate-500 text-sm">Loading custom template "${testName}"...</div>`;
-
-            try {
-                const res = await fetch(`${BASE_URL}/provider/labs/report-templates?testNames=${encodeURIComponent(testName)}`, {
-                    headers: getFetchHeaders()
-                });
-                const json = await res.json();
-                
-                if (json.success && json.data) {
-                    renderFormInputs(json.data);
-                }
-            } catch (err) {
-                form.innerHTML = `<div class="text-center py-20 text-red-500 text-sm">Failed: ${err.message}</div>`;
-            }
-        };
-
-        // Render Dynamic Form Inputs [1]
+        // Render Dynamic Form Inputs (Grouped by TestName with Dynamic Interpretations) [1]
         const renderFormInputs = (templatesMap) => {
             const form = document.getElementById('dynamicReportForm');
             form.innerHTML = "";
@@ -326,7 +348,9 @@
             Object.keys(templatesMap).forEach(testGroup => {
                 const groupData = templatesMap[testGroup];
                 const parameters = groupData.parameters || groupData; 
-                const interpretationVal = groupData.interpretation || "";
+                
+                // Dynamic read interpretation from parameters[0] for database consistency! [1]
+                const interpretationVal = parameters[0]?.interpretation || ""; 
 
                 const groupSection = document.createElement('div');
                 groupSection.className = "space-y-4 border-b border-slate-100 pb-6 last:border-b-0";
@@ -337,7 +361,7 @@
                         <span class="text-[10px] bg-kangarooTeal/10 text-kangarooTeal px-2 py-0.5 rounded font-bold">Template Loaded</span>
                     </div>
 
-                    <!-- CLINICAL INTERPRETATION EDITABLE TEXTAREA [1] -->
+                    <!-- CLINICAL INTERPRETATION EDITABLE TEXTAREA -->
                     <div class="flex flex-col gap-1.5 bg-slate-50 p-4 rounded-lg border border-slate-200/60">
                         <label class="text-xs font-bold text-slate-600 flex items-center gap-1.5">
                             <span>📝 Clinical Interpretation(s) / Section Notes</span>
@@ -384,7 +408,7 @@
         };
 
         // ==========================================
-        // 📄 API 4: SAVE DRAFT RESULTS
+        // 📄 API 4: SAVE DRAFT RESULTS (Partitioned by activePatientId) [1]
         // ==========================================
         const saveDraft = async () => {
             if (!activeOrderId) return alert("Please select an active booking first.");
@@ -396,12 +420,15 @@
                 const res = await fetch(`${BASE_URL}/provider/labs/save-draft/${activeOrderId}`, {
                     method: 'POST',
                     headers: getFetchHeaders(),
-                    body: JSON.stringify({ testValues: payload }) 
+                    body: JSON.stringify({ 
+                        testValues: payload,
+                        patientId: activePatientId // Mapped to target active patient [1]
+                    }) 
                 });
 
                 const json = await res.json();
                 if (json.success) {
-                    alert("💾 Draft progress and interpretations saved successfully!");
+                    alert("💾 Draft progress and interpretations saved successfully for this patient!");
                     fetchIncomingOrders(); 
                 } else {
                     alert("Failed to save draft: " + json.message);
@@ -414,45 +441,54 @@
         // ==========================================
         // 📄 API 5: LOAD SAVED DRAFT (Fetch Draft)
         // ==========================================
-        const loadDraftResults = async () => {
-            if (!activeOrderId) return alert("Please select an active booking first.");
+        const loadDraftResults = async (silent = false) => {
+            if (!activeOrderId) {
+                if (!silent) alert("Please select an active booking first.");
+                return;
+            }
 
             try {
-                const res = await fetch(`${BASE_URL}/provider/labs/get-draft/${activeOrderId}`, {
+                const res = await fetch(`${BASE_URL}/provider/labs/get-draft/${activeOrderId}?patientId=${activePatientId}`, {
                     method: 'GET',
                     headers: getFetchHeaders()
                 });
 
                 const json = await res.json();
                 if (!json.success || !json.data) {
-                    alert("No draft results found for this booking.");
+                    if (!silent) alert("No draft results found for this patient.");
                     return;
                 }
 
                 const draft = json.data;
-                draft.forEach(group => {
-                    const textarea = document.querySelector(`textarea[data-test-name="${group.testName}"]`);
-                    if (textarea && group.interpretation) {
-                        textarea.value = group.interpretation;
-                    }
+                const inputs = document.querySelectorAll('.param-input');
+                const textareas = document.querySelectorAll('.interpretation-input');
 
-                    group.parameters.forEach(param => {
-                        const selector = `input[data-test-name="${group.testName}"][data-param-name="${param.name}"]`;
-                        const input = document.querySelector(selector);
-                        if (input) {
-                            input.value = param.value;
+                draft.forEach(group => {
+                    textareas.forEach(textarea => {
+                        if (textarea.getAttribute('data-test-name') === group.testName && group.interpretation) {
+                            textarea.value = group.interpretation;
                         }
                     });
+
+                    group.parameters.forEach(param => {
+                        inputs.forEach(input => {
+                            if (input.getAttribute('data-test-name') === group.testName && 
+                                input.getAttribute('data-param-name') === param.name) {
+                                input.value = param.value;
+                            }
+                        });
+                    });
                 });
-                alert("📥 Draft results & clinical interpretations pre-populated successfully!");
+                
+                if (!silent) alert("📥 Draft results & clinical interpretations loaded successfully!");
 
             } catch (err) {
-                alert("Failed to load draft values: " + err.message);
+                if (!silent) alert("Failed to load draft values: " + err.message);
             }
         };
 
         // ==========================================
-        // 📄 API 6: GENERATE FINAL PDF SMART REPORT
+        // 📄 API 6: GENERATE FINAL PDF SMART REPORT (Patient Specific) [1, 2]
         // ==========================================
         const generateFinalReport = async () => {
             if (!activeOrderId) return alert("Please select an active booking first.");
@@ -460,14 +496,17 @@
             const payload = collectFormValues();
             if (payload.length === 0) return alert("Please fill parameters observed values first.");
 
-            const confirmPrint = confirm("Are you sure you want to finalize and compile the PDF Smart Report with interpretations [1, 2]?");
+            const confirmPrint = confirm("Are you sure you want to finalize and compile the PDF Smart Report for this patient?");
             if (!confirmPrint) return;
 
             try {
                 const res = await fetch(`${BASE_URL}/provider/labs/generate-report/${activeOrderId}`, {
                     method: 'POST',
                     headers: getFetchHeaders(),
-                    body: JSON.stringify({ testValues: payload })
+                    body: JSON.stringify({ 
+                        testValues: payload,
+                        patientId: activePatientId // Targeted to specific active patient [1]
+                    })
                 });
 
                 const json = await res.json();

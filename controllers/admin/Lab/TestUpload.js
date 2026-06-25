@@ -517,6 +517,58 @@ const deleteReportTemplate = async (req, res) => {
     }
 };
 
+// 7. GET: LIST ALL REPORT TEMPLATES (Admin Table View with Search & Pagination)
+// endpoint: GET /admin/lab/tests/report-templates
+const listReportTemplatesAdmin = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20; // Default 20 templates per page
+        const skip = (page - 1) * limit;
+        const { search } = req.query;
+
+        let filter = {};
+        if (search) {
+            filter.testName = { $regex: search, $options: 'i' }; // Search by test name
+        }
+
+        const total = await MasterReportTemplate.countDocuments(filter);
+        const templates = await MasterReportTemplate.find(filter)
+            .sort({ createdAt: -1 }) // Newest templates first
+            .skip(skip)
+            .limit(limit);
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: templates
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 8. GET: FETCH SINGLE TEMPLATE DETAILS (For Admin Edit/Details Form)
+// endpoint: GET /admin/lab/tests/report-templates/details/:id
+const getReportTemplateDetailsAdmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const template = await MasterReportTemplate.findById(id);
+        if (!template) {
+            return res.status(404).json({ success: false, message: "Report template not found." });
+        }
+
+        res.json({
+            success: true,
+            data: template
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -527,6 +579,7 @@ module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMa
                     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest, updateCategoryImage, updatePharmacyCategoryImage,
                     getLabCategories, getPharmacyCategories,
+                    listReportTemplatesAdmin, getReportTemplateDetailsAdmin,
 
                     uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate
  }; 
