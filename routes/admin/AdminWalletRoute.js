@@ -1,7 +1,7 @@
 // routes/admin/AdminWallet.js
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../middleware/authMiddleware'); // Admin Auth protection
+const { protect, checkRoleAccess } = require('../../middleware/authMiddleware'); // Admin Auth protection
 const { 
     getPendingWithdrawals, 
     approveWithdrawal, 
@@ -11,12 +11,12 @@ const {
 // Base URL: /api/admin/wallet
 
 // Superadmin or subadmin role validations
-router.get('/pending-withdrawals', protect('admin'), getPendingWithdrawals);
-router.patch('/approve-withdrawal/:requestId', protect('admin'), approveWithdrawal);
-router.patch('/reject-withdrawal/:requestId', protect('admin'), rejectWithdrawal);
-router.patch('/verify-bank/:vendorModel/:vendorId', protect('admin'), verifyVendorBankDetails);
-router.get('/pending-banks', protect('admin'), getPendingBankVerifications);
-router.get('/dashboard-stats', protect('admin'), getAdminWalletDashboardStats);
+router.get('/pending-withdrawals', protect('admin'), checkRoleAccess(55),getPendingWithdrawals);
+router.patch('/approve-withdrawal/:requestId', protect('admin'), checkRoleAccess(55), approveWithdrawal);
+router.patch('/reject-withdrawal/:requestId', protect('admin'),  checkRoleAccess(55),rejectWithdrawal);
+router.patch('/verify-bank/:vendorModel/:vendorId', protect('admin'),  checkRoleAccess(55),verifyVendorBankDetails);
+router.get('/pending-banks', protect('admin'),  checkRoleAccess(55),getPendingBankVerifications);
+router.get('/dashboard-stats', protect('admin'), checkRoleAccess(55), getAdminWalletDashboardStats);
 
 
 module.exports = router;

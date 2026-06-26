@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../../middleware/authMiddleware');
+const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 const { 
     addInsuranceType, 
     getInsuranceTypes, 
@@ -14,14 +14,14 @@ const {
 // Base URL: /admin/user/insurance
 
 // Master Types
-router.post('/add-type', protect('admin'), addInsuranceType);
+router.post('/add-type', protect('admin'), checkRoleAccess(21),addInsuranceType);
 router.get('/insurance-types', getInsuranceTypes);
 
 // Main Insurance APIs
-router.post('/add-insurance', protect('admin'), addInsurance);
+router.post('/add-insurance', protect('admin'),checkRoleAccess(21), addInsurance);
 router.get('/insurance-list', getInsuranceList);
-router.patch('/update-status/:id', protect('admin'), updateInsuranceStatus);
-router.put('/update/:id', protect('admin'), updateInsurance);
-router.delete('/delete/:id', protect('admin'), deleteInsurance);
+router.patch('/update-status/:id', protect('admin'),checkRoleAccess(21),  updateInsuranceStatus);
+router.put('/update/:id', protect('admin'), checkRoleAccess(21), updateInsurance);
+router.delete('/delete/:id', protect('admin'), checkRoleAccess(21), deleteInsurance);
 
 module.exports = router; 

@@ -774,6 +774,22 @@ const pharmacyDeliveryUpload = multer({
     { name: 'deliveryPic', maxCount: 1 }        // Screen 14: Delivered order proof photo
 ]);
 
+// ==========================================
+// 41. NURSING PRESCRIPTION REQUEST UPLOADS
+// ==========================================
+const nursingPrescriptionDir = 'public/uploads/nursing_prescriptions';
+ensureDir(nursingPrescriptionDir);
+
+const nursingPrescriptionUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, nursingPrescriptionDir),
+        filename: (req, file, cb) => cb(null, `nursing-rx-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter, // Reuses common images and PDF filter
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
+
+
 module.exports = { 
     hospitalUploads,
     contentUploads,
@@ -817,6 +833,8 @@ module.exports = {
     dietPlanUploads,
     comboOfferUploads,
     nurseProgressUpload,
-    pharmacyDeliveryUpload
+    pharmacyDeliveryUpload,
+
+    nursingPrescriptionUploads
 
 };  

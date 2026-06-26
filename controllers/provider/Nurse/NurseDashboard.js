@@ -167,6 +167,30 @@ const getBookingRequests = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+// const getBookingRequests = async (req, res) => {
+//     try {
+//         const { status, isPriority } = req.query;
+        
+//         // Segregation Query: Only fetch standard bookings, exclude prescription ones
+//         let query = { 
+//             nurseId: req.user.id,
+//             bookingType: { $ne: 'Prescription' } // 👈 Filter out prescription orders
+//         };
+        
+//         if (status) query.status = status;
+
+//         if (isPriority === 'true') {
+//             query['priceBreakdown.fasterServiceCharge'] = { $gt: 0 };
+//         } else if (isPriority === 'false') {
+//             query['priceBreakdown.fasterServiceCharge'] = { $eq: 0 };
+//         }
+
+//         const bookings = await NurseBooking.find(query).sort({ createdAt: -1 });
+//         res.json({ success: true, count: bookings.length, data: bookings });
+//     } catch (error) { 
+//         res.status(500).json({ message: error.message }); 
+//     }
+// };
 
 const handleBookingAction = async (req, res) => {
     try {

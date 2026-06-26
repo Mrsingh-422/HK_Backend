@@ -11,7 +11,7 @@ router.post('/login', loginAdmin); // Maine isko 'login' kar diya hai taaki '/ap
 
 // Protected Routes
 router.put('/update', protect('admin'), updateAdminProfile);
-router.post('/create-subadmin', protect('admin'), createSubAdmin);
+router.post('/subadmins', protect('admin'), createSubAdmin);
 router.get('/manage-admins', protect('admin'), getAdminsList);
  router.put('/subadmins/:id', protect('admin'), editSubadmin);
 

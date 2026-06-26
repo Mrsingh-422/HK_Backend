@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../../../middleware/authMiddleware');
+const { protect, checkRoleAccess } = require('../../../../middleware/authMiddleware');
 const { updateFooter, getFooter } = require('../../../../controllers/admin/user/Home/FooterController');
 
 // Base URL: /api/footer
@@ -9,6 +9,6 @@ const { updateFooter, getFooter } = require('../../../../controllers/admin/user/
 router.get('/', getFooter);
 
 // Admin Route (For saving settings)
-router.post('/', protect('admin'), updateFooter);
+router.post('/', protect('admin'),checkRoleAccess(1), updateFooter);
 
 module.exports = router; 

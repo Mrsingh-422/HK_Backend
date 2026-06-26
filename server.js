@@ -22,6 +22,11 @@ const connectDB = require('./config/db');
 
 // Connect DB
 connectDB();
+
+// --- Initialize Background Workers ---
+const initCronJobs = require('./utils/cronJobs'); // 👈 Add this require
+initCronJobs(); // 👈 Start the background scheduler on server startup
+
 const app = express();
 
 
@@ -195,6 +200,7 @@ app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
 app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
 // --- user nurse ---
 app.use('/user/nurse', require('./routes/user/Nurse/BookNurseRoute'));
+app.use('/user/nurse/prescription', require('./routes/user/Nurse/NursingPrescriptionRoutes')); // 👈 Add this line here
 // --- user pharmacy ---
 app.use('/user/pharmacy', require('./routes/user/Pharmacy/BookPharmacyRoute'));
 app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserRoute'));
@@ -255,6 +261,7 @@ app.use('/provider/nurse/dash', require('./routes/provider/Nurse/NurseDashboardR
 app.use('/provider/nurse/service', require('./routes/provider/Nurse/NurseServiceRoute'));
 app.use('/provider/nurse/management', require('./routes/provider/Nurse/NurseStaffManagementRoute'));
 app.use('/provider/nurse/package', require('./routes/provider/Nurse/NursePackageRoute'));
+app.use('/provider/nurse/prescription', require('./routes/provider/Nurse/NursePrescriptionRoute'));
 
 ////////////////////// Driver Routes /////////////////////
 app.use('/driver/pharmacy', require('./routes/driver/driverPharmacy/OrdersRoute'));  

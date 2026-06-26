@@ -7,6 +7,11 @@ const nurseBookingSchema = new mongoose.Schema({
     packageId: { type: mongoose.Schema.Types.ObjectId, ref: 'NursePackage' },
     assignedStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }, 
     bookingId: { type: String, unique: true },
+    bookingType: { 
+    type: String, 
+    enum: ['Regular', 'Prescription'], 
+    default: 'Regular' 
+},
      // Snapshot of service at time of booking
    serviceDetails: {
         title: { type: String },
@@ -150,7 +155,14 @@ paymentDetails: {
             type: String
         },
         paidAt: { type: Date, default: null }
-    }
+    },
+   prescriptionRequestId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'NursingPrescriptionRequest',
+    default: null 
+},
+
+
 
 
 }, { timestamps: true });

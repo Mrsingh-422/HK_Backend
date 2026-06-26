@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../../../middleware/authMiddleware');
+const { protect, checkRoleAccess } = require('../../../../middleware/authMiddleware');
 const { contentUploads } = require('../../../../middleware/multer');
 
 const { 
@@ -21,13 +21,13 @@ const {
 // 1. ABOUT US
 // ===========================
 router.get('/about-us', getAboutUs);
-router.post('/about-us', protect('admin'), contentUploads, updateAboutUs);
+router.post('/about-us', protect('admin'), checkRoleAccess(1),contentUploads, updateAboutUs);
 
 // ===========================
 // 2. AMBULANCE
 // ===========================
 router.get('/ambulance', getAmbulance);
-router.post('/ambulance', protect('admin'), contentUploads, updateAmbulance);
+router.post('/ambulance', protect('admin'), checkRoleAccess(1), contentUploads, updateAmbulance);
 
 // ===========================
 // 3. HOMEPAGE (MAIN/HERO) - (For your First Form)
@@ -35,6 +35,7 @@ router.post('/ambulance', protect('admin'), contentUploads, updateAmbulance);
 router.get('/main', getHomepageSection);
 router.post('/main', 
     protect('admin'), 
+    checkRoleAccess(1),
     contentUploads, // Handles 'images' array
     updateHomepageSection
 );
@@ -45,33 +46,34 @@ router.post('/main',
 router.get('/introduction', getIntroductionSection);
 router.post('/introduction', 
     protect('admin'), 
+    checkRoleAccess(1),
     contentUploads, 
     updateIntroductionSection
 );
 
 // 5. Get Health App
-router.post('/get-app', protect('admin'), contentUploads, updateAppSection);
+router.post('/get-app', protect('admin'), checkRoleAccess(1), contentUploads, updateAppSection);
 router.get('/get-app', getAppSection);
 
 // 6. Hospitals
-router.post('/hospitals', protect('admin'), contentUploads, updateHospitalSection);
+router.post('/hospitals', protect('admin'), checkRoleAccess(1), contentUploads, updateHospitalSection);
 router.get('/hospitals', getHospitalSection);
 
 // 7. Nursing
-router.post('/nursing', protect('admin'), contentUploads, updateNursingSection);
+router.post('/nursing', protect('admin'), checkRoleAccess(1), contentUploads, updateNursingSection);
 router.get('/nursing', getNursingSection);
 
 
 
 // 11. FEATURED PRODUCTS (Medicine)
 // ==================================================
-router.post('/featured-products', protect('admin'), contentUploads, updateFeaturedProducts);
+router.post('/featured-products', protect('admin'), checkRoleAccess(1), contentUploads, updateFeaturedProducts);
 router.get('/featured-products', getFeaturedProducts);
 
 // ==================================================
 // 12. LABORATORY
 // ==================================================
-router.post('/laboratory', protect('admin'), contentUploads, updateLaboratory);
+router.post('/laboratory', protect('admin'), checkRoleAccess(1), contentUploads, updateLaboratory);
 router.get('/laboratory', getLaboratory);
 
 module.exports = router;

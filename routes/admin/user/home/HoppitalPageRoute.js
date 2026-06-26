@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../../../middleware/authMiddleware');
+const { protect, checkRoleAccess } = require('../../../../middleware/authMiddleware');
 const { contentUploads } = require('../../../../middleware/multer'); // Use same Multer
 
 const {
@@ -15,18 +15,18 @@ const {
 // 1. HOSPITAL MAIN HERO
 // ===========================
 router.get('/hero', getHospitalHero);
-router.post('/hero', protect('admin'), contentUploads, updateHospitalHero);
+router.post('/hero', protect('admin'),checkRoleAccess(1), contentUploads, updateHospitalHero);
 
 // ===========================
 // 2. HOSPITAL FACILITY
 // ===========================
 router.get('/facility', getHospitalFacility);
-router.post('/facility', protect('admin'), contentUploads, updateHospitalFacility);
+router.post('/facility', protect('admin'), checkRoleAccess(1), contentUploads, updateHospitalFacility);
 
 // ===========================
 // 3. MAIN HOW IT WORKS
 // ===========================
 router.get('/how-it-works', getMainHowItWorks);
-router.post('/how-it-works', protect('admin'), contentUploads, updateMainHowItWorks);
+router.post('/how-it-works', protect('admin'), checkRoleAccess(1), contentUploads, updateMainHowItWorks);
 
 module.exports = router;

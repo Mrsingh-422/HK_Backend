@@ -9,6 +9,6 @@ const {
 // Base URL: /admin/nurse
 
 router.get('/approved-list', protect('admin'), checkRoleAccess(5), adminGetApprovedNurses);
-router.get('/bookings', protect('admin'), checkRoleAccess(5), adminGetNurseBookings);
+router.get('/bookings', protect('admin'), checkRoleAccess(36), adminGetNurseBookings);
 
 module.exports = router;
