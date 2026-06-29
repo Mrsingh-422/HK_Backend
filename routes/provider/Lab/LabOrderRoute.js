@@ -15,7 +15,12 @@ const {
     generateAndUploadSmartReport,getReportTemplates,getReportTemplatesDropdown, // 👈 Added
     getReportTemplatesForBooking, // 👈 Added
     saveDraftResults, // 👈 Added
-    getDraftResults // 👈 Added
+    getDraftResults, // 👈 Added
+    getProviderLabPrescriptionRequests,
+    getProviderLabPrescriptionRequestDetails,
+    startLabPrescriptionReview,
+    submitLabReviewBill,
+    rejectLabPrescriptionRequest
 } = require('../../../controllers/provider/Lab/LabsOrder');
 
 // Base URL: /provider/labs
@@ -47,6 +52,37 @@ router.post('/save-draft/:orderId', protect('provider'), saveDraftResults); // S
 router.get('/get-draft/:orderId', protect('provider'), getDraftResults); // Get Draft API
 
 router.post('/generate-report/:orderId', protect('provider'), generateAndUploadSmartReport);
+
+// AI prescriptioin Flow
+router.get(
+    '/prescription-request/list', 
+    protect('provider'), 
+    getProviderLabPrescriptionRequests
+);
+
+router.get(
+    '/prescription-request/details/:requestId', 
+    protect('provider'), 
+    getProviderLabPrescriptionRequestDetails
+);
+
+router.post(
+    '/prescription-request/start-review/:requestId', 
+    protect('provider'), 
+    startLabPrescriptionReview
+);
+
+router.post(
+    '/prescription-request/review/:requestId', 
+    protect('provider'), 
+    submitLabReviewBill
+);
+
+router.post(
+    '/prescription-request/reject/:requestId', 
+    protect('provider'), 
+    rejectLabPrescriptionRequest
+);
 
 
 

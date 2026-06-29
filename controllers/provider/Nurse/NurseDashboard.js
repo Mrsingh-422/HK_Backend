@@ -177,23 +177,20 @@ const deleteService = async (req, res) => {
 // ==========================================
 const getBookingRequests = async (req, res) => {
     try {
-        const { status, isPriority } = req.query; // e.g. status=Assigned
-        
-        let query = { 
-            nurseId: req.user.id,
-            bookingType: { $ne: 'Prescription' } // Excludes prescription bookings for clean panel view
-        };
+        const { status, isPriority } = req.query; // e.g. status=Pending
+        let query = { nurseId: req.user.id };
         
         if (status) query.status = status;
 
-        // Priority / Faster Service filter logic
+        // 🚀 Priority / Faster Service filter logic
         if (isPriority === 'true') {
             query['priceBreakdown.fasterServiceCharge'] = { $gt: 0 };
         } else if (isPriority === 'false') {
+            // Normal bookings where express delivery is either 0 or not applied
             query['priceBreakdown.fasterServiceCharge'] = { $eq: 0 };
         }
 
-        // Populating the complete driver/staff object inside the booking list
+        // Standard logic unchanged, only added populate chain for driver/staff details
         const bookings = await NurseBooking.find(query)
             .populate('assignedStaffId', 'name phone profilePic status location') // 👈 Populated driver details
             .sort({ createdAt: -1 });

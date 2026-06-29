@@ -41,7 +41,7 @@ const nurseSchema = new mongoose.Schema({
     // Nurse Specific
     experienceYears: { type: Number, default: 0 },
     speciality: { type: String, default: null }, // e.g., ICU, Pediatric
-    gender: { type: String, enum: ['Male', 'Female', 'Other'] },
+    gender: { type: String, enum: ['Male', 'Female', 'Other', ''] },
     about: { type: String, default: "" },
      rating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },

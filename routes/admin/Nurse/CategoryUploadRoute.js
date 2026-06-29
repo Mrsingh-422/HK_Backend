@@ -18,8 +18,8 @@ router.post('/upload-services', protect('admin'), checkRoleAccess(36),careCSVUpl
 router.post('/upload-consumables', protect('admin'), checkRoleAccess(36), careCSVUpload, uploadMasterConsumables);
 
 // --- USER/NURSE LINKED ROUTES ---
-router.get('/categories', protect('admin'), checkRoleAccess(36), getCareCategories);
-router.get('/sub-categories', protect('admin'), checkRoleAccess(36), getCareSubCategories);
-router.get('/details', protect('admin'), checkRoleAccess(36), getCareDetails);
+router.get('/categories', getCareCategories);
+router.get('/sub-categories', getCareSubCategories);
+router.get('/details', getCareDetails);
 
 module.exports = router;

@@ -3,6 +3,7 @@
 const LabBooking = require('../../../models/LabBooking');
 const Wallet = require('../../../models/Wallet');
 const MasterReportTemplate = require('../../../models/MasterReportTemplate'); // 👈 Imported Template Model
+const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); // Import model
 const moment = require('moment');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
@@ -742,6 +743,180 @@ const getDraftResults = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+
+/////////////////////////////////////////////////////////////////
+////////////////////// AI SCAN PRESCRIPTION ////////////////////
+////////////////////////////////////////////////////////////////
+
+// 1. GET PENDING REQUESTS FOR LAB (Dashboard View)
+const getProviderLabPrescriptionRequests = async (req, res) => {
+    try {
+        const labId = req.user.id;
+        const { status } = req.query;
+
+        let query = { labId };
+        if (status) query.status = status;
+
+        const requests = await LabPrescriptionRequest.find(query)
+            .populate('userId', 'name phone email')
+            .sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            count: requests.length,
+            data: requests
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. GET SINGLE REQUEST DETAILS (For Review)
+const getProviderLabPrescriptionRequestDetails = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const labId = req.user.id;
+
+        const request = await LabPrescriptionRequest.findOne({ _id: requestId, labId })
+            .populate('userId', 'name phone email gender age');
+
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request details not found" });
+        }
+
+        res.json({
+            success: true,
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3. START PRESCRIPTION REVIEW (Locks status to 'Reviewing')
+const startLabPrescriptionReview = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const labId = req.user.id;
+
+        const request = await LabPrescriptionRequest.findOne({ _id: requestId, labId });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request not found" });
+        }
+
+        if (request.status === 'Pending Review') {
+            request.status = 'Reviewing';
+            await request.save();
+        }
+
+        res.json({
+            success: true,
+            message: "Prescription review started successfully",
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 4. SUBMIT LAB REVIEW & BILL (Generate Bill for suggested tests/packages)
+const submitLabReviewBill = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { tests, packages, homeVisitCharge } = req.body; // Array of verified test/package ids with custom pricing
+        const labId = req.user.id;
+
+        const request = await LabPrescriptionRequest.findOne({ _id: requestId, labId });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request details not found" });
+        }
+
+        let itemTotal = 0;
+        const verifiedTests = [];
+        const verifiedPackages = [];
+
+        // Map tests
+        if (tests && tests.length > 0) {
+            for (let t of tests) {
+                const subtotal = Number(t.pricePerUnit || 0);
+                itemTotal += subtotal;
+                verifiedTests.push({
+                    testId: t.testId,
+                    name: t.name,
+                    mrp: Number(t.mrp || 0),
+                    pricePerUnit: subtotal
+                });
+            }
+        }
+
+        // Map packages
+        if (packages && packages.length > 0) {
+            for (let p of packages) {
+                const subtotal = Number(p.pricePerUnit || 0);
+                itemTotal += subtotal;
+                verifiedPackages.push({
+                    packageId: p.packageId,
+                    name: p.name,
+                    mrp: Number(p.mrp || 0),
+                    pricePerUnit: subtotal
+                });
+            }
+        }
+
+        // Patients multiplication logic
+        const patientCount = request.patients.length || 1;
+        const subtotalSum = itemTotal * patientCount;
+        const totalAmount = subtotalSum + Number(homeVisitCharge || 0);
+
+        request.verifiedBill = {
+            tests: verifiedTests,
+            packages: verifiedPackages,
+            itemTotal: subtotalSum,
+            homeVisitCharge: Number(homeVisitCharge || 0),
+            totalAmount: Math.round(totalAmount)
+        };
+        request.status = 'Bill Generated';
+        await request.save();
+
+        res.json({
+            success: true,
+            message: "Suggested bill generated successfully!",
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 5. REJECT LAB PRESCRIPTION REQUEST
+const rejectLabPrescriptionRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { reason } = req.body;
+        const labId = req.user.id;
+
+        const request = await LabPrescriptionRequest.findOne({ _id: requestId, labId });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request not found" });
+        }
+
+        request.status = 'Rejected';
+        request.rejectReason = reason || "Invalid Prescription criteria";
+        await request.save();
+
+        res.json({
+            success: true,
+            message: "Request rejected successfully",
+            rejectReason: request.rejectReason,
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
  
 
 
@@ -760,5 +935,13 @@ module.exports = {
     getReportTemplatesDropdown, // 👈 Added
     getReportTemplatesForBooking, // 👈 Added
     saveDraftResults, // 👈 Added
-    getDraftResults // 👈 Added
+    getDraftResults, // 👈 Added
+
+
+    // Prescription Flow endpoints
+    getProviderLabPrescriptionRequests,
+    getProviderLabPrescriptionRequestDetails,
+    startLabPrescriptionReview,
+    submitLabReviewBill,
+    rejectLabPrescriptionRequest
 };

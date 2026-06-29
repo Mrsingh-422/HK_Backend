@@ -24,6 +24,8 @@ const states = require('../../../data/states.json');
 const cities = require('../../../data/cities.json');
 const Fuse = require('fuse.js');
 const LabCategory = require('../../../models/LabCategory');
+const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); // Import new model
+
 
 // for rating and reviews
 const Doctor = require('../../../models/Doctor'); 
@@ -2136,6 +2138,234 @@ const getWomenTestsByCategory = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+
+
+
+
+// ----------------------------------------------------------------
+// -------------- AI Scan Prescription -----------------------------
+// -----------------------------------------------------------------
+
+// 1. CREATE LAB PRESCRIPTION REQUEST (User uploads prescription file)
+const createLabPrescriptionRequest = async (req, res) => {
+    try {
+        const { labId, patients, collectionType, address } = req.body;
+        const userId = req.user.id;
+
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: "Please upload prescription image." });
+        }
+
+        const parsedPatients = typeof patients === 'string' ? JSON.parse(patients) : patients;
+
+        // Map Patient details safely
+        const verifiedPatients = await mapPatients(userId, parsedPatients || ['Self']);
+
+        const newRequest = await LabPrescriptionRequest.create({
+            requestId: `REQ-LAB-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            userId,
+            labId,
+            prescriptionImage: req.file.path,
+            patients: verifiedPatients,
+            collectionType,
+            address: typeof address === 'string' ? JSON.parse(address) : address,
+            status: 'Pending Review'
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Prescription request placed successfully!",
+            data: newRequest
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. GET USER'S LAB PRESCRIPTION REQUESTS (List View)
+const getUserLabPrescriptionRequests = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        const requests = await LabPrescriptionRequest.find({ userId })
+            .populate('labId', 'name profileImage city state address rating')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await LabPrescriptionRequest.countDocuments({ userId });
+
+        res.json({
+            success: true,
+            count: requests.length,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: requests
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3. GET SINGLE REQUEST DETAILS (Figma Tracking & Bill view)
+const getUserLabPrescriptionRequestDetails = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const userId = req.user.id;
+
+        // Safe hybrid query fallback (Check if custom code or ObjectId)
+        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
+        const query = { userId };
+        if (isObjectId) query._id = requestId;
+        else query.requestId = requestId;
+
+        const request = await LabPrescriptionRequest.findOne(query)
+            .populate('labId', 'name phone profileImage city state address rating totalReviews location');
+
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request details not found" });
+        }
+
+        res.json({
+            success: true,
+            data: request
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 4. PAY AND CONFIRM LAB REQUEST (For COD & Razorpay setup)
+const payAndConfirmLabRequest = async (req, res) => {
+    try {
+        const { requestId, paymentMethod } = req.body;
+        const userId = req.user.id;
+
+        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
+        const query = { userId };
+        if (isObjectId) query._id = requestId;
+        else query.requestId = requestId;
+
+        const request = await LabPrescriptionRequest.findOne(query);
+        if (!request) {
+            return res.status(400).json({ success: false, message: "Prescription request not found." });
+        }
+
+        if (request.status !== 'Bill Generated') {
+            return res.status(400).json({ success: false, message: `Request status is currently '${request.status}'.` });
+        }
+
+        const bill = request.verifiedBill;
+        const tempBookingId = `ORD-RX-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+        // RAZORPAY INTEGRATION
+        if (paymentMethod !== 'COD') {
+            const rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
+            request.status = 'Pending Payment';
+            await request.save();
+
+            return res.json({
+                success: true,
+                message: "Prescription checkout verified. Complete payment.",
+                key_id: process.env.RAZORPAY_KEY_ID,
+                amount: rzpOrder.amount,
+                razorpayOrderId: rzpOrder.id,
+                appointmentId: request._id
+            });
+        }
+
+        // COD Flow
+        const finalBooking = await LabBooking.create({
+            bookingId: tempBookingId,
+            userId,
+            labId: request.labId,
+            patients: request.patients,
+            items: {
+                tests: request.verifiedBill.tests.map(t => ({ testId: t.testId, price: t.pricePerUnit, name: t.name })),
+                packages: request.verifiedBill.packages.map(p => ({ packageId: p.packageId, price: p.pricePerUnit, name: p.name }))
+            },
+            collectionType: request.collectionType,
+            address: request.address,
+            appointmentDate: new Date(),
+            appointmentTime: 'Immediate',
+            billSummary: bill,
+            paymentMethod: 'COD',
+            paymentStatus: 'Pending',
+            status: 'Confirmed',
+            bookingType: 'Prescription-Based'
+        });
+
+        request.status = 'Paid';
+        await request.save();
+
+        res.status(201).json({
+            success: true,
+            message: "Prescription order confirmed with COD successfully!",
+            data: finalBooking
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 5. VERIFY LAB PRESCRIPTION PAYMENT SIGNATURE
+const verifyLabPrescriptionPayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+        if (!isVerified) {
+            return res.status(400).json({ success: false, message: "Signature verification failed." });
+        }
+
+        const request = await LabPrescriptionRequest.findById(appointmentId);
+        if (!request) return res.status(404).json({ success: false, message: "Prescription request not found." });
+
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+
+        const finalBooking = await LabBooking.create({
+            bookingId: `ORD-RX-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            userId: req.user.id,
+            labId: request.labId,
+            patients: request.patients,
+            items: {
+                tests: request.verifiedBill.tests.map(t => ({ testId: t.testId, price: t.pricePerUnit, name: t.name })),
+                packages: request.verifiedBill.packages.map(p => ({ packageId: p.packageId, price: p.pricePerUnit, name: p.name }))
+            },
+            collectionType: request.collectionType,
+            address: request.address,
+            appointmentDate: new Date(),
+            appointmentTime: 'Immediate',
+            billSummary: request.verifiedBill,
+            paymentMethod: 'Online',
+            paymentStatus: 'Paid',
+            status: 'Confirmed',
+            bookingType: 'Prescription-Based',
+            paymentDetails: rzpDetails
+        });
+
+        request.status = 'Paid';
+        await request.save();
+
+        res.status(201).json({
+            success: true,
+            message: "Prescription payment verified and order placed successfully!",
+            data: finalBooking
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
+
+
 module.exports = { 
         getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
@@ -2147,5 +2377,12 @@ module.exports = {
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
     cancelBooking, confirmPrescriptionBooking,verifyLabPayment, rateLabOrder ,getPaginatedReviews,updateReviewByOrderId, updateReviewByVendorId,getReviewByOrderId,
-    getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,getWomenCategories,getWomenTestsByCategory
+    getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,getWomenCategories,getWomenTestsByCategory,
+    
+    // Prescription Flow
+    createLabPrescriptionRequest,
+    getUserLabPrescriptionRequests,
+    getUserLabPrescriptionRequestDetails,
+    payAndConfirmLabRequest,
+    verifyLabPrescriptionPayment
 };

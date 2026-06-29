@@ -17,7 +17,12 @@ const {
     cancelBooking,
     getAvailableCoupons ,validateLabCoupon,
     getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,
-    getWomenCategories,getWomenTestsByCategory
+    getWomenCategories,getWomenTestsByCategory,
+    createLabPrescriptionRequest,
+    getUserLabPrescriptionRequests,
+    getUserLabPrescriptionRequestDetails,
+    payAndConfirmLabRequest,
+    verifyLabPrescriptionPayment
     
 } = require('../../../controllers/user/Lab/BookLab');
 
@@ -95,6 +100,38 @@ router.get('/review/by-order/:orderId', protect('user'), getReviewByOrderId); //
 router.get('/women-special-tests', protect('user'), getWomenSpecialTests); //
 router.get('/test/women/categories', protect('user'), getWomenCategories); //
 router.get('/test/women/tests-by-category', protect('user'), getWomenTestsByCategory); //
+
+// AI prescriptioin Flow
+router.post(
+    '/prescription-request', 
+    protect('user'), 
+    prescriptionUploads.single('prescriptionImage'), // single upload key
+    createLabPrescriptionRequest
+);
+
+router.get(
+    '/prescription-request/list', 
+    protect('user'), 
+    getUserLabPrescriptionRequests
+);
+
+router.get(
+    '/prescription-request/details/:requestId', 
+    protect('user'), 
+    getUserLabPrescriptionRequestDetails
+);
+
+router.post(
+    '/prescription-request/pay-confirm', 
+    protect('user'), 
+    payAndConfirmLabRequest
+);
+
+router.post(
+    '/prescription-request/verify-payment', 
+    protect('user'), 
+    verifyLabPrescriptionPayment
+);
 
 
 module.exports = router;

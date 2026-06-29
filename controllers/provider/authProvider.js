@@ -104,6 +104,12 @@ const loginProvider = async (req, res) => {
 
         if (provider.profileStatus === 'Incomplete') {
             const token = provider.token || generateToken(provider._id, category);
+            
+            // Safe Token Save: Avoids whole-document validation conflicts during incomplete profile login
+            if (!provider.token) {
+                await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
+            }
+
             return res.status(200).json({ 
                 success: true, 
                 fullAccess: false, 
@@ -115,6 +121,12 @@ const loginProvider = async (req, res) => {
 
         if (provider.profileStatus === 'Rejected') {
             const token = provider.token || generateToken(provider._id, category);
+            
+            // Safe Token Save: Avoids whole-document validation conflicts during rejected state login
+            if (!provider.token) {
+                await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
+            }
+
             return res.status(200).json({ 
                 success: true, 
                 fullAccess: false, 
@@ -125,6 +137,9 @@ const loginProvider = async (req, res) => {
             });
         }
 
+        // ------------------------------------------------------------
+        // APPROVED STATUS FLOW
+        // ------------------------------------------------------------
         let token = null;
         if (process.env.NODE_ENV === 'development' && provider.token) {
             try {
@@ -135,8 +150,8 @@ const loginProvider = async (req, res) => {
 
         if (!token) {
             token = generateToken(provider._id, category);
-            provider.token = token;
-            await provider.save();
+            // Strictly updates only the token variable, ensuring other non-verified fields do not crash the call
+            await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
         }
 
         provider.password = undefined;
