@@ -1,6 +1,8 @@
 const Booking = require('../../models/AmbulanceBooking');
 const Ambulance = require('../../models/Ambulance');
 const Appointment = require('../../models/Appointment'); // 👈 FIX 1: Added missing Appointment model import
+const DriverNotification = require('../../models/DriverNotification'); // Naya Model Imported
+const bcrypt = require('bcryptjs'); // Password change hashing ke liye
 const crypto = require('crypto'); // 👈 FIX 2: Added missing crypto module import
 const mongoose = require('mongoose');
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../utils/notification'); // 👈 FIX 3: Added missing notification helper import
@@ -136,28 +138,44 @@ const acceptBooking = async (req, res) => {
 // --- 3. REJECT REQUEST (Driver Rejection) ---
 const rejectBooking = async (req, res) => {
     try {
-        const { id } = req.params; // 👈 FIXED: ObjectId read from params (not custom bookingId string)
+        const { id } = req.params; // Booking Mongo ObjectId
+        const { reason, comments } = req.body; 
         const driverId = req.user.id;
 
-        const booking = await Booking.findOne({ _id: id }); // 👈 FIXED: Query strictly by MongoDB ObjectId _id
+        // Figma Screen 11/Reject Modal Strict Validation
+        const figmaRejectionReasons = [
+            'Busy on another case',
+            'Pickup location too far',
+            'Vehicle issue',
+            'Not available right now'
+        ];
+
+        if (!figmaRejectionReasons.includes(reason)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please select a valid rejection reason from the list." 
+            });
+        }
+
+        const booking = await Booking.findById(id); 
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        // Update status to Cancelled and mark driver rejection logs
         booking.status = 'Cancelled';
         booking.cancelledBy = 'Driver';
-        booking.cancellationReason = "Driver rejected request";
+        booking.cancellationReason = `${reason}. Comments: ${comments || 'None'}`;
+        
         booking.trackingTimeline.push({ 
             status: 'Cancelled', 
             timestamp: new Date(), 
-            note: `Request rejected by driver. User notified.` 
+            note: `Request rejected by driver. Reason: ${reason}` 
         });
 
         await booking.save();
 
-        // Ensure driver's availability remains free
+        // Release Driver back to Available status
         await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: true } });
 
-        // 🚨 Notify User immediately via FCM
+        // Notify User immediately
         await sendPushNotification(
             booking.userId, 
             'user', 
@@ -553,8 +571,71 @@ const triggerAmbulanceSos = async (req, res) => {
 
 
 
+// --- 2. CHANGE PASSWORD (NEW: Profile Modal Screen) ---
+const changeDriverPassword = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+        const { oldPassword, newPassword } = req.body;
+
+        const driver = await Ambulance.findById(driverId).select('+password');
+        if (!driver) return res.status(404).json({ success: false, message: "Driver not found" });
+
+        // Verify Old Password
+        const isMatch = await bcrypt.compare(oldPassword, driver.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Old password does not match." });
+        }
+
+        // Hash and Save New Password
+        driver.password = await bcrypt.hash(newPassword, 10);
+        await driver.save();
+
+        res.json({ success: true, message: "Password updated successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 3. GET DYNAMIC NOTIFICATIONS (NEW: Figma Screen 4/5 Notifications List) ---
+const getDriverNotifications = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = 15;
+
+        const notifications = await DriverNotification.find({ driverId })
+            .sort({ createdAt: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit);
+
+        const total = await DriverNotification.countDocuments({ driverId });
+
+        res.json({
+            success: true,
+            total,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: notifications
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 4. MARK ALL NOTIFICATIONS AS READ (Figma Checkmark icon) ---
+const markAllNotificationsAsRead = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+        await DriverNotification.updateMany({ driverId, isRead: false }, { $set: { isRead: true } });
+        res.json({ success: true, message: "All notifications marked as read." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = {getMyActiveTrip, getIncomingRequests, acceptBooking, updateTripStatus, uploadIncidentPhoto,
     finalizeTripHandoff,verifyPickupOtp, arrivedAtDropOff, verifyDropOffOtp, triggerAmbulanceSos,
     rejectBooking, reRouteAmbulance,getDriverDashboardStats,
-    getDriverTripHistory
+    getDriverTripHistory, changeDriverPassword, getDriverNotifications, markAllNotificationsAsRead
  };

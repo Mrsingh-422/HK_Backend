@@ -177,20 +177,27 @@ const deleteService = async (req, res) => {
 // ==========================================
 const getBookingRequests = async (req, res) => {
     try {
-        const { status, isPriority } = req.query; // e.g. status=Pending
-        let query = { nurseId: req.user.id };
+        const { status, isPriority } = req.query; // e.g. status=Assigned
+        
+        let query = { 
+            nurseId: req.user.id,
+            bookingType: { $ne: 'Prescription' } // Excludes prescription bookings for clean panel view
+        };
         
         if (status) query.status = status;
 
-        // 🚀 Priority / Faster Service filter logic
+        // Priority / Faster Service filter logic
         if (isPriority === 'true') {
             query['priceBreakdown.fasterServiceCharge'] = { $gt: 0 };
         } else if (isPriority === 'false') {
-            // Normal bookings where express delivery is either 0 or not applied
             query['priceBreakdown.fasterServiceCharge'] = { $eq: 0 };
         }
 
-        const bookings = await NurseBooking.find(query).sort({ createdAt: -1 });
+        // Populating the complete driver/staff object inside the booking list
+        const bookings = await NurseBooking.find(query)
+            .populate('assignedStaffId', 'name phone profilePic status location') // 👈 Populated driver details
+            .sort({ createdAt: -1 });
+
         res.json({ success: true, count: bookings.length, data: bookings });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
@@ -374,31 +381,87 @@ const trackNurse = async (req, res) => {
         const { bookingId } = req.params;
         const nurseId = req.user.id;
 
-        // Aisa order dhoondo jo active ho (On-The-Way, Arrived, etc.)
+        // Fetching the active booking and populating User details as well as Assigned Staff (Driver) details
         const activeBooking = await NurseBooking.findOne({ 
             _id: bookingId, 
             nurseId 
         })
-        .populate('userId', 'name phone address location')
-        .populate('assignedStaffId', 'name phone profilePic status'); // Assigned Driver info
+        .populate('userId', 'name phone profilePic gender dob')
+        .populate({
+            path: 'assignedStaffId',
+            select: 'name phone profilePic status location' // 👈 Strictly populates name, phone, and coordinates of staff/driver
+        });
 
         if (!activeBooking) {
-            return res.status(404).json({ success: false, message: "Active booking not found" });
+            return res.status(404).json({ success: false, message: "Active booking not found." });
         }
 
-        // Response format for Flutter (Map View)
+        // --- Driver / Staff Fallback Safety checks ---
+        let staffDetails = null;
+        if (activeBooking.assignedStaffId) {
+            staffDetails = {
+                staffId: activeBooking.assignedStaffId._id,
+                staffName: activeBooking.assignedStaffId.name || "Not Available", // 👈 Flat key for Driver/Staff Name
+                staffPhone: activeBooking.assignedStaffId.phone || "Not Available",
+                staffProfilePic: activeBooking.assignedStaffId.profilePic || null,
+                staffStatus: activeBooking.assignedStaffId.status || "Busy",
+                staffLocation: activeBooking.assignedStaffId.location || { lat: 0, lng: 0 } // Live location for Map View
+            };
+        }
+
+        // Simulation values for ETA and distance calculations
+        const eta = "25 mins"; 
+        const distance = "3.2 km";
+
         res.json({ 
             success: true, 
             data: {
-                bookingStatus: activeBooking.status,
-                nurseDetails: activeBooking.assignedStaffId,
-                userDetails: activeBooking.userId,
-                address: activeBooking.address,
-                // Simulation for tracking (Flutter will use lat/lng from assignedStaffId)
+                bookingId: activeBooking._id,
+                bookingIdCustom: activeBooking.bookingId, // E.g., HKN-RX-9F8E2D
+                bookingStatus: activeBooking.status,      // E.g., Assigned, On-The-Way, Arrived
+                bookingType: activeBooking.bookingType || "Regular",
+                
+                // 1. Live Assigned Staff / Driver Details
+                assignedStaff: staffDetails, 
+                
+                // 2. Patient / User Information
+                patientDetails: {
+                    userId: activeBooking.userId ? activeBooking.userId._id : null,
+                    patientName: activeBooking.userId ? activeBooking.userId.name : "Guest",
+                    patientPhone: activeBooking.userId ? activeBooking.userId.phone : "Not Available",
+                    patientProfilePic: activeBooking.userId ? activeBooking.userId.profilePic : null,
+                    patientsList: activeBooking.patients || [] // Flat patients details nested inside booking
+                },
+                
+                // 3. Service / Package Snapshot
+                serviceDetails: activeBooking.serviceDetails || {
+                    title: "Nursing Service",
+                    type: "Home Visit"
+                },
+
+                // 4. Detailed Target Address
+                address: {
+                    houseNo: activeBooking.address ? activeBooking.address.houseNo : "",
+                    sector: activeBooking.address ? activeBooking.address.sector : "",
+                    landmark: activeBooking.address ? activeBooking.address.landmark : "",
+                    city: activeBooking.address ? activeBooking.address.city : "",
+                    pincode: activeBooking.address ? activeBooking.address.pincode : "",
+                    state: activeBooking.address ? activeBooking.address.state : ""
+                },
+
+                // 5. Simulated Live ETA Parameters
+                trackingMetrics: {
+                    eta: eta,
+                    distance: distance
+                },
+
+                // 6. Live Check-Points Progress
                 progress: {
+                    isAssigned: activeBooking.status === 'Assigned',
                     isOnWay: activeBooking.status === 'On-The-Way',
                     isArrived: activeBooking.status === 'Arrived',
-                    isStarted: activeBooking.status === 'Service-Started'
+                    isStarted: activeBooking.status === 'Service-Started',
+                    isCompleted: activeBooking.status === 'Completed'
                 }
             } 
         });
@@ -406,7 +469,6 @@ const trackNurse = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
-
 
 module.exports = { 
     getProviderDashboard, updateProviderProfile, manageNurseService, 

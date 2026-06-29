@@ -34,4 +34,11 @@ router.post('/sos/:id', protect(['ambulance', 'hospital-ambulance']), controller
 router.get('/dashboard-stats', protect(['ambulance', 'hospital-ambulance']), controller.getDriverDashboardStats); 
 router.get('/history', protect(['ambulance', 'hospital-ambulance']), controller.getDriverTripHistory); 
 
+// --- CHANGE PASSWORD ---
+router.patch('/change-password', protect(['ambulance', 'hospital-ambulance']), controller.changeDriverPassword);
+
+// --- NOTIFICATIONS ---
+router.get('/notifications', protect(['ambulance', 'hospital-ambulance']), controller.getDriverNotifications);
+router.patch('/notifications/mark-read', protect(['ambulance', 'hospital-ambulance']), controller.markAllNotificationsAsRead);
+
 module.exports = router;

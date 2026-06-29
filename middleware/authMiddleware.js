@@ -211,50 +211,99 @@ const protect = (modelType) => async (req, res, next) => {
 };
 
 // 2. PHP Style Tab ID Check (SQL IDs like 1, 28, 31...)
+// const checkRoleAccess = (tabId) => {
+//     return async (req, res, next) => {
+//         try {
+           
+//             if (req.user.role === 'superadmin') return next();
+ 
+       
+//             const Tab = require('../models/Tab');
+//             const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
+//             if (!globalTab) return res.status(403).json({ message: "This module is temporarily disabled by Admin" });
+ 
+       
+//             const roleTypes = req.user.roleType;
+           
+       
+//             if (!roleTypes || !Array.isArray(roleTypes) || roleTypes.length === 0) {
+//                 return res.status(403).json({ message: "Access Denied: No Role Assigned" });
+//             }
+ 
+           
+//             let allAllowedTabs = [];
+//             roleTypes.forEach(role => {
+//                 if (role && role.tabIds) {
+//                     allAllowedTabs.push(...role.tabIds);
+//                 }
+//             });
+ 
+       
+//             const hasAccess = allAllowedTabs.includes(Number(tabId));
+           
+//             if (!hasAccess) {
+//                 return res.status(403).json({
+//                     success: false,
+//                     message: "Access Denied: You do not have permission for this module."
+//                 });
+//             }
+           
+//             next(); // Access Granted!
+//         } catch (error) {
+//             res.status(500).json({ message: error.message });
+//         }
+//     };
+// };
+ 
 const checkRoleAccess = (tabId) => {
     return async (req, res, next) => {
         try {
-           
+            // 1. Superadmin bypass
             if (req.user.role === 'superadmin') return next();
- 
-       
-            const Tab = require('../models/Tab');
+
+            // 2. Global active check
+            const Tab = require('../models/Tab'); 
             const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
             if (!globalTab) return res.status(403).json({ message: "This module is temporarily disabled by Admin" });
- 
-       
-            const roleTypes = req.user.roleType;
-           
-       
-            if (!roleTypes || !Array.isArray(roleTypes) || roleTypes.length === 0) {
+
+            const roleTypeData = req.user.roleType;
+            
+            if (!roleTypeData) {
                 return res.status(403).json({ message: "Access Denied: No Role Assigned" });
             }
- 
-           
+
             let allAllowedTabs = [];
-            roleTypes.forEach(role => {
-                if (role && role.tabIds) {
-                    allAllowedTabs.push(...role.tabIds);
-                }
-            });
- 
-       
+
+            // HYBRID LOGIC: Array aur Single Object dono ke liye taiyar hai
+            if (Array.isArray(roleTypeData)) {
+                // Case A: Agar multiple roles (Array) hain, toh loop chalayenge
+                roleTypeData.forEach(role => {
+                    if (role && role.tabIds) {
+                        allAllowedTabs.push(...role.tabIds);
+                    }
+                });
+            } else if (roleTypeData.tabIds) {
+                // Case B: Agar single role (Object) hai, toh direct permissions utha lenge
+                allAllowedTabs = roleTypeData.tabIds;
+            }
+
+            // Check access
             const hasAccess = allAllowedTabs.includes(Number(tabId));
-           
+            
             if (!hasAccess) {
-                return res.status(403).json({
-                    success: false,
-                    message: "Access Denied: You do not have permission for this module."
+                return res.status(403).json({ 
+                    success: false, 
+                    message: "Access Denied: You do not have permission for this module." 
                 });
             }
-           
+            
             next(); // Access Granted!
-        } catch (error) {
-            res.status(500).json({ message: error.message });
+        } catch (error) { 
+            res.status(500).json({ message: error.message }); 
         }
     };
 };
- 
+
 
 // 3. Location Filter Helper (For Controller use)
 const getLocationFilter = (req) => {
