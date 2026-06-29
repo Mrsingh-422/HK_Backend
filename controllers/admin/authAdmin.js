@@ -40,73 +40,121 @@ const registerSuperAdmin = async (req, res) => {
 };
 
 const loginAdmin = async (req, res) => {
+
     try {
+
         const { email, phone, password } = req.body;
  
+        // Dynamic Query Builder
+
         let query = {};
+
         if (email) query = { email };
+
         else if (phone) query = { phone };
+
         else return res.status(400).json({ message: 'Provide Email or Phone' });
  
-        // DATABASE SE DATA NIKAL RAHE HAIN
+        // populate('roleType') lagaya hai taaki database se role load ho
+
         const admin = await Admin.findOne(query).select('+password').populate('roleType');
-       
+
         if (!admin || !(await bcrypt.compare(password, admin.password))) {
+
             return res.status(400).json({ message: 'Invalid Admin Credentials' });
+
         }
+
         if (!admin.isActive) return res.status(403).json({ message: 'Account Deactivated' });
  
-        // TERMINAL MEIN PRINT KARKE DEKHENGE KI DATA KYA AAYA
-        console.log("===== LOGIN DEBUG =====");
-        console.log("Admin Name:", admin.name);
-        console.log("Populated RoleType:", admin.roleType);
- 
         let token = null;
-        if (!token) {
-            token = jwt.sign({ id: admin._id, role: admin.role }, process.env.JWT_SECRET, { expiresIn: '30d' });
-            admin.token = token;
-            await admin.save();
-        }
  
-        // TABS NIKALNE KA LOGIC
-        let allowedTabs = [];
-       
-        if (admin.role === 'superadmin') {
-            allowedTabs = ['ALL'];
-        } else if (admin.roleType && Array.isArray(admin.roleType)) {
-            admin.roleType.forEach(role => {
-                // Role model me jo bhi naam ho, sab check kar lenge
-                const tabs = role.tabIds || role.tabs || role.permissions || [];
-                if (tabs.length > 0) {
-                    allowedTabs = [...allowedTabs, ...tabs];
+        // --- DEVELOPMENT MODE LOGIC ---
+
+        if (process.env.NODE_ENV === 'development') {
+
+            if (admin.token) {
+
+                try {
+
+                    jwt.verify(admin.token, process.env.JWT_SECRET);
+
+                    token = admin.token;
+
+                    console.log("Development Mode: Using Existing Token");
+
+                } catch (err) {
+
+                    token = null;
+
                 }
-            });
-            allowedTabs = [...new Set(allowedTabs)];
-        } else if (admin.roleType) {
-            // Agar array nahi, single object hai
-            const tabs = admin.roleType.tabIds || admin.roleType.tabs || admin.roleType.permissions || [];
-            allowedTabs = [...tabs];
+
+            }
+
         }
  
-        console.log("Final Allowed Tabs Jo Frontend jayenge:", allowedTabs);
-        console.log("=======================");
+        // --- TOKEN GENERATION ---
+
+        if (!token) {
+
+            token = jwt.sign(
+
+                { id: admin._id, role: admin.role }, 
+
+                process.env.JWT_SECRET, 
+
+                { expiresIn: '30d' }
+
+            );
  
-        // RESPONSE TO FRONTEND
+            admin.token = token;
+
+            await admin.save();
+
+            console.log("New Token Generated");
+
+        }
+ 
+        // Single Role ke hisaab se permissions nikalna
+
+        let allowedTabs = [];
+
+        if (admin.role === 'superadmin') {
+
+            allowedTabs = 'ALL';
+
+        } else if (admin.roleType && admin.roleType.tabIds) {
+
+            allowedTabs = admin.roleType.tabIds; // Single role ki tabIds
+
+        }
+ 
         res.json({
+
             success: true,
+
             token,
+
             admin: {
+
                 id: admin._id,
+
                 name: admin.name,
+
                 role: admin.role,
-                allowedTabs: allowedTabs
+
+                allowedTabs: allowedTabs // Frontend sidebar hide/show ke liye sabse zaroori hai!
+
             }
+
         });
  
     } catch (error) {
-        console.error("Login Error:", error);
+
         res.status(500).json({ message: error.message });
+
     }
+
 };
  
  
@@ -119,8 +167,8 @@ const createSubAdmin = async (req, res) => {
             return res.status(400).json({ message: 'Email or Phone required' });
         }
  
-        // Check if roleTypeId is provided and is an array
-        if (!roleTypeId || !Array.isArray(roleTypeId) || roleTypeId.length === 0) {
+        // CHANGE: Ab array check nahi karenge, sirf check karenge ki string ID khali na ho
+        if (!roleTypeId || typeof roleTypeId !== 'string' || roleTypeId.trim() === "") {
             return res.status(400).json({ message: 'At least one Authority Role must be selected' });
         }
  
@@ -132,7 +180,7 @@ const createSubAdmin = async (req, res) => {
             phone: phone || undefined,
             password: hashedPassword,
             role: 'subadmin',
-            roleType: roleTypeId, // Frontend se array aayega ['id1', 'id2'] aur direct save ho jayega
+            roleType: roleTypeId, // Direct single role ID save hogi
             locationAccess: {
                 country: locationAccess?.country || null,
                 state: locationAccess?.state || null,
@@ -140,7 +188,7 @@ const createSubAdmin = async (req, res) => {
             }
         });
  
-        res.status(201).json({ success: true, message: 'Sub-Admin created with specific Roles & Location' });
+        res.status(201).json({ success: true, message: 'Sub-Admin created with specific Role & Location' });
     } catch (error) {
         // Handle unique email/phone error from MongoDB
         if (error.code === 11000) {
@@ -277,7 +325,7 @@ const editSubadmin = async (req, res) => {
         res.json({ success: true, message: 'Subadmin updated successfully', data: updatedAdmin });
     } catch (error) {
         res.status(500).json({ message: error.message });
-    }
+    } 
 };
  
 

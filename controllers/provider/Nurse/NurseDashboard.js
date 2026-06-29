@@ -3,6 +3,7 @@ const NurseService = require('../../../models/NurseService');
 const NurseBooking = require('../../../models/NurseBooking');
 const MasterConsumable = require('../../../models/MasterConsumable');
 const Driver = require('../../../models/Driver');
+const { deleteFile } = require('../../../utils/fileHandler'); // 👈 Correct relative import
 const moment = require('moment');
 
 // ==========================================
@@ -49,11 +50,39 @@ const getProviderDashboard = async (req, res) => {
 const updateProviderProfile = async (req, res) => {
     try {
         const updateData = req.body;
-        if (req.file) updateData.profileImage = req.file.path;
 
-        const updated = await Nurse.findByIdAndUpdate(req.user.id, { $set: updateData }, { new: true });
-        res.json({ success: true, message: "Profile Updated Successfully", data: updated });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // Since route middleware is "nurseDocUploads" (.fields configuration), look inside req.files
+        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+            const newImagePath = req.files.profileImage[0].path;
+
+            // Retrieve old image path from currently logged-in nurse model (protect middleware stores it in req.user)
+            const oldImagePath = req.user.profileImage;
+
+            // If an old image exists, remove it from server storage
+            if (oldImagePath) {
+                deleteFile(oldImagePath);
+            }
+
+            // Bind the newly uploaded path to database updates payload
+            updateData.profileImage = newImagePath;
+        }
+
+        // Update the record inside MongoDB
+        const updated = await Nurse.findByIdAndUpdate(
+            req.user.id, 
+            { $set: updateData }, 
+            { new: true }
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Profile Updated Successfully", 
+            data: updated 
+        });
+
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // ==========================================
@@ -220,6 +249,49 @@ const assignStaffToBooking = async (req, res) => {
         res.json({ success: true, message: "Staff Assigned Successfully" });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+const reassignStaffToBooking = async (req, res) => {
+    try {
+        const { bookingId, newStaffId } = req.body;
+
+        if (!bookingId || !newStaffId) {
+            return res.status(400).json({ success: false, message: "Missing bookingId or newStaffId parameter." });
+        }
+
+        const booking = await NurseBooking.findOne({ _id: bookingId, nurseId: req.user.id });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found or not assigned to your account." });
+        }
+
+        const oldStaffId = booking.assignedStaffId;
+
+        // 1. Release the old staff member (make them Available)
+        if (oldStaffId) {
+            await Driver.findByIdAndUpdate(oldStaffId, { status: 'Available' });
+            console.log(`[Reassign Debug]: Released old staff ID: ${oldStaffId}`);
+        }
+
+        // 2. Set the newly selected staff status to Busy
+        await Driver.findByIdAndUpdate(newStaffId, { status: 'Busy' });
+
+        // 3. Update the booking with new staff details
+        booking.assignedStaffId = newStaffId;
+        booking.status = 'Assigned';
+        await booking.save();
+
+        res.json({ 
+            success: true, 
+            message: "Staff reassigned successfully.", 
+            data: {
+                bookingId: booking._id,
+                status: booking.status,
+                assignedStaffId: newStaffId
+            }
+        });
+
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
 
 const getStaffByStatus = async (req, res) => {
     try {
@@ -339,6 +411,6 @@ const trackNurse = async (req, res) => {
 module.exports = { 
     getProviderDashboard, updateProviderProfile, manageNurseService, 
     getMyServices, deleteService, getBookingRequests, 
-    handleBookingAction, getAvailableStaff, assignStaffToBooking, searchMasterConsumables, getStaffByStatus,
+    handleBookingAction, getAvailableStaff, assignStaffToBooking,reassignStaffToBooking, searchMasterConsumables, getStaffByStatus,
     getOrderHistory, trackNurse
 };

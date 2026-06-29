@@ -835,6 +835,6 @@ module.exports = {
     nurseProgressUpload,
     pharmacyDeliveryUpload,
 
-    nursingPrescriptionUploads
+    nursingPrescriptionUploads,
 
 };  
