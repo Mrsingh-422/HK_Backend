@@ -14,6 +14,14 @@ const labPrescriptionRequestSchema = new mongoose.Schema({
         gender: { type: String, enum: ['Male', 'Female', 'Other'] },
         relation: String
     }],
+     // 🚨 ADDED: To store user's selected or manually added tests
+    requestedTests: [{
+        name: { type: String, required: true }, // e.g. "CBC" or manual test "Lipid Profile"
+        testCode: { type: String, default: null }, // e.g. "LPL026"
+        masterId: { type: mongoose.Schema.Types.ObjectId, default: null }, // Link to master DB
+        productType: { type: String, enum: ['MasterLabTest', 'MasterLabPackage', 'None'], default: 'None' },
+        isSelected: { type: Boolean, default: true }
+    }],
 
     collectionType: { type: String, enum: ['Home Collection', 'Visit Lab'], required: true },
     

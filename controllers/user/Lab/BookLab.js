@@ -29,7 +29,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const fs = require('fs');
 const path = require('path');
-
+const { deleteFile } = require('../../../utils/fileHandler')
 
 // for rating and reviews
 const Doctor = require('../../../models/Doctor'); 
@@ -2324,33 +2324,149 @@ const scanLabPrescription = async (req, res) => {
 // 1. CREATE LAB PRESCRIPTION REQUEST (User uploads prescription file)
 const createLabPrescriptionRequest = async (req, res) => {
     try {
-        const { labId, patients, collectionType, address } = req.body;
+        const { labId, patients, collectionType, address, requestedTests } = req.body;
         const userId = req.user.id;
 
         if (!req.file) {
-            return res.status(400).json({ success: false, message: "Please upload prescription image." });
+            return res.status(400).json({ success: false, message: "Please upload prescription image file." });
         }
 
         const parsedPatients = typeof patients === 'string' ? JSON.parse(patients) : patients;
+        const parsedTests = typeof requestedTests === 'string' ? JSON.parse(requestedTests) : requestedTests;
 
-        // Map Patient details safely
         const verifiedPatients = await mapPatients(userId, parsedPatients || ['Self']);
 
+        const verifiedRequestedTests = [];
+        if (parsedTests && parsedTests.length > 0) {
+            for (const test of parsedTests) {
+                let masterId = test.masterId || null;
+                let productType = test.productType || 'None';
+                let testCode = test.testCode || null;
+
+                if (!masterId) {
+                    const dbTest = await MasterLabTest.findOne({ testName: new RegExp(`^${test.name}$`, 'i') }).select('_id testCode').lean();
+                    if (dbTest) {
+                        masterId = dbTest._id;
+                        productType = 'MasterLabTest';
+                        testCode = dbTest.testCode;
+                    } else {
+                        const dbPkg = await MasterLabPackage.findOne({ packageName: new RegExp(`^${test.name}$`, 'i') }).select('_id').lean();
+                        if (dbPkg) {
+                            masterId = dbPkg._id;
+                            productType = 'MasterLabPackage';
+                        }
+                    }
+                }
+
+                verifiedRequestedTests.push({
+                    name: test.name,
+                    testCode,
+                    masterId,
+                    productType,
+                    isSelected: test.isSelected !== false
+                });
+            }
+        }
+
+        const tempReqId = `REQ-LAB-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
         const newRequest = await LabPrescriptionRequest.create({
-            requestId: `REQ-LAB-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            requestId: tempReqId,
             userId,
             labId,
             prescriptionImage: req.file.path,
             patients: verifiedPatients,
             collectionType,
             address: typeof address === 'string' ? JSON.parse(address) : address,
+            requestedTests: verifiedRequestedTests,
             status: 'Pending Review'
         });
+
+        // 🚨 TRIGGER PUSH NOTIFICATION: Lab ko instant update bhejein
+        await notifyAdminsAndVendor(
+            labId,
+            'lab',
+            "New Prescription Uploaded!",
+            `A new laboratory prescription request #${tempReqId} is pending your manual audit.`,
+            { requestId: newRequest._id.toString(), type: 'lab_prescription_review' }
+        );
 
         res.status(201).json({
             success: true,
             message: "Prescription request placed successfully!",
             data: newRequest
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+const getMasterCatalogSuggestions = async (req, res) => {
+    try {
+        const { query, page, limit } = req.query; // optional parameters
+        
+        let searchRegex = null;
+        let testQuery = { isActive: true };
+        let pkgQuery = { isActive: true };
+
+        // If user starts typing (Minimum 2 characters check)
+        if (query && query.trim().length >= 2) {
+            searchRegex = new RegExp(query.trim(), 'i');
+            testQuery.testName = searchRegex;
+            pkgQuery.packageName = searchRegex;
+        }
+
+        // Dynamic limit logic: If 'all' is passed, bypass limits. Otherwise default to 50 rows per page.
+        const pageNum = parseInt(page) || 1;
+        const limitNum = limit === 'all' ? 0 : (parseInt(limit) || 50); 
+        const skip = (pageNum - 1) * limitNum;
+
+        // Build database queries
+        let testPromise = MasterLabTest.find(testQuery)
+            .select('testName testCode mainCategory standardMRP')
+            .sort({ testName: 1 });
+
+        let pkgPromise = MasterLabPackage.find(pkgQuery)
+            .select('packageName mainCategory standardMRP')
+            .sort({ packageName: 1 });
+
+        // Apply skip/limit only if not querying 'all' records
+        if (limitNum > 0) {
+            testPromise = testPromise.skip(skip).limit(limitNum);
+            pkgPromise = pkgPromise.skip(skip).limit(limitNum);
+        }
+
+        // Execute queries concurrently for high speed
+        const [tests, packages] = await Promise.all([
+            testPromise.lean(),
+            pkgPromise.lean()
+        ]);
+
+        // Format tests outcomes
+        const formattedTests = tests.map(t => ({
+            masterId: t._id,
+            name: t.testName,
+            testCode: t.testCode || null,
+            mainCategory: t.mainCategory,
+            standardMRP: t.standardMRP || 0,
+            productType: 'MasterLabTest'
+        }));
+
+        // Format packages outcomes
+        const formattedPackages = packages.map(p => ({
+            masterId: p._id,
+            name: p.packageName,
+            testCode: null,
+            mainCategory: p.mainCategory || 'Pathology',
+            standardMRP: p.standardMRP || 0,
+            productType: 'MasterLabPackage'
+        }));
+
+        const combinedSuggestions = [...formattedTests, ...formattedPackages];
+
+        res.json({
+            success: true,
+            count: combinedSuggestions.length,
+            data: combinedSuggestions
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -2566,6 +2682,7 @@ module.exports = {
     estimateLabRxPrices,
     scanLabPrescription,
     createLabPrescriptionRequest,
+    getMasterCatalogSuggestions,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,

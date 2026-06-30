@@ -8,6 +8,7 @@ const moment = require('moment');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+const mongoose = require('mongoose');
 
 
 
@@ -779,7 +780,13 @@ const getProviderLabPrescriptionRequestDetails = async (req, res) => {
         const { requestId } = req.params;
         const labId = req.user.id;
 
-        const request = await LabPrescriptionRequest.findOne({ _id: requestId, labId })
+        // 🚨 FIXED: Hybrid query safely supports both Mongoose _id and custom REQ-LAB string
+        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
+        const query = { labId };
+        if (isObjectId) query._id = requestId;
+        else query.requestId = requestId;
+
+        const request = await LabPrescriptionRequest.findOne(query)
             .populate('userId', 'name phone email gender age');
 
         if (!request) {
@@ -795,13 +802,19 @@ const getProviderLabPrescriptionRequestDetails = async (req, res) => {
     }
 };
 
-// 3. START PRESCRIPTION REVIEW (Locks status to 'Reviewing')
+// 3. START PRESCRIPTION REVIEW (Locks status to 'Reviewing' with Hybrid Query)
 const startLabPrescriptionReview = async (req, res) => {
     try {
         const { requestId } = req.params;
         const labId = req.user.id;
 
-        const request = await LabPrescriptionRequest.findOne({ _id: requestId, labId });
+        // 🚨 FIXED: Hybrid query support
+        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
+        const query = { labId };
+        if (isObjectId) query._id = requestId;
+        else query.requestId = requestId;
+
+        const request = await LabPrescriptionRequest.findOne(query);
         if (!request) {
             return res.status(404).json({ success: false, message: "Request not found" });
         }
@@ -821,14 +834,19 @@ const startLabPrescriptionReview = async (req, res) => {
     }
 };
 
-// 4. SUBMIT LAB REVIEW & BILL (Generate Bill for suggested tests/packages)
+// 4. SUBMIT LAB REVIEW & BILL (Generate Suggested Invoice)
 const submitLabReviewBill = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const { tests, packages, homeVisitCharge } = req.body; // Array of verified test/package ids with custom pricing
+        const { tests, packages, homeVisitCharge } = req.body; 
         const labId = req.user.id;
 
-        const request = await LabPrescriptionRequest.findOne({ _id: requestId, labId });
+        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
+        const query = { labId };
+        if (isObjectId) query._id = requestId;
+        else query.requestId = requestId;
+
+        const request = await LabPrescriptionRequest.findOne(query);
         if (!request) {
             return res.status(404).json({ success: false, message: "Request details not found" });
         }
@@ -837,7 +855,6 @@ const submitLabReviewBill = async (req, res) => {
         const verifiedTests = [];
         const verifiedPackages = [];
 
-        // Map tests
         if (tests && tests.length > 0) {
             for (let t of tests) {
                 const subtotal = Number(t.pricePerUnit || 0);
@@ -851,7 +868,6 @@ const submitLabReviewBill = async (req, res) => {
             }
         }
 
-        // Map packages
         if (packages && packages.length > 0) {
             for (let p of packages) {
                 const subtotal = Number(p.pricePerUnit || 0);
@@ -865,7 +881,6 @@ const submitLabReviewBill = async (req, res) => {
             }
         }
 
-        // Patients multiplication logic
         const patientCount = request.patients.length || 1;
         const subtotalSum = itemTotal * patientCount;
         const totalAmount = subtotalSum + Number(homeVisitCharge || 0);
@@ -880,6 +895,14 @@ const submitLabReviewBill = async (req, res) => {
         request.status = 'Bill Generated';
         await request.save();
 
+        // 🚨 TRIGGER PUSH NOTIFICATION: Patient ko alert bhejein ki bill ready hai
+        await sendPushNotification(
+            request.userId,
+            "Lab Bill Generated!",
+            `Your prescription review is complete. View suggested tests & make payment of ₹${request.verifiedBill.totalAmount}.`,
+            { requestId: request._id.toString(), type: 'lab_bill_generated' }
+        );
+
         res.json({
             success: true,
             message: "Suggested bill generated successfully!",
@@ -890,14 +913,19 @@ const submitLabReviewBill = async (req, res) => {
     }
 };
 
-// 5. REJECT LAB PRESCRIPTION REQUEST
+// 5. REJECT LAB PRESCRIPTION REQUEST (With Push Alert)
 const rejectLabPrescriptionRequest = async (req, res) => {
     try {
         const { requestId } = req.params;
         const { reason } = req.body;
         const labId = req.user.id;
 
-        const request = await LabPrescriptionRequest.findOne({ _id: requestId, labId });
+        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
+        const query = { labId };
+        if (isObjectId) query._id = requestId;
+        else query.requestId = requestId;
+
+        const request = await LabPrescriptionRequest.findOne(query);
         if (!request) {
             return res.status(404).json({ success: false, message: "Request not found" });
         }
@@ -905,6 +933,14 @@ const rejectLabPrescriptionRequest = async (req, res) => {
         request.status = 'Rejected';
         request.rejectReason = reason || "Invalid Prescription criteria";
         await request.save();
+
+        // 🚨 TRIGGER PUSH NOTIFICATION: Patient ko rejection ki suchna dein
+        await sendPushNotification(
+            request.userId,
+            "Prescription Request Rejected",
+            `Your prescription upload was rejected. Reason: ${request.rejectReason}`,
+            { requestId: request._id.toString(), type: 'lab_prescription_rejected' }
+        );
 
         res.json({
             success: true,

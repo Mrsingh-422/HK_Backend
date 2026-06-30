@@ -21,7 +21,7 @@ const {
 
     estimateLabRxPrices,
     scanLabPrescription,
-    createLabPrescriptionRequest,
+    createLabPrescriptionRequest,getMasterCatalogSuggestions,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
@@ -121,6 +121,11 @@ router.post(
     protect('user'), 
     prescriptionUploads.single('prescriptionImage'), // single upload key
     createLabPrescriptionRequest
+);
+router.get(
+    '/suggestions/master-catalog', 
+    protect('user'), 
+    getMasterCatalogSuggestions
 );
 
 router.get(
