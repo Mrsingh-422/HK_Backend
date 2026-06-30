@@ -4,11 +4,13 @@ const LabBooking = require('../../../models/LabBooking');
 const Wallet = require('../../../models/Wallet');
 const MasterReportTemplate = require('../../../models/MasterReportTemplate'); // 👈 Imported Template Model
 const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); // Import model
+const Driver = require('../../../models/Driver');
 const moment = require('moment');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
+const { sendPushNotification } = require('../../../utils/notification'); 
 
 
 
@@ -957,6 +959,510 @@ const rejectLabPrescriptionRequest = async (req, res) => {
     }
 };
 
+ // =======================================================
+
+// 1. GET ALL ELIGIBLE PHLEBOTOMISTS FOR DROPDOWN / LIST
+
+// =======================================================
+
+// Endpoint: GET /provider/labs/available-phlebotomists
+
+const getAvailablePhlebotomists = async (req, res) => {
+
+    try {
+
+        const labId = req.user.id;
+ 
+        // Sirf un drivers ko fetch karein jo is Lab ke under registered hain aur Offline nahi hain
+
+        const phlebotomists = await Driver.find({
+
+            vendorId: labId,
+
+            vendorType: 'Lab',
+
+            status: { $ne: 'Offline' } // Jo log offline hain unhe assign nahi kiya ja sakta
+
+        }).select('name phone status profilePic');
+ 
+        res.json({ 
+
+            success: true, 
+
+            count: phlebotomists.length, 
+
+            data: phlebotomists 
+
+        });
+
+    } catch (error) {
+
+        res.status(500).json({ success: false, message: error.message });
+
+    }
+
+};
+ 
+// =======================================================
+
+// 2. ASSIGN PHLEBOTOMIST (First Time Assignment)
+
+// =======================================================
+
+// Endpoint: PATCH /provider/labs/assign-staff/:orderId
+
+const assignDriverStaff = async (req, res) => {
+
+    try {
+
+        const { orderId } = req.params;
+
+        const { phlebotomistId } = req.body;
+
+        const labId = req.user.id;
+ 
+        if (!phlebotomistId) {
+
+            return res.status(400).json({ 
+
+                success: false, 
+
+                message: "Phlebotomist ID is required to assign staff." 
+
+            });
+
+        }
+ 
+        // 1. Verify karein ki driver exist karta hai aur is lab ka part hai
+
+        const driver = await Driver.findOne({ _id: phlebotomistId, vendorId: labId });
+
+        if (!driver) {
+
+            return res.status(404).json({ success: false, message: "Phlebotomist not found or unauthorized." });
+
+        }
+ 
+        if (driver.status === 'Offline') {
+
+            return res.status(400).json({ success: false, message: "Cannot assign an offline phlebotomist." });
+
+        }
+ 
+        // 2. Booking ko update karein
+
+        const booking = await LabBooking.findOneAndUpdate(
+
+            { _id: orderId, labId },
+
+            { 
+
+                phlebotomistId: phlebotomistId, 
+
+                status: 'Phlebotomist Assigned' 
+
+            },
+
+            { new: true }
+
+        );
+ 
+        if (!booking) {
+
+            return res.status(404).json({ success: false, message: "Order not found" });
+
+        }
+ 
+        // 3. Driver status Busy mark karein
+
+        driver.status = 'Busy';
+
+        await driver.save();
+ 
+        res.json({ 
+
+            success: true, 
+
+            message: "Phlebotomist assigned successfully", 
+
+            data: booking 
+
+        });
+
+    } catch (error) { 
+
+        res.status(500).json({ success: false, message: error.message }); 
+
+    }
+
+};
+ 
+// =======================================================
+
+// 3. RE-ASSIGN PHLEBOTOMIST (Change Existing Driver)
+
+// =======================================================
+
+// Endpoint: PATCH /provider/labs/reassign-staff/:orderId
+
+const reassignDriverStaff = async (req, res) => {
+
+    try {
+
+        const { orderId } = req.params;
+
+        const { newPhlebotomistId } = req.body;
+
+        const labId = req.user.id;
+ 
+        if (!newPhlebotomistId) {
+
+            return res.status(400).json({ 
+
+                success: false, 
+
+                message: "New Phlebotomist ID is required for re-assignment." 
+
+            });
+
+        }
+ 
+        // 1. Find the current booking
+
+        const booking = await LabBooking.findOne({ _id: orderId, labId });
+
+        if (!booking) {
+
+            return res.status(404).json({ success: false, message: "Booking not found." });
+
+        }
+ 
+        const oldPhlebotomistId = booking.phlebotomistId;
+ 
+        // Security check: Agar same driver ko re-assign karne ki koshish ki jaye
+
+        if (oldPhlebotomistId && String(oldPhlebotomistId) === String(newPhlebotomistId)) {
+
+            return res.status(400).json({ 
+
+                success: false, 
+
+                message: "This phlebotomist is already assigned to this booking." 
+
+            });
+
+        }
+ 
+        // 2. Naye phlebotomist ki verification
+
+        const newDriver = await Driver.findOne({ _id: newPhlebotomistId, vendorId: labId });
+
+        if (!newDriver) {
+
+            return res.status(404).json({ success: false, message: "New phlebotomist not found or unauthorized." });
+
+        }
+ 
+        if (newDriver.status === 'Offline') {
+
+            return res.status(400).json({ success: false, message: "New phlebotomist is offline." });
+
+        }
+ 
+        // 3. Database Updates tayyar karein
+
+        const updateFields = {
+
+            phlebotomistId: newPhlebotomistId,
+
+            status: 'Phlebotomist Assigned',
+
+            // Reset tracking timestamps kyunki naya driver naye sire se shuru karega
+
+            startedAt: null,
+
+            arrivedAt: null,
+
+            collectedAt: null
+
+        };
+ 
+        // Agar purana driver assign tha, toh use 'rejectedBy' history array me push karein
+
+        const updateQuery = {
+
+            $set: updateFields
+
+        };
+ 
+        if (oldPhlebotomistId) {
+
+            updateQuery.$addToSet = { rejectedBy: oldPhlebotomistId };
+
+        }
+ 
+        // 4. Booking update execute karein
+
+        const updatedBooking = await LabBooking.findByIdAndUpdate(
+
+            orderId,
+
+            updateQuery,
+
+            { new: true }
+
+        );
+ 
+        // 5. Naye driver ko 'Busy' mark karein
+
+        newDriver.status = 'Busy';
+
+        await newDriver.save();
+ 
+        // 6. Purane driver ka status manage karein
+
+        if (oldPhlebotomistId) {
+
+            // Check karein kya purane driver ke paas koi aur active booking abhi chal rahi hai
+
+            const activeBookingsForOldDriver = await LabBooking.countDocuments({
+
+                phlebotomistId: oldPhlebotomistId,
+
+                status: { $in: ['Phlebotomist Assigned', 'Sample Collected', 'Sample Deposited'] }
+
+            });
+ 
+            // Agar koi active task nahi bacha, toh purane driver ko wapas 'Available' mark kar dein
+
+            if (activeBookingsForOldDriver === 0) {
+
+                await Driver.findByIdAndUpdate(oldPhlebotomistId, { status: 'Available' });
+
+            }
+
+        }
+ 
+        res.json({
+
+            success: true,
+
+            message: "Phlebotomist re-assigned successfully.",
+
+            data: updatedBooking
+
+        });
+ 
+    } catch (error) {
+
+        res.status(500).json({ success: false, message: error.message });
+
+    }
+
+};
+
+// =======================================================
+
+// GET LIVE TRACKING DETAILS FOR MODAL POPUP
+
+// =======================================================
+
+// Endpoint: GET /provider/labs/booking-tracking/:orderId
+
+const getBookingTrackingDetails = async (req, res) => {
+
+    try {
+
+        const { orderId } = req.params;
+
+        const labId = req.user.id;
+ 
+        // Fetch booking and populate user and driver details
+
+        const booking = await LabBooking.findOne({ _id: orderId, labId })
+
+            .populate('userId', 'name phone email profilePic')
+
+            .populate('phlebotomistId', 'name phone profilePic status');
+ 
+        if (!booking) {
+
+            return res.status(404).json({ 
+
+                success: false, 
+
+                message: "Lab booking not found." 
+
+            });
+
+        }
+ 
+        // Address string compile karein (Figma ui representation ke liye)
+
+        const addr = booking.address;
+
+        const formattedAddress = addr 
+
+            ? `${addr.houseNo ? addr.houseNo + ', ' : ''}${addr.sector ? addr.sector + ', ' : ''}${addr.landmark ? addr.landmark + ', ' : ''}${addr.city || ''}, ${addr.state || ''} - ${addr.pincode || ''}`
+
+            : "Address Details Not Found";
+ 
+        // Patient details determine karein
+
+        // Pehle patients array se main primary details nikalein
+
+        const primaryPatientName = booking.patients?.[0]?.name || booking.userId?.name || "Patient";
+
+        const primaryPatientPhone = booking.address?.phone || booking.userId?.phone || "N/A";
+ 
+        // Live Tracking Stubs (ETA/Distance dynamic placeholders)
+
+        // Note: Real routing algorithms na hone par standard fallback values render karein
+
+        const liveTrackingStats = {
+
+            distance: booking.startedAt && !booking.arrivedAt ? "3.2 km" : "0.0 km",
+
+            eta: booking.startedAt && !booking.arrivedAt ? "25 mins" : "0 mins"
+
+        };
+ 
+        // Timeline Builder Array
+
+        const timeline = [
+
+            {
+
+                step: "Booking Assigned",
+
+                completed: !!booking.phlebotomistId,
+
+                timestamp: booking.phlebotomistId ? booking.updatedAt : null,
+
+                description: "Staff allocation recorded."
+
+            },
+
+            {
+
+                step: "On the Way",
+
+                completed: !!booking.startedAt,
+
+                timestamp: booking.startedAt,
+
+                description: "Phlebotomist is in-transit to patient location."
+
+            },
+
+            {
+
+                step: "Arrived at Location",
+
+                completed: !!booking.arrivedAt,
+
+                timestamp: booking.arrivedAt,
+
+                description: "Field phlebotomist arrived at destination."
+
+            },
+
+            {
+
+                step: "Sample Collected",
+
+                completed: !!booking.collectedAt,
+
+                timestamp: booking.collectedAt,
+
+                description: "Diagnostics samples collected successfully."
+
+            },
+
+            {
+
+                step: "Sample Deposited",
+
+                completed: !!booking.depositedAt,
+
+                timestamp: booking.depositedAt,
+
+                description: "Samples deposited at processing lab hub."
+
+            }
+
+        ];
+ 
+        // Output Structure matches the popup exactly
+
+        res.status(200).json({
+
+            success: true,
+
+            data: {
+
+                orderId: booking.bookingId,
+
+                status: booking.status,
+
+                bookingType: booking.bookingType,
+
+                collectionType: booking.collectionType,
+
+                amount: booking.billSummary?.totalAmount || 0,
+
+                // Dispatched Field Nurse equivalent
+
+                phlebotomist: booking.phlebotomistId ? {
+
+                    id: booking.phlebotomistId._id,
+
+                    name: booking.phlebotomistId.name,
+
+                    phone: booking.phlebotomistId.phone,
+
+                    profilePic: booking.phlebotomistId.profilePic || null,
+
+                    status: booking.phlebotomistId.status || "Busy"
+
+                } : null,
+ 
+                // Live Tracking Distance & Duration Card
+
+                liveTracking: liveTrackingStats,
+ 
+                // Patient Details Section
+
+                patientDetails: {
+
+                    name: primaryPatientName,
+
+                    phone: primaryPatientPhone,
+
+                    address: formattedAddress,
+
+                    patientsCount: booking.patients?.length || 1
+
+                },
+ 
+                // Service Timeline Tracker Card
+
+                timeline: timeline
+
+            }
+
+        });
+ 
+    } catch (error) {
+
+        console.error("Error in getBookingTrackingDetails:", error.message);
+
+        res.status(500).json({ success: false, message: error.message });
+
+    }
+
+};
+
  
 
 
@@ -983,5 +1489,11 @@ module.exports = {
     getProviderLabPrescriptionRequestDetails,
     startLabPrescriptionReview,
     submitLabReviewBill,
-    rejectLabPrescriptionRequest
+    rejectLabPrescriptionRequest,
+    getAvailablePhlebotomists,
+    assignDriverStaff,              
+    reassignDriverStaff   ,
+    getBookingTrackingDetails,
+    
+ 
 };

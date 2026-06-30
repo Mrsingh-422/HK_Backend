@@ -3,6 +3,62 @@ const Driver = require('../../../models/Driver');
 const bcrypt = require('bcryptjs');
 const moment = require('moment');
 
+// Razorpay Utilities integration
+const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay');
+
+// ==========================================
+// 💡 NEW HELPER: Dynamic Price Recalculation Engine
+// ==========================================
+const recalculateBookingPrice = async (bookingId) => {
+    // Populate tests and packages prices
+    const booking = await LabBooking.findById(bookingId)
+        .populate('items.tests.testId', 'price')
+        .populate('items.packages.packageId', 'price');
+        
+    if (!booking) return null;
+
+    let singlePatientCost = 0;
+    
+    // Add individual test costs
+    if (booking.items.tests) {
+        booking.items.tests.forEach(t => {
+            if (t.testId && t.testId.price) {
+                singlePatientCost += Number(t.testId.price);
+            }
+        });
+    }
+
+    // Add individual package costs
+    if (booking.items.packages) {
+        booking.items.packages.forEach(p => {
+            if (p.packageId && p.packageId.price) {
+                singlePatientCost += Number(p.packageId.price);
+            }
+        });
+    }
+
+    // Grand Total = Single Patient Cost * Number of Patients logged (Inclusive family members)
+    const patientCount = booking.patients.length || 1;
+    const subtotal = singlePatientCost * patientCount;
+    
+    // Proportional GST/Tax surcharge (5% dynamic mockup)
+    const tax = Math.round(subtotal * 0.05); 
+    const grandTotal = subtotal + tax;
+
+    booking.totalPrice = grandTotal;
+    
+    if (!booking.billSummary) {
+        booking.billSummary = {};
+    }
+    booking.billSummary.itemTotal = subtotal;
+    booking.billSummary.taxAmount = tax;
+    booking.billSummary.totalAmount = grandTotal;
+
+    await booking.save();
+    return booking;
+};
+
+
 // ==========================================
 // 1. AUTHENTICATION & PASSWORD OPERATIONS
 // ==========================================
@@ -82,7 +138,7 @@ const updateProfile = async (req, res) => {
 // Switch Duty Availability Status (Figma Screen 4, 5)
 const toggleDriverStatus = async (req, res) => {
     try {
-        const { status } = req.body; // 'Available' or 'Offline'
+        const { status } = req.body; 
         const driver = await Driver.findByIdAndUpdate(req.user.id, { status }, { new: true });
         res.json({ success: true, message: `Status updated to ${status}`, data: driver });
     } catch (error) { res.status(500).json({ message: error.message }); }
@@ -101,7 +157,7 @@ const getLabDashboard = async (req, res) => {
         const driver = await Driver.findById(driverId);
         if (!driver) return res.status(404).json({ success: false, message: "Phlebotomist account not found" });
 
-        // Count active collections (Sample collected are not yet deposited, hence active)
+        // Count active collections
         const activeCount = await LabBooking.countDocuments({
             phlebotomistId: driverId,
             status: { $in: ['Phlebotomist Assigned', 'Sample Collected'] }
@@ -124,7 +180,6 @@ const getLabDashboard = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // Get All Lab Assigned Orders (Figma Screen 9)
 const getDriverOrders = async (req, res) => {
@@ -194,7 +249,7 @@ const startDelivery = async (req, res) => {
             return res.status(403).json({ message: "Unauthorized operation" });
         }
 
-        order.status = 'Phlebotomist Assigned'; // Keep assigned but log start
+        order.status = 'Phlebotomist Assigned'; 
         order.startedAt = new Date();
         await order.save();
 
@@ -218,11 +273,12 @@ const arriveAtLocation = async (req, res) => {
         if (!order.tracking) {
             order.tracking = {};
         }
-        order.tracking.otp = '1111'; // Set Static OTP
+        // Verification OTP dynamically updated to '2468' (Matches Figma verification popups exactly)
+        order.tracking.otp = '2468'; 
         order.arrivedAt = new Date();
         await order.save();
 
-        res.json({ success: true, message: "Arrived at location. Static OTP generated.", debugOtp: '1111' });
+        res.json({ success: true, message: "Arrived at location. Static OTP generated.", debugOtp: '2468' });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -239,7 +295,8 @@ const verifySampleCollection = async (req, res) => {
             return res.status(403).json({ message: "Unauthorized" });
         }
 
-        if (otp !== '1111' && order.tracking?.otp !== otp) {
+        // OTP evaluation dynamically shifted to '2468'
+        if (otp !== '2468' && order.tracking?.otp !== otp) {
             return res.status(400).json({ success: false, message: "Invalid OTP" });
         }
 
@@ -255,7 +312,7 @@ const verifySampleCollection = async (req, res) => {
 const deliverSampleToLab = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { labDepositName } = req.body; // e.g. "HK Lab"
+        const { labDepositName } = req.body; 
         const driverId = req.user.id;
 
         const order = await LabBooking.findById(orderId);
@@ -281,7 +338,7 @@ const deliverSampleToLab = async (req, res) => {
 const reportNoResponse = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { noShowComments } = req.body; // e.g. "No Show after 3 calls"
+        const { noShowComments } = req.body; 
         const driverId = req.user.id;
 
         const order = await LabBooking.findById(orderId);
@@ -314,17 +371,16 @@ const createBookingAtHome = async (req, res) => {
         const phlebotomistId = req.user.id;
         const { 
             name, dob, phone, gender, address, city, pincode, 
-            testsSelected, // Array of LabTest ObjectIds
-            packagesSelected // Array of LabPackage ObjectIds
+            testsSelected, 
+            packagesSelected 
         } = req.body;
 
-        // Custom bookingId generator
         const bookingId = "ORD-" + Math.random().toString(36).substring(2, 10).toUpperCase();
 
-        const newOrder = await LabBooking.create({
+        let newOrder = await LabBooking.create({
             bookingId,
-            userId: req.user.id, // Phlebotomist handles creation
-            labId: req.user.id, // Auto-link to logged-in phlebotomist's lab / profile
+            userId: req.user.id, 
+            labId: req.user.id, 
             bookingType: "Direct",
             patients: [{
                 name,
@@ -349,34 +405,40 @@ const createBookingAtHome = async (req, res) => {
             phlebotomistId
         });
 
+        // Dynamic price calculation
+        newOrder = await recalculateBookingPrice(newOrder._id);
+
         res.status(201).json({ success: true, message: "Diagnostic booking registered successfully!", data: newOrder });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Add Family Members to Existing Booking (Figma Screen 23, 24)
+// Add Family Members to Existing Booking (Price recalculated dynamically)
 const addFamilyToBooking = async (req, res) => {
     try {
         const { bookingId } = req.params;
         const { familyList } = req.body; // Array of objects: [{"name":"Yash User", "age":32, "gender":"Male"}]
 
-        const order = await LabBooking.findById(bookingId);
+        let order = await LabBooking.findById(bookingId);
         if (!order) return res.status(404).json({ message: "Booking not found" });
 
         // Append to patients array
         order.patients.push(...familyList);
         await order.save();
 
+        // 💡 Dynamic calculation trigger
+        order = await recalculateBookingPrice(bookingId);
+
         res.json({ success: true, message: "Family members added successfully", data: order });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Add New Tests/Packages Dynamically (Figma Screen 16, 17)
+// Add New Tests/Packages Dynamically (Price recalculated dynamically)
 const appendItemsToBooking = async (req, res) => {
     try {
         const { bookingId } = req.params;
-        const { testIds, packageIds } = req.body; // Arrays of ObjectIds
+        const { testIds, packageIds } = req.body; 
 
-        const order = await LabBooking.findById(bookingId);
+        let order = await LabBooking.findById(bookingId);
         if (!order) return res.status(404).json({ message: "Booking not found" });
 
         if (testIds) {
@@ -390,6 +452,10 @@ const appendItemsToBooking = async (req, res) => {
         }
 
         await order.save();
+
+        // 💡 Dynamic calculation trigger
+        order = await recalculateBookingPrice(bookingId);
+
         res.json({ success: true, message: "Items successfully appended to booking", data: order });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
@@ -432,15 +498,14 @@ const reassignLabOrderDueToEmergency = async (req, res) => {
 };
 
 // ==========================================
-// 4. MISSING HISTORY & LEGAL APIs (Figma Sidebar Screens)
+// 4. MISSING HISTORY & LEGAL APIs
 // ==========================================
 
-// A. Get Phlebotomist Service History (Figma Screen 13 style)
+// Get Phlebotomist Service History (Figma Screen 13 style)
 const getDriverHistory = async (req, res) => {
     try {
         const phlebotomistId = req.user.id;
 
-        // Completed (Sample Deposited) aur Cancelled bookings fetch karna
         const bookings = await LabBooking.find({
             phlebotomistId,
             status: { $in: ['Sample Deposited', 'Completed', 'Cancelled'] }
@@ -473,7 +538,7 @@ const getDriverHistory = async (req, res) => {
 
         res.json({
             success: true,
-            totalOrders: formattedHistory.length, // Figma history count header
+            totalOrders: formattedHistory.length, 
             data: formattedHistory
         });
     } catch (error) {
@@ -481,7 +546,7 @@ const getDriverHistory = async (req, res) => {
     }
 };
 
-// B. Get Terms & Conditions Document
+// Get Terms & Conditions Document
 const getTermsAndConditions = async (req, res) => {
     try {
         const termsText = `
@@ -505,7 +570,7 @@ const getTermsAndConditions = async (req, res) => {
     }
 };
 
-// C. Get About Page Document
+// Get About Page Document
 const getAboutContent = async (req, res) => {
     try {
         const aboutText = `
@@ -523,6 +588,119 @@ const getAboutContent = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+
+// ==========================================
+// 💡 5. RAZORPAY DOORSTEP PAYMENT FLOW
+// ==========================================
+
+// Step 1: Create a Doorstep Razorpay Order
+const createDoorstepOrder = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+        const driverId = req.user.id;
+
+        const booking = await LabBooking.findOne({ _id: bookingId, phlebotomistId: driverId });
+        if (!booking) return res.status(404).json({ success: false, message: "Active booking not found" });
+
+        const amountToPay = booking.totalPrice || 100; // safety fallback
+
+        const receiptId = `receipt_doorstep_${bookingId.substring(18)}_${Date.now()}`;
+        const order = await createRazorpayOrder(amountToPay, receiptId);
+
+        res.status(200).json({
+            success: true,
+            orderId: order.id,
+            amount: amountToPay,
+            currency: "INR",
+            keyId: process.env.RAZORPAY_KEY_ID
+        });
+    } catch (error) {
+        console.error("Doorstep Payment Order Creation Failure:", error);
+        res.status(500).json({ message: "Internal Server Error", error: error.message });
+    }
+};
+
+// Step 2: Verify Doorstep Payment & Log Payment Details securely
+const verifyDoorstepPayment = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+        const driverId = req.user.id;
+
+        const booking = await LabBooking.findOne({ _id: bookingId, phlebotomistId: driverId });
+        if (!booking) return res.status(404).json({ success: false, message: "Active booking not found" });
+
+        // Verify signatures securely via cryptography [1]
+        const isValid = verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+
+        if (isValid) {
+            // Fetch authentic payment details from Razorpay [1]
+            const paymentDetails = await fetchAndMapRazorpayPayment(razorpay_payment_id, razorpay_signature);
+            
+            // Mark payment as paid
+            booking.paymentStatus = 'Paid';
+            booking.paymentMethod = paymentDetails ? paymentDetails.method : 'Online';
+            if (paymentDetails) {
+                booking.paymentDetails = paymentDetails;
+            } else {
+                booking.paymentDetails = {
+                    razorpayPaymentId: razorpay_payment_id,
+                    razorpayOrderId: razorpay_order_id,
+                    razorpaySignature: razorpay_signature,
+                    status: 'captured',
+                    paidAt: new Date()
+                };
+            }
+            
+            await booking.save();
+
+            res.status(200).json({
+                success: true,
+                message: "Doorstep QR Payment verified and logged successfully!",
+                data: booking
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                message: "Invalid signature, verification failed."
+            });
+        }
+    } catch (error) {
+        console.error("Signature Verification Error:", error);
+        res.status(500).json({ message: "Internal Server Error", error: error.message });
+    }
+};
+
+// Step 3: Cash Payment Collection Handler
+const collectCashPayment = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+        const driverId = req.user.id;
+
+        const booking = await LabBooking.findOne({ _id: bookingId, phlebotomistId: driverId });
+        if (!booking) return res.status(404).json({ success: false, message: "Active booking not found" });
+
+        booking.paymentStatus = 'Paid';
+        booking.paymentMethod = 'Cash';
+        booking.paymentDetails = {
+            method: 'Cash',
+            amount: booking.totalPrice || 0,
+            status: 'captured',
+            paidAt: new Date()
+        };
+        await booking.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Cash Payment collected and marked paid successfully!",
+            data: booking
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = {
     forgotPassword,
@@ -547,5 +725,10 @@ module.exports = {
     reassignLabOrderDueToEmergency,
     getDriverHistory,
     getTermsAndConditions,
-    getAboutContent
+    getAboutContent,
+    
+    // Payment integrations exports
+    createDoorstepOrder,
+    verifyDoorstepPayment,
+    collectCashPayment
 };

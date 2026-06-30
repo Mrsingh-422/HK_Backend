@@ -20,7 +20,11 @@ const {
     getProviderLabPrescriptionRequestDetails,
     startLabPrescriptionReview,
     submitLabReviewBill,
-    rejectLabPrescriptionRequest
+    rejectLabPrescriptionRequest,
+    getAvailablePhlebotomists,
+    assignDriverStaff,
+    reassignDriverStaff,
+    getBookingTrackingDetails
 } = require('../../../controllers/provider/Lab/LabsOrder');
 
 // Base URL: /provider/labs
@@ -83,6 +87,18 @@ router.post(
     protect('provider'), 
     rejectLabPrescriptionRequest
 );
+ 
+router.get('/available-phlebotomists', protect('provider'), getAvailablePhlebotomists);
+ 
+// Assign staff / phlebotomist (First time)
+router.patch('/assign-staff/:orderId', protect('provider'), assignDriverStaff);
+ 
+// Re-assign staff / phlebotomist (Changes driver and resets timestamps)
+router.patch('/reassign-staff/:orderId', protect('provider'), reassignDriverStaff);
+ 
+// Get live tracking detail schema for modal popups
+router.get('/booking-tracking/:orderId', protect('provider'), getBookingTrackingDetails);
+ 
 
 
 
