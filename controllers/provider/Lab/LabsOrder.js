@@ -838,7 +838,7 @@ const startLabPrescriptionReview = async (req, res) => {
 const submitLabReviewBill = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const { tests, packages, homeVisitCharge } = req.body; 
+        const { items, homeVisitCharge } = req.body; // items: [{ name: "...", pricePerUnit: 100 }]
         const labId = req.user.id;
 
         const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
@@ -852,30 +852,15 @@ const submitLabReviewBill = async (req, res) => {
         }
 
         let itemTotal = 0;
-        const verifiedTests = [];
-        const verifiedPackages = [];
+        const verifiedItems = [];
 
-        if (tests && tests.length > 0) {
-            for (let t of tests) {
-                const subtotal = Number(t.pricePerUnit || 0);
+        // Loop over the vendor input items list and calculate
+        if (items && items.length > 0) {
+            for (let item of items) {
+                const subtotal = Number(item.pricePerUnit || 0);
                 itemTotal += subtotal;
-                verifiedTests.push({
-                    testId: t.testId,
-                    name: t.name,
-                    mrp: Number(t.mrp || 0),
-                    pricePerUnit: subtotal
-                });
-            }
-        }
-
-        if (packages && packages.length > 0) {
-            for (let p of packages) {
-                const subtotal = Number(p.pricePerUnit || 0);
-                itemTotal += subtotal;
-                verifiedPackages.push({
-                    packageId: p.packageId,
-                    name: p.name,
-                    mrp: Number(p.mrp || 0),
+                verifiedItems.push({
+                    name: item.name,
                     pricePerUnit: subtotal
                 });
             }
@@ -886,8 +871,7 @@ const submitLabReviewBill = async (req, res) => {
         const totalAmount = subtotalSum + Number(homeVisitCharge || 0);
 
         request.verifiedBill = {
-            tests: verifiedTests,
-            packages: verifiedPackages,
+            items: verifiedItems, // Array matches unified manual entries format
             itemTotal: subtotalSum,
             homeVisitCharge: Number(homeVisitCharge || 0),
             totalAmount: Math.round(totalAmount)
@@ -895,7 +879,7 @@ const submitLabReviewBill = async (req, res) => {
         request.status = 'Bill Generated';
         await request.save();
 
-        // 🚨 TRIGGER PUSH NOTIFICATION: Patient ko alert bhejein ki bill ready hai
+        // Trigger Notification
         await sendPushNotification(
             request.userId,
             "Lab Bill Generated!",

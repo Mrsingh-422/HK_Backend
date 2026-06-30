@@ -2321,7 +2321,7 @@ const scanLabPrescription = async (req, res) => {
 };
 
 
-// 1. CREATE LAB PRESCRIPTION REQUEST (User uploads prescription file)
+// 1. CREATE LAB PRESCRIPTION REQUEST (Accepts strictly manual test names list)
 const createLabPrescriptionRequest = async (req, res) => {
     try {
         const { labId, patients, collectionType, address, requestedTests } = req.body;
@@ -2336,37 +2336,10 @@ const createLabPrescriptionRequest = async (req, res) => {
 
         const verifiedPatients = await mapPatients(userId, parsedPatients || ['Self']);
 
-        const verifiedRequestedTests = [];
-        if (parsedTests && parsedTests.length > 0) {
-            for (const test of parsedTests) {
-                let masterId = test.masterId || null;
-                let productType = test.productType || 'None';
-                let testCode = test.testCode || null;
-
-                if (!masterId) {
-                    const dbTest = await MasterLabTest.findOne({ testName: new RegExp(`^${test.name}$`, 'i') }).select('_id testCode').lean();
-                    if (dbTest) {
-                        masterId = dbTest._id;
-                        productType = 'MasterLabTest';
-                        testCode = dbTest.testCode;
-                    } else {
-                        const dbPkg = await MasterLabPackage.findOne({ packageName: new RegExp(`^${test.name}$`, 'i') }).select('_id').lean();
-                        if (dbPkg) {
-                            masterId = dbPkg._id;
-                            productType = 'MasterLabPackage';
-                        }
-                    }
-                }
-
-                verifiedRequestedTests.push({
-                    name: test.name,
-                    testCode,
-                    masterId,
-                    productType,
-                    isSelected: test.isSelected !== false
-                });
-            }
-        }
+        // Directly store requested test names as strings without master database validation checks
+        const formattedRequestedTests = (parsedTests || []).map(testName => ({
+            name: typeof testName === 'string' ? testName : (testName.name || "General Diagnostic Test")
+        }));
 
         const tempReqId = `REQ-LAB-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
@@ -2378,11 +2351,11 @@ const createLabPrescriptionRequest = async (req, res) => {
             patients: verifiedPatients,
             collectionType,
             address: typeof address === 'string' ? JSON.parse(address) : address,
-            requestedTests: verifiedRequestedTests,
+            requestedTests: formattedRequestedTests,
             status: 'Pending Review'
         });
 
-        // 🚨 TRIGGER PUSH NOTIFICATION: Lab ko instant update bhejein
+        // Trigger Notification
         await notifyAdminsAndVendor(
             labId,
             'lab',
@@ -2400,80 +2373,8 @@ const createLabPrescriptionRequest = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-const getMasterCatalogSuggestions = async (req, res) => {
-    try {
-        const { query, page, limit } = req.query; // optional parameters
-        
-        let searchRegex = null;
-        let testQuery = { isActive: true };
-        let pkgQuery = { isActive: true };
 
-        // If user starts typing (Minimum 2 characters check)
-        if (query && query.trim().length >= 2) {
-            searchRegex = new RegExp(query.trim(), 'i');
-            testQuery.testName = searchRegex;
-            pkgQuery.packageName = searchRegex;
-        }
-
-        // Dynamic limit logic: If 'all' is passed, bypass limits. Otherwise default to 50 rows per page.
-        const pageNum = parseInt(page) || 1;
-        const limitNum = limit === 'all' ? 0 : (parseInt(limit) || 50); 
-        const skip = (pageNum - 1) * limitNum;
-
-        // Build database queries
-        let testPromise = MasterLabTest.find(testQuery)
-            .select('testName testCode mainCategory standardMRP')
-            .sort({ testName: 1 });
-
-        let pkgPromise = MasterLabPackage.find(pkgQuery)
-            .select('packageName mainCategory standardMRP')
-            .sort({ packageName: 1 });
-
-        // Apply skip/limit only if not querying 'all' records
-        if (limitNum > 0) {
-            testPromise = testPromise.skip(skip).limit(limitNum);
-            pkgPromise = pkgPromise.skip(skip).limit(limitNum);
-        }
-
-        // Execute queries concurrently for high speed
-        const [tests, packages] = await Promise.all([
-            testPromise.lean(),
-            pkgPromise.lean()
-        ]);
-
-        // Format tests outcomes
-        const formattedTests = tests.map(t => ({
-            masterId: t._id,
-            name: t.testName,
-            testCode: t.testCode || null,
-            mainCategory: t.mainCategory,
-            standardMRP: t.standardMRP || 0,
-            productType: 'MasterLabTest'
-        }));
-
-        // Format packages outcomes
-        const formattedPackages = packages.map(p => ({
-            masterId: p._id,
-            name: p.packageName,
-            testCode: null,
-            mainCategory: p.mainCategory || 'Pathology',
-            standardMRP: p.standardMRP || 0,
-            productType: 'MasterLabPackage'
-        }));
-
-        const combinedSuggestions = [...formattedTests, ...formattedPackages];
-
-        res.json({
-            success: true,
-            count: combinedSuggestions.length,
-            data: combinedSuggestions
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-// 2. GET USER'S LAB PRESCRIPTION REQUESTS (List View)
+// 2. GET USER'S LAB PRESCRIPTION REQUESTS (List View remains unchanged)
 const getUserLabPrescriptionRequests = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -2501,13 +2402,12 @@ const getUserLabPrescriptionRequests = async (req, res) => {
     }
 };
 
-// 3. GET SINGLE REQUEST DETAILS (Figma Tracking & Bill view)
+// 3. GET SINGLE REQUEST DETAILS (Details Polling remains unchanged)
 const getUserLabPrescriptionRequestDetails = async (req, res) => {
     try {
         const { requestId } = req.params;
         const userId = req.user.id;
 
-        // Safe hybrid query fallback (Check if custom code or ObjectId)
         const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
         const query = { userId };
         if (isObjectId) query._id = requestId;
@@ -2529,7 +2429,7 @@ const getUserLabPrescriptionRequestDetails = async (req, res) => {
     }
 };
 
-// 4. PAY AND CONFIRM LAB REQUEST (For COD & Razorpay setup)
+// 4. PAY AND CONVERT LAB REQUEST (Converts verifiedBill.items with testId: null safely)
 const payAndConfirmLabRequest = async (req, res) => {
     try {
         const { requestId, paymentMethod } = req.body;
@@ -2568,21 +2468,29 @@ const payAndConfirmLabRequest = async (req, res) => {
             });
         }
 
-        // COD Flow
+        // COD Flow: Maps items safely to standard tests array with testId: null
         const finalBooking = await LabBooking.create({
             bookingId: tempBookingId,
             userId,
             labId: request.labId,
             patients: request.patients,
             items: {
-                tests: request.verifiedBill.tests.map(t => ({ testId: t.testId, price: t.pricePerUnit, name: t.name })),
-                packages: request.verifiedBill.packages.map(p => ({ packageId: p.packageId, price: p.pricePerUnit, name: p.name }))
+                tests: request.verifiedBill.items.map(item => ({ 
+                    testId: null, // Null safe fallback for manual entry
+                    price: item.pricePerUnit, 
+                    name: item.name 
+                })),
+                packages: [] // Direct manual entries mapped in tests array
             },
             collectionType: request.collectionType,
             address: request.address,
             appointmentDate: new Date(),
             appointmentTime: 'Immediate',
-            billSummary: bill,
+            billSummary: {
+                itemTotal: bill.itemTotal || 0,
+                homeVisitCharge: bill.homeVisitCharge || 0,
+                totalAmount: bill.totalAmount || 0
+            },
             paymentMethod: 'COD',
             paymentStatus: 'Pending',
             status: 'Confirmed',
@@ -2602,7 +2510,7 @@ const payAndConfirmLabRequest = async (req, res) => {
     }
 };
 
-// 5. VERIFY LAB PRESCRIPTION PAYMENT SIGNATURE
+// 5. VERIFY LAB PRESCRIPTION PAYMENT SIGNATURE (With testId: null safety)
 const verifyLabPrescriptionPayment = async (req, res) => {
     try {
         const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
@@ -2617,15 +2525,18 @@ const verifyLabPrescriptionPayment = async (req, res) => {
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // Map final items safely from verified bill
         const finalBooking = await LabBooking.create({
             bookingId: `ORD-RX-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             userId: req.user.id,
             labId: request.labId,
             patients: request.patients,
             items: {
-                tests: request.verifiedBill.tests.map(t => ({ testId: t.testId, price: t.pricePerUnit, name: t.name })),
-                packages: request.verifiedBill.packages.map(p => ({ packageId: p.packageId, price: p.pricePerUnit, name: p.name }))
+                tests: request.verifiedBill.items.map(item => ({ 
+                    testId: null, 
+                    price: item.pricePerUnit, 
+                    name: item.name 
+                })),
+                packages: []
             },
             collectionType: request.collectionType,
             address: request.address,
@@ -2633,7 +2544,7 @@ const verifyLabPrescriptionPayment = async (req, res) => {
             appointmentTime: 'Immediate',
             billSummary: request.verifiedBill,
             paymentMethod: 'Online',
-            paymentStatus: 'Done', // 👈 FIXED: Changed from 'Paid' to 'Done' to match LabBooking schema allowed enums! [1]
+            paymentStatus: 'Done',
             status: 'Confirmed',
             bookingType: 'Prescription-Based',
             paymentDetails: rzpDetails
@@ -2642,7 +2553,7 @@ const verifyLabPrescriptionPayment = async (req, res) => {
         request.status = 'Paid';
         await request.save();
 
-        // Trigger Notification for Paid Online Lab Bookings
+        // Trigger Notification
         await notifyAdminsAndVendor(
             request.labId,
             'lab',
@@ -2665,6 +2576,7 @@ const verifyLabPrescriptionPayment = async (req, res) => {
 
 
 
+
 module.exports = { 
         getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
@@ -2682,7 +2594,6 @@ module.exports = {
     estimateLabRxPrices,
     scanLabPrescription,
     createLabPrescriptionRequest,
-    getMasterCatalogSuggestions,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
