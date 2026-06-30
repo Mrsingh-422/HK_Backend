@@ -18,6 +18,9 @@ const {
     getAvailableCoupons ,validateLabCoupon,
     getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,
     getWomenCategories,getWomenTestsByCategory,
+
+    estimateLabRxPrices,
+    scanLabPrescription,
     createLabPrescriptionRequest,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
@@ -102,6 +105,17 @@ router.get('/test/women/categories', protect('user'), getWomenCategories); //
 router.get('/test/women/tests-by-category', protect('user'), getWomenTestsByCategory); //
 
 // AI prescriptioin Flow
+router.post(
+    '/prescription-request/estimate-prices', 
+    protect('user'), 
+    estimateLabRxPrices
+);
+router.post(
+    '/scan-rx', 
+    protect('user'), 
+    prescriptionUploads.single('prescriptionFile'), // Utilizes standard single upload config
+    scanLabPrescription
+);
 router.post(
     '/prescription-request', 
     protect('user'), 

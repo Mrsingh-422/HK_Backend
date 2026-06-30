@@ -25,6 +25,10 @@ const cities = require('../../../data/cities.json');
 const Fuse = require('fuse.js');
 const LabCategory = require('../../../models/LabCategory');
 const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); // Import new model
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const fs = require('fs');
+const path = require('path');
 
 
 // for rating and reviews
@@ -2148,6 +2152,175 @@ const getWomenTestsByCategory = async (req, res) => {
 // -------------- AI Scan Prescription -----------------------------
 // -----------------------------------------------------------------
 
+// =========================================================================
+// 🚀 AI PRESCRIPTION IMAGE EXTRACTOR FOR LAB TESTS
+// =========================================================================
+const extractLabDataWithGemini = async (filePath) => {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeType = ext === ".png" ? "image/png" : "image/jpeg";
+
+    const imageData = {
+        inlineData: {
+            data: Buffer.from(fs.readFileSync(filePath)).toString("base64"),
+            mimeType: mimeType,
+        },
+    };
+
+    const prompt = `Act as a professional medical lab technician or diagnostic expert. Extract data in STRICT JSON format: {"doctorName": "string", "date": "string", "tests": [{"name": "string"}]}`;
+
+    const result = await model.generateContent([prompt, imageData]);
+    const response = await result.response;
+    const text = response.text();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("AI did not return valid JSON.");
+    return JSON.parse(jsonMatch[0]);
+};
+
+const estimateLabRxPrices = async (req, res) => {
+    try {
+        const { labId, items, patientsCount = 1 } = req.body; 
+        // items: [{ itemId, productType: 'LabTest' | 'LabPackage' }]
+
+        if (!labId || !items || !items.length) {
+            return res.status(400).json({ success: false, message: "Lab ID and items list are required to estimate prices" });
+        }
+
+        let itemTotal = 0;
+        const pricedItems = [];
+
+        for (const item of items) {
+            let price = 0;
+            let mrp = 0;
+            let available = false;
+            let displayName = "Unknown Parameter";
+
+            if (item.productType === 'LabTest') {
+                const test = await LabTest.findOne({ labId, _id: item.itemId, isActive: true });
+                if (test) {
+                    price = test.discountPrice || test.amount;
+                    mrp = test.amount;
+                    displayName = test.testName;
+                    available = true;
+                }
+            } else if (item.productType === 'LabPackage') {
+                const pkg = await LabPackage.findOne({ labId, _id: item.itemId, isActive: true });
+                if (pkg) {
+                    price = pkg.offerPrice || pkg.mrp;
+                    mrp = pkg.mrp;
+                    displayName = pkg.packageName;
+                    available = true;
+                }
+            }
+
+            const subtotal = price * patientsCount;
+            itemTotal += subtotal;
+
+            pricedItems.push({
+                itemId: item.itemId,
+                productType: item.productType,
+                name: displayName,
+                pricePerUnit: price,
+                mrp,
+                totalPrice: subtotal,
+                available
+            });
+        }
+
+        res.json({
+            success: true,
+            estimatedTotal: Math.round(itemTotal),
+            items: pricedItems
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 🚨 NEW: SCAN LAB PRESCRIPTION & MATCH WITH MASTER DATA
+const scanLabPrescription = async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ success: false, message: "Please upload an image" });
+
+        let aiData;
+        
+        // CHECK ENVIRONMENT
+        if (process.env.NODE_ENV === 'production') {
+            console.log("Using REAL AI Logic for Lab Prescription...");
+            aiData = await extractLabDataWithGemini(req.file.path);
+        } else {
+            console.log("Using DEVELOPMENT MOCK Logic for Lab Prescription...");
+            // Mock Response for CBC & HbA1c
+            aiData = {
+                doctorName: "Dr. Rajesh Sharma (Mock)",
+                date: moment().format('DD-MM-YYYY'),
+                tests: [
+                    { name: "CBC" },
+                    { name: "HbA1c" }
+                ]
+            };
+        }
+
+        const finalDetectedTests = [];
+
+        // DATABASE MATCHING LOGIC (Matching with Master Tests & Packages)
+        if (aiData.tests && aiData.tests.length > 0) {
+            for (let testItem of aiData.tests) {
+                // 1. Try to find a match in MasterLabTest
+                const dbMatch = await MasterLabTest.findOne({
+                    testName: { $regex: testItem.name.split(" ")[0], $options: 'i' }
+                }).select('testName testCode mainCategory category standardMRP pretestPreparation').lean();
+
+                if (dbMatch) {
+                    finalDetectedTests.push({
+                        masterId: dbMatch._id,
+                        name: dbMatch.testName,
+                        testCode: dbMatch.testCode,
+                        mainCategory: dbMatch.mainCategory,
+                        category: dbMatch.category,
+                        standardMRP: dbMatch.standardMRP,
+                        pretestPreparation: dbMatch.pretestPreparation,
+                        productType: 'LabTest' // To help cart/checkout identify the item
+                    });
+                } else {
+                    // 2. If no test found, try to match in MasterLabPackage
+                    const pkgMatch = await MasterLabPackage.findOne({
+                        packageName: { $regex: testItem.name.split(" ")[0], $options: 'i' }
+                    }).select('packageName mainCategory category standardMRP preparations').lean();
+
+                    if (pkgMatch) {
+                        finalDetectedTests.push({
+                            masterId: pkgMatch._id,
+                            name: pkgMatch.packageName,
+                            mainCategory: pkgMatch.mainCategory,
+                            category: pkgMatch.category,
+                            standardMRP: pkgMatch.standardMRP,
+                            pretestPreparation: pkgMatch.preparations?.join(", ") || "",
+                            productType: 'LabPackage'
+                        });
+                    }
+                }
+            }
+        }
+
+        res.json({
+            success: true,
+            message: process.env.NODE_ENV === 'production' ? "AI Scan Complete" : "Dev Mock Scan Complete",
+            data: {
+                doctorName: aiData.doctorName,
+                prescriptionDate: aiData.date,
+                prescriptionFile: req.file.path,
+                detectedTests: finalDetectedTests
+            }
+        });
+
+    } catch (error) {
+        console.error("Scan Lab API Error:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 // 1. CREATE LAB PRESCRIPTION REQUEST (User uploads prescription file)
 const createLabPrescriptionRequest = async (req, res) => {
     try {
@@ -2328,6 +2501,7 @@ const verifyLabPrescriptionPayment = async (req, res) => {
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
+        // Map final items safely from verified bill
         const finalBooking = await LabBooking.create({
             bookingId: `ORD-RX-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             userId: req.user.id,
@@ -2343,7 +2517,7 @@ const verifyLabPrescriptionPayment = async (req, res) => {
             appointmentTime: 'Immediate',
             billSummary: request.verifiedBill,
             paymentMethod: 'Online',
-            paymentStatus: 'Paid',
+            paymentStatus: 'Done', // 👈 FIXED: Changed from 'Paid' to 'Done' to match LabBooking schema allowed enums! [1]
             status: 'Confirmed',
             bookingType: 'Prescription-Based',
             paymentDetails: rzpDetails
@@ -2351,6 +2525,15 @@ const verifyLabPrescriptionPayment = async (req, res) => {
 
         request.status = 'Paid';
         await request.save();
+
+        // Trigger Notification for Paid Online Lab Bookings
+        await notifyAdminsAndVendor(
+            request.labId,
+            'lab',
+            "New Lab Booking Confirmed!",
+            `Paid Lab booking #${finalBooking.bookingId} has been successfully verified.`,
+            { bookingId: finalBooking._id.toString(), type: 'new_lab_booking' }
+        );
 
         res.status(201).json({
             success: true,
@@ -2380,6 +2563,8 @@ module.exports = {
     getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,getWomenCategories,getWomenTestsByCategory,
     
     // Prescription Flow
+    estimateLabRxPrices,
+    scanLabPrescription,
     createLabPrescriptionRequest,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
