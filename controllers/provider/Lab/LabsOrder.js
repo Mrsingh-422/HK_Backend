@@ -838,7 +838,8 @@ const startLabPrescriptionReview = async (req, res) => {
 const submitLabReviewBill = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const { items, homeVisitCharge } = req.body; // items: [{ name: "...", pricePerUnit: 100 }]
+        // 🚨 STRICT SYNC: Capturing tests and packages separately as defined in your schema
+        const { tests, packages, homeVisitCharge } = req.body; 
         const labId = req.user.id;
 
         const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
@@ -852,15 +853,32 @@ const submitLabReviewBill = async (req, res) => {
         }
 
         let itemTotal = 0;
-        const verifiedItems = [];
+        const verifiedTests = [];
+        const verifiedPackages = [];
 
-        // Loop over the vendor input items list and calculate
-        if (items && items.length > 0) {
-            for (let item of items) {
-                const subtotal = Number(item.pricePerUnit || 0);
+        // Map tests array safely [1]
+        if (tests && tests.length > 0) {
+            for (let t of tests) {
+                const subtotal = Number(t.pricePerUnit || 0);
                 itemTotal += subtotal;
-                verifiedItems.push({
-                    name: item.name,
+                verifiedTests.push({
+                    testId: t.testId && mongoose.isValidObjectId(t.testId) ? t.testId : null,
+                    name: t.name,
+                    mrp: Number(t.mrp || 0),
+                    pricePerUnit: subtotal
+                });
+            }
+        }
+
+        // Map packages array safely [1]
+        if (packages && packages.length > 0) {
+            for (let p of packages) {
+                const subtotal = Number(p.pricePerUnit || 0);
+                itemTotal += subtotal;
+                verifiedPackages.push({
+                    packageId: p.packageId && mongoose.isValidObjectId(p.packageId) ? p.packageId : null,
+                    name: p.name,
+                    mrp: Number(p.mrp || 0),
                     pricePerUnit: subtotal
                 });
             }
@@ -870,8 +888,10 @@ const submitLabReviewBill = async (req, res) => {
         const subtotalSum = itemTotal * patientCount;
         const totalAmount = subtotalSum + Number(homeVisitCharge || 0);
 
+        // 🚨 SAVED: Strictly matching your database schema keys
         request.verifiedBill = {
-            items: verifiedItems, // Array matches unified manual entries format
+            tests: verifiedTests,
+            packages: verifiedPackages,
             itemTotal: subtotalSum,
             homeVisitCharge: Number(homeVisitCharge || 0),
             totalAmount: Math.round(totalAmount)

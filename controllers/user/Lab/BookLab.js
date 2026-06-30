@@ -2177,66 +2177,6 @@ const extractLabDataWithGemini = async (filePath) => {
     return JSON.parse(jsonMatch[0]);
 };
 
-const estimateLabRxPrices = async (req, res) => {
-    try {
-        const { labId, items, patientsCount = 1 } = req.body; 
-        // items: [{ itemId, productType: 'LabTest' | 'LabPackage' }]
-
-        if (!labId || !items || !items.length) {
-            return res.status(400).json({ success: false, message: "Lab ID and items list are required to estimate prices" });
-        }
-
-        let itemTotal = 0;
-        const pricedItems = [];
-
-        for (const item of items) {
-            let price = 0;
-            let mrp = 0;
-            let available = false;
-            let displayName = "Unknown Parameter";
-
-            if (item.productType === 'LabTest') {
-                const test = await LabTest.findOne({ labId, _id: item.itemId, isActive: true });
-                if (test) {
-                    price = test.discountPrice || test.amount;
-                    mrp = test.amount;
-                    displayName = test.testName;
-                    available = true;
-                }
-            } else if (item.productType === 'LabPackage') {
-                const pkg = await LabPackage.findOne({ labId, _id: item.itemId, isActive: true });
-                if (pkg) {
-                    price = pkg.offerPrice || pkg.mrp;
-                    mrp = pkg.mrp;
-                    displayName = pkg.packageName;
-                    available = true;
-                }
-            }
-
-            const subtotal = price * patientsCount;
-            itemTotal += subtotal;
-
-            pricedItems.push({
-                itemId: item.itemId,
-                productType: item.productType,
-                name: displayName,
-                pricePerUnit: price,
-                mrp,
-                totalPrice: subtotal,
-                available
-            });
-        }
-
-        res.json({
-            success: true,
-            estimatedTotal: Math.round(itemTotal),
-            items: pricedItems
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
 // 🚨 NEW: SCAN LAB PRESCRIPTION & MATCH WITH MASTER DATA
 const scanLabPrescription = async (req, res) => {
     try {
@@ -2468,19 +2408,23 @@ const payAndConfirmLabRequest = async (req, res) => {
             });
         }
 
-        // COD Flow: Maps items safely to standard tests array with testId: null
+        // COD Flow: Mapping separate tests and packages arrays safely matching your schemas
         const finalBooking = await LabBooking.create({
             bookingId: tempBookingId,
             userId,
             labId: request.labId,
             patients: request.patients,
             items: {
-                tests: request.verifiedBill.items.map(item => ({ 
-                    testId: null, // Null safe fallback for manual entry
-                    price: item.pricePerUnit, 
-                    name: item.name 
+                tests: (request.verifiedBill.tests || []).map(t => ({ 
+                    testId: t.testId || null, 
+                    price: t.pricePerUnit, 
+                    name: t.name 
                 })),
-                packages: [] // Direct manual entries mapped in tests array
+                packages: (request.verifiedBill.packages || []).map(p => ({ 
+                    packageId: p.packageId || null, 
+                    price: p.pricePerUnit, 
+                    name: p.name 
+                }))
             },
             collectionType: request.collectionType,
             address: request.address,
@@ -2591,7 +2535,6 @@ module.exports = {
     getAvailableCoupons,validateLabCoupon, getLabSlots,getPreparationGuide,suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,getWomenCategories,getWomenTestsByCategory,
     
     // Prescription Flow
-    estimateLabRxPrices,
     scanLabPrescription,
     createLabPrescriptionRequest,
     getUserLabPrescriptionRequests,
