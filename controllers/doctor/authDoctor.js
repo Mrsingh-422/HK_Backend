@@ -208,41 +208,88 @@ const loginDoctor = async (req, res) => {
 
 // --- 5. UPDATE PROFILE (Bio, Fees, Availability, etc.) ---
 // Endpoint: PUT /api/auth/doctor/update-profile
+// const updateDoctorProfile = async (req, res) => {
+//     try {
+//         const doctorId = req.user.id; // From Protect Middleware
+//         const updates = req.body;
+
+//         // Security Check: Kuch fields update karne se profileStatus wapas 'Pending' ho sakta hai (Optional Logic)
+//         // Agar aap chahte hain ki name ya qualification badalne par dobara verify ho:
+//         // if (updates.name || updates.qualification) { updates.profileStatus = 'Pending'; }
+
+//         // Handle Profile Image Update (If uploaded)
+//         if (req.files && req.files.profileImage) {
+//             updates.profileImage = req.files.profileImage[0].path;
+//         }
+
+//         // Nested objects (fees, availability) ko update karne ke liye $set use hota hai
+//         const updatedDoctor = await Doctor.findByIdAndUpdate(
+//             doctorId,
+//             { $set: updates },
+//             { new: true, runValidators: true }
+//         );
+
+//         if (!updatedDoctor) {
+//             return res.status(404).json({ success: false, message: 'Doctor not found' });
+//         }
+
+//         res.json({
+//             success: true,
+//             message: 'Profile updated successfully',
+//             data: updatedDoctor
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
+
+// --- 5. UPDATE PROFILE (Bio, Fees, Availability, etc.) ---
+// Endpoint: PUT /api/auth/doctor/update-profile
 const updateDoctorProfile = async (req, res) => {
     try {
         const doctorId = req.user.id; // From Protect Middleware
         const updates = req.body;
-
-        // Security Check: Kuch fields update karne se profileStatus wapas 'Pending' ho sakta hai (Optional Logic)
-        // Agar aap chahte hain ki name ya qualification badalne par dobara verify ho:
-        // if (updates.name || updates.qualification) { updates.profileStatus = 'Pending'; }
-
+ 
+        // 1. Block authorized/sensitive fields from being updated
+        delete updates.email;
+        delete updates.phone;
+        delete updates.password;
+        delete updates.role;
+        delete updates.profileStatus;
+        delete updates.rejectionReason;
+ 
+        // 2. Block documents from being edited or overwritten
+        // This ensures previously uploaded files/data remain completely safe and untouched
+        delete updates.documents;
+ 
         // Handle Profile Image Update (If uploaded)
         if (req.files && req.files.profileImage) {
             updates.profileImage = req.files.profileImage[0].path;
         }
-
-        // Nested objects (fees, availability) ko update karne ke liye $set use hota hai
+ 
+        // Nested objects (fees, availability, alternatePhone) are updated using $set safely
         const updatedDoctor = await Doctor.findByIdAndUpdate(
             doctorId,
             { $set: updates },
             { new: true, runValidators: true }
         );
-
+ 
         if (!updatedDoctor) {
             return res.status(404).json({ success: false, message: 'Doctor not found' });
         }
-
+ 
         res.json({
             success: true,
             message: 'Profile updated successfully',
             data: updatedDoctor
         });
-
+ 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+ 
 
 // --- 6. GET DOCTOR PROFILE (Self) ---
 // Endpoint: GET /api/auth/doctor/profile

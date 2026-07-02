@@ -33,17 +33,80 @@ const getMyDoctorProfile = async (req, res) => {
 };
 
 // --- 12. UPDATE MY DOCTOR PROFILE (PUT API - Secure and Multer Image supported) ---
+// const updateDoctorProfile = async (req, res) => {
+//     try {
+//         const doctorId = req.user.id;
+        
+//         // Allowed professional fields for self-update (Excludes role, email, phone, profileStatus)
+//         const { 
+//             name, country, state, city, address, 
+//             qualification, speciality, about, experienceYears, 
+//             languages, fees, consultationStatus 
+//         } = req.body;
+
+//         const updates = {};
+//         if (name) updates.name = name;
+//         if (country) updates.country = country;
+//         if (state) updates.state = state;
+//         if (city) updates.city = city;
+//         if (address) updates.address = address;
+//         if (qualification) updates.qualification = qualification;
+//         if (speciality) updates.speciality = speciality;
+//         if (about) updates.about = about;
+//         if (experienceYears) updates.experienceYears = Number(experienceYears);
+        
+//         // Handle languages array parsing
+//         if (languages) {
+//             updates.languages = Array.isArray(languages) ? languages : JSON.parse(languages);
+//         }
+        
+//         // Handle dynamic nested fees object safely
+//         if (fees) {
+//             updates.fees = typeof fees === 'string' ? JSON.parse(fees) : fees;
+//         }
+        
+//         // Handle dynamic nested consultation status safely
+//         if (consultationStatus) {
+//             updates.consultationStatus = typeof consultationStatus === 'string' ? JSON.parse(consultationStatus) : consultationStatus;
+//         }
+
+//         // Handle single profile image upload from multer fields
+//         if (req.files && req.files.profileImage) {
+//             updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
+//         }
+
+//         const updatedDoctor = await Doctor.findByIdAndUpdate(
+//             doctorId,
+//             { $set: updates },
+//             { new: true, runValidators: true }
+//         ).select('-password');
+
+//         res.json({ 
+//             success: true, 
+//             message: "Doctor profile updated successfully.", 
+//             data: updatedDoctor 
+//         });
+
+//     } catch (error) {
+//         console.error("Profile update error:", error);
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
+
+// --- 12. UPDATE MY DOCTOR PROFILE (PUT API - Secure and Multer Image supported) ---
 const updateDoctorProfile = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        
-        // Allowed professional fields for self-update (Excludes role, email, phone, profileStatus)
-        const { 
-            name, country, state, city, address, 
-            qualification, speciality, about, experienceYears, 
-            languages, fees, consultationStatus 
+       
+        // Allowed professional fields for self-update (Excludes role, email, phone, documents, password, profileStatus)
+        const {
+            name, country, state, city, address,
+            qualification, speciality, about, experienceYears,
+            languages, fees, consultationStatus,
+            // Destructured alternate phone
+            alternatePhone
         } = req.body;
-
+ 
         const updates = {};
         if (name) updates.name = name;
         if (country) updates.country = country;
@@ -54,45 +117,46 @@ const updateDoctorProfile = async (req, res) => {
         if (speciality) updates.speciality = speciality;
         if (about) updates.about = about;
         if (experienceYears) updates.experienceYears = Number(experienceYears);
-        
+        if (alternatePhone) updates.alternatePhone = alternatePhone; // Added to update payload
+       
         // Handle languages array parsing
         if (languages) {
             updates.languages = Array.isArray(languages) ? languages : JSON.parse(languages);
         }
-        
+       
         // Handle dynamic nested fees object safely
         if (fees) {
             updates.fees = typeof fees === 'string' ? JSON.parse(fees) : fees;
         }
-        
+       
         // Handle dynamic nested consultation status safely
         if (consultationStatus) {
             updates.consultationStatus = typeof consultationStatus === 'string' ? JSON.parse(consultationStatus) : consultationStatus;
         }
-
+ 
         // Handle single profile image upload from multer fields
         if (req.files && req.files.profileImage) {
             updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
         }
-
+ 
         const updatedDoctor = await Doctor.findByIdAndUpdate(
             doctorId,
             { $set: updates },
             { new: true, runValidators: true }
         ).select('-password');
-
-        res.json({ 
-            success: true, 
-            message: "Doctor profile updated successfully.", 
-            data: updatedDoctor 
+ 
+        res.json({
+            success: true,
+            message: "Doctor profile updated successfully.",
+            data: updatedDoctor
         });
-
+ 
     } catch (error) {
         console.error("Profile update error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
+ 
 
 
 

@@ -34,7 +34,7 @@ const hospitalSchema = new mongoose.Schema({
     hospitalImage: [{ type: String }], 
     licenseDocument: [{ type: String }],
     otherDocuments: [{ type: String }],
-
+    alternatePhone: { type: String, default: null },
     // --- SYSTEM FIELDS ---
     role: { type: String, default: 'hospital', immutable: true },
     token: { type: String, default: null },

@@ -53,6 +53,7 @@
 
     
             rejectionReason: { type: String, default: null },
+            alternatePhone: { type: String, default: null },
 
         
 

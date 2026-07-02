@@ -47,48 +47,98 @@ const getProviderDashboard = async (req, res) => {
 };
 
 
-const updateProviderProfile = async (req, res) => {
-    try {
-        const updateData = req.body;
+// const updateProviderProfile = async (req, res) => {
+//     try {
+//         const updateData = req.body;
 
-        // Since route middleware is "nurseDocUploads" (.fields configuration), look inside req.files
-        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
-            const newImagePath = req.files.profileImage[0].path;
+//         // Since route middleware is "nurseDocUploads" (.fields configuration), look inside req.files
+//         if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+//             const newImagePath = req.files.profileImage[0].path;
 
-            // Retrieve old image path from currently logged-in nurse model (protect middleware stores it in req.user)
-            const oldImagePath = req.user.profileImage;
+//             // Retrieve old image path from currently logged-in nurse model (protect middleware stores it in req.user)
+//             const oldImagePath = req.user.profileImage;
 
-            // If an old image exists, remove it from server storage
-            if (oldImagePath) {
-                deleteFile(oldImagePath);
-            }
+//             // If an old image exists, remove it from server storage
+//             if (oldImagePath) {
+//                 deleteFile(oldImagePath);
+//             }
 
-            // Bind the newly uploaded path to database updates payload
-            updateData.profileImage = newImagePath;
-        }
+//             // Bind the newly uploaded path to database updates payload
+//             updateData.profileImage = newImagePath;
+//         }
 
-        // Update the record inside MongoDB
-        const updated = await Nurse.findByIdAndUpdate(
-            req.user.id, 
-            { $set: updateData }, 
-            { new: true }
-        );
+//         // Update the record inside MongoDB
+//         const updated = await Nurse.findByIdAndUpdate(
+//             req.user.id, 
+//             { $set: updateData }, 
+//             { new: true }
+//         );
 
-        res.json({ 
-            success: true, 
-            message: "Profile Updated Successfully", 
-            data: updated 
-        });
+//         res.json({ 
+//             success: true, 
+//             message: "Profile Updated Successfully", 
+//             data: updated 
+//         });
 
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
-    }
-};
+//     } catch (error) { 
+//         res.status(500).json({ message: error.message }); 
+//     }
+// };
 
 // ==========================================
 // 2. SERVICE MANAGEMENT (Figma: Add/Edit Service)
 // ==========================================
-
+const updateProviderProfile = async (req, res) => {
+    try {
+        const updateData = req.body;
+ 
+        // 1. Block authorized/sensitive fields from being updated
+        delete updateData.email;
+        delete updateData.phone;
+        delete updateData.password;
+        delete updateData.role;
+        delete updateData.profileStatus;
+        delete updateData.rejectionReason;
+ 
+        // 2. Block documents from being edited or overwritten
+        // This ensures previously uploaded files/data remain completely safe and untouched
+        delete updateData.documents;
+ 
+        // 3. Since route middleware is "nurseDocUploads" (.fields configuration), look inside req.files
+        // Only allow profileImage update, completely ignoring any other document file uploads if sent.
+        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+            const newImagePath = req.files.profileImage[0].path;
+ 
+            // Retrieve old image path from currently logged-in nurse model (protect middleware stores it in req.user)
+            const oldImagePath = req.user.profileImage;
+ 
+            // If an old image exists, remove it from server storage
+            if (oldImagePath) {
+                deleteFile(oldImagePath);
+            }
+ 
+            // Bind the newly uploaded path to database updates payload
+            updateData.profileImage = newImagePath;
+        }
+ 
+        // 4. Update the record inside MongoDB
+        const updated = await Nurse.findByIdAndUpdate(
+            req.user.id,
+            { $set: updateData },
+            { new: true }
+        );
+ 
+        res.json({
+            success: true,
+            message: "Profile Updated Successfully",
+            data: updated
+        });
+ 
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+ 
 const manageNurseService = async (req, res) => {
     try {
         const { id } = req.params;

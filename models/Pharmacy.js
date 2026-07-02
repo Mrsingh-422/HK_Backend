@@ -45,7 +45,8 @@ const pharmacySchema = new mongoose.Schema({
         }
     },
 
-   
+        alternatePhone: { type: String, default: null }, 
+ 
         rejectionReason: { type: String, default: null },
 
     // Pharmacy Specific (Potential future fields)

@@ -25,7 +25,8 @@ const doctorSchema = new mongoose.Schema({
         default: null 
     },
     isActive: { type: Boolean, default: true },
-
+     alternatePhone: { type: String, default: null }, 
+ 
     // Professional Info
     qualification: { type: String, default: null },
     speciality: { type: String, default: null }, 

@@ -14,6 +14,7 @@ const nurseSchema = new mongoose.Schema({
         default: null 
     },
     isActive: { type: Boolean, default: true },
+    alternatePhone: { type: String, default: null },
 
     profileImage: { type: String, default: null },
 

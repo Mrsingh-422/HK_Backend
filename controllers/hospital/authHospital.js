@@ -176,45 +176,85 @@ const loginHospital = async (req, res) => {
 
 // --- 3. UPDATE DOCUMENTS & CHANGE STATUS ---
 // Endpoint: PUT /api/auth/hospital/update-profile
+// const updateHospitalProfile = async (req, res) => {
+//     try {
+//         const hospitalId = req.user.id;
+//         const updates = req.body;
+
+//         if (req.files) {
+//             if (req.files.hospitalImage) {
+//                 updates.hospitalImage = req.files.hospitalImage.map(f => `/uploads/hospitals/${f.filename}`);
+//             }
+//             if (req.files.licenseDocument) {
+//                 updates.licenseDocument = req.files.licenseDocument.map(f => `/uploads/hospitals/${f.filename}`);
+//             }
+//             if (req.files.otherDocuments) {
+//                 updates.otherDocuments = req.files.otherDocuments.map(f => `/uploads/hospitals/${f.filename}`);
+//             }
+
+//             // Agar main docs upload ho gaye hain, to status Pending kar do
+//             if (req.files.hospitalImage && req.files.licenseDocument) {
+//                 updates.profileStatus = 'Pending';
+//                 updates.rejectionReason = null; // Purana reason clear karein
+//             }
+//         }
+
+//         const updatedHospital = await Hospital.findByIdAndUpdate(
+//             hospitalId,
+//             { $set: updates },
+//             { new: true }
+//         );
+
+//         res.json({ 
+//             success: true, 
+//             message: updates.profileStatus === 'Pending' ? "Documents submitted for review" : "Profile Updated", 
+//             data: updatedHospital 
+//         });
+//     } catch (error) {
+//         res.status(500).json({ message: error.message });
+//     }
+// };
+// --- 3. UPDATE HOSPITAL PROFILE ---
+// Endpoint: PUT /api/auth/hospital/profile/update
 const updateHospitalProfile = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const updates = req.body;
-
-        if (req.files) {
-            if (req.files.hospitalImage) {
-                updates.hospitalImage = req.files.hospitalImage.map(f => `/uploads/hospitals/${f.filename}`);
-            }
-            if (req.files.licenseDocument) {
-                updates.licenseDocument = req.files.licenseDocument.map(f => `/uploads/hospitals/${f.filename}`);
-            }
-            if (req.files.otherDocuments) {
-                updates.otherDocuments = req.files.otherDocuments.map(f => `/uploads/hospitals/${f.filename}`);
-            }
-
-            // Agar main docs upload ho gaye hain, to status Pending kar do
-            if (req.files.hospitalImage && req.files.licenseDocument) {
-                updates.profileStatus = 'Pending';
-                updates.rejectionReason = null; // Purana reason clear karein
-            }
-        }
-
+ 
+        // 1. Block authorized/sensitive fields from being updated
+        delete updates.email;
+        delete updates.phone;
+        delete updates.password;
+        delete updates.role;
+        delete updates.profileStatus; // Users cannot self-approve or change status
+        delete updates.rejectionReason;
+ 
+        // 2. Block documents from being edited or overwritten
+        // This ensures previously uploaded files remain completely safe and untouched
+        delete updates.hospitalImage;
+        delete updates.licenseDocument;
+        delete updates.otherDocuments;
+ 
+        // Note: Any uploaded files via req.files for documents are ignored to protect the existing data.
+        // alternatePhone (along with other standard profile fields) will be successfully updated.
+ 
+        // 3. Database Update
         const updatedHospital = await Hospital.findByIdAndUpdate(
             hospitalId,
             { $set: updates },
             { new: true }
         );
-
-        res.json({ 
-            success: true, 
-            message: updates.profileStatus === 'Pending' ? "Documents submitted for review" : "Profile Updated", 
-            data: updatedHospital 
+ 
+        res.json({
+            success: true,
+            message: "Profile Updated",
+            data: updatedHospital
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
-
+ 
 const getMyHospitalProfile = async (req, res) => {
     try {
         const hospital = await Hospital.findById(req.user.id).select('-password');
