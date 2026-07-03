@@ -794,6 +794,82 @@ const getDraftResults = async (req, res) => {
     }
 };
 
+// GET LAB ORDER HISTORY (Completed & Cancelled Bookings)
+// Endpoint: GET /provider/labs/order-history
+const getLabOrderHistory = async (req, res) => {
+    try {
+        const labId = req.user.id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20; // Default limit 20 entries per page
+        const skip = (page - 1) * limit;
+        
+        const { search, status, startDate, endDate } = req.query;
+
+        // Base query: Sirf completed ya cancelled orders fetch karne ke liye
+        let query = { 
+            labId, 
+            status: { $in: ['Completed', 'Cancelled'] } 
+        };
+
+        // Specific status filter (Completed ya Cancelled me se koi ek)
+        if (status && ['Completed', 'Cancelled'].includes(status)) {
+            query.status = status;
+        }
+
+        // Dynamic Keyword Search (Booking ID, Custom Order ID ya Patient Name ke upar)
+        if (search) {
+            query.$or = [
+                { bookingId: { $regex: search, $options: 'i' } },
+                { 'patients.name': { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Optional Date Range filtering (Auditing/Earnings checks ke liye)
+        if (startDate && endDate) {
+            const start = moment(startDate).startOf('day').toDate();
+            const end = moment(endDate).endOf('day').toDate();
+            query.createdAt = {
+                $gte: start,
+                $lte: end
+            };
+        }
+
+        // Parallel count and find operations for performance optimization
+        const [orders, total] = await Promise.all([
+            LabBooking.find(query)
+                .populate('userId', 'name phone email')
+                .populate('phlebotomistId', 'name phone status')
+                .populate({
+                    path: 'items.packages.packageId',
+                    select: 'packageName tests',
+                    populate: {
+                        path: 'tests',
+                        model: 'MasterLabTest',
+                        select: 'testName'
+                    }
+                })
+                .sort({ createdAt: -1 }) // Latest orders first
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            LabBooking.countDocuments(query)
+        ]);
+
+        res.json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            limit,
+            data: orders
+        });
+
+    } catch (error) {
+        console.error("Error in getLabOrderHistory:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 /////////////////////////////////////////////////////////////////
@@ -1436,6 +1512,7 @@ module.exports = {
     getReportTemplatesForBooking, // 👈 Added
     saveDraftResults, // 👈 Added
     getDraftResults, // 👈 Added
+    getLabOrderHistory,
 
 
     // Prescription Flow endpoints

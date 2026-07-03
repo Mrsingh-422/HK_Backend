@@ -16,6 +16,8 @@ const {
     getReportTemplatesForBooking, // 👈 Added
     saveDraftResults, // 👈 Added
     getDraftResults, // 👈 Added
+    getLabOrderHistory,
+
     getProviderLabPrescriptionRequests,
     getProviderLabPrescriptionRequestDetails,
     startLabPrescriptionReview,
@@ -55,6 +57,7 @@ router.post('/save-draft/:orderId', protect('provider'), saveDraftResults); // S
 router.get('/get-draft/:orderId', protect('provider'), getDraftResults); // Get Draft API
 
 router.post('/generate-report/:orderId', protect('provider'), generateAndUploadSmartReport);
+router.get('/order-history', protect('provider'), getLabOrderHistory);
 
 // AI prescriptioin Flow
 router.get(
