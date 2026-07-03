@@ -32,7 +32,7 @@ router.post('/book', protect('user'), userReportUploads, bookAppointment);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 1a. Specialized Disease Care Booking (Dementia, Dialysis, Cancer) - Restricted to Subscribers
-router.post('/book/dementia-specialist', protect('user'), requireConditionPlan('Dementia'), bookAppointment);
+router.post('/book/specialist/:diseaseType', protect('user'), requireConditionPlan(), bookAppointment);
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // 2. Step 2: Cryptographic Signature Verify & Confirm
