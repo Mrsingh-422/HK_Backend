@@ -43,6 +43,8 @@ const Driver = require('../../../models/Driver');
 const { sendPushNotification,notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { checkAndApplyBenefit, deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+
 
 
 
@@ -51,7 +53,7 @@ const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment
 const calculateBillHelper = async (labId, items, patientsCount, collectionType, couponCode, isRapid, userId, appointmentTime) => {
     let itemTotal = 0;
     
-    // Items total calculation
+    // Items total calculation (Preserving existing logic)
     const tests = items.items ? items.items.filter(i => i.productType === 'LabTest') : (items.tests || []);
     const packages = items.items ? items.items.filter(i => i.productType === 'LabPackage') : (items.packages || []);
 
@@ -66,30 +68,31 @@ const calculateBillHelper = async (labId, items, patientsCount, collectionType, 
         if (pkg) itemTotal += (pkg.offerPrice || pkg.mrp);
     }
 
-    itemTotal = itemTotal * patientsCount; // Subtotal
+    itemTotal = itemTotal * patientsCount; 
 
     let homeVisitCharge = 0;
     const charges = await DeliveryCharge.findOne({ vendorId: labId });
 
     if (collectionType === 'Home Collection') {
-        // --- FIXED LOGIC ---
         let standardFee = charges ? Number(charges.fixedPrice) : 40;
         
-        // Agar total amount threshold se zyada hai toh zero
-        if (charges && charges.freeDeliveryThreshold && itemTotal >= charges.freeDeliveryThreshold) {
+        // 🚨 SUBSCRIPTION CHECK: Free Lab Delivery Check
+        const labDeliveryBenefit = await checkAndApplyBenefit(userId, 'freeLabDeliveriesCount', standardFee);
+        
+        if (labDeliveryBenefit.isApplied) {
+            homeVisitCharge = 0; // Set to 0 if plan benefit is active
+        } else if (charges && charges.freeDeliveryThreshold && itemTotal >= charges.freeDeliveryThreshold) {
             homeVisitCharge = 0;
         } else {
             homeVisitCharge = standardFee;
         }
     }
     
-    // Rapid charge logic
     let rapidCharge = 0;
     if (isRapid) {
         rapidCharge = charges ? Number(charges.fastDeliveryExtra) : 100;
     }
 
-    // Slot charge logic
     let slotCharge = 0;
     if (appointmentTime && appointmentTime !== 'Immediate') {
         const availConfig = await Availability.findOne({ vendorId: labId });
@@ -99,7 +102,6 @@ const calculateBillHelper = async (labId, items, patientsCount, collectionType, 
         }
     }
 
-    // Coupon logic
     let couponDiscount = 0;
     let couponId = null;
     if (couponCode) {
@@ -1109,7 +1111,11 @@ const checkoutLabBooking = async (req, res) => {
         if (paymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
 
-            // 🚨 Trigger Notification for COD Lab Bookings
+            // 🚨 SUBSCRIPTION DEDUCTION: COD Lab Delivery Benefit deduct karein
+            if (collectionType === 'Home Collection') {
+                await deductBenefitCount(req.user.id, 'freeLabDeliveriesCount');
+            }
+
             await notifyAdminsAndVendor(
                 cart.labCart.labId,
                 'lab',
@@ -1136,6 +1142,7 @@ const checkoutLabBooking = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 
@@ -1417,7 +1424,11 @@ const verifyLabPayment = async (req, res) => {
 
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
 
-        // 🚨 Trigger Notification for Paid Online Lab Bookings
+        // 🚨 SUBSCRIPTION DEDUCTION: Online Lab Delivery Benefit deduct karein
+        if (booking.collectionType === 'Home Collection') {
+            await deductBenefitCount(booking.userId, 'freeLabDeliveriesCount');
+        }
+
         await notifyAdminsAndVendor(
             booking.labId,
             'lab',
