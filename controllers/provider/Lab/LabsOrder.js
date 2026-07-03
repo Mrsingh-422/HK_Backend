@@ -107,19 +107,50 @@ const handleOrderAction = async (req, res) => {
 const assignStaff = async (req, res) => {
     try {
         const { phlebotomistId } = req.body;
+        const { orderId } = req.params;
+        const labId = req.user.id;
 
-        if (!phlebotomistId) {
+        if (!phlebotomistId || !orderId) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Phlebotomist ID is required to assign staff." 
+                message: "Phlebotomist ID and Order ID are required to assign staff." 
             });
         }
 
+        // 1. Explicitly cast values to ObjectId to prevent dynamic refPath mismatch in queries
+        const phlebotomistObjectId = new mongoose.Types.ObjectId(phlebotomistId);
+        const labObjectId = new mongoose.Types.ObjectId(labId);
+        const orderObjectId = new mongoose.Types.ObjectId(orderId);
+
+        // 2. Verify karein ki driver exist karta hai, is lab ka part hai aur online hai
+        const driver = await Driver.findOne({ 
+            _id: phlebotomistObjectId, 
+            vendorId: labObjectId,
+            vendorType: 'Lab'
+        });
+
+        if (!driver) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Phlebotomist not found or unauthorized for this lab." 
+            });
+        }
+
+        if (driver.status === 'Offline') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cannot assign an offline phlebotomist." 
+            });
+        }
+
+        // 3. Booking update karein database me
         const booking = await LabBooking.findOneAndUpdate(
-            { _id: req.params.orderId, labId: req.user.id },
+            { _id: orderObjectId, labId: labObjectId },
             { 
-                phlebotomistId: phlebotomistId, 
-                status: 'Phlebotomist Assigned' 
+                $set: {
+                    phlebotomistId: phlebotomistObjectId, 
+                    status: 'Phlebotomist Assigned' 
+                }
             },
             { new: true }
         );
@@ -128,8 +159,24 @@ const assignStaff = async (req, res) => {
             return res.status(404).json({ success: false, message: "Order not found" });
         }
 
-        res.json({ success: true, message: "Phlebotomist assigned successfully", data: booking });
+        // 4. Update the driver status directly to 'Busy' using findByIdAndUpdate
+        const updatedDriver = await Driver.findByIdAndUpdate(
+            phlebotomistObjectId,
+            { $set: { status: 'Busy' } },
+            { new: true, runValidators: false }
+        );
+
+        console.log(`[Sync Completed]: Phlebotomist status set to ->`, updatedDriver?.status);
+
+        res.json({ 
+            success: true, 
+            message: "Phlebotomist assigned successfully", 
+            driverStatus: updatedDriver ? updatedDriver.status : "Busy",
+            data: booking 
+        });
+
     } catch (error) { 
+        console.error("Assign Staff Operation Failed:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -1003,81 +1050,6 @@ const getAvailablePhlebotomists = async (req, res) => {
 
 };
  
-// =======================================================
-
-// 2. ASSIGN PHLEBOTOMIST (First Time Assignment)
-
-// =======================================================
-
-// Endpoint: PATCH /provider/labs/assign-staff/:orderId
-
-const assignDriverStaff = async (req, res) => {
-    try {
-        const { orderId } = req.params;
-        const { phlebotomistId } = req.body;
-        const labId = req.user.id;
- 
-        if (!phlebotomistId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Phlebotomist ID is required to assign staff." 
-            });
-        }
-
-        // ID formats validate karein
-        if (!mongoose.Types.ObjectId.isValid(phlebotomistId)) {
-            return res.status(400).json({ success: false, message: "Invalid Phlebotomist ID format." });
-        }
- 
-        // 1. Phlebotomist fetch karein aur verification apply karein
-        const driver = await Driver.findById(phlebotomistId);
-        if (!driver) {
-            return res.status(404).json({ success: false, message: "Phlebotomist not found." });
-        }
-
-        // Secure boundary checks: verify vendor connection
-        if (driver.vendorId.toString() !== labId.toString()) {
-            return res.status(403).json({ success: false, message: "Unauthorized. This phlebotomist does not belong to your lab." });
-        }
- 
-        if (driver.status === 'Offline') {
-            return res.status(400).json({ success: false, message: "Cannot assign an offline phlebotomist." });
-        }
- 
-        // 2. Booking ko update karein
-        const booking = await LabBooking.findOneAndUpdate(
-            { _id: orderId, labId },
-            { 
-                phlebotomistId: phlebotomistId, 
-                status: 'Phlebotomist Assigned' 
-            },
-            { new: true }
-        );
- 
-        if (!booking) {
-            return res.status(404).json({ success: false, message: "Order not found or unauthorized." });
-        }
- 
-        // 3. FIX: Atomic update operator use karein taaki status directly update ho bina kisi hook blockage ke
-        const updatedDriver = await Driver.findByIdAndUpdate(
-            phlebotomistId,
-            { $set: { status: 'Busy' } },
-            { new: true } // Returns the updated document state
-        );
- 
-        res.json({ 
-            success: true, 
-            message: "Phlebotomist assigned successfully and status updated to Busy.", 
-            data: {
-                booking,
-                phlebotomistStatus: updatedDriver ? updatedDriver.status : 'Busy'
-            }
-        });
-
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
-    }
-};
  
 // =======================================================
 
@@ -1472,8 +1444,7 @@ module.exports = {
     startLabPrescriptionReview,
     submitLabReviewBill,
     rejectLabPrescriptionRequest,
-    getAvailablePhlebotomists,
-    assignDriverStaff,              
+    getAvailablePhlebotomists,              
     reassignDriverStaff   ,
     getBookingTrackingDetails,
     

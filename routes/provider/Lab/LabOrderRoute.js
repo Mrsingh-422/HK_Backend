@@ -22,7 +22,6 @@ const {
     submitLabReviewBill,
     rejectLabPrescriptionRequest,
     getAvailablePhlebotomists,
-    assignDriverStaff,
     reassignDriverStaff,
     getBookingTrackingDetails
 } = require('../../../controllers/provider/Lab/LabsOrder');
@@ -91,7 +90,7 @@ router.post(
 router.get('/available-phlebotomists', protect('provider'), getAvailablePhlebotomists);
  
 // Assign staff / phlebotomist (First time)
-router.patch('/assign-staff/:orderId', protect('provider'), assignDriverStaff);
+// router.patch('/assign-staff/:orderId', protect('provider'), assignDriverStaff);
  
 // Re-assign staff / phlebotomist (Changes driver and resets timestamps)
 router.patch('/reassign-staff/:orderId', protect('provider'), reassignDriverStaff);

@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscription Plans Management Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans min-h-screen">
+
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="mb-8 border-b pb-4 flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-indigo-700">Plans Management</h1>
+                <p class="text-sm text-gray-500">Configure Elder Care & Condition Management subscription matrices</p>
+            </div>
+            <div id="alertBox" class="hidden px-4 py-2 rounded shadow-md text-sm transition-all duration-300"></div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <!-- Left Panel: Create / Edit Form -->
+            <div class="lg:col-span-5 bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <h2 id="formTitle" class="text-xl font-semibold text-gray-700 mb-6 border-b pb-2">Create Subscription Plan</h2>
+                
+                <form id="planForm" class="space-y-4">
+                    <input type="hidden" id="planId" value="">
+
+                    <!-- Plan Type -->
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Plan Type</label>
+                        <select id="planType" onchange="toggleDiseaseSelect()" class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="Elder Care">Elder Care</option>
+                            <option value="Condition Management">Condition Management</option>
+                        </select>
+                    </div>
+
+                    <!-- Name -->
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Plan Name</label>
+                        <input type="text" id="name" placeholder="e.g. Basic Annual Care, Dementia Plan" required class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+
+                    <!-- Disease Type (Toggleable) -->
+                    <div id="diseaseGroup" class="hidden">
+                        <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Disease Focus Type</label>
+                        <select id="diseaseType" class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="">None (General)</option>
+                            <option value="Dementia">Dementia</option>
+                            <option value="Dialysis">Dialysis</option>
+                            <option value="Cancer">Cancer</option>
+                        </select>
+                    </div>
+
+                    <!-- Validity in Days & Price -->
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Validity (In Days)</label>
+                            <input type="number" id="validityInDays" placeholder="e.g., 7, 30, 365" required min="1" class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Price (Rupees ₹)</label>
+                            <input type="number" id="price" placeholder="INR" required min="0" class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                    </div>
+
+                    <!-- Description -->
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Short Description</label>
+                        <textarea id="description" rows="2" placeholder="Describe the focus of this subscription..." class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                    </div>
+
+                    <!-- Features -->
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Bullet Features (Comma Separated)</label>
+                        <input type="text" id="features" placeholder="Free physical assessment, 24/7 Support Line, Crisis Updates" class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+
+                    <!-- Terms & Conditions -->
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Terms & Conditions</label>
+                        <textarea id="termsAndConditions" rows="2" placeholder="Write terms or fine prints..." class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                    </div>
+
+                    <!-- Benefits Configurations -->
+                    <div class="border border-gray-150 p-4 rounded bg-gray-50 space-y-3">
+                        <span class="text-xs font-bold text-gray-600 uppercase tracking-wide block border-b pb-1">Benefits Configuration Limits</span>
+                        
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-2xs text-gray-500 mb-0.5">Free Doc Consults</label>
+                                <input type="number" id="freeDoc" value="0" min="0" class="w-full border border-gray-300 rounded p-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-2xs text-gray-500 mb-0.5">Free Nurse Visits</label>
+                                <input type="number" id="freeNurse" value="0" min="0" class="w-full border border-gray-300 rounded p-1 text-xs">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-2">
+                            <div>
+                                <label class="block text-3xs text-gray-500 mb-0.5">Free Lab Deliv.</label>
+                                <input type="number" id="freeLabDeliv" value="0" min="0" class="w-full border border-gray-300 rounded p-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-3xs text-gray-500 mb-0.5">Free Nurse Deliv.</label>
+                                <input type="number" id="freeNurseDeliv" value="0" min="0" class="w-full border border-gray-300 rounded p-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-3xs text-gray-500 mb-0.5">Free Pharm Deliv.</label>
+                                <input type="number" id="freePharmDeliv" value="0" min="0" class="w-full border border-gray-300 rounded p-1 text-xs">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-2xs text-gray-500 mb-0.5">Free Ambulance Trips</label>
+                                <input type="number" id="freeAmbulance" value="0" min="0" class="w-full border border-gray-300 rounded p-1 text-xs">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Active state checkbox -->
+                    <div class="flex items-center space-x-2 pt-2">
+                        <input type="checkbox" id="isActive" checked class="h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                        <label for="isActive" class="text-xs font-semibold text-gray-600">Active and visible to customers</label>
+                    </div>
+
+                    <!-- Actions Buttons -->
+                    <div class="flex space-x-3 pt-4 border-t">
+                        <button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 rounded text-sm transition">Save Plan</button>
+                        <button type="button" onclick="resetFormState()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded text-sm transition">Reset</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Right Panel: Plans Catalog Display list -->
+            <div class="lg:col-span-7 space-y-4">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="text-xl font-semibold text-gray-700">Existing Subscription Plans</h2>
+                    <button onclick="fetchExistingPlans()" class="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-200 px-3 py-1 rounded transition">Sync List</button>
+                </div>
+
+                <div id="plansListContainer" class="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+                    <div class="text-center py-12 text-gray-400">Loading catalog matrix...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS Actions Operations Logic -->
+    <script>
+        const USER_BASE_URL = 'http://localhost:5002/user/subscriptions';
+        const ADMIN_BASE_URL = 'http://localhost:5002/admin/subscriptions';
+
+        document.getElementById('planForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const planId = document.getElementById('planId').value;
+            const featuresInput = document.getElementById('features').value;
+
+            const formData = {
+                planType: document.getElementById('planType').value,
+                name: document.getElementById('name').value,
+                diseaseType: document.getElementById('diseaseType').value || null,
+                validityInDays: Number(document.getElementById('validityInDays').value),
+                price: Number(document.getElementById('price').value),
+                description: document.getElementById('description').value,
+                termsAndConditions: document.getElementById('termsAndConditions').value,
+                features: featuresInput ? featuresInput.split(',').map(f => f.trim()) : [],
+                isActive: document.getElementById('isActive').checked,
+                benefits: {
+                    freeDoctorAppointmentsCount: Number(document.getElementById('freeDoc').value),
+                    freeNurseVisitsCount: Number(document.getElementById('freeNurse').value),
+                    freeLabDeliveriesCount: Number(document.getElementById('freeLabDeliv').value),
+                    freeNurseDeliveriesCount: Number(document.getElementById('freeNurseDeliv').value),
+                    freePharmacyDeliveriesCount: Number(document.getElementById('freePharmDeliv').value),
+                    freeAmbulanceTripsCount: Number(document.getElementById('freeAmbulance').value)
+                }
+            };
+
+            try {
+                let url = `${ADMIN_BASE_URL}/create`;
+                let method = 'POST';
+
+                if (planId) {
+                    url = `${ADMIN_BASE_URL}/update/${planId}`;
+                    method = 'PUT';
+                }
+
+                const response = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert(planId ? "Plan updated successfully!" : "Plan created successfully!", "success");
+                    resetFormState();
+                    fetchExistingPlans();
+                } else {
+                    showAlert(result.message || "An error occurred.", "error");
+                }
+            } catch (error) {
+                showAlert("Network communication error.", "error");
+            }
+        });
+
+        function toggleDiseaseSelect() {
+            const planType = document.getElementById('planType').value;
+            const diseaseGroup = document.getElementById('diseaseGroup');
+            if (planType === 'Condition Management') {
+                diseaseGroup.classList.remove('hidden');
+            } else {
+                diseaseGroup.classList.add('hidden');
+                document.getElementById('diseaseType').value = "";
+            }
+        }
+
+        async function fetchExistingPlans() {
+            try {
+                const response = await fetch(`${USER_BASE_URL}/list`);
+                const result = await response.json();
+
+                if (result.success) {
+                    renderPlans(result.data);
+                } else {
+                    showAlert("Could not load plans catalog.", "error");
+                }
+            } catch (error) {
+                showAlert("Error fetching catalog.", "error");
+            }
+        }
+
+        function renderPlans(plans) {
+            const container = document.getElementById('plansListContainer');
+            if (plans.length === 0) {
+                container.innerHTML = `<div class="text-center py-12 text-gray-400 bg-white rounded border">No plans registered in backend database.</div>`;
+                return;
+            }
+
+            container.innerHTML = plans.map(plan => `
+                <div class="bg-white p-5 rounded-lg border border-gray-200 shadow-sm relative hover:shadow-md transition">
+                    <div class="absolute top-4 right-4 flex space-x-2">
+                        <button onclick="editPlan('${encodeURIComponent(JSON.stringify(plan))}')" class="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded border border-indigo-200 hover:bg-indigo-100">Edit</button>
+                        <button onclick="deletePlan('${plan._id}')" class="text-xs bg-red-50 text-red-600 px-3 py-1 rounded border border-red-150 hover:bg-red-100">Delete</button>
+                    </div>
+
+                    <span class="inline-block text-3xs font-bold uppercase tracking-wider px-2 py-0.5 rounded ${plan.planType === 'Elder Care' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'} mb-2">
+                        ${plan.planType} ${plan.diseaseType ? `(${plan.diseaseType})` : ''}
+                    </span>
+
+                    <h3 class="text-lg font-bold text-gray-800 mb-1">${plan.name}</h3>
+                    <p class="text-2xs text-gray-500 mb-1">${plan.description || 'No description provided.'}</p>
+                    <p class="text-3xs text-amber-600 italic mb-3">T&C: ${plan.termsAndConditions || 'None'}</p>
+
+                    <div class="mb-4">
+                        <span class="text-2xl font-black text-indigo-600 font-sans">₹${plan.price}</span>
+                        <span class="text-xs text-gray-400">/ ${plan.validityInDays} Days validity</span>
+                        <span class="text-2xs ml-2 px-1.5 py-0.5 rounded ${plan.isActive ? 'bg-blue-50 text-indigo-600' : 'bg-gray-100 text-gray-500'}">
+                            ${plan.isActive ? 'Live' : 'Hidden'}
+                        </span>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4 text-xs bg-gray-50 p-3 rounded border">
+                        <div>
+                            <span class="block font-semibold text-gray-400 text-3xs uppercase mb-1">Limits / Surcharges</span>
+                            <ul class="space-y-1 text-gray-600">
+                                <li>• Free Consults: <b>${plan.benefits.freeDoctorAppointmentsCount}</b></li>
+                                <li>• Free Nurse visits: <b>${plan.benefits.freeNurseVisitsCount}</b></li>
+                                <li>• Free Ambulance: <b>${plan.benefits.freeAmbulanceTripsCount}</b></li>
+                            </ul>
+                        </div>
+                        <div>
+                            <span class="block font-semibold text-gray-400 text-3xs uppercase mb-1">Free Delivery Counts</span>
+                            <ul class="space-y-1 text-gray-600">
+                                <li>• Lab Delivery: <b>${plan.benefits.freeLabDeliveriesCount || 0}</b></li>
+                                <li>• Nurse Delivery: <b>${plan.benefits.freeNurseDeliveriesCount || 0}</b></li>
+                                <li>• Pharmacy Delivery: <b>${plan.benefits.freePharmacyDeliveriesCount || 0}</b></li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    ${plan.features && plan.features.length > 0 ? `
+                        <div class="mt-3">
+                            <span class="block text-3xs font-semibold uppercase text-gray-400 mb-1">Bullets display features</span>
+                            <div class="flex flex-wrap gap-1.5">
+                                ${plan.features.map(f => `<span class="bg-gray-100 text-gray-600 text-3xs px-2 py-0.5 rounded">${f}</span>`).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        function editPlan(encodedPlanStr) {
+            const plan = JSON.parse(decodeURIComponent(encodedPlanStr));
+            
+            document.getElementById('formTitle').innerText = "Edit Subscription Plan";
+            document.getElementById('planId').value = plan._id;
+            
+            document.getElementById('planType').value = plan.planType;
+            document.getElementById('name').value = plan.name;
+            document.getElementById('validityInDays').value = plan.validityInDays;
+            document.getElementById('price').value = plan.price;
+            document.getElementById('description').value = plan.description || "";
+            document.getElementById('termsAndConditions').value = plan.termsAndConditions || "";
+            document.getElementById('features').value = plan.features ? plan.features.join(', ') : "";
+            document.getElementById('isActive').checked = plan.isActive;
+
+            toggleDiseaseSelect();
+            if (plan.planType === 'Condition Management') {
+                document.getElementById('diseaseType').value = plan.diseaseType || "";
+            }
+
+            document.getElementById('freeDoc').value = plan.benefits.freeDoctorAppointmentsCount || 0;
+            document.getElementById('freeNurse').value = plan.benefits.freeNurseVisitsCount || 0;
+            document.getElementById('freeLabDeliv').value = plan.benefits.freeLabDeliveriesCount || 0;
+            document.getElementById('freeNurseDeliv').value = plan.benefits.freeNurseDeliveriesCount || 0;
+            document.getElementById('freePharmDeliv').value = plan.benefits.freePharmacyDeliveriesCount || 0;
+            document.getElementById('freeAmbulance').value = plan.benefits.freeAmbulanceTripsCount || 0;
+
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        async function deletePlan(id) {
+            if (!confirm("Are you sure you want to permanently delete this plan?")) return;
+
+            try {
+                const response = await fetch(`${ADMIN_BASE_URL}/delete/${id}`, { method: 'DELETE' });
+                const result = await response.json();
+                if (result.success) {
+                    showAlert("Plan deleted successfully.", "success");
+                    fetchExistingPlans();
+                } else {
+                    showAlert(result.message || "Failed to delete plan.", "error");
+                }
+            } catch (error) {
+                showAlert("Communication error during deletion.", "error");
+            }
+        }
+
+        function resetFormState() {
+            document.getElementById('formTitle').innerText = "Create Subscription Plan";
+            document.getElementById('planId').value = "";
+            document.getElementById('planForm').reset();
+            document.getElementById('diseaseGroup').classList.add('hidden');
+        }
+
+        function showAlert(msg, statusType) {
+            const alertBox = document.getElementById('alertBox');
+            alertBox.innerText = msg;
+            alertBox.className = `block px-4 py-2 rounded shadow-md text-sm transition-all duration-300 ${
+                statusType === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+            }`;
+            setTimeout(() => { alertBox.className = "hidden"; }, 3500);
+        }
+
+        fetchExistingPlans();
+    </script>
+</body>
+</html>

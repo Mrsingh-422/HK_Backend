@@ -138,6 +138,7 @@ app.use('/admin/vendor-km-limit', require('./routes/admin/others/VendorKMLimitRo
 app.use('/admin/users', require('./routes/admin/user/UserRoute'));
 app.use('/admin/user/insurance', require('./routes/admin/user/insruranceAdd'));
 app.use('/admin/roles', require('./routes/subAdmin/RoleRoute')); // Role Management Route
+app.use('/admin/subscriptions', require('./routes/admin/others/AdminSubscriptionRoute'));
 
 app.use('/api/homepage', require('./routes/admin/user/home/HomePageRoute')); // HomePage Content Management Route
 app.use('/api/labpage', require('./routes/admin/user/home/LabPageRoute')) // LabPage Content Management Route
@@ -193,8 +194,8 @@ app.use('/user/doctor/video-call', require('./routes/user/Doctor/VideoCallRoute'
 app.use('/api/chat', require('./routes/user/Doctor/ChatRoutes')); // Doctor-User Chat Route
 // --- user hospital ---
 app.use('/user/hospital', require('./routes/user/Hospital/BookHospitalRoute'));
-// --- user ambulance ---
-// app.use('/user/ambulance', require('./routes/user/Ambulance/BookAmbulanceRoute'));
+// --- user others ---
+app.use('/user/subscriptions', require('./routes/user/others/SubscriptionRoute'));
 // --- user lab ---
 app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
 app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
