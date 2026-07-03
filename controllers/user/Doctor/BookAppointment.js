@@ -18,6 +18,7 @@ const Review = require('../../../models/Review'); // For dynamic ratings calcula
 
 const Bed = require('../../../models/Bed'); // For hospital admissions
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
+const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 
 // 1. GET ALL SPECIALIZATIONS (For dropdown)
 const getSpecializations = async (req, res) => {
@@ -268,6 +269,74 @@ const validateCoupon = async (req, res) => {
 };
 
 // GET CHECKOUT SUMMARY
+// const getCheckoutSummary = async (req, res) => {
+//     try {
+//         const { 
+//             doctorId, consultationType, couponCode, 
+//             distance = 0, timeSlot, appointmentDate, 
+//             specialServices = [], patients = [], address = null 
+//         } = req.body;
+
+//         const doctor = await Doctor.findById(doctorId);
+//         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
+
+//         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
+//         let baseFee = doctor.fees[typeMap[consultationType]] || 0;
+
+//         // 🚨 SUBSCRIPTION CHECK: Free Doctor Consultations check karein
+//         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
+//         baseFee = docBenefit.amount; // Benefit active hone par baseFee 0 ho jayegi
+
+//         let visitCharge = 0;
+//         if (consultationType === 'Home Visit') {
+//             if (!address) return res.status(400).json({ message: "Address required for Home Visit" });
+
+//             const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
+            
+//             if (chargeConfig) {
+//                 visitCharge = chargeConfig.fixedPrice; 
+//                 if (distance > chargeConfig.fixedDistance) {
+//                     visitCharge += (distance - chargeConfig.fixedDistance) * chargeConfig.pricePerKM;
+//                 }
+//             } else {
+//                 visitCharge = 100; 
+//             }
+//         }
+
+//         let premiumFee = 0;
+//         const avail = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
+//         const slot = avail?.premiumSlots.find(s => s.time === timeSlot);
+//         if (slot) premiumFee = slot.extraFee;
+
+//         const servicesTotal = specialServices.reduce((sum, s) => sum + (s.price || 0), 0);
+//         let subtotal = baseFee + visitCharge + premiumFee + servicesTotal;
+
+//         let discount = 0;
+//         if (couponCode) {
+//             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+//             if (coupon && subtotal >= coupon.minOrderAmount) {
+//                 discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+//             }
+//         }
+
+//         res.json({
+//             success: true,
+//             data: {
+//                 baseFee,
+//                 visitCharge, 
+//                 premiumFee,
+//                 servicesTotal,
+//                 discount,
+//                 subtotal,
+//                 totalPayable: subtotal - discount,
+//                 patients,
+//                 address: consultationType === 'Home Visit' ? address : null
+//             }
+//         });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
+
+// for condtional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
 const getCheckoutSummary = async (req, res) => {
     try {
         const { 
@@ -279,8 +348,38 @@ const getCheckoutSummary = async (req, res) => {
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
 
+        // =========================================================================
+        // 🚨 CRITICAL SUBSCRIPTION FLOW: FAMILY MEMBERS VERIFICATION LOGIC
+        // =========================================================================
+        const user = await User.findById(req.user.id).select('familyMember');
+        if (!user) return res.status(404).json({ message: "User account not found" });
+
+        // Validate each patient in the request body
+        for (const patient of patients) {
+            const isSelf = patient.relation === 'Self' || patient.patientName.toLowerCase() === 'self';
+            
+            if (!isSelf) {
+                // Check if patient exists in primary user's familyMember array in DB
+                const isRegisteredMember = user.familyMember.some(member => 
+                    member.memberName.toLowerCase() === patient.patientName.toLowerCase()
+                );
+
+                if (!isRegisteredMember) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Access Blocked: Patient '${patient.patientName}' is not registered under your family profile. Please add them first to apply your elder care subscription benefits.`
+                    });
+                }
+            }
+        }
+
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
         let baseFee = doctor.fees[typeMap[consultationType]] || 0;
+
+        // 🚨 SUBSCRIPTION CHECK: Free Doctor Consultations check karein
+        const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
+        const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
+        baseFee = docBenefit.amount; // Sets to 0 if benefit applied
 
         let visitCharge = 0;
         if (consultationType === 'Home Visit') {
@@ -328,7 +427,9 @@ const getCheckoutSummary = async (req, res) => {
                 address: consultationType === 'Home Visit' ? address : null
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY ORDER CREATION) ---
@@ -475,7 +576,9 @@ const verifyDoctorPayment = async (req, res) => {
             return res.status(404).json({ success: false, message: "Appointment record not found." });
         }
 
-        // 🚨 Trigger Notification for Doctor & Admins
+        // 🚨 SUBSCRIPTION DEDUCTION: Successful consultation deduct karein
+        await deductBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
+
         await notifyAdminsAndVendor(
             appointment.doctorId._id,
             'doctor',
@@ -589,6 +692,13 @@ const userCancelAppointment = async (req, res) => {
         appointment.paymentStatus = 'Refund-Initiated'; 
 
         await appointment.save();
+
+        // 🚨 SUBSCRIPTION REFUND: Check if booking baseFee was 0 due to subscription
+        if (appointment.pricingBreakdown?.baseFee === 0) {
+            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+            await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
+        }
+
         res.json({ 
             success: true, 
             message: "Appointment cancelled successfully. You can reschedule this appointment.", 

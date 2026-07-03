@@ -43,7 +43,7 @@ const Driver = require('../../../models/Driver');
 const { sendPushNotification,notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
-const { checkAndApplyBenefit, deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 
 
 
@@ -1314,7 +1314,6 @@ const cancelBooking = async (req, res) => {
 
         if (!booking) return res.status(404).json({ message: "Booking not found" });
 
-        // Logic: Sirf 'Confirmed' ya 'Pending' status me hi cancel ho sakta hai
         const nonCancellable = ['Sample Collected', 'Testing', 'Report Generated', 'Completed'];
         if (nonCancellable.includes(booking.status)) {
             return res.status(400).json({ message: "Cannot cancel. Phlebotomist is already on the way or sample is in lab." });
@@ -1324,8 +1323,16 @@ const cancelBooking = async (req, res) => {
         booking.cancelReason = reason;
         await booking.save();
 
+        // 🚨 SUBSCRIPTION REFUND: Check if delivery charge was 0 due to subscription
+        if (booking.billSummary?.homeVisitCharge === 0 && booking.collectionType === 'Home Collection') {
+            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+            await refundBenefitCount(booking.userId, 'freeLabDeliveriesCount');
+        }
+
         res.json({ success: true, message: "Booking cancelled successfully" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 9. CONFIRM SUGGESTED TESTS (Prescription Flow - Replacing confirmPrescriptionBooking)

@@ -30,6 +30,7 @@ const ComboOffer = require('../../../models/PharmacyComboOffer'); // Import Comb
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
+const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 
 
 
@@ -37,7 +38,7 @@ const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/
 
 
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
-const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime) => {
+const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime, userId) => {
     let rawItemTotalWithoutPromo = 0; 
     let promoDeductedTotal = 0;       
     const today = new Date();
@@ -45,12 +46,9 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     for (const item of items) {
         const pricePerUnit = Number(item.price || item.pricePerUnit || 0);
         const orderedQty = Number(item.quantity || 1);
-        const medicineId = item.medicineId._id || item.medicineId;
 
-        // Raw total calculation
         rawItemTotalWithoutPromo += (pricePerUnit * orderedQty);
 
-        // 🚨 STRICT CHECK: Apply BOGO only if cart item has isComboApplied set to true [1]
         if (item.isComboApplied === true && item.comboOfferId) {
             const activePromo = await PharmacyComboOffer.findOne({
                 _id: item.comboOfferId,
@@ -74,7 +72,6 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
                 promoDeductedTotal += (pricePerUnit * orderedQty);
             }
         } else {
-            // Calculated as standard non-combo medicine [1]
             promoDeductedTotal += (pricePerUnit * orderedQty);
         }
     }
@@ -89,7 +86,11 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     const charges = await DeliveryCharge.findOne({ vendorId: cleanPharmaId });
 
     if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
-        deliveryCharge = charges ? Number(charges.fixedPrice) : 40;
+        let standardFee = charges ? Number(charges.fixedPrice) : 40;
+
+        // 🚨 SUBSCRIPTION INTEGRATION (FREE PHARMACY DELIVERY) ---
+        const pharmDeliveryBenefit = await checkAndApplyBenefit(userId, 'freePharmacyDeliveriesCount', standardFee);
+        deliveryCharge = pharmDeliveryBenefit.amount; // Sets deliveryCharge to 0 if benefit is applied
     }
     
     if (isRapid && (!appointmentTime || appointmentTime === 'Immediate')) {
@@ -1235,8 +1236,9 @@ const placeOrder = async (req, res) => {
 
         const isPrescriptionOrder = rxMandatory || rxImages.length > 0;
 
+        // Passed req.user.id to calculatePharmacyBillHelper
         const bill = await calculatePharmacyBillHelper(
-            pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime
+            pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
         );
 
         const mappedOrderItems = cart.pharmacyCart.items.map(item => {
@@ -1281,12 +1283,11 @@ const placeOrder = async (req, res) => {
         } else {
             for (const item of cart.pharmacyCart.items) {
                 const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId._id });
-                if (!inventory || inventory.stock_quantity < item.quantity) {
-                    return res.status(400).json({ message: `Stock mismatch for ${item.name}. Please refresh cart.` });
+                if (inventory) {
+                    inventory.stock_quantity = Math.max(0, inventory.stock_quantity - item.quantity);
+                    if (inventory.stock_quantity === 0) inventory.is_available = false;
+                    await inventory.save();
                 }
-                inventory.stock_quantity -= item.quantity;
-                if (inventory.stock_quantity <= 0) inventory.is_available = false;
-                await inventory.save();
             }
         }
 
@@ -1314,7 +1315,11 @@ const placeOrder = async (req, res) => {
         if (paymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-            // 🚨 Trigger Notification for COD Pharmacy Bookings
+            // 🚨 SUBSCRIPTION DEDUCTION: COD Pharmacy Delivery Benefit deduct karein
+            if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
+                await deductBenefitCount(req.user.id, 'freePharmacyDeliveriesCount');
+            }
+
             await notifyAdminsAndVendor(
                 pharmacyId,
                 'pharmacy',
@@ -1404,7 +1409,11 @@ const verifyPharmacyPayment = async (req, res) => {
 
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-        // 🚨 Trigger Notification for Online Paid Pharmacy Orders
+        // 🚨 SUBSCRIPTION DEDUCTION: Online Pharmacy Delivery Benefit deduct karein
+        if (order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection') {
+            await deductBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
+        }
+
         await notifyAdminsAndVendor(
             order.pharmacyId,
             'pharmacy',
@@ -1461,16 +1470,26 @@ const cancelMedicineOrder = async (req, res) => {
         const { reason } = req.body;
         const order = await PharmacyBooking.findOne({ _id: req.params.id, userId: req.user.id });
 
-        if (['Out for Delivery', 'Delivered'].includes(order.status)) {
-            return res.status(400).json({ message: "Cannot cancel order now." });
+        if (!order) return res.status(404).json({ message: "Order not found." });
+
+        if (['Out for Delivery', 'Delivered', 'Cancelled'].includes(order.status)) {
+            return res.status(400).json({ message: "Cannot cancel order in its current state." });
         }
 
         order.status = 'Cancelled';
         order.cancelReason = reason;
         await order.save();
 
+        // 🚨 SUBSCRIPTION REFUND: Check if delivery charge was 0 due to subscription
+        if (order.billSummary?.deliveryCharge === 0 && (order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection')) {
+            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+            await refundBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
+        }
+
         res.json({ success: true, message: "Order cancelled" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 

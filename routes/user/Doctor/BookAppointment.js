@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
+const { requireConditionPlan } = require('../../../middleware/subscriptionCheckMiddleware');
 const { userReportUploads } = require('../../../middleware/multer');
 
 const { 
@@ -28,6 +29,11 @@ router.post('/checkout-summary', protect('user'), getCheckoutSummary);
 
 // 1. Step 1: Create Order & Book
 router.post('/book', protect('user'), userReportUploads, bookAppointment);
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+// 1a. Specialized Disease Care Booking (Dementia, Dialysis, Cancer) - Restricted to Subscribers
+router.post('/book/dementia-specialist', protect('user'), requireConditionPlan('Dementia'), bookAppointment);
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // 2. Step 2: Cryptographic Signature Verify & Confirm
 router.post('/verify-payment', protect('user'), verifyDoctorPayment); // 👈 Added Route Path

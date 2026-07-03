@@ -18,6 +18,7 @@ const mongoose = require('mongoose');
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 
 const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 
 
 // 1. LIST HOSPITALS (Screenshot 18, 19)
@@ -376,6 +377,92 @@ const getAvailableBedsForRange = async (req, res) => {
 };
 
 // --- 2. UPDATED CHECKOUT (Based on stay duration) ---
+// const getHospitalCheckoutSummary = async (req, res) => {
+//     try {
+//         const { 
+//             hospitalId, 
+//             doctorId, 
+//             bedId, 
+//             consultationType, 
+//             couponCode, 
+//             specialServices, 
+//             startDate, 
+//             endDate,
+//             triageLevel 
+//         } = req.body;
+
+//         let baseFee = 0;         
+//         let visitCharge = 0;     
+//         let triageSurcharge = 0; 
+//         let days = 1;            
+
+//         if (bedId && startDate && endDate) {
+//             const start = moment(startDate).startOf('day');
+//             const end = moment(endDate).endOf('day');
+            
+//             days = end.diff(start, 'days');
+//             if (days <= 0) days = 1;
+
+//             const bed = await Bed.findById(bedId);
+//             if (bed) {
+//                 const bedPrice = bed.price || bed.pricePerDay || 0;
+//                 baseFee = bedPrice * days;
+//             }
+//         }
+
+//         if (doctorId) {
+//             const doctor = await Doctor.findById(doctorId);
+//             if (doctor) {
+//                 visitCharge = doctor.fees || 0;
+
+//                 // 🚨 SUBSCRIPTION CHECK: Hospital me assigned doctor consultation check karein
+//                 const hospDocBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', visitCharge);
+//                 visitCharge = hospDocBenefit.amount; // Sets visitCharge to 0 if benefit active
+//             }
+//         }
+
+//         if (triageLevel === 'Urgent') {
+//             triageSurcharge = 300; 
+//         } else if (triageLevel === 'Emergency') {
+//             triageSurcharge = 500;
+//         }
+
+//         const serviceCharge = (specialServices?.length || 0) * 100; 
+
+//         let subtotal = baseFee + visitCharge + serviceCharge + triageSurcharge;
+
+//         let discount = 0;
+//         if (couponCode) {
+//             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+//             if (coupon) {
+//                 if (subtotal >= coupon.minOrderAmount) {
+//                     discount = (subtotal * coupon.discountPercentage) / 100;
+//                     if (discount > coupon.maxDiscount) {
+//                         discount = coupon.maxDiscount;
+//                     }
+//                 }
+//             }
+//         }
+
+//         res.json({
+//             success: true,
+//             data: {
+//                 baseFee,
+//                 visitCharge,
+//                 serviceCharge,
+//                 triageSurcharge,
+//                 days,
+//                 discount: Math.round(discount),
+//                 subtotal: Math.round(subtotal),
+//                 totalPayable: Math.round(subtotal - discount)
+//             }
+//         });
+//     } catch (error) { 
+//         res.status(500).json({ message: error.message }); 
+//     }
+// };
+
+// for conditional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
         const { 
@@ -387,58 +474,80 @@ const getHospitalCheckoutSummary = async (req, res) => {
             specialServices, 
             startDate, 
             endDate,
-            triageLevel 
+            triageLevel,
+            patients // patients list passed in request body
         } = req.body;
 
-        let baseFee = 0;         // Bed stay charges
-        let visitCharge = 0;     // Doctor consultation fees
-        let triageSurcharge = 0; // Emergency/Urgent surcharge
-        let days = 1;            // Stay duration in days
+        // =========================================================================
+        // 🚨 CRITICAL SUBSCRIPTION FLOW: FAMILY MEMBERS VERIFICATION LOGIC
+        // =========================================================================
+        const user = await User.findById(req.user.id).select('familyMember');
+        if (!user) return res.status(404).json({ message: "User account not found" });
 
-        // 1. Bed Stay Fee Calculation based on Dates
+        if (patients && Array.isArray(patients)) {
+            for (const patient of patients) {
+                const isSelf = patient.relation === 'Self' || patient.patientName?.toLowerCase() === 'self';
+                
+                if (!isSelf) {
+                    const isRegisteredMember = user.familyMember.some(member => 
+                        member.memberName.toLowerCase() === (patient.patientName || patient.name).toLowerCase()
+                    );
+
+                    if (!isRegisteredMember) {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Access Blocked: Patient '${patient.patientName || patient.name}' is not registered under your family profile. Unable to apply subscription benefits.`
+                        });
+                    }
+                }
+            }
+        }
+
+        let baseFee = 0;         
+        let visitCharge = 0;     
+        let triageSurcharge = 0; 
+        let days = 1;            
+
         if (bedId && startDate && endDate) {
             const start = moment(startDate).startOf('day');
             const end = moment(endDate).endOf('day');
             
-            // Calculate total days (minimum 1 day)
             days = end.diff(start, 'days');
             if (days <= 0) days = 1;
 
             const bed = await Bed.findById(bedId);
             if (bed) {
-                // Bed database schema fields mapping (support 'price' or 'pricePerDay')
                 const bedPrice = bed.price || bed.pricePerDay || 0;
                 baseFee = bedPrice * days;
             }
         }
 
-        // 2. Doctor Consultation Fee
         if (doctorId) {
             const doctor = await Doctor.findById(doctorId);
             if (doctor) {
                 visitCharge = doctor.fees || 0;
+
+                // 🚨 SUBSCRIPTION CHECK: Hospital Doctor consultation limit evaluation
+                const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
+                const hospDocBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', visitCharge);
+                visitCharge = hospDocBenefit.amount; // Sets visitCharge to 0 if benefit applied
             }
         }
 
-        // 3. Triage Surcharge
         if (triageLevel === 'Urgent') {
-            triageSurcharge = 300; // Standard surcharge for urgent cases
+            triageSurcharge = 300; 
         } else if (triageLevel === 'Emergency') {
             triageSurcharge = 500;
         }
 
-        // 4. Special Services Charge
-        const serviceCharge = (specialServices?.length || 0) * 100; // standard 100 per service
+        const serviceCharge = (specialServices?.length || 0) * 100; 
 
-        // 5. Subtotal calculation
         let subtotal = baseFee + visitCharge + serviceCharge + triageSurcharge;
 
-        // 6. Coupon Discount Calculation
         let discount = 0;
         if (couponCode) {
             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
             if (coupon) {
-                // Check if order meets minimum amount criteria
                 if (subtotal >= coupon.minOrderAmount) {
                     discount = (subtotal * coupon.discountPercentage) / 100;
                     if (discount > coupon.maxDiscount) {
@@ -465,6 +574,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
 
 // --- 3. FINAL RANGE BOOKING ---
 // 3. FINAL RANGE BOOKING (Complete dynamic flow with strict overlap check & secure coupon array updates)
@@ -571,7 +681,11 @@ const finalHospitalBooking = async (req, res) => {
                 }
             }
 
-            // 🚨 Trigger Notification for COD Bed Admissions
+            // 🚨 SUBSCRIPTION DEDUCTION: COD flow me direct doctor consultation count minus karein
+            if (doctorId) {
+                await deductBenefitCount(req.user.id, 'freeDoctorAppointmentsCount');
+            }
+
             await notifyAdminsAndVendor(
                 hospitalId,
                 'hospital',
@@ -598,6 +712,7 @@ const finalHospitalBooking = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
 
 // 🚨 NEW CONTROLLER: VERIFY HOSPITAL BOOKING PAYMENT SIGNATURE
 // endpoint: POST /user/hospital/verify-payment
@@ -643,29 +758,10 @@ const verifyHospitalPayment = async (req, res) => {
         appointment.paymentDetails = rzpDetails; 
         await appointment.save();
 
-        const couponId = appointment.couponDetails?.couponId;
-        if (couponId) {
-            const existingUsage = await Coupon.findOne({ _id: couponId, "usedBy.userId": req.user.id });
-            if (existingUsage) {
-                await Coupon.updateOne(
-                    { _id: couponId, "usedBy.userId": req.user.id },
-                    { $inc: { "usedBy.$.usageCount": 1 } }
-                );
-            } else {
-                await Coupon.findByIdAndUpdate(couponId, { 
-                    $push: { usedBy: { userId: req.user.id, usageCount: 1 } } 
-                });
-            }
+        // 🚨 SUBSCRIPTION DEDUCTION: Online payment successful hone par doctor count minus karein
+        if (appointment.doctorId) {
+            await deductBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
         }
-
-        // 🚨 Trigger Notification for Hospital & Admins on Verified Paid Admissions
-        await notifyAdminsAndVendor(
-            appointment.hospitalId,
-            'hospital',
-            "New Bed Admission Requested!",
-            `Admission request submitted for date range: ${moment(appointment.startDate).format('YYYY-MM-DD')} to ${moment(appointment.endDate).format('YYYY-MM-DD')}.`,
-            { appointmentId: appointment._id.toString(), type: 'new_admission' }
-        );
 
         res.json({
             success: true,
@@ -701,9 +797,8 @@ const cancelBedBooking = async (req, res) => {
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const currentCancelCount = appt.cancellationCount || 0;
-        const currentRescheduleCount = appt.rescheduleCount || 0; // 👈 Fetch current reschedule count
+        const currentRescheduleCount = appt.rescheduleCount || 0; 
 
-        // 🚀 CRITICAL RULE: Agar reschedule limits exhaust (khatam) ho chuki hain, toh cancellation strictly block hoga
         if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
@@ -731,6 +826,12 @@ const cancelBedBooking = async (req, res) => {
         appt.cancelReason = reason || "Cancelled by User";
 
         await appt.save();
+
+        // 🚨 SUBSCRIPTION REFUND: Check if doctor consultation fee was 0 due to subscription
+        if (appt.doctorId && appt.pricingBreakdown?.visitCharges === 0) {
+            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+            await refundBenefitCount(appt.userId, 'freeDoctorAppointmentsCount');
+        }
 
         res.json({
             success: true,

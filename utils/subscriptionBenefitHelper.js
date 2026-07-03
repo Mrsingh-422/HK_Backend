@@ -54,7 +54,34 @@ const deductBenefitCount = async (userId, benefitField) => {
     }
 };
 
+
+const refundBenefitCount = async (userId, benefitField) => {
+    try {
+        if (!userId) return false;
+        
+        const activeSub = await UserSubscription.findOne({
+            userId,
+            status: 'Active',
+            endDate: { $gt: new Date() }
+        });
+
+        if (activeSub) {
+            // Increment the benefit count back by 1
+            activeSub.remainingBenefits[benefitField] += 1;
+            await activeSub.save();
+            console.log(`[Subscription Refund]: Refunded 1 unit of '${benefitField}' to user: ${userId}`);
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.error(`Benefit refund error for ${benefitField}:`, error);
+        return false;
+    }
+};
+
+
 module.exports = {
     checkAndApplyBenefit,
-    deductBenefitCount
+    deductBenefitCount,
+    refundBenefitCount
 };

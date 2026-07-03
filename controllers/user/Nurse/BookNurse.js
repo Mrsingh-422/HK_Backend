@@ -15,6 +15,8 @@ const crypto = require('crypto');
 
 const { createRazorpayOrder, verifyRazorpaySignature , fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
+const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+
 
 
 // 1. LIST NURSES
@@ -391,7 +393,7 @@ const checkoutNurseBooking = async (req, res) => {
         const { 
             nurseId, serviceId, packageId, isPackage, selectedType, 
             startDate, endDate, startTime, endTime, isFasterService, 
-            patientCount, selectedConsumables, couponCode 
+            patientCount, selectedConsumables, couponCode
         } = req.body;
 
         const [item, config, delivery] = await Promise.all([
@@ -407,7 +409,6 @@ const checkoutNurseBooking = async (req, res) => {
         let slotSurcharge = 0;
         let units = 1;
 
-        // --- TRIPLE PRICING LOGIC ---
         if (selectedType === 'For Multiple Days') {
             units = moment(endDate).diff(moment(startDate), 'days') + 1;
             basePrice = item.pricing.multipleDays.final * units;
@@ -432,13 +433,15 @@ const checkoutNurseBooking = async (req, res) => {
             if (pSlot) slotSurcharge = pSlot.extraFee;
         }
 
+        // 🚨 1. SUBSCRIPTION INTEGRATION (FREE NURSE VISITS) ---
+        const nurseVisitBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseVisitsCount', basePrice);
+        basePrice = nurseVisitBenefit.amount; // 0 if benefit applied
+
         const consumableTotal = (selectedConsumables || []).reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
         
-        // --- 🎫 COUPON LOGIC START ---
         let couponDiscount = 0;
         let couponInfo = null;
 
-        // Subtotal jisme discount milega (Base + Surcharge + Consumables) * Patients
         const subTotalForCoupon = (basePrice + slotSurcharge + consumableTotal) * pCount;
 
         if (couponCode) {
@@ -447,15 +450,13 @@ const checkoutNurseBooking = async (req, res) => {
                 isActive: true,
                 expiryDate: { $gte: new Date() },
                 $or: [
-                    { isAdminCreated: true, vendorType: { $in: ['Nurse', 'All'] } }, // Admin coupons
-                    { vendorId: nurseId } // Vendor's own coupons
+                    { isAdminCreated: true, vendorType: { $in: ['Nurse', 'All'] } }, 
+                    { vendorId: nurseId } 
                 ]
             });
 
             if (coupon) {
-                // Check Min Order Amount
                 if (subTotalForCoupon >= coupon.minOrderAmount) {
-                    // Check Max Usage for this specific user
                     const userUsage = coupon.usedBy.find(u => u.userId.toString() === req.user.id.toString());
                     const usageCount = userUsage ? userUsage.usageCount : 0;
 
@@ -469,12 +470,17 @@ const checkoutNurseBooking = async (req, res) => {
                 }
             }
         }
-        // --- 🎫 COUPON LOGIC END ---
 
-        const fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
+        let fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
+
+        // 🚨 2. SUBSCRIPTION INTEGRATION (FREE NURSE DELIVERY CHARGE) ---
+        if (isFasterService) {
+            const nurseDelivBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseDeliveriesCount', fasterCharge);
+            fasterCharge = nurseDelivBenefit.amount; // 0 if benefit applied
+        }
+
         const totalAfterDiscount = (subTotalForCoupon - couponDiscount) + fasterCharge;
 
-        // Dynamic Tax
         let tax = 0;
         if (delivery?.taxPercentage) tax = (totalAfterDiscount * delivery.taxPercentage) / 100;
         if (delivery?.taxInRupees) tax += delivery.taxInRupees;
@@ -485,7 +491,7 @@ const checkoutNurseBooking = async (req, res) => {
                 baseServicePrice: Math.round(basePrice * pCount),
                 slotSurcharge: Math.round(slotSurcharge * pCount),
                 consumableTotal: Math.round(consumableTotal * pCount),
-                couponDiscount: couponDiscount, // 👈 New Key
+                couponDiscount: couponDiscount,
                 fasterServiceCharge: fasterCharge,
                 taxAmount: Math.round(tax),
                 totalPrice: Math.round(totalAfterDiscount + tax),
@@ -497,13 +503,14 @@ const checkoutNurseBooking = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
 // 5. PLACE BOOKING (Replacing placeNurseBooking with Razorpay payload creation)
 const placeNurseBooking = async (req, res) => {
     try {
         const { 
             nurseId, serviceId, packageId, isPackage, schedule, priceBreakdown, 
             patients, address, selectedConsumables, assessmentLocation, 
-            appliedCoupon, paymentMethod 
+            appliedCoupon, paymentMethod, isFasterService
         } = req.body;
         
         const item = isPackage ? await NursePackage.findById(packageId) : await NurseService.findById(serviceId);
@@ -556,7 +563,12 @@ const placeNurseBooking = async (req, res) => {
                 }
             }
 
-            // 🚨 Trigger Notification for COD Nurse Bookings
+            // 🚨 SUBSCRIPTION DEDUCTION: COD Nurse Benefits deduct karein
+            await deductBenefitCount(req.user.id, 'freeNurseVisitsCount');
+            if (isFasterService) {
+                await deductBenefitCount(req.user.id, 'freeNurseDeliveriesCount');
+            }
+
             await notifyAdminsAndVendor(
                 nurseId,
                 'nurse',
@@ -580,6 +592,7 @@ const placeNurseBooking = async (req, res) => {
 
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 
 // 🚨 NEW CONTROLLER: VERIFY NURSE BOOKING PAYMENT SIGNATURE
@@ -621,7 +634,12 @@ const verifyNursePayment = async (req, res) => {
             }
         }
 
-        // 🚨 Trigger Notification for Online Paid Nurse Bookings
+        // 🚨 SUBSCRIPTION DEDUCTION: Online Nurse Benefits deduct karein
+        await deductBenefitCount(booking.userId, 'freeNurseVisitsCount');
+        if (booking.priceBreakdown?.fasterServiceCharge > 0) {
+            await deductBenefitCount(booking.userId, 'freeNurseDeliveriesCount');
+        }
+
         await notifyAdminsAndVendor(
             booking.nurseId,
             'nurse',
