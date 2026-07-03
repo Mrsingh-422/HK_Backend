@@ -1012,89 +1012,71 @@ const getAvailablePhlebotomists = async (req, res) => {
 // Endpoint: PATCH /provider/labs/assign-staff/:orderId
 
 const assignDriverStaff = async (req, res) => {
-
     try {
-
         const { orderId } = req.params;
-
         const { phlebotomistId } = req.body;
-
         const labId = req.user.id;
  
         if (!phlebotomistId) {
-
             return res.status(400).json({ 
-
                 success: false, 
-
                 message: "Phlebotomist ID is required to assign staff." 
-
             });
+        }
 
+        // ID formats validate karein
+        if (!mongoose.Types.ObjectId.isValid(phlebotomistId)) {
+            return res.status(400).json({ success: false, message: "Invalid Phlebotomist ID format." });
         }
  
-        // 1. Verify karein ki driver exist karta hai aur is lab ka part hai
-
-        const driver = await Driver.findOne({ _id: phlebotomistId, vendorId: labId });
-
+        // 1. Phlebotomist fetch karein aur verification apply karein
+        const driver = await Driver.findById(phlebotomistId);
         if (!driver) {
+            return res.status(404).json({ success: false, message: "Phlebotomist not found." });
+        }
 
-            return res.status(404).json({ success: false, message: "Phlebotomist not found or unauthorized." });
-
+        // Secure boundary checks: verify vendor connection
+        if (driver.vendorId.toString() !== labId.toString()) {
+            return res.status(403).json({ success: false, message: "Unauthorized. This phlebotomist does not belong to your lab." });
         }
  
         if (driver.status === 'Offline') {
-
             return res.status(400).json({ success: false, message: "Cannot assign an offline phlebotomist." });
-
         }
  
         // 2. Booking ko update karein
-
         const booking = await LabBooking.findOneAndUpdate(
-
             { _id: orderId, labId },
-
             { 
-
                 phlebotomistId: phlebotomistId, 
-
                 status: 'Phlebotomist Assigned' 
-
             },
-
             { new: true }
-
         );
  
         if (!booking) {
-
-            return res.status(404).json({ success: false, message: "Order not found" });
-
+            return res.status(404).json({ success: false, message: "Order not found or unauthorized." });
         }
  
-        // 3. Driver status Busy mark karein
-
-        driver.status = 'Busy';
-
-        await driver.save();
+        // 3. FIX: Atomic update operator use karein taaki status directly update ho bina kisi hook blockage ke
+        const updatedDriver = await Driver.findByIdAndUpdate(
+            phlebotomistId,
+            { $set: { status: 'Busy' } },
+            { new: true } // Returns the updated document state
+        );
  
         res.json({ 
-
             success: true, 
-
-            message: "Phlebotomist assigned successfully", 
-
-            data: booking 
-
+            message: "Phlebotomist assigned successfully and status updated to Busy.", 
+            data: {
+                booking,
+                phlebotomistStatus: updatedDriver ? updatedDriver.status : 'Busy'
+            }
         });
 
     } catch (error) { 
-
         res.status(500).json({ success: false, message: error.message }); 
-
     }
-
 };
  
 // =======================================================
