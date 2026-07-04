@@ -668,8 +668,8 @@ const generateAndUploadSmartReport = async (req, res) => {
         const { orderId } = req.params;
         const { testValues, patientId } = req.body; 
 
-        if (!testValues || !patientId) {
-            return res.status(400).json({ success: false, message: "Both 'testValues' and 'patientId' are required." });
+        if (!testValues) {
+            return res.status(400).json({ success: false, message: "testValues payload is required." });
         }
 
         const booking = await LabBooking.findById(orderId).populate('labId');
@@ -677,21 +677,39 @@ const generateAndUploadSmartReport = async (req, res) => {
             return res.status(404).json({ success: false, message: "Lab booking not found." });
         }
 
-        const patient = booking.patients.find(p => 
-            String(p.patientId) === String(patientId) || 
-            String(p._id) === String(patientId) ||
-            (patientId === 'Self' && p.relation === 'Self')
-        ) || { name: "Mrs Kriti Tiwari", age: 31, gender: "Female" };
+        // 1. SMART FAIL-SAFE PATIENT RESOLVER [1]
+        let patient = null;
+        
+        if (patientId && patientId !== "undefined" && patientId !== "null") {
+            patient = booking.patients.find(p => 
+                String(p.patientId) === String(patientId) || 
+                String(p._id) === String(patientId) ||
+                (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
+            );
+        }
 
-        const patientName = patient.name || "Mrs Kriti Tiwari";
-        const isFemale = patient.gender?.toLowerCase() === 'female';
-        const displayAge = `${patient.age || 31} Yrs`;
+        // Fallback 1: Use first patient if not matched [1]
+        if (!patient && booking.patients && booking.patients.length > 0) {
+            patient = booking.patients[0];
+        }
+
+        // Fallback 2: General defaults if patients array is empty [1]
+        if (!patient) {
+            patient = { name: "Mrs Kriti Tiwari", age: 31, gender: "Female" };
+        }
+
+        // 🚨 FIXED: Variables extracted properly at top scope with fallbacks [1]
+        const patientName = patient.name || "Patient";
+        const cleanPatientName = patientName.replace(/\s+/g, '_'); // 👈 Scope bug fixed!
+        const patientAge = patient.age || 30;
+        const patientGender = patient.gender || "Female"; // 👈 Mapped dynamically with fallback
+        
+        const isFemale = String(patientGender).toLowerCase() === 'female';
+        const displayAge = `${patientAge} Yrs`;
 
         const resolvedLabName = booking.labId?.name || "HealthKangaroo Labs";
 
-        // ==========================================
-        // 📊 DYNAMIC EVALUATIONS & HEALTH SCORE (Same as Frontend) [2]
-        // ==========================================
+        // Dynamic Calculations
         let totalParams = 0;
         let normalParams = 0;
         const outOfRangeList = [];
@@ -740,7 +758,7 @@ const generateAndUploadSmartReport = async (req, res) => {
 
         const healthScore = totalParams > 0 ? Math.round((normalParams / totalParams) * 100) : 86;
 
-        // Dynamic Recommendations matching Frontend [2]
+        // Dynamic Recommendations [2]
         const recommendations = [];
         if (outOfRangeList.some(name => name.includes('vitamin d') || name.includes('vit d'))) {
             recommendations.push({
@@ -766,12 +784,13 @@ const generateAndUploadSmartReport = async (req, res) => {
             });
         }
 
-        // ==========================================
-        // 🚨 PDF GENERATION ENGINE (Strict A4 Layout)
-        // ==========================================
-        const doc = new PDFDocument({ margin: 0, size: 'A4' }); // Use 0 margin for full layout control
-        const cleanPatientName = patientName.replace(/\s+/g, '_');
-        const reportFileName = `report-${booking.bookingId}-${cleanPatientName}.pdf`;
+        // Fetch matching Master templates
+        const testNames = testValues.map(tg => tg.testName);
+        const templates = await MasterReportTemplate.find({ testName: { $in: testNames } }).lean();
+
+        // PDF Generation Engine (HealthKangaroo Branded)
+        const doc = new PDFDocument({ margin: 0, size: 'A4' }); 
+        const reportFileName = `report-${booking.bookingId}-${cleanPatientName}.pdf`; // 👈 Fixed reference
         const reportPath = path.join(process.cwd(), 'public', 'uploads', 'user_reports', reportFileName);
 
         fs.mkdirSync(path.dirname(reportPath), { recursive: true });
@@ -779,8 +798,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         const stream = fs.createWriteStream(reportPath);
         doc.pipe(stream);
 
-        // Branded Colors Map
-        const primaryColor = "#00a859"; // Kangaroo Green
+        const primaryColor = "#00a859"; 
         const darkGreen = "#007a3e";
         const warningColor = "#D32F2F"; 
         const successColor = "#388E3C"; 
@@ -791,23 +809,19 @@ const generateAndUploadSmartReport = async (req, res) => {
         // ==========================================
         // PAGE 1: COVER PAGE
         // ==========================================
-        // Top Banner
         doc.rect(0, 0, 595.28, 70).fill(primaryColor);
         doc.fillColor("#ffffff").font('Helvetica-Bold').fontSize(14).text("Health Kangaroo", 50, 25);
         doc.fontSize(8).font('Helvetica-Bold').text("ONE-STOP HEALTHCARE SOLUTION", 50, 42);
         doc.rect(450, 20, 100, 30).lineWidth(1).strokeColor("#ffffff").stroke();
         doc.fontSize(9).text("SMART REPORT 3.0", 462, 31);
 
-        // Hero Titles
         doc.fillColor("#0e1e38").fontSize(22).font('Helvetica-Bold').text("India's Trusted", 50, 110);
         doc.fillColor(primaryColor).fontSize(42).font('Helvetica-Bold').text("Health Test", 50, 135);
         doc.fillColor("#1e293b").fontSize(26).font('Helvetica-Bold').text(resolvedLabName, 50, 185);
 
-        // Draw Heartbeat EKG Pulse Line [2]
         doc.moveTo(50, 240).lineTo(100, 240).lineTo(110, 225).lineTo(120, 255).lineTo(130, 235).lineTo(140, 240).lineTo(200, 240)
            .strokeColor(primaryColor).lineWidth(2).stroke();
 
-        // Details Box Card
         doc.rect(50, 280, 495, 140).fillColor("#f8fafc").fill();
         doc.rect(50, 280, 495, 140).lineWidth(1).strokeColor("#e2e8f0").stroke();
         
@@ -816,17 +830,14 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.text(`Sample Collection Date :`, 70, 325);
         doc.text(formattedDate, 180, 325);
         
-        // Separator line inside card
         doc.moveTo(70, 345).lineTo(525, 345).strokeColor("#e2e8f0").lineWidth(1).stroke();
         
         doc.fillColor("#0f172a").fontSize(20).font('Helvetica-Bold').text(patientName, 70, 360);
         doc.fillColor("#64748b").fontSize(10).text(`${patientGender}, ${displayAge}`, 70, 388);
 
-        // AI Personalized pill
         doc.rect(50, 445, 230, 28).fillColor(primaryColor).fill();
         doc.fillColor("#ffffff").fontSize(9).font('Helvetica-Bold').text("🧠 AI Based Personalized Report for You", 62, 455);
 
-        // Dynamic QR code generation [2]
         const qrText = `Health Kangaroo\nID: ${booking.bookingId}\nPatient: ${patientName}\nAuthentic: Verified ✅`;
         const qrBuffer = await getQRBuffer(qrText);
         if (qrBuffer) {
@@ -834,10 +845,9 @@ const generateAndUploadSmartReport = async (req, res) => {
             doc.rect(50, 495, 495, 100).lineWidth(1).strokeColor("#a7f3d0").stroke();
             doc.image(qrBuffer, 70, 508, { width: 75, height: 75 });
             doc.fillColor("#065f46").fontSize(10).font('Helvetica-Bold').text("INDIA'S FIRST & ONLY CREDIBILITY CHECK FOR YOUR REPORT", 165, 520);
-            doc.fillColor("#047857").fontSize(8).font('Helvetica').text("Scan the QR code on our app to verify the dynamic machine-generated authenticity of your results.", 165, 542, { width: 350 });
+            doc.fillColor("#047857").fontSize(8).font('Helvetica').text("Scan the QR code on our app to verify the machine-generated authenticity of your results.", 165, 542, { width: 350 });
         }
 
-        // Bottom green bar with icons
         doc.rect(0, 785, 595.28, 56).fill(darkGreen);
         doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold');
         doc.text("🔬 Advanced Tech", 50, 808);
@@ -858,7 +868,6 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor("#0f172a").fontSize(22).font('Helvetica-Bold').text(`Hello ${patientName},`, 50, 105);
         doc.fillColor("#475569").fontSize(10).font('Helvetica-Bold').text(`We have processed your diagnostic samples for ${resolvedLabName}. Below is your dynamic body ecosystem health score card:`, 50, 132, { width: 330 });
 
-        // Score gauge circle [2]
         doc.circle(470, 140, 45).fillColor(primaryColor).fill();
         doc.fillColor("#ffffff").fontSize(28).font('Helvetica-Bold').text(`${healthScore}`, 452, 120);
         doc.fontSize(8).text("Score / 100", 446, 150);
@@ -866,25 +875,21 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor("#0f172a").fontSize(13).font('Helvetica-Bold').text("Key Parameters Status", 50, 205);
         doc.moveTo(50, 222).lineTo(545, 222).strokeColor("#e2e8f0").lineWidth(1).stroke();
 
-        // Parameter Status cards
         let sumCardY = 238;
         processedParametersList.slice(0, 8).forEach((item) => {
             const isConcern = item.status === 'Concern';
             
-            // Draw background card
             doc.rect(50, sumCardY, 495, 36).fillColor("#f8fafc").fill();
             doc.rect(50, sumCardY, 495, 36).lineWidth(1).strokeColor("#f1f5f9").stroke();
             
             doc.fillColor("#334155").fontSize(10).font('Helvetica-Bold').text(item.parameterName, 70, sumCardY + 13);
             doc.fillColor("#0f172a").text(`${item.value}`, 280, sumCardY + 13);
             
-            // Status tag
             doc.fillColor(isConcern ? warningColor : successColor).fontSize(9).text(item.status, 425, sumCardY + 13);
             
             sumCardY += 44;
         });
 
-        // Bottom green bar with heartbeat
         doc.rect(0, 785, 595.28, 56).fill(darkGreen);
         doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold').text("✅ Your Health is our priority. Stay consistent with regular checkups.", 50, 808);
 
@@ -898,19 +903,17 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.rect(450, 20, 100, 30).lineWidth(1).strokeColor("#ffffff").stroke();
         doc.fontSize(9).text("SMART REPORT 3.0", 462, 31);
 
-        // Patient Metadata Split Card
         doc.rect(50, 95, 495, 120).fillColor("#f8fafc").fill();
         doc.rect(50, 95, 495, 120).lineWidth(1).strokeColor("#f1f5f9").stroke();
         
         doc.fillColor("#475569").fontSize(8).font('Helvetica-Bold');
         doc.text("Patient Name :", 65, 110).fillColor("#0f172a").text(patientName, 140, 110);
-        doc.fillColor("#475569").text("Age / Sex :", 65, 126).fillColor("#0f172a").text(`${patientAge}Y / ${patientGender}`, 140, 126);
+        doc.fillColor("#475569").text("Age / Sex :", 65, 126).fillColor("#0f172a").text(`${patientAge}Y / ${patientGender}`, 140, 126); // 👈 Safely mapped with destructured variables [1]
         doc.fillColor("#475569").text("Order ID :", 65, 142).fillColor("#0f172a").text(bookingId, 140, 142);
         doc.fillColor("#475569").text("Referred By :", 65, 158).fillColor("#0f172a").text("Self", 140, 158);
         doc.fillColor("#475569").text("Customer Since :", 65, 174).fillColor("#0f172a").text(formattedDate, 140, 174);
         doc.fillColor("#475569").text("Sample Type :", 65, 190).fillColor("#0f172a").text("Serum", 140, 190);
 
-        // Split column separator
         doc.moveTo(290, 105).lineTo(290, 205).strokeColor("#e2e8f0").lineWidth(1).stroke();
 
         doc.fillColor("#475569").text("Barcode :", 310, 110).fillColor("#0f172a").text(barcodeValue, 410, 110);
@@ -920,12 +923,10 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor("#475569").text("Temperature :", 310, 174).fillColor("#0f172a").text("Maintained", 410, 174);
         doc.fillColor("#475569").text("Report Status :", 310, 190).fillColor("#0f172a").text("Final Report", 410, 190);
 
-        // Department Header [2]
         doc.rect(197, 230, 200, 20).fillColor("#e6f7f0").fill();
         doc.rect(197, 230, 200, 20).lineWidth(1).strokeColor("#b3ebd6").stroke();
         doc.fillColor("#007a3e").fontSize(8).font('Helvetica-Bold').text("DEPARTMENT OF BIOCHEMISTRY", 243, 236);
 
-        // Table Header [2]
         let tableY = 265;
         doc.rect(50, tableY, 495, 20).fillColor(darkGreen).fill();
         doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold');
@@ -935,7 +936,6 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.text("REFERENCE INTERVAL", 390, tableY + 6);
         tableY += 20;
 
-        // Render Parameters (Max 11 to fit within page bounds) [1]
         processedParametersList.slice(0, 11).forEach((item) => {
             const isConcern = item.status === 'Concern';
             
@@ -950,7 +950,6 @@ const generateAndUploadSmartReport = async (req, res) => {
             tableY += 28;
         });
 
-        // Explanatory Medical Box if any interpretation exists [1]
         const sampleInterpretation = testValues[0]?.parameters?.[0]?.interpretation || "";
         if (sampleInterpretation) {
             doc.rect(50, 600, 495, 60).fillColor("#f0faf5").fill();
@@ -959,7 +958,6 @@ const generateAndUploadSmartReport = async (req, res) => {
             doc.font('Helvetica').text(sampleInterpretation.slice(0, 310) + "...", 125, 610, { width: 400, lineGap: 1 });
         }
 
-        // Pathologist Verification Sign Off Section [1]
         if (qrBuffer) {
             doc.image(qrBuffer, 50, 680, { width: 45, height: 45 });
             doc.fillColor("#94a3b8").fontSize(7).font('Helvetica-Bold').text("SCAN TO", 105, 690);
@@ -971,13 +969,11 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor("#0f172a").fontSize(10).font('Helvetica-Bold').text("Dr. Verified Pathologist", 230, 695);
         doc.fillColor("#64748b").fontSize(7).font('Helvetica-Bold').text("CONSULTANT PATHOLOGIST", 252, 708);
 
-        // NABL Accreditation Stamp
         doc.rect(425, 685, 120, 36).fillColor("#ffffff").fill();
         doc.rect(425, 685, 120, 36).lineWidth(1).strokeColor("#e2e8f0").stroke();
         doc.fillColor("#334155").fontSize(10).font('Helvetica-Bold').text("MC-5949", 435, 695);
         doc.fillColor("#475569").fontSize(7).text("NABL APPROVED", 435, 708);
 
-        // Footer Banner
         doc.rect(0, 785, 595.28, 56).fill(darkGreen);
         doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold').text(`${resolvedLabName} (A Unit of HealthKangaroo Healthcare Private Limited)`, 50, 808);
 
@@ -989,7 +985,6 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor(primaryColor).fontSize(14).font('Helvetica-Bold').text("SUGGESTED NUTRITION & LIFESTYLE ADVISORY", 50, 40);
         doc.moveTo(50, 60).lineTo(545, 60).strokeColor("#e0e0e0").lineWidth(1).stroke();
 
-        // Suggested Nutrition card
         doc.fillColor("#0f172a").fontSize(11).font('Helvetica-Bold').text("Suggested Nutrition Do's", 50, 85);
         let nutritionY = 105;
         recommendations.forEach((item) => {
@@ -998,22 +993,18 @@ const generateAndUploadSmartReport = async (req, res) => {
             nutritionY += 50;
         });
 
-        // App Promo Grid Layout card [2]
         doc.rect(50, 380, 495, 160).fillColor("#f8fafc").fill();
         doc.rect(50, 380, 495, 160).lineWidth(1).strokeColor("#e2e8f0").stroke();
         
         doc.fillColor(primaryColor).fontSize(10).font('Helvetica-Bold').text("EVERYTHING YOU NEED, ALL IN ONE PLACE", 70, 400);
         doc.fillColor("#0f172a").fontSize(14).font('Helvetica-Bold').text("Download HealthKangaroo App Today", 70, 420);
-        
         doc.fillColor("#475569").fontSize(8.5).font('Helvetica').text("Book verified nurses for elder care, consult experienced doctors via video call, quick ambulance service in emergencies and order genuine medicines with home delivery.", 70, 442, { width: 330, lineGap: 1.5 });
 
-        // QR code image in promo
         if (qrBuffer) {
             doc.image(qrBuffer, 430, 400, { width: 90, height: 90 });
             doc.fillColor("#64748b").fontSize(7).font('Helvetica-Bold').text("SCAN TO DOWNLOAD APP", 432, 498);
         }
 
-        // Checklist of Features
         doc.fillColor("#0f172a").fontSize(12).font('Helvetica-Bold').text("— Why Choose Health Kangaroo? —", 50, 570);
         let checkY = 595;
         const features = [
@@ -1028,27 +1019,43 @@ const generateAndUploadSmartReport = async (req, res) => {
             checkY += 20;
         });
 
-        // Disclaimer Bar
         doc.rect(50, 715, 495, 45).fillColor("#fef2f2").fill();
         doc.rect(50, 715, 495, 45).lineWidth(1).strokeColor("#fee2e2").stroke();
         doc.fillColor("#991b1b").fontSize(7.5).font('Helvetica').text("Disclaimer: This is a promotional health advisory. It is based on your test results and general health information. It is recommended to consult your doctor for a comprehensive evaluation and personalized advice.", 65, 725, { width: 465, lineGap: 1 });
 
-        // Footer
         doc.rect(0, 785, 595.28, 56).fill(darkGreen);
-        doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold').text(`HealthKangaroo Technologies Private Limited © 2026. All Rights Reserved.`, 50, 808);
+        doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold').text("HealthKangaroo Technologies Private Limited © 2026. All Rights Reserved.", 50, 808);
 
-        // End PDF generation
         doc.end();
 
         stream.on('finish', async () => {
-            // Update MongoDB report file path [1]
-            booking.reportFile = `/uploads/user_reports/${reportFileName}`;
-            booking.status = 'Completed';
+            // MULTI-PATIENT SYNC
+            if (!booking.patientReports) booking.patientReports = [];
+
+            booking.patientReports = booking.patientReports.filter(r => String(r.patientId) !== String(patientId));
+
+            const finalReportFile = `/uploads/user_reports/${reportFileName}`;
+
+            booking.patientReports.push({
+                patientId: patient.patientId || patient._id || "Self",
+                patientName: patientName,
+                reportFile: finalReportFile
+            });
+
+            const allCompleted = booking.patients.every(p => {
+                const targetId = p.patientId || p._id || "Self";
+                return booking.patientReports.some(r => String(r.patientId) === String(targetId));
+            });
+
+            booking.status = allCompleted ? 'Completed' : 'Testing';
+            booking.reportFile = finalReportFile; // Fallback main reference
+            
+            booking.markModified('patientReports');
             await booking.save();
 
             res.status(200).json({
                 success: true,
-                message: "Branded Smart Report generated and uploaded successfully!",
+                message: `Dynamic report for ${patientName} generated successfully!`,
                 reportUrl: booking.reportFile,
                 data: booking
             });
