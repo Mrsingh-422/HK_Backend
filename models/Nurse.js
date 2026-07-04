@@ -9,22 +9,26 @@ const nurseSchema = new mongoose.Schema({
     role: { type: String, enum: ['Nurse'], default: 'Nurse', immutable: true },
     profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
     token: { type: String, default: null },
-    fcmToken: { 
-        type: String, 
-        default: null 
+    fcmToken: {
+        type: String,
+        default: null
     },
     isActive: { type: Boolean, default: true },
+    isOnline: {
+        type: Boolean,
+        default: true
+    },
     alternatePhone: { type: String, default: null },
 
     profileImage: { type: String, default: null },
 
-     // Location Details
+    // Location Details
     country: { type: String, default: null },
     state: { type: String, default: null },
     city: { type: String, default: null },
     address: { type: String, default: null },
-    
- documents: {
+
+    documents: {
         nursingCertificates: [{ type: String }],    // Figma: Nursing Certificate
         licensePhotos: [{ type: String }],          // Figma: License Photo
         gstCertificates: [{ type: String }],        // Figma: GST Certificate (Optional)
@@ -36,21 +40,21 @@ const nurseSchema = new mongoose.Schema({
         gstNumber: { type: String },                // Figma: GST Certificate Number
         experience: { type: String }                // Figma: Award / Experience Input
     },
-    
-        rejectionReason: { type: String, default: null },
+
+    rejectionReason: { type: String, default: null },
 
     // Nurse Specific
     experienceYears: { type: Number, default: 0 },
     speciality: { type: String, default: null }, // e.g., ICU, Pediatric
     gender: { type: String, enum: ['Male', 'Female', 'Other', ''] },
     about: { type: String, default: "" },
-     rating: { type: Number, default: 0 },
+    rating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
     location: {
-            lat: { type: Number, default: 0 },
-            lng: { type: Number, default: 0 }
-        },
-        offeredServices: [{
+        lat: { type: Number, default: 0 },
+        lng: { type: Number, default: 0 }
+    },
+    offeredServices: [{
         type: { type: String, enum: ['Daily Care', 'Package'] },
         title: { type: String }, // e.g., "Cancer Care"
         description: { type: String },

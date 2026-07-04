@@ -7,10 +7,15 @@ const ambulanceSchema = new mongoose.Schema({
     email: { type: String, unique: true, sparse: true, lowercase: true },
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
-    role: { 
-        type: String, 
-        enum: ['ambulance', 'hospital-ambulance'], 
-        default: 'ambulance' 
+    role: {
+        type: String,
+        enum: ['ambulance', 'hospital-ambulance'],
+        default: 'ambulance'
+    },
+    isActive: { type: Boolean, default: true },
+    isOnline: {
+        type: Boolean,
+        default: true
     },
 
     // --- Step 1: Location ---
@@ -24,10 +29,10 @@ const ambulanceSchema = new mongoose.Schema({
     licenseExpiryDate: { type: Date, default: null },
     experienceYears: { type: String, default: null },
     bloodGroup: { type: String, default: null },
-    vehicleType: { 
-        type: String, 
-        enum: ['Van', 'Mini Van', 'Advance Life Support', 'ICU Ambulance'], 
-        default: 'Van' 
+    vehicleType: {
+        type: String,
+        enum: ['Van', 'Mini Van', 'Advance Life Support', 'ICU Ambulance'],
+        default: 'Van'
     },
 
     // --- Step 3: Vehicle Information ---
@@ -61,9 +66,9 @@ const ambulanceSchema = new mongoose.Schema({
         referral: { type: Boolean, default: false }
     },
     defaultService: { type: String, default: null }, // Selected from dropdown
-    optionalServices: [{ 
-        name: String, 
-        price: Number 
+    optionalServices: [{
+        name: String,
+        price: Number
     }],
     driverInfo: {
         fullName: String,
@@ -88,14 +93,14 @@ const ambulanceSchema = new mongoose.Schema({
     // --- System ---
     isPhoneVerified: { type: Boolean, default: false },
     token: { type: String, default: null },
-    fcmToken: { 
-        type: String, 
-        default: null 
+    fcmToken: {
+        type: String,
+        default: null
     },
-    profileStatus: { 
-        type: String, 
-        enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
-        default: 'Incomplete' 
+    profileStatus: {
+        type: String,
+        enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'],
+        default: 'Incomplete'
     },
     rejectionReason: { type: String, default: null },
     bankDetails: {
@@ -107,8 +112,8 @@ const ambulanceSchema = new mongoose.Schema({
         upiId: { type: String, default: "" },
         isVerified: { type: Boolean, default: false }
     },
-    averageRating: { type: Number, default: 0 }, 
-    totalReviews: { type: Number, default: 0 }  
+    averageRating: { type: Number, default: 0 },
+    totalReviews: { type: Number, default: 0 }
 
 }, { timestamps: true });
 

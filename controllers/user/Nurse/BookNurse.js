@@ -24,21 +24,19 @@ const getNurses = async (req, res) => {
     try {
         const { city, search, speciality } = req.body;
         
+        // Strictly filters: Only APPROVED and ACTIVE (isActive: true) nurses
         let query = { profileStatus: 'Approved', isActive: true };
         
-        // Filter logic
         if (city) query.city = new RegExp(city, 'i');
         if (search) query.name = new RegExp(search, 'i');
         if (speciality) query.speciality = speciality;
 
-        // 1. Pehle Approved Nurses dhoondo
         const nurses = await Nurse.find(query).lean();
         console.log(`Found ${nurses.length} approved nurses in DB`);
 
         const data = [];
 
         for (let nurse of nurses) {
-            // 2. Nurse ki services check karo
             const services = await NurseService.find({ nurseId: nurse._id });
             console.log(`Nurse ${nurse.name} has ${services.length} services`);
 
@@ -46,7 +44,6 @@ const getNurses = async (req, res) => {
             let serviceTitles = [];
 
             if (services.length > 0) {
-                // Naya Pricing Logic Check (Final Price)
                 const validPrices = services
                     .map(s => (s.pricing && s.pricing.oneDay ? s.pricing.oneDay.final : 0))
                     .filter(p => p > 0);
@@ -55,7 +52,7 @@ const getNurses = async (req, res) => {
                 serviceTitles = services.slice(0, 2).map(s => s.title);
             }
 
-            // Data push (Service ho ya na ho, Nurse list mein aayegi)
+            // Projecting 'isOnline' in list response
             data.push({
                 _id: nurse._id,
                 name: nurse.name,
@@ -66,7 +63,8 @@ const getNurses = async (req, res) => {
                 startingPrice: minPrice || 0, 
                 topServices: serviceTitles,
                 location: nurse.location,
-                profileStatus: nurse.profileStatus
+                profileStatus: nurse.profileStatus,
+                isOnline: nurse.isOnline ?? true // Passes isOnline state to frontend
             });
         }
         
@@ -84,28 +82,29 @@ const getNurseDetails = async (req, res) => {
         if (!nurseId) return res.status(400).json({ message: "Nurse ID required" });
 
         const nurse = await Nurse.findById(nurseId).lean();
-        if (!nurse) return res.status(404).json({ message: "Nurse not found" });
+        
+        // 🚨 CRITICAL CHECK: Block access if nurse is inactive by Admin
+        if (!nurse || nurse.isActive === false) {
+            return res.status(404).json({ success: false, message: "Nurse profile is inactive or not found." });
+        }
 
-        // Dynamic dynamic rating calculation from Polymorphic Review schema
         const reviews = await Review.find({ 
             targetId: nurseId, 
             targetType: 'Nurse' 
         }).select('rating').lean();
 
-        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        let averageRating = 4.8; 
         if (reviews.length > 0) {
             const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
             averageRating = Number((totalRating / reviews.length).toFixed(1)); 
         }
 
-        // Fetch last 3 recent reviews specifically for this Nurse Provider
         const recentReviews = await Review.find({ targetId: nurseId, targetType: 'Nurse' })
             .select('userName rating comment createdAt')
             .sort({ createdAt: -1 })
             .limit(3)
             .lean();
 
-        // Parallel fetching for services, packages and configs
         const [services, packages, config] = await Promise.all([
             NurseService.find({ nurseId, status: 'Approved' })
                 .populate('consumablesUsed.masterItemId')
@@ -121,12 +120,13 @@ const getNurseDetails = async (req, res) => {
             success: true, 
             data: { 
                 ...nurse, 
-                rating: averageRating,           // 👈 Dynamic average rating
-                totalReviews: reviews.length,    // 👈 Dynamic total reviews count
+                rating: averageRating,           
+                totalReviews: reviews.length,    
                 services: services || [], 
                 packages: packages || [], 
                 availability: config || null,
-                recentReviews                    // 👈 Added live last 3 user reviews
+                recentReviews,
+                isOnline: nurse.isOnline ?? true // Sends online status to UI
             } 
         });
     } catch (e) { 
@@ -510,9 +510,20 @@ const placeNurseBooking = async (req, res) => {
         const { 
             nurseId, serviceId, packageId, isPackage, schedule, priceBreakdown, 
             patients, address, selectedConsumables, assessmentLocation, 
-            appliedCoupon, paymentMethod, isFasterService
+            appliedCoupon, paymentMethod, isFasterService 
         } = req.body;
         
+        const nurse = await Nurse.findById(nurseId);
+        if (!nurse) return res.status(404).json({ message: "Nurse provider not found." });
+
+        // 🚨 CRITICAL CHECK: Block booking if Nurse is offline
+        if (nurse.isOnline === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking Blocked: Nurse is currently offline and not accepting bookings."
+            });
+        }
+
         const item = isPackage ? await NursePackage.findById(packageId) : await NurseService.findById(serviceId);
         const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
@@ -563,7 +574,6 @@ const placeNurseBooking = async (req, res) => {
                 }
             }
 
-            // 🚨 SUBSCRIPTION DEDUCTION: COD Nurse Benefits deduct karein
             await deductBenefitCount(req.user.id, 'freeNurseVisitsCount');
             if (isFasterService) {
                 await deductBenefitCount(req.user.id, 'freeNurseDeliveriesCount');

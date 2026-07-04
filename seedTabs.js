@@ -54,7 +54,12 @@ const tabsData = [
     { tabId: 49, name: "Pharmacy Drivers", parentId: 3, subParentId: 0, isActive: true },
     { tabId: 50, name: "Lab Drivers", parentId: 3, subParentId: 0, isActive: true },
     { tabId: 51, name: "Nurse Drivers", parentId: 3, subParentId: 0, isActive: true },
-    { tabId: 52, name: "Ambulance Drivers", parentId: 3, subParentId: 0, isActive: true }
+    { tabId: 52, name: "Ambulance Drivers", parentId: 3, subParentId: 0, isActive: true },
+    { tabId: 53, name: "Manage Banks", parentId: 0, subParentId: 0, isActive: true },
+    { tabId: 54, name: "vendor km limit", parentId: 0, subParentId: 0, isActive: true },
+    { tabId: 55, name: "Wallet Mangement", parentId: 0, subParentId: 0, isActive: true }
+ 
+ 
 ];
 
 const seedDB = async () => {

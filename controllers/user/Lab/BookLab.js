@@ -611,28 +611,21 @@ const getLabs = async (req, res) => {
     try {
         let { lat, lng, search, city, state, country } = req.body;
 
-        // 1. Coordinates Fallback: Agar user ne GPS coordinates nahi diye, toh Delhi base manein
         const filterLat = lat || DEFAULT_LAT;
         const filterLng = lng || DEFAULT_LNG;
 
-        // 2. Default State Check: Jab app pehli baar khule (No search, No city select, No GPS)
-        const isInitialLoad = (!lat || !lng) && !search && !city;
-
+        // Strictly filters: Only APPROVED and ACTIVE labs (isActive must be true, offline ones included)
         let query = { profileStatus: 'Approved', isActive: true };
 
-        // 3. Strict Location Matching (Dropdown selection logic)
         if (city) query.city = new RegExp(`^${city}$`, 'i');
         if (state) query.state = new RegExp(`^${state}$`, 'i');
         if (country) query.country = new RegExp(`^${country}$`, 'i');
 
-        // 4. Lab Name Search Logic
         if (search) {
             const searchRegex = new RegExp(search, 'i');
             if (city) {
-                // Agar city chuni hai toh sirf us city ke andar name search karein
                 query.name = searchRegex;
             } else {
-                // Agar city nahi chuni toh global search (Name, City ya State match ho)
                 query.$or = [
                     { name: searchRegex },
                     { city: searchRegex },
@@ -641,8 +634,8 @@ const getLabs = async (req, res) => {
             }
         }
 
-        // 5. Fetch Labs
-        const labs = await Lab.find(query).select('name profileImage city state country address rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable location is24x7 isInsuranceAccepted acceptedInsurances labImages').lean();
+        // Projecting 'isOnline' along with other fields
+        const labs = await Lab.find(query).select('name profileImage city state country address rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable location is24x7 isInsuranceAccepted acceptedInsurances labImages isOnline').lean();
 
         let finalLabs = [];
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Lab', isActive: true });
@@ -651,21 +644,13 @@ const getLabs = async (req, res) => {
         for (let lab of labs) {
             let distance = null;
 
-            // Distance calculation using provided GPS or Delhi Fallback
             if (lab.location?.lat) {
                 distance = await getDistance(filterLat, filterLng, lab.location.lat, lab.location.lng);
             }
-
-            // --- IMPROVED FILTER LOGIC ---
-            // Case A: User ne suggestions se city select ki hai -> Radius ignore karein.
-            // Case B: User ne Lab Name search kiya hai -> Radius ignore karein (Global search).
-            // Case C: Initial load ya GPS tracking -> Sirf 'maxRadius' ke andar wali dikhayein.
             
             const isBroadSearch = !!(city || search);
 
             if (isBroadSearch || distance <= maxRadius) {
-                
-                // Fetch Min Pricing
                 const [minTest, minPackage] = await Promise.all([
                     LabTest.findOne({ labId: lab._id, isActive: true }).sort({ discountPrice: 1 }).select('discountPrice'),
                     LabPackage.findOne({ labId: lab._id, isActive: true }).sort({ offerPrice: 1 }).select('offerPrice')
@@ -681,7 +666,6 @@ const getLabs = async (req, res) => {
             }
         }
 
-        // 6. Sorting: Nearest First
         finalLabs.sort((a, b) => {
             if (a.distance === "N/A") return 1;
             if (b.distance === "N/A") return -1;
@@ -705,14 +689,15 @@ const getLabDetails = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // 1. Fetch Lab Basic Info (Including Images for Gallery)
         const lab = await Lab.findById(id)
-            .select('name country state city address profileImage rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable isInsuranceAccepted acceptedInsurances about location documents.labImages is24x7')
+            .select('name country state city address profileImage rating totalReviews isHomeCollectionAvailable isRapidServiceAvailable isInsuranceAccepted acceptedInsurances about location documents.labImages is24x7 isActive isOnline')
             .lean();
         
-        if (!lab) return res.status(404).json({ success: false, message: "Lab not found" });
+        // 🚨 CRITICAL CHECK: Block access if lab is inactive by Admin
+        if (!lab || lab.isActive === false) {
+            return res.status(404).json({ success: false, message: "Lab profile is inactive or not found." });
+        }
 
-        // 2. Fetch Lab Availability/Slots Configuration
         const config = await Availability.findOne({ vendorId: id });
         
         let openStatus = "Closed";
@@ -721,12 +706,8 @@ const getLabDetails = async (req, res) => {
 
         if (config) {
             const now = moment();
-            const dayName = now.format('YYYY-MM-DD');
-
-            // A. Timing Label (Figma: Open 7 AM - 9 PM)
             timingLabel = `Open ${config.startTime} - ${config.endTime}`;
 
-            // B. Calculate Open/Closed Status
             const isOffDay = config.offDays.includes(now.format('dddd'));
             const startTime = moment(config.startTime, "HH:mm");
             const endTime = moment(config.endTime, "HH:mm");
@@ -735,10 +716,8 @@ const getLabDetails = async (req, res) => {
                 openStatus = "Open Now";
             }
 
-            // C. Calculate Next Available Slot (Figma: Next Available Slot Today - 4:00 PM)
             const allSlots = generateTimeSlots(config);
             
-            // Aaj ke liye booked slots ginti karein
             const bookedCounts = await LabBooking.aggregate([
                 { $match: { labId: lab._id, appointmentDate: new Date(now.startOf('day')), status: { $ne: 'Cancelled' } } },
                 { $group: { _id: "$appointmentTime", count: { $sum: 1 } } }
@@ -768,23 +747,22 @@ const getLabDetails = async (req, res) => {
             }
         }
 
-        // 🚨 NEW: Fetch dynamic last 3 user reviews for this Lab to show on profile
         const recentReviews = await Review.find({ targetId: id, targetType: 'Lab' })
             .select('userName rating comment createdAt')
             .sort({ createdAt: -1 })
             .limit(3)
             .lean();
 
-        // 3. Final Response matching Figma with live reviews
         res.json({ 
             success: true, 
             data: {
                 ...lab,
-                openStatus,           // Figma: "Open Now"
-                timingLabel,          // Figma: "Open 7 AM - 9 PM"
-                gallery: lab.documents?.labImages || [], // Figma Gallery
-                nextAvailableSlot: nextSlot, // Figma: "Today - 4:00 PM"
-                recentReviews        // 👈 Added live detailed reviews
+                openStatus,           
+                timingLabel,          
+                gallery: lab.documents?.labImages || [], 
+                nextAvailableSlot: nextSlot, 
+                recentReviews,
+                isOnline: lab.isOnline ?? true // Sends online status to UI
             } 
         });
     } catch (error) { 
@@ -1067,6 +1045,15 @@ const checkoutLabBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cart is empty" });
         }
 
+        // 🚨 CRITICAL CHECK: Block booking if Lab is offline
+        const targetLab = await Lab.findById(cart.labCart.labId);
+        if (!targetLab || targetLab.isOnline === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking Blocked: Lab is currently offline and not accepting bookings."
+            });
+        }
+
         const bill = await calculateBillHelper(
             cart.labCart.labId, 
             cart.labCart, 
@@ -1111,7 +1098,6 @@ const checkoutLabBooking = async (req, res) => {
         if (paymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
 
-            // 🚨 SUBSCRIPTION DEDUCTION: COD Lab Delivery Benefit deduct karein
             if (collectionType === 'Home Collection') {
                 await deductBenefitCount(req.user.id, 'freeLabDeliveriesCount');
             }
@@ -1142,7 +1128,6 @@ const checkoutLabBooking = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
 
 
 

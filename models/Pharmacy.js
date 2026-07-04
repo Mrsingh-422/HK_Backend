@@ -9,21 +9,25 @@ const pharmacySchema = new mongoose.Schema({
     role: { type: String, enum: ['Pharmacy'], default: 'Pharmacy', immutable: true },
     profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
     token: { type: String, default: null },
-    fcmToken: { 
-        type: String, 
-        default: null 
+    fcmToken: {
+        type: String,
+        default: null
     },
     isActive: { type: Boolean, default: true },
+    isOnline: {
+        type: Boolean,
+        default: true
+    },
 
 
     profileImage: { type: String, default: null },
 
-     // Location Details
+    // Location Details
     country: { type: String, default: null },
     state: { type: String, default: null },
     city: { type: String, default: null },
     address: { type: String, default: null },
-     location: {
+    location: {
         lat: Number,
         lng: Number
     },
@@ -39,15 +43,15 @@ const pharmacySchema = new mongoose.Schema({
         issuingAuthority: { type: String },       // Figma: Issuing Authority Name
         gstNumber: { type: String },              // Figma: GST Certificate Number
         drugLicenseType: {                        // Figma: Drug License Type
-            type: String, 
+            type: String,
             enum: ['Retail', 'Wholesale', 'Restricted', 'Blood Bank', 'None'],
             default: 'Retail'
         }
     },
 
-        alternatePhone: { type: String, default: null }, 
- 
-        rejectionReason: { type: String, default: null },
+    alternatePhone: { type: String, default: null },
+
+    rejectionReason: { type: String, default: null },
 
     // Pharmacy Specific (Potential future fields)
     isHomeDeliveryAvailable: { type: Boolean, default: true },

@@ -26,15 +26,16 @@ const getHospitals = async (req, res) => {
     try {
         const { search, city, userLat, userLng } = req.body;
 
+        // Strictly filters: Only APPROVED and ACTIVE (isActive: true) hospitals
         let query = { profileStatus: 'Approved', isActive: true };
         if (city) query.city = { $regex: city, $options: 'i' };
         if (search) query.name = { $regex: search, $options: 'i' };
 
+        // Projecting 'isOnline' in list query response
         let hospitals = await Hospital.find(query)
-            .select('name address city state hospitalImage type averageRating totalReviews location')
-            .lean(); // .lean() use karein taaki object modify kar sakein
+            .select('name address city state hospitalImage type averageRating totalReviews location isOnline')
+            .lean();
 
-        // Distance Calculation
         const dataWithDistance = await Promise.all(hospitals.map(async (hosp) => {
             let distance = 0;
             if (userLat && userLng && hosp.location?.lat) {
@@ -48,60 +49,56 @@ const getHospitals = async (req, res) => {
             return { ...hosp, distance };
         }));
 
-        // Sort by distance (Nearest first)
         dataWithDistance.sort((a, b) => a.distance - b.distance);
 
         res.json({ success: true, count: dataWithDistance.length, data: dataWithDistance });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+
 const getHospitalDetails = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 1. Fetch Hospital Basic Info
         const hospital = await Hospital.findById(id).select('-password -token').lean();
-        if (!hospital) return res.status(404).json({ message: "Hospital not found" });
+        
+        // 🚨 CRITICAL CHECK: Block access if hospital is inactive by Admin
+        if (!hospital || hospital.isActive === false) {
+            return res.status(404).json({ success: false, message: "Hospital profile is inactive or not found." });
+        }
 
-        // =========================================================================
-        // 🚨 2. DYNAMIC RATINGS & REVIEWS CALCULATOR (For Hospital Profile)
-        // =========================================================================
         const reviews = await Review.find({ 
             targetId: id, 
             targetType: 'Hospital' 
         }).select('rating').lean();
 
-        let averageRating = 4.5; // Default fallback if no reviews exist in DB yet
+        let averageRating = 4.5; 
         if (reviews.length > 0) {
             const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-            // Format to 1 decimal place (e.g. 4.3)
             averageRating = Number((totalRating / reviews.length).toFixed(1)); 
         }
 
-        // Fetch last 3 recent reviews specifically for this Hospital
         const recentReviews = await Review.find({ targetId: id, targetType: 'Hospital' })
             .select('userName rating comment createdAt')
             .sort({ createdAt: -1 })
             .limit(3)
             .lean();
 
-        // 3. Fetch Wards, Doctors, and Admin-added Services (Figma S-29)
-        // FIX: Added 'experienceYears', 'about', and 'qualification' fields inside Doctor's select query!
         const [wards, doctors, services] = await Promise.all([
             Ward.find({ hospitalId: id, isActive: true }),
-            Doctor.find({ hospitalId: id, profileStatus: 'Approved' })
-                .select('name speciality profileImage fees averageRating consultationStatus experienceYears about qualification'), // 👈 FIXED
-            HospitalService.find({ hospitalId: id }) // Fetch Nurse, Security, etc.
+            Doctor.find({ hospitalId: id, profileStatus: 'Approved', isActive: true }) // 👈 Added filter for active doctors
+                .select('name speciality profileImage fees averageRating consultationStatus experienceYears about qualification'), 
+            HospitalService.find({ hospitalId: id }) 
         ]);
 
-        // 4. Dynamic Response Payload (Exact same structure maintained)
         res.json({
             success: true,
             data: { 
                 hospital: {
                     ...hospital,
                     rating: averageRating,           
-                    totalReviews: reviews.length     
+                    totalReviews: reviews.length,
+                    isOnline: hospital.isOnline ?? true // Sends online status to UI
                 }, 
                 wards, 
                 doctors, 
@@ -587,6 +584,17 @@ const finalHospitalBooking = async (req, res) => {
             specialServices, couponId, couponCode, paymentMethod = 'Online' 
         } = req.body;
 
+        const hospital = await Hospital.findById(hospitalId);
+        if (!hospital) return res.status(404).json({ success: false, message: "Hospital not found." });
+
+        // 🚨 CRITICAL CHECK: Block booking if Hospital is offline
+        if (hospital.isOnline === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking Blocked: Hospital is currently offline and not accepting admissions."
+            });
+        }
+
         if (bedId && startDate && endDate) {
             const start = moment(startDate).startOf('day').toDate();
             const end = moment(endDate).endOf('day').toDate();
@@ -681,7 +689,6 @@ const finalHospitalBooking = async (req, res) => {
                 }
             }
 
-            // 🚨 SUBSCRIPTION DEDUCTION: COD flow me direct doctor consultation count minus karein
             if (doctorId) {
                 await deductBenefitCount(req.user.id, 'freeDoctorAppointmentsCount');
             }

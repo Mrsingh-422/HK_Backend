@@ -35,6 +35,7 @@ const searchDoctors = async (req, res) => {
     try {
         const { speciality, city, search, consultationType, userLat, userLng } = req.body;
         
+        // Strictly filters: Only APPROVED and ACTIVE doctors (Offline ones are included but will be marked in response)
         let query = { role: 'doctor', profileStatus: 'Approved', isActive: true };
 
         if (speciality) query.speciality = speciality;
@@ -50,7 +51,7 @@ const searchDoctors = async (req, res) => {
         }
 
         let doctors = await Doctor.find(query)
-            .select('-password -token')
+            .select('-password -token') // preserves isOnline automatically as it is not excluded
             .populate('hospitalId', 'name')
             .lean();
 
@@ -94,24 +95,22 @@ const getDoctorDetails = async (req, res) => {
             .populate('hospitalId', 'name address city')
             .select('-password -token');
 
-        if (!doctorDoc) return res.status(404).json({ message: "Doctor not found" });
+        // 🚨 CRITICAL CHECK: Block access if doctor is not found or is marked inactive by Admin
+        if (!doctorDoc || doctorDoc.isActive === false) {
+            return res.status(404).json({ success: false, message: "Doctor profile is inactive or not found." });
+        }
 
-        // =========================================================================
-        // 🚨 DYNAMIC RATINGS & REVIEWS CALCULATOR (For Doctor Profile)
-        // =========================================================================
         const reviews = await Review.find({ 
             targetId: doctorId, 
             targetType: 'Doctor' 
         }).select('rating').lean();
 
-        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        let averageRating = 4.8; 
         if (reviews.length > 0) {
             const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-            // Format to 1 decimal place (e.g. 4.3)
             averageRating = Number((totalRating / reviews.length).toFixed(1)); 
         }
 
-        // Fetch last 3 recent reviews specifically for this Doctor
         const recentReviews = await Review.find({ targetId: doctorId, targetType: 'Doctor' })
             .select('userName rating comment createdAt')
             .sort({ createdAt: -1 })
@@ -153,19 +152,20 @@ const getDoctorDetails = async (req, res) => {
             data: {
                 profile: {
                     ...doctor,
-                    averageRating: averageRating,   // 👈 Dynamic average rating
-                    totalReviews: reviews.length,  // 👈 Dynamic total reviews count
+                    averageRating: averageRating,   
+                    totalReviews: reviews.length,  
                     experience: `${doctor.experienceYears}+ years`,
                     workingHours: workingHoursDisplay,
                     helpWith: doctor.treatedConditions || ["Fever", "Cough", "Headache"],
                     competencies: doctor.competencies || ["MD Degree", "Emergency Care"],
+                    isOnline: doctor.isOnline ?? true // Sends online status to UI
                 },
                 activeServices: [
                     { type: 'Clinic Visit', fee: doctor.fees.clinic, active: doctor.consultationStatus.clinic },
                     { type: 'Video Consult', fee: doctor.fees.online, active: doctor.consultationStatus.online },
                     { type: 'Home Visit', fee: doctor.fees.home, active: doctor.consultationStatus.home }
                 ],
-                recentReviews // 👈 Added live last 3 user reviews
+                recentReviews 
             } 
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
@@ -452,7 +452,6 @@ const bookAppointment = async (req, res) => {
         const appointmentTime = timeSlot; 
         const pricingData = pricingBreakdown; 
 
-        // 1. Basic Validations
         if (!doctorId || !appointmentDate || !appointmentTime) {
             return res.status(400).json({ 
                 success: false, 
@@ -467,7 +466,6 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 2. Strict Independent Doctor Role Validation [1]
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor not found." });
@@ -479,7 +477,14 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 3. Check Slot Availability
+        // 🚨 CRITICAL CHECK: Block booking if Doctor has turned off isOnline
+        if (doctor.isOnline === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking Blocked: Doctor is currently offline and not accepting appointments."
+            });
+        }
+
         const isBooked = await Appointment.findOne({ 
             doctorId, 
             appointmentDate, 
@@ -493,10 +498,8 @@ const bookAppointment = async (req, res) => {
 
         const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-        // 4. Create Razorpay Order in paise (1 INR = 100 paise)
         const rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
 
-        // 5. Create Draft/Unpaid Appointment Record in MongoDB
         const appointment = await Appointment.create({
             userId: req.user.id,
             doctorId,
@@ -505,7 +508,6 @@ const bookAppointment = async (req, res) => {
             appointmentDate: new Date(appointmentDate),
             appointmentTime, 
             consultationType,
-            
             pricingBreakdown: {
                 baseFee: Number(pricingData.baseFee || 0),
                 visitCharges: Number(pricingData.visitCharges || 0),
@@ -513,21 +515,19 @@ const bookAppointment = async (req, res) => {
                 discountAmount: Number(pricingData.discountAmount || 0),
                 subtotal: Number(pricingData.subtotal || totalAmount)
             },
-            
             totalAmount: Number(totalAmount),
             bookingId: tempBookingId,
-            status: 'Pending', // Pending payment signature verification
+            status: 'Pending', 
             paymentStatus: 'Pending',
-            transactionId: rzpOrder.id, // Store Razorpay Order ID as tracker
+            transactionId: rzpOrder.id, 
             'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString()
         });
 
-        // 6. Return Razorpay configurations to Mobile/Web Frontend
         res.status(201).json({ 
             success: true, 
             message: "Razorpay order created. Complete payment to confirm.",
-            key_id: process.env.RAZORPAY_KEY_ID, // Send key_id securely
-            amount: rzpOrder.amount, // in paise
+            key_id: process.env.RAZORPAY_KEY_ID, 
+            amount: rzpOrder.amount, 
             razorpayOrderId: rzpOrder.id,
             appointmentId: appointment._id,
             bookingId: tempBookingId

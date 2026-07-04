@@ -535,7 +535,7 @@ const getPharmacies = async (req, res) => {
         const filterLat = lat || DEFAULT_LAT;
         const filterLng = lng || DEFAULT_LNG;
 
-        // --- STRICT FILTER: Only Approved and Active ---
+        // Strictly filters: Only APPROVED and ACTIVE pharmacies (Offline ones included)
         let query = { 
             profileStatus: 'Approved', 
             isActive: true 
@@ -549,8 +549,9 @@ const getPharmacies = async (req, res) => {
             query.$or = [{ name: searchRegex }, { city: searchRegex }];
         }
 
+        // Projecting 'isOnline' along with other fields
         const pharmacies = await Pharmacy.find(query)
-            .select('name profileImage city state country address location rating totalReviews isHomeDeliveryAvailable is24x7 documents.pharmacyImages')
+            .select('name profileImage city state country address location rating totalReviews isHomeDeliveryAvailable is24x7 documents.pharmacyImages isOnline')
             .lean();
 
         let finalPharmacies = [];
@@ -587,42 +588,39 @@ const getPharmacyDetails = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 1. Fetch Pharmacy Basic Info (Excluding password and token)
         const pharmacy = await Pharmacy.findById(id).select('-password -token').lean();
         
-        if (!pharmacy) return res.status(404).json({ message: "Pharmacy not found" });
+        // 🚨 CRITICAL CHECK: Block access if pharmacy is inactive by Admin
+        if (!pharmacy || pharmacy.isActive === false) {
+            return res.status(404).json({ success: false, message: "Pharmacy profile is inactive or not found." });
+        }
 
-        // =========================================================================
-        // 🚨 2. DYNAMIC RATINGS & REVIEWS CALCULATOR (For Pharmacy Profile)
-        // =========================================================================
         const reviews = await Review.find({ 
             targetId: id, 
             targetType: 'Pharmacy' 
         }).select('rating').lean();
 
-        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        let averageRating = 4.8; 
         if (reviews.length > 0) {
             const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-            // Format to 1 decimal place (e.g. 4.3)
             averageRating = Number((totalRating / reviews.length).toFixed(1)); 
         }
 
-        // Fetch last 3 recent reviews/comments for this pharmacy
         const recentReviews = await Review.find({ targetId: id, targetType: 'Pharmacy' })
             .select('userName rating comment createdAt')
             .sort({ createdAt: -1 })
             .limit(3)
             .lean();
 
-        // 3. Dynamic Response Payload (All old keys are completely intact)
         res.json({ 
             success: true, 
             data: {
                 ...pharmacy,
-                rating: averageRating,           // 👈 Dynamic calculated rating
-                totalReviews: reviews.length,    // 👈 Dynamic total reviews count
+                rating: averageRating,           
+                totalReviews: reviews.length,    
                 gallery: pharmacy.documents?.pharmacyImages || [],
-                recentReviews                    // 👈 Dynamic last 3 user reviews
+                recentReviews,
+                isOnline: pharmacy.isOnline ?? true // Sends online status to UI
             } 
         });
     } catch (error) { 
@@ -1218,6 +1216,15 @@ const placeOrder = async (req, res) => {
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
 
+        // 🚨 CRITICAL CHECK: Block booking if Pharmacy is offline
+        const targetPharmacy = await Pharmacy.findById(pharmacyId);
+        if (!targetPharmacy || targetPharmacy.isOnline === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking Blocked: Pharmacy is currently offline and not accepting orders."
+            });
+        }
+
         const rxMandatory = cart.pharmacyCart.items.some(item => 
             item.medicineId?.prescription_required?.toUpperCase() === "YES"
         );
@@ -1236,7 +1243,6 @@ const placeOrder = async (req, res) => {
 
         const isPrescriptionOrder = rxMandatory || rxImages.length > 0;
 
-        // Passed req.user.id to calculatePharmacyBillHelper
         const bill = await calculatePharmacyBillHelper(
             pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
         );
@@ -1315,7 +1321,6 @@ const placeOrder = async (req, res) => {
         if (paymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-            // 🚨 SUBSCRIPTION DEDUCTION: COD Pharmacy Delivery Benefit deduct karein
             if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
                 await deductBenefitCount(req.user.id, 'freePharmacyDeliveriesCount');
             }

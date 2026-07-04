@@ -66,7 +66,8 @@ const getNearestAmbulances = async (req, res) => {
     try {
         const { lat, lng, serviceType, vehicleType } = req.body; 
 
-        let query = { availableForEmergency: true, profileStatus: 'Approved' };
+        // Strictly filters: Only ACTIVE (isActive: true) and APPROVED ambulances (Offline ones included)
+        let query = { isActive: true, profileStatus: 'Approved' };
         if (vehicleType) query.vehicleType = vehicleType;
 
         const ambulances = await Ambulance.find(query);
@@ -74,23 +75,20 @@ const getNearestAmbulances = async (req, res) => {
         const data = await Promise.all(ambulances.map(async (amb) => {
             const distance = await getDistance(lat, lng, amb.location.lat, amb.location.lng);
             
-            // 🚨 DYNAMIC RATING & REVIEWS CALCULATION FOR EACH AMBULANCE 🚨
             const reviews = await Review.find({ 
                 targetId: amb._id, 
                 targetType: 'Ambulance' 
             }).select('rating').lean();
 
-            let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+            let averageRating = 4.8; 
             if (reviews.length > 0) {
                 const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-                averageRating = Number((totalRating / reviews.length).toFixed(1)); // e.g., 4.2
+                averageRating = Number((totalRating / reviews.length).toFixed(1)); 
             }
 
-            // Default pricing from DB
             let displayPrice = amb.pricing?.fixedPrice || 2000;
             let isFree = false;
 
-            // STRICT OVERRIDE: Accident emergency is always free (₹0)
             if (serviceType === 'Accident emergency') {
                 displayPrice = 0;
                 isFree = true;
@@ -106,11 +104,12 @@ const getNearestAmbulances = async (req, res) => {
                 ...amb._doc,
                 distance: `${distance} km`,
                 rawDistance: distance,
-                displayPrice: displayPrice, // Frontend isko use karega
+                displayPrice: displayPrice, 
                 isFreeCase: isFree,
                 eta: `${Math.round(distance * 3)} mins`,
-                rating: averageRating,       // 👈 ADDED DYNAMIC RATING
-                totalReviews: reviews.length // 👈 ADDED DYNAMIC REVIEW COUNT
+                rating: averageRating,       
+                totalReviews: reviews.length,
+                isOnline: amb.isOnline ?? true // Passes isOnline state to list response
             };
         }));
 
@@ -125,39 +124,34 @@ const getAmbulanceDetails = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // 1. Fetch Ambulance with Hospital Population
         const ambulance = await Ambulance.findById(id)
             .populate('hospitalId', 'name address city state hospitalImage location')
             .select('+password');
 
-        if (!ambulance) return res.status(404).json({ message: "Ambulance not found" });
+        // 🚨 CRITICAL CHECK: Block access if ambulance is inactive by Admin
+        if (!ambulance || ambulance.isActive === false) {
+            return res.status(404).json({ success: false, message: "Ambulance profile is inactive or not found." });
+        }
 
-        // =========================================================================
-        // 🚨 2. DYNAMIC RATING & REVIEWS CALCULATOR (RAG / Aggregate)
-        // =========================================================================
         const reviews = await Review.find({ 
             targetId: id, 
             targetType: 'Ambulance' 
         }).select('rating').lean();
 
-        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        let averageRating = 4.8; 
         if (reviews.length > 0) {
             const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-            // Format to 1 decimal place (e.g., (5 + 2) / 2 = 3.5)
             averageRating = Number((totalRating / reviews.length).toFixed(1)); 
         }
 
-        // 🚨 Fetch last 3 recent reviews for this specific ambulance
         const recentReviews = await Review.find({ targetId: id, targetType: 'Ambulance' })
             .select('userName rating comment createdAt')
             .sort({ createdAt: -1 })
             .limit(3)
             .lean();
 
-        // 3. Prepare Detailed Response with Live Ratings & Recent Reviews
         const data = {
             _id: ambulance._id,
-            // --- Driver / Identification ---
             driverInfo: {
                 name: ambulance.driverInfo?.fullName || ambulance.name,
                 phone: ambulance.phone,
@@ -165,29 +159,23 @@ const getAmbulanceDetails = async (req, res) => {
                 experience: ambulance.experienceYears || "N/A",
                 bloodGroup: ambulance.bloodGroup,
                 department: ambulance.driverInfo?.department,
-                rating: averageRating, // 👈 DYNAMICALLY CALCULATED!
-                totalReviews: reviews.length, // 👈 Dynamic reviews counter
-                tripsCount: reviews.length > 0 ? `${reviews.length * 3 + 120}+` : "1,240+" // Semi-dynamic
+                rating: averageRating, 
+                totalReviews: reviews.length, 
+                tripsCount: reviews.length > 0 ? `${reviews.length * 3 + 120}+` : "1,240+" 
             },
-
-            // --- Vehicle Details (Figma Screen 32/43) ---
             vehicle: {
                 vehicleNumber: ambulance.vehicleNumber || "Not Assigned",
-                vehicleType: ambulance.vehicleType, // Van, Mini Van, ALS, ICU
+                vehicleType: ambulance.vehicleType, 
                 serviceRadius: ambulance.serviceRadius,
                 isAvailable: ambulance.availableForEmergency,
                 features: ambulance.vehicleType === 'Advance Life Support' 
                     ? ["Ventilator", "Paramedic", "Oxygen", "Monitor"] 
                     : ["Oxygen Support", "First Aid Kit", "Stretcher"]
             },
-
-            // --- Pricing & Supporting Staff (Dynamic) ---
             pricing: {
                 basePrice: ambulance.pricing?.fixedPrice || 0,
                 baseDistance: ambulance.pricing?.baseDistance || 0,
                 extraKMPrice: ambulance.pricing?.pricePerKM || 0,
-                
-                // Detailed Support Staff Info
                 supportStaff: {
                     nurse: {
                         isAvailable: ambulance.supportStaff?.nurse?.available || false,
@@ -198,35 +186,26 @@ const getAmbulanceDetails = async (req, res) => {
                         fee: ambulance.supportStaff?.doctor?.price || 0
                     }
                 },
-
-                // Service Specific Free Status
                 freeServices: {
-                    isAccidentalFree: ambulance.freeServices?.accidental || true, // Government standard
+                    isAccidentalFree: ambulance.freeServices?.accidental || true, 
                     isEmergencyFree: ambulance.freeServices?.emergency || false,
                     isReferralFree: ambulance.freeServices?.referral || false
                 }
             },
-
-            // --- Location & Association ---
             location: ambulance.location,
             address: ambulance.address,
-            
-            // If it's a Hospital Ambulance, show Hospital info
             associatedHospital: ambulance.hospitalId ? {
                 id: ambulance.hospitalId._id,
                 name: ambulance.hospitalId.name,
                 address: ambulance.hospitalId.address,
                 image: ambulance.hospitalId.hospitalImage?.[0] || null
             } : null,
-
-            // Documents (Paths for UI preview if needed)
             documents: {
                 licenseVerified: !!ambulance.documents?.drivingLicenseFile,
                 rcVerified: !!ambulance.documents?.rcFile,
                 insuranceValid: !!ambulance.documents?.insuranceFile
             },
-
-            // 🚨 ADDED: Dynamic Last 3 User Reviews List
+            isOnline: ambulance.isOnline ?? true, // Sends online status to UI
             recentReviews 
         };
 
@@ -388,6 +367,23 @@ const confirmAmbulanceBooking = async (req, res) => {
             scheduledDate, appointmentTime 
         } = body;
 
+        if (!ambulanceId) {
+            return res.status(400).json({ success: false, message: "Target Ambulance ID is required." });
+        }
+
+        const targetAmbulance = await Ambulance.findById(ambulanceId);
+        if (!targetAmbulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        // 🚨 CRITICAL CHECK: Block booking if Ambulance is offline
+        if (targetAmbulance.isOnline === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking Blocked: Ambulance is currently offline and not accepting requests."
+            });
+        }
+
         const fare = await getFinalFare(body, req.user.id); 
 
         let staffList = staffType ? (typeof staffType === 'string' ? staffType.split(',') : staffType) : [];
@@ -406,6 +402,41 @@ const confirmAmbulanceBooking = async (req, res) => {
         let incidentPhotoPath = req.files?.incidentPhoto ? `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
 
         let finalPickupLocation = { address: "Pickup Location", lat: 30.7046, lng: 76.7179 };
+
+        if (body['pickupLocation[address]']) {
+            finalPickupLocation = {
+                address: body['pickupLocation[address]'],
+                lat: Number(body['pickupLocation[lat]'] || 30.7046),
+                lng: Number(body['pickupLocation[lng]'] || 76.7179)
+            };
+        } 
+        else if (body.pickupAddress || body.pickupLocationAddress) {
+            finalPickupLocation = {
+                address: body.pickupAddress || body.pickupLocationAddress,
+                lat: Number(body.pickupLat || body.pickupLocationLat || 30.7046),
+                lng: Number(body.pickupLng || body.pickupLocationLng || 76.7179)
+            };
+        }
+        else if (body.pickupLocation) {
+            if (typeof body.pickupLocation === 'string') {
+                try {
+                    const parsed = JSON.parse(body.pickupLocation);
+                    if (parsed && typeof parsed === 'object') {
+                        finalPickupLocation = {
+                            address: parsed.address || parsed.pickupAddress || "Pickup Location",
+                            lat: Number(parsed.lat || parsed.pickupLat || 30.7046),
+                            lng: Number(parsed.lng || parsed.pickupLng || 76.7179)
+                        };
+                    }
+                } catch (e) {
+                    finalPickupLocation = {
+                        address: body.pickupLocation, 
+                        lat: Number(body.lat || body.pickupLat || 30.7046),
+                        lng: Number(body.lng || body.pickupLng || 76.7179)
+                    };
+                }
+            }
+        }
 
         const tempBookingId = `HK-BOK-${Date.now().toString().slice(-6)}`;
         let rzpOrder = null;
@@ -447,13 +478,12 @@ const confirmAmbulanceBooking = async (req, res) => {
             },
             isFreeCase: fare.isFree,
             paymentStatus: fare.isFree ? 'Paid' : 'Pending',
-            transactionId: rzpOrder ? rzpOrder.id : (paymentId || null),
+            transactionId: rzpOrder ? rzpOrder.id : null,
             status: 'Searching', 
             otp: Math.floor(1000 + Math.random() * 9000).toString()
         });
 
         if (fare.isFree) {
-            // 🚨 SUBSCRIPTION DEDUCTION: Free/Discounted ambulance COD flow me trip deduct karein
             await deductBenefitCount(req.user.id, 'freeAmbulanceTripsCount');
 
             return res.status(201).json({ success: true, message: "Booking Request Sent Successfully (Free/Subscription Case)", booking });

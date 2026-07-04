@@ -6,14 +6,14 @@ const hospitalSchema = new mongoose.Schema({
     email: { type: String, unique: true, sparse: true },
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
-    
+
     // OTP Fields (For Forgot Password)
     resetPasswordOtp: { type: String },
     resetPasswordExpires: { type: Date },
 
     // --- PROFILE FIELDS (Matches Figma Register Screen) ---
     name: { type: String, required: true }, // Hospital Name
-    
+
     // Address Breakdown
     country: { type: String },
     state: { type: String },
@@ -31,23 +31,27 @@ const hospitalSchema = new mongoose.Schema({
 
     // --- DOCUMENTS (Multiple Images Support) ---
     // Stores array of URL strings (e.g., ["url1.jpg", "url2.jpg"])
-    hospitalImage: [{ type: String }], 
+    hospitalImage: [{ type: String }],
     licenseDocument: [{ type: String }],
     otherDocuments: [{ type: String }],
     alternatePhone: { type: String, default: null },
     // --- SYSTEM FIELDS ---
     role: { type: String, default: 'hospital', immutable: true },
     token: { type: String, default: null },
-    fcmToken: { 
-        type: String, 
-        default: null 
+    fcmToken: {
+        type: String,
+        default: null
     },
     location: {
         lat: { type: Number, default: 0 },
         lng: { type: Number, default: 0 }
     },
     isActive: { type: Boolean, default: true },
-    
+    isOnline: {
+        type: Boolean,
+        default: true
+    },
+
     // Approval Status
     profileStatus: {
         type: String,

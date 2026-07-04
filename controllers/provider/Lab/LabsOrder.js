@@ -663,6 +663,7 @@ const getQRBuffer = async (text) => {
 //         res.status(500).json({ success: false, message: error.message });
 //     }
 // };
+// Replacing generateAndUploadSmartReport inside controllers/provider/Lab/LabsOrder.js
 const generateAndUploadSmartReport = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -677,9 +678,11 @@ const generateAndUploadSmartReport = async (req, res) => {
             return res.status(404).json({ success: false, message: "Lab booking not found." });
         }
 
+        const bookingId = booking.bookingId; 
+        const barcodeValue = booking.barcode || "E4708538"; 
+
         // 1. SMART FAIL-SAFE PATIENT RESOLVER [1]
         let patient = null;
-        
         if (patientId && patientId !== "undefined" && patientId !== "null") {
             patient = booking.patients.find(p => 
                 String(p.patientId) === String(patientId) || 
@@ -688,26 +691,24 @@ const generateAndUploadSmartReport = async (req, res) => {
             );
         }
 
-        // Fallback 1: Use first patient if not matched [1]
         if (!patient && booking.patients && booking.patients.length > 0) {
             patient = booking.patients[0];
         }
 
-        // Fallback 2: General defaults if patients array is empty [1]
         if (!patient) {
             patient = { name: "Mrs Kriti Tiwari", age: 31, gender: "Female" };
         }
 
-        // 🚨 FIXED: Variables extracted properly at top scope with fallbacks [1]
         const patientName = patient.name || "Patient";
-        const cleanPatientName = patientName.replace(/\s+/g, '_'); // 👈 Scope bug fixed!
+        const cleanPatientName = patientName.replace(/\s+/g, '_'); 
         const patientAge = patient.age || 30;
-        const patientGender = patient.gender || "Female"; // 👈 Mapped dynamically with fallback
+        const patientGender = patient.gender || "Female"; 
         
         const isFemale = String(patientGender).toLowerCase() === 'female';
         const displayAge = `${patientAge} Yrs`;
 
         const resolvedLabName = booking.labId?.name || "HealthKangaroo Labs";
+        const formattedDate = moment(booking.appointmentDate).format('DD/MMM/YYYY');
 
         // Dynamic Calculations
         let totalParams = 0;
@@ -788,9 +789,18 @@ const generateAndUploadSmartReport = async (req, res) => {
         const testNames = testValues.map(tg => tg.testName);
         const templates = await MasterReportTemplate.find({ testName: { $in: testNames } }).lean();
 
+        // 🚨 DYNAMIC QR METADATA GENERATOR (Same as Frontend React config) [2]
+        const qrDataText = `Health Kangaroo Smart Report\n============================\nBooking ID: ${bookingId}\nLab Name: ${resolvedLabName}\nPatient Name: ${patientName}\nAge / Gender: ${patientGender}, ${displayAge}\nCollection Date: ${formattedDate}\nVerified Status: Authentic Verified`;
+        
+        // Parallel QR Loading
+        const [qrBuffer, pathologistQRBuffer] = await Promise.all([
+            getQRBuffer(qrDataText),
+            getQRBuffer(`https://hk.app/verify-report/${bookingId}`)
+        ]);
+
         // PDF Generation Engine (HealthKangaroo Branded)
         const doc = new PDFDocument({ margin: 0, size: 'A4' }); 
-        const reportFileName = `report-${booking.bookingId}-${cleanPatientName}.pdf`; // 👈 Fixed reference
+        const reportFileName = `report-${bookingId}-${cleanPatientName}.pdf`;
         const reportPath = path.join(process.cwd(), 'public', 'uploads', 'user_reports', reportFileName);
 
         fs.mkdirSync(path.dirname(reportPath), { recursive: true });
@@ -804,56 +814,84 @@ const generateAndUploadSmartReport = async (req, res) => {
         const successColor = "#388E3C"; 
         const textColor = "#1e293b";
 
-        const formattedDate = moment(booking.appointmentDate).format('DD/MMM/YYYY');
-
         // ==========================================
         // PAGE 1: COVER PAGE
         // ==========================================
+        // Top Banner
         doc.rect(0, 0, 595.28, 70).fill(primaryColor);
         doc.fillColor("#ffffff").font('Helvetica-Bold').fontSize(14).text("Health Kangaroo", 50, 25);
         doc.fontSize(8).font('Helvetica-Bold').text("ONE-STOP HEALTHCARE SOLUTION", 50, 42);
         doc.rect(450, 20, 100, 30).lineWidth(1).strokeColor("#ffffff").stroke();
         doc.fontSize(9).text("SMART REPORT 3.0", 462, 31);
 
+        // Dynamic light-green gradient Cover page style [2]
+        doc.save();
+        doc.fillColor("#f3f9f6").rect(0, 70, 595.28, 715).fill();
+        doc.restore();
+
+        // 🚨 COVER PAGE GRID PATTERN (Drawn natively with high performance) [2]
+        doc.save();
+        doc.fillColor(primaryColor).opacity(0.04);
+        for (let x = 30; x < 560; x += 15) {
+            for (let y = 80; y < 760; y += 15) {
+                doc.circle(x, y, 1).fill();
+            }
+        }
+        doc.restore();
+
+        // Hero Titles
         doc.fillColor("#0e1e38").fontSize(22).font('Helvetica-Bold').text("India's Trusted", 50, 110);
         doc.fillColor(primaryColor).fontSize(42).font('Helvetica-Bold').text("Health Test", 50, 135);
         doc.fillColor("#1e293b").fontSize(26).font('Helvetica-Bold').text(resolvedLabName, 50, 185);
 
+        // Heartbeat pulse EKG drawing
         doc.moveTo(50, 240).lineTo(100, 240).lineTo(110, 225).lineTo(120, 255).lineTo(130, 235).lineTo(140, 240).lineTo(200, 240)
            .strokeColor(primaryColor).lineWidth(2).stroke();
 
-        doc.rect(50, 280, 495, 140).fillColor("#f8fafc").fill();
-        doc.rect(50, 280, 495, 140).lineWidth(1).strokeColor("#e2e8f0").stroke();
-        
-        doc.fillColor(textColor).fontSize(10).font('Helvetica-Bold').text(`Booking ID :`, 70, 305);
-        doc.text(booking.bookingId, 180, 305);
-        doc.text(`Sample Collection Date :`, 70, 325);
-        doc.text(formattedDate, 180, 325);
-        
-        doc.moveTo(70, 345).lineTo(525, 345).strokeColor("#e2e8f0").lineWidth(1).stroke();
-        
-        doc.fillColor("#0f172a").fontSize(20).font('Helvetica-Bold').text(patientName, 70, 360);
-        doc.fillColor("#64748b").fontSize(10).text(`${patientGender}, ${displayAge}`, 70, 388);
+        // NABL Accredited Badge on Cover Page
+        doc.save();
+        doc.roundedRect(50, 260, 150, 45, 8).fillColor("#ffffff").fill();
+        doc.roundedRect(50, 260, 150, 45, 8).lineWidth(1).strokeColor("#e2e8f0").stroke();
+        doc.circle(70, 282, 10).fillColor("#f1f5f9").fill();
+        doc.fillColor(primaryColor).fontSize(8).font('Helvetica-Bold').text("*", 67, 278); // bullet marker
+        doc.fillColor("#0f172a").fontSize(10).font('Helvetica-Bold').text("NABL", 90, 270);
+        doc.fillColor("#64748b").fontSize(7).font('Helvetica-Bold').text("ACCREDITED", 90, 281);
+        doc.fillColor("#94a3b8").fontSize(6).text("MC-5949", 90, 290);
+        doc.restore();
 
-        doc.rect(50, 445, 230, 28).fillColor(primaryColor).fill();
-        doc.fillColor("#ffffff").fontSize(9).font('Helvetica-Bold').text("🧠 AI Based Personalized Report for You", 62, 455);
+        // Details Box Card
+        doc.rect(50, 325, 495, 140).fillColor("#ffffff").fill();
+        doc.rect(50, 325, 495, 140).lineWidth(1).strokeColor("#e2e8f0").stroke();
+        
+        doc.fillColor(textColor).fontSize(10).font('Helvetica-Bold').text(`Booking ID :`, 70, 350);
+        doc.text(bookingId, 180, 350);
+        doc.text(`Sample Collection Date :`, 70, 370);
+        doc.text(formattedDate, 180, 370);
+        
+        doc.moveTo(70, 390).lineTo(525, 390).strokeColor("#e2e8f0").lineWidth(1).stroke();
+        
+        doc.fillColor("#0f172a").fontSize(20).font('Helvetica-Bold').text(patientName, 70, 405);
+        doc.fillColor("#64748b").fontSize(10).text(`${patientGender}, ${displayAge}`, 70, 433);
 
-        const qrText = `Health Kangaroo\nID: ${booking.bookingId}\nPatient: ${patientName}\nAuthentic: Verified ✅`;
-        const qrBuffer = await getQRBuffer(qrText);
+        // AI Personalized pill (No emojis) [3]
+        doc.rect(50, 490, 230, 28).fillColor(primaryColor).fill();
+        doc.fillColor("#ffffff").fontSize(9).font('Helvetica-Bold').text("AI Based Personalized Report for You", 62, 500);
+
         if (qrBuffer) {
-            doc.rect(50, 495, 495, 100).fillColor("#f0faf5").fill();
-            doc.rect(50, 495, 495, 100).lineWidth(1).strokeColor("#a7f3d0").stroke();
-            doc.image(qrBuffer, 70, 508, { width: 75, height: 75 });
-            doc.fillColor("#065f46").fontSize(10).font('Helvetica-Bold').text("INDIA'S FIRST & ONLY CREDIBILITY CHECK FOR YOUR REPORT", 165, 520);
-            doc.fillColor("#047857").fontSize(8).font('Helvetica').text("Scan the QR code on our app to verify the machine-generated authenticity of your results.", 165, 542, { width: 350 });
+            doc.rect(50, 540, 495, 100).fillColor("#f0faf5").fill();
+            doc.rect(50, 540, 495, 100).lineWidth(1).strokeColor("#a7f3d0").stroke();
+            doc.image(qrBuffer, 70, 553, { width: 75, height: 75 });
+            doc.fillColor("#065f46").fontSize(10).font('Helvetica-Bold').text("INDIA'S FIRST & ONLY CREDIBILITY CHECK FOR YOUR REPORT", 165, 565);
+            doc.fillColor("#047857").fontSize(8).font('Helvetica').text("Scan the QR code on our app to verify the machine-generated authenticity of your results.", 165, 587, { width: 350 });
         }
 
+        // Bottom green bar with icons (No emojis) [3]
         doc.rect(0, 785, 595.28, 56).fill(darkGreen);
         doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold');
-        doc.text("🔬 Advanced Tech", 50, 808);
-        doc.text("✅ Accurate Results", 185, 808);
-        doc.text("👩‍⚕️ Expert Support", 325, 808);
-        doc.text("🔒 100% Secure", 465, 808);
+        doc.text("Advanced Tech", 50, 808);
+        doc.text("Accurate Results", 185, 808);
+        doc.text("Expert Support", 325, 808);
+        doc.text("100% Secure", 465, 808);
 
         // ==========================================
         // PAGE 2: SUMMARY & VITALS
@@ -891,7 +929,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         });
 
         doc.rect(0, 785, 595.28, 56).fill(darkGreen);
-        doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold').text("✅ Your Health is our priority. Stay consistent with regular checkups.", 50, 808);
+        doc.fillColor("#ffffff").fontSize(8).font('Helvetica-Bold').text("Your Health is our priority. Stay consistent with regular checkups.", 50, 808);
 
         // ==========================================
         // PAGE 3: DETAILED REPORT TABLE
@@ -908,7 +946,7 @@ const generateAndUploadSmartReport = async (req, res) => {
         
         doc.fillColor("#475569").fontSize(8).font('Helvetica-Bold');
         doc.text("Patient Name :", 65, 110).fillColor("#0f172a").text(patientName, 140, 110);
-        doc.fillColor("#475569").text("Age / Sex :", 65, 126).fillColor("#0f172a").text(`${patientAge}Y / ${patientGender}`, 140, 126); // 👈 Safely mapped with destructured variables [1]
+        doc.fillColor("#475569").text("Age / Sex :", 65, 126).fillColor("#0f172a").text(`${patientAge}Y / ${patientGender}`, 140, 126); 
         doc.fillColor("#475569").text("Order ID :", 65, 142).fillColor("#0f172a").text(bookingId, 140, 142);
         doc.fillColor("#475569").text("Referred By :", 65, 158).fillColor("#0f172a").text("Self", 140, 158);
         doc.fillColor("#475569").text("Customer Since :", 65, 174).fillColor("#0f172a").text(formattedDate, 140, 174);
@@ -958,8 +996,9 @@ const generateAndUploadSmartReport = async (req, res) => {
             doc.font('Helvetica').text(sampleInterpretation.slice(0, 310) + "...", 125, 610, { width: 400, lineGap: 1 });
         }
 
-        if (qrBuffer) {
-            doc.image(qrBuffer, 50, 680, { width: 45, height: 45 });
+        // 🚨 VERIFICATION QR ENCODING (Separated for Page 3 pathologist verification link) [1]
+        if (pathologistQRBuffer) {
+            doc.image(pathologistQRBuffer, 50, 680, { width: 45, height: 45 });
             doc.fillColor("#94a3b8").fontSize(7).font('Helvetica-Bold').text("SCAN TO", 105, 690);
             doc.fillColor("#334155").fontSize(9).font('Helvetica-Bold').text("verify report", 105, 700);
         }
@@ -993,6 +1032,7 @@ const generateAndUploadSmartReport = async (req, res) => {
             nutritionY += 50;
         });
 
+        // 🚨 HIGH-FIDELITY APP PROMO MOCKUP GRID [2]
         doc.rect(50, 380, 495, 160).fillColor("#f8fafc").fill();
         doc.rect(50, 380, 495, 160).lineWidth(1).strokeColor("#e2e8f0").stroke();
         
@@ -1000,9 +1040,19 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.fillColor("#0f172a").fontSize(14).font('Helvetica-Bold').text("Download HealthKangaroo App Today", 70, 420);
         doc.fillColor("#475569").fontSize(8.5).font('Helvetica').text("Book verified nurses for elder care, consult experienced doctors via video call, quick ambulance service in emergencies and order genuine medicines with home delivery.", 70, 442, { width: 330, lineGap: 1.5 });
 
+        // App vector-layout phone graphic [2]
+        doc.save();
+        doc.roundedRect(380, 395, 150, 130, 15).fillColor("#f1f5f9").fill();
+        doc.rect(380, 395, 150, 60).fillColor(primaryColor).fill();
+        doc.fillColor("#ffffff").fontSize(6).font('Helvetica-Bold').text("Assign Staff", 390, 410);
+        doc.fontSize(4).font('Helvetica').text("Select an active phlebotomist", 390, 420);
+        doc.roundedRect(390, 470, 130, 25, 6).fillColor("#ffffff").fill();
+        doc.fillColor("#0f172a").fontSize(6).font('Helvetica-Bold').text("Hello, Kautsar", 400, 480);
+        doc.restore();
+
         if (qrBuffer) {
-            doc.image(qrBuffer, 430, 400, { width: 90, height: 90 });
-            doc.fillColor("#64748b").fontSize(7).font('Helvetica-Bold').text("SCAN TO DOWNLOAD APP", 432, 498);
+            doc.image(qrBuffer, 460, 400, { width: 70, height: 70 });
+            doc.fillColor("#64748b").fontSize(6).font('Helvetica-Bold').text("DOWNLOAD APP", 462, 475);
         }
 
         doc.fillColor("#0f172a").fontSize(12).font('Helvetica-Bold').text("— Why Choose Health Kangaroo? —", 50, 570);
@@ -1014,7 +1064,8 @@ const generateAndUploadSmartReport = async (req, res) => {
             "24/7 Priority Emergency Healthcare Support"
         ];
         features.forEach(feat => {
-            doc.fillColor("#047857").fontSize(9).font('Helvetica-Bold').text("✓", 60, checkY);
+            // 🚨 FIXED: Bullet list symbol matching React style guidelines safely without emoji crash [3]
+            doc.fillColor("#047857").fontSize(9).font('Helvetica-Bold').text("*", 60, checkY);
             doc.fillColor("#334155").font('Helvetica').text(feat, 80, checkY);
             checkY += 20;
         });
@@ -1029,7 +1080,6 @@ const generateAndUploadSmartReport = async (req, res) => {
         doc.end();
 
         stream.on('finish', async () => {
-            // MULTI-PATIENT SYNC
             if (!booking.patientReports) booking.patientReports = [];
 
             booking.patientReports = booking.patientReports.filter(r => String(r.patientId) !== String(patientId));
@@ -1048,7 +1098,7 @@ const generateAndUploadSmartReport = async (req, res) => {
             });
 
             booking.status = allCompleted ? 'Completed' : 'Testing';
-            booking.reportFile = finalReportFile; // Fallback main reference
+            booking.reportFile = finalReportFile; 
             
             booking.markModified('patientReports');
             await booking.save();
