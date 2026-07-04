@@ -6,7 +6,7 @@ const {
     registerDoctor, 
     verifyOTP, 
     uploadDocuments, 
-    loginDoctor ,
+    loginDoctor ,toggleDoctorOnlineStatus,
     updateDoctorProfile,getDoctorProfile, getDoctorById
 } = require('../../controllers/doctor/authDoctor');
 
@@ -23,6 +23,9 @@ router.put('/upload-docs', protect('doctor'), doctorDocUploads, uploadDocuments)
 
 // 4. Login
 router.post('/login', loginDoctor);
+
+// 4. Toggle Online Status
+router.patch('/status/toggle', protect('doctor'), toggleDoctorOnlineStatus);
 
 // 5. Update Profile (Optional)
 router.put(

@@ -120,11 +120,11 @@ const uploadDocuments = async (req, res) => {
 
 // --- 4. LOGIN DOCTOR (Unified Logic) ---
 // Endpoint: POST /api/auth/doctor/login
+// 1. UPDATED LOGIN DOCTOR (With Inactive check)
 const loginDoctor = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
         
-        // 1. Find Doctor by Email or Phone
         let query = email ? { email: email.toLowerCase() } : { phone };
         const doctor = await Doctor.findOne(query).select('+password');
 
@@ -132,22 +132,24 @@ const loginDoctor = async (req, res) => {
             return res.status(400).json({ message: 'Invalid Credentials' });
         }
 
-        // ------------------------------------------------------------
-        // 🚀 STATUS & ROLE BASED FLOW
-        // ------------------------------------------------------------
-        
-        // A. PENDING: Review ke liye wait kar raha hai
+        // 🚨 SECURITY LOCK: Block login if Doctor account is inactive/disabled by Admin
+        if (doctor.isActive === false) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "Access Denied: Your account is inactive. Please contact support/administrator." 
+            });
+        }
+
         if (doctor.profileStatus === 'Pending') {
             return res.status(200).json({ 
                 success: true, 
                 fullAccess: false,
-                role: doctor.role, // 'doctor' ya 'hospital-doctor'
+                role: doctor.role, 
                 profileStatus: 'Pending',
                 message: 'Profile under review. No dashboard access yet.' 
             });
         }
 
-        // B. INCOMPLETE: Docs upload karne baaki hain
         if (doctor.profileStatus === 'Incomplete') {
             const token = doctor.token || generateToken(doctor._id, doctor.role);
             if (!doctor.token) { doctor.token = token; await doctor.save(); }
@@ -162,7 +164,6 @@ const loginDoctor = async (req, res) => {
             });
         }
 
-        // C. REJECTED: Admin ne docs reject kar diye
         if (doctor.profileStatus === 'Rejected') {
             const token = doctor.token || generateToken(doctor._id, doctor.role);
             return res.status(200).json({ 
@@ -176,7 +177,6 @@ const loginDoctor = async (req, res) => {
             });
         }
 
-        // D. APPROVED: Full Access (Dashboard)
         let token = null;
         if (process.env.NODE_ENV === 'development' && doctor.token) {
             try {
@@ -196,7 +196,7 @@ const loginDoctor = async (req, res) => {
             success: true, 
             fullAccess: true, 
             token, 
-            role: doctor.role, // Figma navigation ke liye zaroori
+            role: doctor.role, 
             profileStatus: 'Approved', 
             data: doctor 
         });
@@ -205,6 +205,37 @@ const loginDoctor = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// 2. NEW DOCTOR STATUS TOGGLE API
+const toggleDoctorOnlineStatus = async (req, res) => {
+    try {
+        const { isOnline } = req.body;
+        const doctorId = req.user.id;
+
+        if (isOnline === undefined) {
+            return res.status(400).json({ success: false, message: "isOnline status value is required." });
+        }
+
+        const updatedDoctor = await Doctor.findByIdAndUpdate(
+            doctorId,
+            { $set: { isOnline: Boolean(isOnline) } },
+            { new: true }
+        ).select('-password');
+
+        if (!updatedDoctor) {
+            return res.status(404).json({ success: false, message: "Doctor profile not found." });
+        }
+
+        res.json({
+            success: true,
+            message: `Your status has been updated to ${isOnline ? 'Online' : 'Offline'}.`,
+            isOnline: updatedDoctor.isOnline
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // --- 5. UPDATE PROFILE (Bio, Fees, Availability, etc.) ---
 // Endpoint: PUT /api/auth/doctor/update-profile
@@ -453,4 +484,4 @@ const getDoctorById = async (req, res) => {
     }
 };
 
-module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor, updateDoctorProfile ,getDoctorProfile, getDoctorById };
+module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor,toggleDoctorOnlineStatus, updateDoctorProfile ,getDoctorProfile, getDoctorById };

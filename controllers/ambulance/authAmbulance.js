@@ -56,11 +56,14 @@ const loginAmbulance = async (req, res) => {
             return res.status(400).json({ message: 'Invalid Credentials' });
         }
 
-        // ============================================================
-        // 🚀 STATUS BASED LOGIN FLOW (Matches Hospital)
-        // ============================================================
+        // 🚨 SECURITY LOCK: Block login if Ambulance driver account is inactive/disabled by Admin
+        if (amb.isActive === false) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "Access Denied: Your driver account is inactive. Please contact support." 
+            });
+        }
 
-        // 1. Case: PENDING
         if (amb.profileStatus === 'Pending') {
             return res.status(200).json({ 
                 success: true, 
@@ -70,7 +73,6 @@ const loginAmbulance = async (req, res) => {
             });
         }
 
-        // 2. Case: INCOMPLETE (Token denge documents upload ke liye)
         if (amb.profileStatus === 'Incomplete') {
             const token = amb.token || generateToken(amb._id, amb.role);
             return res.status(200).json({ 
@@ -82,7 +84,6 @@ const loginAmbulance = async (req, res) => {
             });
         }
 
-        // 3. Case: REJECTED
         if (amb.profileStatus === 'Rejected') {
             const token = amb.token || generateToken(amb._id, amb.role);
             return res.status(200).json({ 
@@ -95,7 +96,6 @@ const loginAmbulance = async (req, res) => {
             });
         }
 
-        // 4. Case: APPROVED (Full Access)
         let token = null;
         if (process.env.NODE_ENV === 'development' && amb.token) {
             try {
@@ -170,25 +170,36 @@ const completeAmbulanceProfile = async (req, res) => {
 
 const toggleDriverAvailability = async (req, res) => {
     try {
-        const { available } = req.body; // expects true (Online) or false (Offline)
+        const { available } = req.body; // true (Online) or false (Offline)
+
+        if (available === undefined) {
+            return res.status(400).json({ success: false, message: "available parameter is required." });
+        }
 
         const ambulance = await Ambulance.findByIdAndUpdate(
             req.user.id,
-            { $set: { availableForEmergency: available } },
+            { 
+                $set: { 
+                    availableForEmergency: Boolean(available),
+                    isOnline: Boolean(available) // 🚨 Synchronized to keep both model fields perfectly aligned
+                } 
+            },
             { new: true }
-        );
+        ).select('-password');
 
         if (!ambulance) return res.status(404).json({ success: false, message: "Driver profile not found." });
 
         res.json({ 
             success: true, 
             message: `Driver status updated to ${available ? 'Online' : 'Offline'}`, 
-            available: ambulance.availableForEmergency 
+            available: ambulance.availableForEmergency,
+            isOnline: ambulance.isOnline
         });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
     }
 };
+
 
 const getMyAmbulanceProfile = async (req, res) => {
     try {

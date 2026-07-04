@@ -90,9 +90,14 @@ const loginProvider = async (req, res) => {
             return res.status(400).json({ message: 'Invalid Credentials' });
         }
 
-        // ------------------------------------------------------------
-        // 🚀 STATUS BASED FLOW
-        // ------------------------------------------------------------
+        // 🚨 SECURITY LOCK: Block login if Provider is inactive/disabled by Admin
+        if (provider.isActive === false) {
+            return res.status(403).json({ 
+                success: false, 
+                message: `Access Denied: Your ${category} partner account is inactive. Please contact support.` 
+            });
+        }
+
         if (provider.profileStatus === 'Pending') {
             return res.status(200).json({ 
                 success: true, 
@@ -105,7 +110,6 @@ const loginProvider = async (req, res) => {
         if (provider.profileStatus === 'Incomplete') {
             const token = provider.token || generateToken(provider._id, category);
             
-            // Safe Token Save: Avoids whole-document validation conflicts during incomplete profile login
             if (!provider.token) {
                 await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
             }
@@ -122,7 +126,6 @@ const loginProvider = async (req, res) => {
         if (provider.profileStatus === 'Rejected') {
             const token = provider.token || generateToken(provider._id, category);
             
-            // Safe Token Save: Avoids whole-document validation conflicts during rejected state login
             if (!provider.token) {
                 await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
             }
@@ -137,9 +140,6 @@ const loginProvider = async (req, res) => {
             });
         }
 
-        // ------------------------------------------------------------
-        // APPROVED STATUS FLOW
-        // ------------------------------------------------------------
         let token = null;
         if (process.env.NODE_ENV === 'development' && provider.token) {
             try {
@@ -150,7 +150,6 @@ const loginProvider = async (req, res) => {
 
         if (!token) {
             token = generateToken(provider._id, category);
-            // Strictly updates only the token variable, ensuring other non-verified fields do not crash the call
             await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
         }
 
@@ -165,6 +164,37 @@ const loginProvider = async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ message: error.message });
+    }
+};
+
+// 2. NEW PROVIDER STATUS TOGGLE API
+const toggleProviderOnlineStatus = async (req, res) => {
+    try {
+        const { isOnline } = req.body;
+        const providerId = req.user.id;
+        const role = req.user.role; // e.g., 'Lab', 'Pharmacy', 'Nurse'
+
+        if (isOnline === undefined) {
+            return res.status(400).json({ success: false, message: "isOnline status value is required." });
+        }
+
+        const Model = getModelByCategory(role);
+        if (!Model) return res.status(400).json({ success: false, message: "Invalid Provider Role" });
+
+        const updatedProvider = await Model.findByIdAndUpdate(
+            providerId,
+            { $set: { isOnline: Boolean(isOnline) } },
+            { new: true }
+        ).select('-password');
+
+        res.json({
+            success: true,
+            message: `Your status has been updated to ${isOnline ? 'Online' : 'Offline'}.`,
+            isOnline: updatedProvider.isOnline
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -482,7 +512,7 @@ const getProviderProfile = async (req, res) => {
 
 module.exports = { 
     registerProvider, 
-    loginProvider, 
+    loginProvider, toggleProviderOnlineStatus,
     uploadLabDocs, 
     uploadPharmacyDocs, 
     uploadNurseDocs,

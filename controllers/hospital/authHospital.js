@@ -106,11 +106,14 @@ const loginHospital = async (req, res) => {
             return res.status(400).json({ message: 'Invalid Credentials' });
         }
 
-        // ============================================================
-        // 🚀 STATUS BASED LOGIN FLOW
-        // ============================================================
-        
-        // 1. Agar PENDING hai
+        // 🚨 SECURITY LOCK: Block login if Hospital account is inactive/disabled by Admin
+        if (hospital.isActive === false) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "Access Denied: Your hospital account is inactive. Please contact administrator." 
+            });
+        }
+
         if (hospital.profileStatus === 'Pending') {
             return res.status(200).json({ 
                 success: true, 
@@ -120,7 +123,6 @@ const loginHospital = async (req, res) => {
             });
         }
 
-        // 2. Agar INCOMPLETE hai (Token denge taki docs upload kar sake)
         if (hospital.profileStatus === 'Incomplete') {
             const token = hospital.token || generateToken(hospital._id);
             return res.status(200).json({ 
@@ -132,7 +134,6 @@ const loginHospital = async (req, res) => {
             });
         }
 
-        // 3. Agar REJECTED hai
         if (hospital.profileStatus === 'Rejected') {
             const token = hospital.token || generateToken(hospital._id);
             return res.status(200).json({ 
@@ -145,7 +146,6 @@ const loginHospital = async (req, res) => {
             });
         }
 
-        // 4. Agar APPROVED hai (Full Login)
         let token = null;
         if (process.env.NODE_ENV === 'development' && hospital.token) {
             try {
@@ -173,6 +173,37 @@ const loginHospital = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// 2. NEW HOSPITAL STATUS TOGGLE API
+const toggleHospitalOnlineStatus = async (req, res) => {
+    try {
+        const { isOnline } = req.body;
+        const hospitalId = req.user.id;
+
+        if (isOnline === undefined) {
+            return res.status(400).json({ success: false, message: "isOnline status value is required." });
+        }
+
+        const updatedHospital = await Hospital.findByIdAndUpdate(
+            hospitalId,
+            { $set: { isOnline: Boolean(isOnline) } },
+            { new: true }
+        ).select('-password');
+
+        if (!updatedHospital) {
+            return res.status(404).json({ success: false, message: "Hospital profile not found." });
+        }
+
+        res.json({
+            success: true,
+            message: `Hospital status successfully updated to ${isOnline ? 'Online' : 'Offline'}.`,
+            isOnline: updatedHospital.isOnline
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // --- 3. UPDATE DOCUMENTS & CHANGE STATUS ---
 // Endpoint: PUT /api/auth/hospital/update-profile
@@ -279,4 +310,4 @@ const getMyHospitalProfile = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { registerHospital, loginHospital, updateHospitalProfile, getMyHospitalProfile };
+module.exports = { registerHospital, loginHospital,toggleHospitalOnlineStatus, updateHospitalProfile, getMyHospitalProfile };

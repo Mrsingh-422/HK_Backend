@@ -4,7 +4,7 @@ const { protect } = require('../../middleware/authMiddleware');
 const { labDocUploads, pharmacyDocUploads, nurseDocUploads } = require('../../middleware/multer'); // Multer import
 const { 
     registerProvider, 
-    loginProvider, 
+    loginProvider, toggleProviderOnlineStatus,
     uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs,
     forgotPasswordProvider, resetPasswordProvider ,getProviderProfile
 } = require('../../controllers/provider/authProvider.js');
@@ -16,6 +16,8 @@ router.post('/register', registerProvider);
 
 // 2. Step 2: Login (Get Token & check profileStatus)
 router.post('/login', loginProvider);
+router.patch('/status/toggle', protect('provider'), toggleProviderOnlineStatus);
+
 
 router.post('/forgot-password', forgotPasswordProvider);
 router.post('/reset-password', resetPasswordProvider);
