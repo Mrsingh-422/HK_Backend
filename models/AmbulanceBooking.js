@@ -14,6 +14,12 @@ const ambulanceBookingSchema = new mongoose.Schema({
         required: true 
     },
     incidentType: { type: String }, // Road Accident, Trauma, Heart Attack
+// 👇 NEW: Figma Accidental Support Needed Options
+    additionalSupport: {
+        policeRequired: { type: Boolean, default: false },
+        fireRequired: { type: Boolean, default: false }
+    },
+
      pickupLocation: {
         address: { type: String, default: "" },
         lat: { type: Number, default: 0 },
@@ -89,7 +95,10 @@ const ambulanceBookingSchema = new mongoose.Schema({
         wardName: { type: String, default: null },
         duration: { type: String, default: null }, // e.g., "22 mins"
         reasonAtHandoff: { type: String, default: null }, // Figma: "Stable at handoff"
-        completedAt: { type: Date, default: null }
+        completedAt: { type: Date, default: null },
+         // 👇 NEW: Hand-off Screen Telemetry
+        totalDistance: { type: String, default: null }, // e.g., "8.4 km"
+        travelTime: { type: String, default: null }     // e.g., "15 mins"
     },
     
     // 👇 NEW: Store exactly what was selected

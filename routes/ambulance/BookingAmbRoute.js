@@ -10,6 +10,9 @@ const controller = require('../../controllers/ambulance/BookingAmb');
 router.get('/active-trip', protect(['ambulance', 'hospital-ambulance']), controller.getMyActiveTrip);
 router.get('/requests', protect(['ambulance', 'hospital-ambulance']), controller.getIncomingRequests);
 
+router.get('/referral-cases', protect(['ambulance', 'hospital-ambulance']), controller.getDriverReferralCases); // Referral Cases Page
+router.get('/system-cms', protect(['ambulance', 'hospital-ambulance']), controller.getSystemCms); // About, Terms, Contact Us Page
+
 // --- RIDE CONFIRMATION / REJECTION ---
 router.patch('/accept/:id', protect(['ambulance', 'hospital-ambulance']), controller.acceptBooking);
 router.patch('/reject/:id', protect(['ambulance', 'hospital-ambulance']), controller.rejectBooking); 
