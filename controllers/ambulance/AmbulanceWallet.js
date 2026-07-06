@@ -2,6 +2,7 @@
 const Wallet = require('../../models/Wallet');
 const Booking = require('../../models/AmbulanceBooking'); // Synced with AmbulanceBooking model
 const WithdrawalRequest = require('../../models/WithdrawalRequest');
+const Ambulance = require('../../models/Ambulance'); // 👈 Imported Ambulance model (fixes profile update)
 const moment = require('moment');
 const mongoose = require('mongoose');
 
@@ -78,6 +79,7 @@ const getAmbulanceWalletStats = async (req, res) => {
 
         const balances = await calculateAmbulanceBalances(ambulanceId);
 
+        // Daily vs Weekly stats for dashboard
         const stats = {
             todayEarnings: await Booking.aggregate([
                 { $match: { ambulanceId: new mongoose.Types.ObjectId(ambulanceId), status: 'Delivered', updatedAt: { $gte: moment().startOf('day').toDate() } } },
@@ -89,7 +91,17 @@ const getAmbulanceWalletStats = async (req, res) => {
             ])
         };
 
-        const wallet = await Wallet.findOne({ vendorId: ambulanceId, vendorModel: 'Ambulance' });
+        // 🚨 LAZY INITIALIZATION: Agar Wallet nahi mila, toh auto-initialize karein [1]
+        let wallet = await Wallet.findOne({ vendorId: ambulanceId, vendorModel: 'Ambulance' });
+        if (!wallet) {
+            wallet = await Wallet.create({
+                vendorId: ambulanceId,
+                vendorModel: 'Ambulance',
+                balance: 0,
+                transactions: []
+            });
+            console.log(`[Wallet] Self-Healed: Created new wallet for Ambulance ${ambulanceId}`);
+        }
 
         res.json({ 
             success: true, 
@@ -115,9 +127,16 @@ const requestAmbulanceWithdrawal = async (req, res) => {
         const ambulanceId = req.user.id;
         const ambulance = req.user; // Decoded and populated via protect('ambulance') middleware
 
-        const wallet = await Wallet.findOne({ vendorId: ambulanceId, vendorModel: 'Ambulance' });
+        // 🚨 LAZY INITIALIZATION: Agar Wallet nahi mila, toh auto-initialize karein [1]
+        let wallet = await Wallet.findOne({ vendorId: ambulanceId, vendorModel: 'Ambulance' });
         if (!wallet) {
-            return res.status(404).json({ success: false, message: "Ambulance wallet not found." });
+            wallet = await Wallet.create({
+                vendorId: ambulanceId,
+                vendorModel: 'Ambulance',
+                balance: 0,
+                transactions: []
+            });
+            console.log(`[Wallet] Self-Healed on Payout: Created wallet for Ambulance ${ambulanceId}`);
         }
 
         // dynamic lock verification
@@ -186,17 +205,31 @@ const requestAmbulanceWithdrawal = async (req, res) => {
 // 3. GET TRANSACTION HISTORY
 const getAmbulanceTransactions = async (req, res) => {
     try {
-        const wallet = await Wallet.findOne({ vendorId: req.user.id, vendorModel: 'Ambulance' });
+        const ambulanceId = req.user.id;
+
+        // 🚨 LAZY INITIALIZATION: Agar Wallet nahi mila, toh auto-initialize karein [1]
+        let wallet = await Wallet.findOne({ vendorId: ambulanceId, vendorModel: 'Ambulance' });
+        if (!wallet) {
+            wallet = await Wallet.create({
+                vendorId: ambulanceId,
+                vendorModel: 'Ambulance',
+                balance: 0,
+                transactions: []
+            });
+            console.log(`[Wallet] Self-Healed on Tx History: Created wallet for Ambulance ${ambulanceId}`);
+        }
+
         res.json({ success: true, transactions: wallet?.transactions || [] });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 4. UPDATE AMBULANCE BANK DETAILS (Strict verification reset) - [1]
+// 4. UPDATE AMBULANCE BANK DETAILS (Strict verification reset & Geo-indexing bypass) - [1]
 const updateAmbulanceBankDetails = async (req, res) => {
     try {
         const { accountType, bankName, accountHolderName, accountNumber, ifscCode, upiId } = req.body;
+        const ambulanceId = req.user.id;
 
         if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
             return res.status(400).json({ success: false, message: "Missing required bank details fields." });
@@ -213,16 +246,21 @@ const updateAmbulanceBankDetails = async (req, res) => {
             isVerified: false // Locked for admin re-verification [1]
         };
 
-        req.user.bankDetails = updatedBankDetails;
-        await req.user.save();
+        // 🚨 CRITICAL FIX: Use findByIdAndUpdate to bypass 2dsphere indexing and full-document validation bugs!
+        const updatedAmbulance = await Ambulance.findByIdAndUpdate(
+            ambulanceId,
+            { $set: { bankDetails: updatedBankDetails } },
+            { new: true }
+        );
 
         res.json({ 
             success: true, 
             message: "Ambulance driver bank details updated successfully. Payouts are locked until Admin verifies your account.", 
-            data: updatedBankDetails 
+            data: updatedAmbulance.bankDetails 
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 module.exports = { getAmbulanceWalletStats, requestAmbulanceWithdrawal, getMyTransactions: getAmbulanceTransactions, updateAmbulanceBankDetails };

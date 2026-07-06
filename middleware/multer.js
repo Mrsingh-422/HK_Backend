@@ -789,6 +789,28 @@ const nursingPrescriptionUploads = multer({
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
+// ==========================================
+// 42. LAB CLIENT-GENERATED REPORT UPLOADS (Figma Handshake Setup)
+// ==========================================
+const labReportDir = 'public/uploads/user_reports';
+ensureDir(labReportDir);
+
+const labReportUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, labReportDir),
+        filename: (req, file, cb) => cb(null, `temp-report-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        // Strictly allow ONLY PDF uploads for lab reports to prevent malicious files
+        if (file.mimetype === 'application/pdf') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only PDF documents are allowed for Lab Reports!'), false);
+        }
+    },
+    limits: { fileSize: 15 * 1024 * 1024 } // 15MB limit
+}).single('reportFile'); // 👈 Custom key matching 'reportFile' schema attribute
+
 
 module.exports = { 
     hospitalUploads,
@@ -836,5 +858,6 @@ module.exports = {
     pharmacyDeliveryUpload,
 
     nursingPrescriptionUploads,
+    labReportUpload
 
 };  

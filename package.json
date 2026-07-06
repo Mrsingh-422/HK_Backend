@@ -29,6 +29,7 @@
     "fuse.js": "^7.3.0",
     "groq-sdk": "^1.2.1",
     "helmet": "^8.1.0",
+    "html2pdf.js": "^0.14.0",
     "joi": "^18.0.2",
     "jsonwebtoken": "^9.0.3",
     "moment": "^2.30.1",

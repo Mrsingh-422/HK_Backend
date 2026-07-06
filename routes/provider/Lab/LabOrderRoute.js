@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { labDocUploads } = require('../../../middleware/multer'); 
+const { labDocUploads, labReportUpload } = require('../../../middleware/multer'); 
 const { 
     getLabStats, 
     getOrders, 
@@ -11,8 +11,10 @@ const {
     assignStaff, 
     updateProgressStatus, 
     uploadReport ,
+    getReportData,            
+        uploadClientGeneratedPDF, 
     
-    generateAndUploadSmartReport,getReportTemplates,getReportTemplatesDropdown, // 👈 Added
+    getReportTemplates,getReportTemplatesDropdown, // 👈 Added
     getReportTemplatesForBooking, // 👈 Added
     saveDraftResults, // 👈 Added
     getDraftResults, // 👈 Added
@@ -56,7 +58,9 @@ router.get('/report-templates/booking/:orderId', protect('provider'), getReportT
 router.post('/save-draft/:orderId', protect('provider'), saveDraftResults); // Save Draft API
 router.get('/get-draft/:orderId', protect('provider'), getDraftResults); // Get Draft API
 
-router.post('/generate-report/:orderId', protect('provider'), generateAndUploadSmartReport);
+router.get('/get-report-data/:orderId', protect('provider'), getReportData);
+router.post('/upload-client-pdf/:orderId', protect('provider'), labReportUpload, uploadClientGeneratedPDF); // 👈 Replaced userReportUploads with labReportUpload
+
 router.get('/order-history', protect('provider'), getLabOrderHistory);
 
 // AI prescriptioin Flow
