@@ -54,86 +54,91 @@ const getIncomingRequests = async (req, res) => {
 // --- 2. ACCEPT REQUEST (Figma Screen 35) ---
 const acceptBooking = async (req, res) => {
     try {
-        const { id } = req.params; // 👈 FIXED: ObjectId read from params (not custom bookingId string)
+        const { id } = req.params;
         const ambulanceId = req.user.id;
 
-        // Pehle check karein ki driver busy toh nahi hai
         const driver = await Ambulance.findById(ambulanceId);
         if (!driver.availableForEmergency) {
             return res.status(400).json({ success: false, message: "You are already on an active trip." });
         }
 
-        // 1. Pehle confirm karein ki status abhi bhi 'Searching' hai (prevents duplicate driver accepts)
         const bookingCheck = await Booking.findOne({ _id: id, status: 'Searching' });
         if (!bookingCheck) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "This trip is no longer available (accepted by another driver or cancelled)." 
-            });
+            return res.status(400).json({ success: false, message: "This trip is no longer available." });
         }
 
         const isAccidental = bookingCheck.serviceType === 'Accident emergency';
         const timelineStatus = isAccidental ? 'Driver Assigned' : 'Accepted by Driver';
         const timelineNote = isAccidental 
             ? `${driver.name} has accepted your emergency request and is arriving shortly.`
-            : `${driver.name} accepted your request. Waiting for your payment to start navigation.`;
+            : `${driver.name} accepted your request. Waiting for payment to start navigation.`;
 
-        // 2. 🚨 ATOMIC UPDATE: Query by strictly _id and status: 'Searching'
+        // ATOMIC UPDATE
         const booking = await Booking.findOneAndUpdate(
-            { _id: id, status: 'Searching' }, // 👈 FIXED: Query strictly by MongoDB ObjectId _id
+            { _id: id, status: 'Searching' },
             {
-                $set: {
-                    ambulanceId: ambulanceId,
-                    status: 'Confirmed'
-                },
-                $push: { 
-                    trackingTimeline: { 
-                        status: timelineStatus, 
-                        timestamp: new Date(),
-                        note: timelineNote 
-                    } 
-                }
-            }, 
+                $set: { ambulanceId: ambulanceId, status: 'Confirmed' },
+                $push: { trackingTimeline: { status: timelineStatus, timestamp: new Date(), note: timelineNote } }
+            },
             { new: true }
         );
 
         if (!booking) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "This trip was just claimed by another driver." 
-            });
+            return res.status(400).json({ success: false, message: "This trip was just claimed by another driver." });
         }
 
-        // Driver ko busy mark karein
         driver.availableForEmergency = false;
         await driver.save();
 
-        // 🟢 Push Notifications send karein (FCM module)
-        if (isAccidental) {
-            await sendPushNotification(
-                booking.userId, 
-                'user', 
-                "Emergency Driver Assigned!", 
-                `${driver.name} is arriving shortly. OTP is ${booking.otp}.`,
-                { bookingId: booking._id.toString(), type: 'driver_assigned' }
+        // 🚨 PRE-ARRIVAL SHORT ADMISSION REGISTRATION FOR THE TARGET HOSPITAL
+        // If hospital is already selected, create the pre-arrival record immediately
+        if (booking.hospitalId) {
+            const hospitalBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+            
+            await Appointment.create({
+                userId: booking.userId,
+                hospitalId: booking.hospitalId,
+                ambulanceId: booking.ambulanceId,
+                bookingType: 'Admission',
+                bedBookingType: 'Emergency-Bed',
+                status: 'Hospital-Pending', // Appears in Hospital's Pending List
+                bookingId: hospitalBookingId,
+                transactionId: booking.bookingId, // Map with ambulance booking reference
+                triageLevel: booking.triageLevel || 'Emergency',
+                patients: [{
+                    patientName: booking.patientDetails?.name || "Emergency Patient",
+                    patientAge: booking.patientDetails?.age || 30,
+                    gender: booking.patientDetails?.gender || "Male",
+                    reasonForVisit: booking.patientDetails?.emergencyDescription || "Ambulance Emergency Drop-off"
+                }],
+                startDate: new Date(),
+                pricingBreakdown: { baseFee: 0, subtotal: 0 },
+                totalAmount: 0
+            });
+
+            // Trigger Notification to Destination Hospital (Figma Notification Screen)
+            await notifyAdminsAndVendor(
+                booking.hospitalId,
+                'hospital',
+                "🚨 New Incoming Emergency Case",
+                `Trauma patient is arriving shortly via Ambulance #${booking.bookingId}. Prepare emergency ward.`,
+                { bookingId: booking._id.toString(), type: 'incoming_emergency_case' }
             );
-            res.json({ success: true, message: "Emergency ride confirmed.", data: booking });
-        } else {
-            await sendPushNotification(
-                booking.userId, 
-                'user', 
-                "Ambulance Request Accepted", 
-                "Driver accepted your request! Please complete the payment to start navigation.",
-                { bookingId: booking._id.toString(), type: 'payment_pending' }
-            );
-            res.json({ success: true, message: "Request accepted. Waiting for patient payment.", data: booking });
         }
 
-    } catch (error) { 
-        console.error("Accept booking error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        // Send Push Notifications to User
+        if (isAccidental) {
+            await sendPushNotification(booking.userId, 'user', "Emergency Driver Assigned!", `${driver.name} is arriving shortly. OTP is ${booking.otp}.`);
+        } else {
+            await sendPushNotification(booking.userId, 'user', "Ambulance Request Accepted", "Driver accepted! Please complete payment to start navigation.");
+        }
+
+        res.json({ success: true, message: "Ride accepted. Pre-arrival registration triggered.", data: booking });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // --- 3. REJECT REQUEST (Driver Rejection) ---
 const rejectBooking = async (req, res) => {
@@ -195,15 +200,57 @@ const rejectBooking = async (req, res) => {
 const updateTripStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, note, patientCondition } = req.body; 
+        const { status, note, patientCondition, hospitalId } = req.body; 
 
         const booking = await Booking.findById(id);
-        if (!booking) return res.status(404).json({ message: "Trip not found" });
+        if (!booking) return res.status(404).json({ success: false, message: "Trip not found" });
 
         booking.status = status;
         if (patientCondition) booking.patientDetails.condition = patientCondition;
 
-        // Push to Figma Timeline
+        // 🚨 DUPLICATE GUARD: Check if admission record is already created (Medical/Referral check)
+        const existingAdmission = await Appointment.findOne({ transactionId: booking.bookingId });
+
+        // --- 1. ACCIDENTAL DYNAMIC HOSPITAL ALLOCATION (Trips starts) ---
+        if (status === 'En-Route' && hospitalId) {
+            booking.hospitalId = hospitalId; // Save selected hospital
+
+            // Create admission record ONLY if it doesn't exist already!
+            if (!existingAdmission) {
+                const hospitalBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+                
+                await Appointment.create({
+                    userId: booking.userId,
+                    hospitalId: hospitalId,
+                    ambulanceId: booking.ambulanceId,
+                    bookingType: 'Admission',
+                    bedBookingType: 'Emergency-Bed',
+                    status: 'Hospital-Pending', 
+                    bookingId: hospitalBookingId,
+                    transactionId: booking.bookingId, 
+                    triageLevel: booking.triageLevel || 'Emergency',
+                    patients: [{
+                        patientName: booking.patientDetails?.name || "Accident Victim",
+                        patientAge: booking.patientDetails?.age || 30,
+                        gender: booking.patientDetails?.gender || "Male",
+                        reasonForVisit: booking.patientDetails?.emergencyDescription || "Accidental Emergency Drop-off"
+                    }],
+                    startDate: new Date(),
+                    pricingBreakdown: { baseFee: 0, subtotal: 0 },
+                    totalAmount: 0
+                });
+
+                // Trigger Notification to selected Hospital (Figma Screen 11 Alert)
+                await notifyAdminsAndVendor(
+                    hospitalId,
+                    'hospital',
+                    "🚨 New Emergency Patient En-Route!",
+                    `Accident victim is arriving via Ambulance #${booking.bookingId}. Both User & Driver spot photos attached.`,
+                    { bookingId: booking._id.toString(), type: 'emergency_incoming' }
+                );
+            }
+        }
+
         booking.trackingTimeline.push({ 
             status: status, 
             timestamp: new Date(),
@@ -215,41 +262,38 @@ const updateTripStatus = async (req, res) => {
         }
 
         await booking.save();
-        res.json({ success: true, message: `Status: ${status}`, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-// 4. CAPTURE INCIDENT PHOTO (Figma Screen 33)
-const uploadIncidentPhoto = async (req, res) => {
-    try {
-        const files = req.files || {};
-        
-        // FIX: Replaced req.file with req.files structure as ambulanceDocUploads is a fields uploader
-        const photoPath = files.incidentPhoto ? `/uploads/ambulances/${files.incidentPhoto[0].filename}` : null;
-
-        if (!photoPath) {
-            return res.status(400).json({ success: false, message: "No photo uploaded or wrong field name" });
-        }
-        
-        const booking = await Booking.findByIdAndUpdate(req.params.id, {
-            $set: { 'patientDetails.incidentPhoto': photoPath }
-        }, { new: true });
-
-        res.json({ success: true, message: "Incident photo uploaded successfully", data: booking });
+        res.json({ success: true, message: `Status updated to: ${status}`, data: booking });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
     }
 };
 
+// 4. CAPTURE INCIDENT PHOTO (Figma Screen 33)
+const uploadIncidentPhoto = async (req, res) => {
+    try {
+        const { id } = req.params; // Booking Mongo ID
+        const files = req.files || {};
+        
+        const photoPath = files.incidentPhoto ? `/uploads/ambulances/${files.incidentPhoto[0].filename}` : null;
+        if (!photoPath) return res.status(400).json({ success: false, message: "No photo uploaded" });
+        
+        const booking = await Booking.findByIdAndUpdate(id, {
+            $set: { 'patientDetails.driverOnSpotPhoto': photoPath } // Saves driver's live on-spot photo
+        }, { new: true });
 
-// 5. FINALIZE TRIP HANDOFF & AUTO-REGISTER HOSPITAL EMERGENCY ADMISSION
+        res.json({ success: true, message: "On-spot photo saved successfully", data: booking });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+
+// --- 3. UPDATE FINALIZE HANDOFF (Update Existing Pre-Admission Record) ---
 const finalizeTripHandoff = async (req, res) => {
     try {
-        const { id } = req.params; 
+        const { id } = req.params; // Booking ID
         const { doctorName, wardName, duration, reason } = req.body;
 
         const booking = await Booking.findById(id);
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
         booking.handoffDetails = {
             doctorName,
@@ -258,62 +302,47 @@ const finalizeTripHandoff = async (req, res) => {
             reasonAtHandoff: reason,
             completedAt: new Date()
         };
-
         booking.status = 'Delivered';
-        
         booking.trackingTimeline.push({
             status: 'Patient delivered to hospital',
             timestamp: new Date(),
-            note: `Handoff done to ${doctorName} in ${wardName}`
+            note: `Handoff completed to Dr. ${doctorName} in ${wardName}`
         });
-
-        await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
 
         await booking.save();
+        await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
 
-        const hospitalBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-
-        const patientsData = [{
-            patientName: booking.patientDetails?.name || "Emergency Patient",
-            patientAge: booking.patientDetails?.age || 30,
-            gender: booking.patientDetails?.gender || "Male",
-            relation: booking.patientDetails?.relation || "Self",
-            reasonForVisit: reason || booking.patientDetails?.emergencyDescription || "Ambulance Emergency Drop-off"
-        }];
-
-        // Create Auto Hospital Admission
-        const newAdmission = await Appointment.create({
-            userId: booking.userId,
-            hospitalId: booking.hospitalId, 
-            ambulanceId: booking.ambulanceId, 
-            bookingType: 'Admission',
-            bedBookingType: 'Emergency-Bed', 
-            status: 'Hospital-Pending', 
-            bookingId: hospitalBookingId,
-            triageLevel: booking.triageLevel || 'Emergency',
-            patients: patientsData,
-            startDate: new Date(), 
-            pricingBreakdown: {
-                baseFee: 0,
-                subtotal: 0
-            },
-            totalAmount: 0
+        // =========================================================================
+        // 🚨 UPDATE EXISTING ADMISSION FILE WITH HANDOFF DETAILS
+        // Do not create duplicate admissions; update the pre-arrival file!
+        // =========================================================================
+        const existingAdmission = await Appointment.findOne({ 
+            transactionId: booking.bookingId 
         });
 
-        // 🚨 Trigger Notification for the Destination Hospital and Admins regarding Handed-Off Emergency Patient
-        await notifyAdminsAndVendor(
-            booking.hospitalId,
-            'hospital',
-            "🚨 Emergency Handoff Patient Delivered!",
-            `An emergency transit patient has been delivered to your hospital. Bed admission ID #${hospitalBookingId} has been created.`,
-            { appointmentId: newAdmission._id.toString(), type: 'emergency_handoff_admission' }
-        );
+        if (existingAdmission) {
+            existingAdmission.status = 'Hospital-Pending'; // Or set to 'Admitted'
+            existingAdmission.wardName = wardName;
+            existingAdmission.doctorName = doctorName;
+            
+            // Map the on-spot incident photo and referral card so hospital can view
+            existingAdmission.patients[0].reasonForVisit = reason || existingAdmission.patients[0].reasonForVisit;
+            
+            await existingAdmission.save();
 
-        res.json({ success: true, message: "Trip Finalized & Hospital Admission Created", data: booking });
+            // Notify hospital of delivery confirmation
+            await notifyAdminsAndVendor(
+                booking.hospitalId,
+                'hospital',
+                "✅ Patient Arrived & Handoff Complete",
+                `Patient ${booking.patientDetails?.name || 'Emergency Case'} is now under custody in ${wardName}.`,
+                { appointmentId: existingAdmission._id.toString() }
+            );
+        }
 
-    } catch (error) { 
-        console.error("Handoff Error:", error);
-        res.status(500).json({ message: error.message }); 
+        res.json({ success: true, message: "Handoff successfully registered on hospital records.", data: booking });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -356,36 +385,68 @@ const verifyPickupOtp = async (req, res) => {
     }
 };
 
-// --- API: RE-ROUTE TRANSIT AMBULANCE (Figma Screen: Re-Route Dialog) ---
+// --- 2. UPDATE RE-ROUTE TRANSIT (Strict Hospital Swap & Record Transfer) ---
 const reRouteAmbulance = async (req, res) => {
     try {
-        const { id } = req.params; // Booking ObjectId (_id)
-        const { newHospitalId, reason, notes } = req.body; // Reason options: "Hospital Full", "No ICU Bed", etc.
+        const { id } = req.params; // Booking ID
+        const { newHospitalId, reason } = req.body;
 
         const booking = await Booking.findById(id);
         if (!booking) return res.status(404).json({ success: false, message: "Transit booking not found." });
 
-        const oldHospital = await Hospital.findById(booking.hospitalId);
+        const oldHospitalId = booking.hospitalId;
+        const oldHospital = await Hospital.findById(oldHospitalId);
         const newHospital = await Hospital.findById(newHospitalId);
 
         if (!newHospital) return res.status(404).json({ success: false, message: "New target hospital not found." });
 
-        // Update target destination hospital
+        // Update Destination
         booking.hospitalId = newHospitalId;
-        
-        // Push re-route event to tracking timeline
         booking.trackingTimeline.push({
             status: 'Re-Routed',
             timestamp: new Date(),
-            note: `Re-routed from ${oldHospital ? oldHospital.name : 'Old Hospital'} to ${newHospital.name}. Reason: ${reason}. Note: ${notes || ''}`
+            note: `Re-routed from ${oldHospital ? oldHospital.name : 'Old Hospital'} to ${newHospital.name}. Reason: ${reason}`
+        });
+        await booking.save();
+
+        // =========================================================================
+        // 🚨 DYNAMIC ADMISSION RECORD SWAP
+        // Find the active pre-arrival Appointment record and transfer it to the new hospital
+        // =========================================================================
+        const activeAdmission = await Appointment.findOne({ 
+            transactionId: booking.bookingId, // Mapped via ambulance booking ref
+            status: 'Hospital-Pending'
         });
 
-        await booking.save();
-        res.json({ success: true, message: `Transit successfully re-routed to ${newHospital.name}`, data: booking });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        if (activeAdmission) {
+            // Update hospital reference in the existing admission record
+            activeAdmission.hospitalId = newHospitalId;
+            await activeAdmission.save();
+
+            // 🟢 Send cancellation/removal notification to Old Hospital
+            await notifyAdminsAndVendor(
+                oldHospitalId,
+                'hospital',
+                "ℹ️ Emergency Case Diverted",
+                `Incoming patient from Ambulance #${booking.bookingId} has been re-routed to another hospital.`
+            );
+
+            // 🟢 Send new incoming notification to New Hospital (with Patient Images & Details)
+            await notifyAdminsAndVendor(
+                newHospitalId,
+                'hospital',
+                "🚨 Emergency Case Re-Routed to You!",
+                `An incoming emergency patient from Ambulance #${booking.bookingId} has been diverted to your facility. Reason: ${reason}`,
+                { appointmentId: activeAdmission._id.toString(), type: 'emergency_re_routed' }
+            );
+        }
+
+        res.json({ success: true, message: `Successfully re-routed to ${newHospital.name}. Pre-arrival data transferred.`, data: booking });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // --- 7. GET DRIVER DASHBOARD COUNTS (NEW API - Figma Screen 1/2) ---
 const getDriverDashboardStats = async (req, res) => {

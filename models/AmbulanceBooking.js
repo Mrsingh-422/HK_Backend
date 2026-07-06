@@ -37,6 +37,7 @@ const ambulanceBookingSchema = new mongoose.Schema({
         condition: { type: String, default: 'Stable' }, // Figma Screen 8
         emergencyDescription: String,
         incidentPhoto: String,
+        driverOnSpotPhoto: String, // 👇 NEW: Driver ki khichi hui live photo        
         referralCard: String, // Figma Screen 6
         referralReason: String 
     },

@@ -3,9 +3,14 @@ const Wallet = require('../../../models/Wallet');
 const WithdrawalRequest = require('../../../models/WithdrawalRequest');
 const moment = require('moment');
 const mongoose = require('mongoose');
+
+// Mapped real models to guarantee schema compilation [1]
 const Lab = require('../../../models/Lab');
 const Pharmacy = require('../../../models/Pharmacy');
 const Nurse = require('../../../models/Nurse');
+const LabBooking = require('../../../models/LabBooking');
+const PharmacyBooking = require('../../../models/PharmacyBooking'); // 👈 Fixed Import
+const NurseBooking = require('../../../models/NurseBooking');       // 👈 Fixed Import
 
 // Helper to dynamically resolve booking model and run aggregate calculations based on Provider Type
 const calculateProviderBalances = async (vendorId, role) => {
@@ -13,26 +18,27 @@ const calculateProviderBalances = async (vendorId, role) => {
     
     let BookingModel;
     let matchQuery = {};
-    let sumField = "$totalAmount"; // Default
+    let sumField = "$totalAmount"; // Default fallback
     let completedStatuses = ['Completed'];
 
-    // 🚨 Dynamic Model Resolution based on active login role [1]
+    // 🚨 FIX: Corrected Model Name, nested sum fields path, and status enums [1]
     if (role === 'Lab') {
-        BookingModel = mongoose.model('LabBooking');
+        BookingModel = LabBooking;
         matchQuery = { labId: new mongoose.Types.ObjectId(vendorId) };
-        sumField = "$billSummary.totalAmount"; // As per your lab aggregate schema
+        sumField = "$billSummary.totalAmount"; // Nested inside billSummary
         completedStatuses = ['Report Uploaded', 'Completed'];
     } 
     else if (role === 'Pharmacy') {
-        // Safe check: Fallback dynamically if PharmacyOrder is not compiled yet
-        BookingModel = mongoose.models.PharmacyOrder || mongoose.models.PharmacyBooking || mongoose.model('PharmacyOrder', new mongoose.Schema({}));
+        BookingModel = PharmacyBooking; // 👈 Resolved to correct model
         matchQuery = { pharmacyId: new mongoose.Types.ObjectId(vendorId) };
-        completedStatuses = ['Delivered', 'Completed'];
+        sumField = "$billSummary.totalAmount"; // 👈 Nested inside billSummary
+        completedStatuses = ['Placed', 'Packed', 'Shipped', 'Delivered', 'Completed'];
     } 
     else if (role === 'Nurse') {
-        BookingModel = mongoose.models.NurseBooking || mongoose.model('NurseBooking', new mongoose.Schema({}));
+        BookingModel = NurseBooking; // 👈 Resolved to correct model
         matchQuery = { nurseId: new mongoose.Types.ObjectId(vendorId) };
-        completedStatuses = ['Completed'];
+        sumField = "$priceBreakdown.totalPrice"; // 👈 Nested inside priceBreakdown
+        completedStatuses = ['Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed'];
     } else {
         throw new Error("Invalid Provider Role inside Wallet controller.");
     }
@@ -75,6 +81,7 @@ const calculateProviderBalances = async (vendorId, role) => {
         {
             $match: {
                 vendorId: new mongoose.Types.ObjectId(vendorId),
+                vendorModel: role, // Dynamically maps to Lab, Pharmacy, or Nurse
                 status: { $in: ['Pending', 'Approved'] }
             }
         },
@@ -95,10 +102,23 @@ const calculateProviderBalances = async (vendorId, role) => {
 const getWalletStats = async (req, res) => {
     try {
         const vendorId = req.user.id;
-        const role = req.user.role; 
-        const provider = req.user; // Decoded profile carries fresh bankDetails [1]
+        const role = req.user.role; // 'Lab', 'Pharmacy', or 'Nurse'
+        const provider = req.user; 
 
+        // Dynamic balances calculate karein
         const balances = await calculateProviderBalances(vendorId, role);
+
+        // 🚨 LAZY INITIALIZATION: Agar Wallet nahi mila, toh auto-initialize karein [1]
+        let wallet = await Wallet.findOne({ vendorId, vendorModel: role });
+        if (!wallet) {
+            wallet = await Wallet.create({
+                vendorId,
+                vendorModel: role,
+                balance: 0,
+                transactions: []
+            });
+            console.log(`[Wallet] Self-Healed: Created wallet for Provider (${role}): ${vendorId}`);
+        }
 
         res.json({ 
             success: true, 
@@ -106,7 +126,8 @@ const getWalletStats = async (req, res) => {
             totalBalance: balances.walletBalance,             
             withdrawableBalance: balances.withdrawableBalance,      
             pendingBalance: balances.pendingEarnings,         
-            bankDetails: provider.bankDetails || null // 👈 Read dynamically from Lab/Pharmacy/Nurse profile [1]
+            bankDetails: provider.bankDetails || null,
+            transactions: wallet?.transactions || []
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
@@ -119,16 +140,24 @@ const requestWithdrawal = async (req, res) => {
         const { amount } = req.body;
         const vendorId = req.user.id;
         const role = req.user.role; // 'Lab', 'Pharmacy', or 'Nurse'
-        const provider = req.user;  // Decoded and populated via protect('provider') middleware
+        const provider = req.user;  
 
-        const wallet = await Wallet.findOne({ vendorId, vendorModel: role });
+        // 🚨 LAZY INITIALIZATION: Agar Wallet nahi mila, toh auto-initialize karein [1]
+        let wallet = await Wallet.findOne({ vendorId, vendorModel: role });
         if (!wallet) {
-            return res.status(404).json({ success: false, message: "Wallet record not found." });
+            wallet = await Wallet.create({
+                vendorId,
+                vendorModel: role,
+                balance: 0,
+                transactions: []
+            });
+            console.log(`[Wallet] Self-Healed on Payout: Created wallet for Provider (${role}): ${vendorId}`);
         }
 
         // Calculate dynamic balances using lock checks
         const balances = await calculateProviderBalances(vendorId, role);
 
+        // requested amount check against withdrawableBalance
         if (balances.withdrawableBalance < amount) {
             return res.status(400).json({ 
                 success: false, 
@@ -136,7 +165,7 @@ const requestWithdrawal = async (req, res) => {
             });
         }
 
-        // 🚨 STRICTOR RULE 1: Ensure Bank details are not empty [1]
+        // STRICTOR RULE 1: Ensure Bank details are not empty [1]
         if (!provider.bankDetails || !provider.bankDetails.accountNumber) {
             return res.status(400).json({ 
                 success: false, 
@@ -144,7 +173,7 @@ const requestWithdrawal = async (req, res) => {
             });
         }
 
-        // 🚨 STRICTOR RULE 2: Block requests unless bank details are verified by Admin! [1]
+        // STRICTOR RULE 2: Block requests unless bank details are verified by Admin! [1]
         if (provider.bankDetails.isVerified !== true) {
             return res.status(400).json({ 
                 success: false, 
@@ -161,10 +190,10 @@ const requestWithdrawal = async (req, res) => {
         });
         await wallet.save();
 
-        // Create request document with verified bank details [1]
+        // Create a unified withdrawal request for Admin Panel
         const request = await WithdrawalRequest.create({
             vendorId,
-            vendorModel: role,
+            vendorModel: role, // Dynamically maps to Lab, Pharmacy, or Nurse
             amount,
             bankDetails: {
                 accountHolderName: provider.bankDetails.accountHolderName,
@@ -186,7 +215,7 @@ const requestWithdrawal = async (req, res) => {
     }
 };
 
-// 3. UPDATE PROVIDER BANK DETAILS (Strict verification reset) - [1]
+// 3. UPDATE PROVIDER BANK DETAILS (Strict verification reset & Geo-indexing bypass) - [1]
 const updateProviderBankDetails = async (req, res) => {
     try {
         const { accountType, bankName, accountHolderName, accountNumber, ifscCode, upiId } = req.body;
@@ -214,7 +243,7 @@ const updateProviderBankDetails = async (req, res) => {
         else if (role === 'Pharmacy') VendorModel = Pharmacy;
         else if (role === 'Nurse') VendorModel = Nurse;
 
-        // 🚨 CRITICAL FIX: Use findByIdAndUpdate to bypass 2dsphere indexing and full-document validation bugs!
+        // CRITICAL FIX: Use findByIdAndUpdate to bypass 2dsphere indexing and full-document validation bugs!
         const updatedVendor = await VendorModel.findByIdAndUpdate(
             vendorId,
             { $set: { bankDetails: updatedBankDetails } },

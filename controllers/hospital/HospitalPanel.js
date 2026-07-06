@@ -783,12 +783,11 @@ const getEmergencyCases = async (req, res) => {
     try {
         const hospitalId = req.user.id;
 
-        // Query: brought in by ambulance (ambulanceId must exist and not be null)
-        // FIX: Added 'Discharge-Pending' so clinically discharged emergency patients stay visible until billed!
-        const data = await Appointment.find({ 
+        // 1. Fetch appointments brought in by ambulance
+        const appointments = await Appointment.find({ 
             hospitalId: hospitalId, 
             ambulanceId: { $ne: null, $exists: true }, 
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] } // 👈 FIXED
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] }
         })
         .populate('userId', 'name profilePic phone age gender')
         .populate('ambulanceId', 'name vehicleNumber vehicleType')
@@ -797,12 +796,37 @@ const getEmergencyCases = async (req, res) => {
             select: 'bedNumber status',
             populate: { path: 'wardId', select: 'name' }
         })
-        .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .lean(); // Lean use karne se hum object ko modify kar sakte hain safely
+
+        // 2. 🚨 DYNAMIC PHOTO & CASE REF INJECTION
+        // Har emergency appointment ke corresponding Ambulance Booking se photos fetch karenge
+        const enrichedData = await Promise.all(appointments.map(async (appt) => {
+            const booking = await AmbulanceBooking.findOne({
+                $or: [
+                    { bookingId: appt.bookingId },
+                    { bookingId: appt.transactionId } // Fallback tracking check
+                ]
+            }).select('patientDetails caseReference serviceType triageLevel').lean();
+
+            return {
+                ...appt,
+                caseReference: booking ? booking.caseReference : null,
+                serviceType: booking ? booking.serviceType : null,
+                // Hospital is object se "incidentPhoto" aur "driverOnSpotPhoto" nikal kar dikhayega
+                emergencyPhotos: booking ? {
+                    userIncidentPhoto: booking.patientDetails?.incidentPhoto || null,
+                    driverOnSpotPhoto: booking.patientDetails?.driverOnSpotPhoto || null,
+                    referralCard: booking.patientDetails?.referralCard || null,
+                    emergencyDescription: booking.patientDetails?.emergencyDescription || ""
+                } : null
+            };
+        }));
 
         res.json({ 
             success: true, 
-            count: data.length, 
-            data 
+            count: enrichedData.length, 
+            data: enrichedData 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 

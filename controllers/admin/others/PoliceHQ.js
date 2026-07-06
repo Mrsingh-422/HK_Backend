@@ -4,17 +4,37 @@ const PoliceStaff = require('../../../models/PoliceStaff');
 const bcrypt = require('bcryptjs');
  
 // Helper function to extract image path from Multer (req.file or req.files)
+// Helper function to extract image path from Multer (Clean & Standardized)
 const getImagePath = (req) => {
-    if (req.file) return req.file.path;
-    if (req.files) {
-        if (req.files.profileImage && req.files.profileImage[0]) return req.files.profileImage[0].path;
-        if (Array.isArray(req.files)) {
+    let filePath = null;
+ 
+    // 1. File path nikalna
+    if (req.file) {
+        filePath = req.file.path;
+    } else if (req.files) {
+        if (req.files.profileImage && req.files.profileImage[0]) {
+            filePath = req.files.profileImage[0].path;
+        } else if (Array.isArray(req.files)) {
             const found = req.files.find(f => f.fieldname === 'profileImage');
-            if (found) return found.path;
+            if (found) filePath = found.path;
         }
     }
-    return null;
+ 
+    if (!filePath) return null;
+ 
+    // 2. 🚨 FIX: Windows ke backslashes (\) ko seedhe slashes (/) mein badalna
+    filePath = filePath.replace(/\\/g, '/');
+ 
+    // 3. 🚨 FIX: 'public' word ko URL se hatana
+    if (filePath.startsWith('public/')) {
+        filePath = filePath.replace('public/', '/');
+    } else if (!filePath.startsWith('/')) {
+        filePath = '/' + filePath;
+    }
+ 
+    return filePath;
 };
+ 
  
 // --- POLICE HEADQUARTER (HQ) CRUD ---
  

@@ -1,4 +1,5 @@
 const FireHQ = require('../../../models/FireHQ');
+const FireStaff = require('../../../models/FireStaff');
 const FireStation = require('../../../models/FireStation');
 const bcrypt = require('bcryptjs');
  
