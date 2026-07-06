@@ -349,18 +349,53 @@ const calculateAmbulanceFare = async (req, res) => {
 const confirmAmbulanceBooking = async (req, res) => {
     try {
         let body = { ...req.body };
-        // ... (JSON stringify check of req.body remains same) ...
+        
+        // 1. Flutter/Form-data Parsing (Handles stringified objects from Multipart requests)
+        if (typeof body.pricing === 'string') {
+            try { body.pricing = JSON.parse(body.pricing); } catch (e) {}
+        }
+        
+        if (typeof body.couponDetails === 'string') {
+            try { 
+                const parsedCoupon = JSON.parse(body.couponDetails);
+                body.couponCode = parsedCoupon.couponCode;
+            } catch (e) {}
+        }
 
         const { 
-            ambulanceId, hospitalId, pickupHospitalId, serviceType, 
-            triageLevel, patientDetails, staffType, paymentId, paymentMethod,
-            scheduledDate, appointmentTime, reason, incidentDescription, referralReason,
-            // 👇 New fields
-            policeRequired, fireRequired 
+            ambulanceId, 
+            hospitalId,        // Destination Hospital
+            pickupHospitalId,  // For Referral (Pickup Hospital)
+            serviceType, 
+            triageLevel, 
+            patientDetails,    // JSON string or Object
+            staffType,         // "Doctor" or "Nurse" or "Doctor,Nurse"
+            paymentId,         // Razorpay ID
+            scheduledDate,     // YYYY-MM-DD
+            appointmentTime,   // e.g., "10:30 AM"
+            reason,            // General reason
+            incidentDescription, 
+            referralReason,
+            policeRequired,    // Accidental check Alert
+            fireRequired       // Accidental check Alert
         } = body;
 
+        // 2. Strict Availability Check: Block if Ambulance is offline
+        const targetAmbulance = await Ambulance.findById(ambulanceId);
+        if (!targetAmbulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+        if (targetAmbulance.isOnline === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking Blocked: Ambulance is currently offline and not accepting requests."
+            });
+        }
+
+        // 3. Secure Fare Calculation using getFinalFare helper (Handles subscription & staff pricing)
         const fare = await getFinalFare(body, req.user.id); 
 
+        // 4. Map supportStaffSelected Booleans
         let staffList = staffType ? (typeof staffType === 'string' ? staffType.split(',') : staffType) : [];
         staffList = staffList.map(s => s.trim());
         const supportStaffSelected = {
@@ -368,14 +403,75 @@ const confirmAmbulanceBooking = async (req, res) => {
             nurse: staffList.includes('Nurse')
         };
 
-        // File checks
+        // 5. Patient Details Parsing
+        let parsedDetails = {};
+        if (typeof patientDetails === 'string') {
+            try { parsedDetails = JSON.parse(patientDetails || '{}'); } catch (e) { parsedDetails = {}; }
+        } else { 
+            parsedDetails = patientDetails || {}; 
+        }
+
+        // 6. Handle Images from Multer Uploads
         let referralCardPath = req.files?.referralCard ? `/uploads/ambulances/${req.files.referralCard[0].filename}` : null;
         let incidentPhotoPath = req.files?.incidentPhoto ? `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
 
-        const finalReason = reason || referralReason || incidentDescription || "";
+        const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
+        // 7. Robust Pickup Location Parser (Supports nested, flat, or stringified inputs)
+        let finalPickupLocation = { address: "Pickup Location", lat: 30.7046, lng: 76.7179 };
+
+        if (body['pickupLocation[address]']) {
+            finalPickupLocation = {
+                address: body['pickupLocation[address]'],
+                lat: Number(body['pickupLocation[lat]'] || 30.7046),
+                lng: Number(body['pickupLocation[lng]'] || 76.7179)
+            };
+        } 
+        else if (body.pickupAddress || body.pickupLocationAddress) {
+            finalPickupLocation = {
+                address: body.pickupAddress || body.pickupLocationAddress,
+                lat: Number(body.pickupLat || body.pickupLocationLat || 30.7046),
+                lng: Number(body.pickupLng || body.pickupLocationLng || 76.7179)
+            };
+        }
+        else if (body.pickupLocation) {
+            if (typeof body.pickupLocation === 'string') {
+                try {
+                    const parsed = JSON.parse(body.pickupLocation);
+                    if (parsed && typeof parsed === 'object') {
+                        finalPickupLocation = {
+                            address: parsed.address || parsed.pickupAddress || "Pickup Location",
+                            lat: Number(parsed.lat || parsed.pickupLat || 30.7046),
+                            lng: Number(parsed.lng || parsed.pickupLng || 76.7179)
+                        };
+                    }
+                } catch (e) {
+                    finalPickupLocation = {
+                        address: body.pickupLocation, 
+                        lat: Number(body.lat || body.pickupLat || 30.7046),
+                        lng: Number(body.lng || body.pickupLng || 76.7179)
+                    };
+                }
+            } else if (typeof body.pickupLocation === 'object') {
+                finalPickupLocation = {
+                    address: body.pickupLocation.address || body.pickupLocation.pickupAddress || "Pickup Location",
+                    lat: Number(body.pickupLocation.lat || 30.7046),
+                    lng: Number(body.pickupLocation.lng || 76.7179)
+                };
+            }
+        }
+
+        const tempBookingId = `HK-BOK-${Date.now().toString().slice(-6)}`;
+        let rzpOrder = null;
+
+        // 8. Razorpay integration for Online Payments
+        if (!fare.isFree) {
+            rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
+        }
+
+        // 9. Save Booking Record
         const booking = await Booking.create({
-            bookingId: `HK-BOK-${Date.now().toString().slice(-6)}`,
+            bookingId: tempBookingId,
             caseReference: generateCaseRef(serviceType),
             userId: req.user.id,
             ambulanceId,
@@ -386,8 +482,8 @@ const confirmAmbulanceBooking = async (req, res) => {
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
             scheduledTime: appointmentTime || null,
             supportStaffSelected: supportStaffSelected,
+            pickupLocation: finalPickupLocation,
             
-            // 👇 NEW: Support selection mapped
             additionalSupport: {
                 policeRequired: policeRequired === 'true' || policeRequired === true,
                 fireRequired: fireRequired === 'true' || fireRequired === true
@@ -397,9 +493,14 @@ const confirmAmbulanceBooking = async (req, res) => {
                 ...parsedDetails,
                 emergencyDescription: finalReason,
                 referralReason: finalReason,
-                referralCard: referralCardPath,
-                incidentPhoto: incidentPhotoPath,
-                condition: "Stable"
+                referralCard: referralCardPath || parsedDetails.referralCard,
+                incidentPhoto: incidentPhotoPath || parsedDetails.incidentPhoto,
+                condition: parsedDetails.condition || "Stable"
+            },
+            couponDetails: {
+                couponId: fare.couponId,
+                couponCode: fare.finalCouponCode,
+                discountValue: fare.discount
             },
             pricing: {
                 ambulanceCharge: fare.ambulanceCharge,
@@ -409,17 +510,60 @@ const confirmAmbulanceBooking = async (req, res) => {
                 total: fare.total
             },
             isFreeCase: fare.isFree,
-            paymentMethod: fare.isFree ? 'Free' : (paymentMethod || 'UPI'), // 👇 NEW
-            paymentStatus: fare.isFree ? 'Paid' : (paymentId ? 'Paid' : 'Pending'),
-            transactionId: paymentId || null,
-            status: 'Confirmed',
-            otp: Math.floor(1000 + Math.random() * 9000).toString()
+            paymentStatus: fare.isFree ? 'Paid' : 'Pending',
+            transactionId: rzpOrder ? rzpOrder.id : (paymentId || null),
+            status: 'Searching', 
+            otp: Math.floor(1000 + Math.random() * 9000).toString(),
+            trackingTimeline: [{ 
+                status: 'Searching', 
+                timestamp: new Date(),
+                note: `Booking request sent, searching for driver.` 
+            }]
         });
 
-        // ... update coupon and ambulance available status ...
+        // 10. Update Coupon Usage if applied successfully
+        if (fare.couponId) {
+            const coupon = await Coupon.findById(fare.couponId);
+            const userIndex = coupon.usedBy.findIndex(u => u.userId && u.userId.toString() === req.user.id.toString());
+            if (userIndex > -1) {
+                coupon.usedBy[userIndex].usageCount += 1;
+            } else {
+                coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
+            }
+            await coupon.save();
+        }
 
-        res.status(201).json({ success: true, message: "Booking Confirmed", booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // Deduct Subscription benefits for Free/Subscription trips
+        if (fare.isFree) {
+            await deductBenefitCount(req.user.id, 'freeAmbulanceTripsCount');
+
+            // 🚨 Trigger Notification for Free Case Bookings (So nearby drivers are notified instantly)
+            await notifyAdminsAndVendor(
+                ambulanceId, 
+                'ambulance', 
+                "New Booking Request (Free Case)!", 
+                `An ambulance booking #${tempBookingId} has been placed. Action required.`,
+                { bookingId: booking._id.toString(), type: 'new_booking' }
+            );
+
+            return res.status(201).json({ success: true, message: "Booking Request Sent Successfully (Free/Subscription Case)", booking });
+        }
+
+        // For Online Paid cases, return Razorpay Order configurations
+        res.status(201).json({ 
+            success: true, 
+            message: "Razorpay order created for ambulance. Complete payment to confirm.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount, 
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: booking._id,
+            bookingId: tempBookingId
+        });
+
+    } catch (error) { 
+        console.error("Booking Error:", error);
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 
