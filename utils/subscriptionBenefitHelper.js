@@ -79,9 +79,34 @@ const refundBenefitCount = async (userId, benefitField) => {
     }
 };
 
+const getActiveSubscriptionMetadata = async (userId) => {
+    try {
+        if (!userId) return null;
+
+        const activeSub = await UserSubscription.findOne({
+            userId,
+            status: 'Active',
+            endDate: { $gt: new Date() }
+        }).populate('planId', 'name planType validityInDays');
+
+        if (!activeSub) return null;
+
+        return {
+            subscriptionId: activeSub._id,
+            planName: activeSub.planId?.name || "Premium Care Plan",
+            planType: activeSub.planId?.planType || "Elder Care",
+            endDate: activeSub.endDate,
+            remainingBenefits: activeSub.remainingBenefits
+        };
+    } catch (error) {
+        console.error("Error populating subscription metadata:", error);
+        return null;
+    }
+};
 
 module.exports = {
     checkAndApplyBenefit,
     deductBenefitCount,
-    refundBenefitCount
+    refundBenefitCount,
+    getActiveSubscriptionMetadata
 };

@@ -7,6 +7,7 @@ const sendEmailOTP = require('../../utils/emailService'); // Email sending utili
 const HealthData = require('../../models/HealthData');
 const PillReminder = require('../../models/PillReminder');
 const HealthNews = require('../../models/HealthNews'); // New Model
+const { getActiveSubscriptionMetadata } = require('../../utils/subscriptionBenefitHelper'); // New Helper
 
 // Helper: Generate Token
 const generateToken = (id) => {
@@ -271,15 +272,25 @@ const resetPassword = async (req, res) => {
 // endpoint: GET /api/auth/user/profile
 const getUserProfile = async (req, res) => {
     try {
-        const userId = req.user.id;
-        // NOTE: populate sirf insuranceId par chalega kyunki baaki sab user ke andar hi hain
-        const user = await User.findById(userId)
-            .select('-password -token')
-            .populate('insuranceId', 'name'); 
+        const user = await User.findById(req.user.id).select('-password');
 
-        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
 
-        res.status(200).json({ success: true, data: user });
+        // 🚨 INTEGRATION CHECK: Fetch subscription metadata
+        const subscriptionMeta = await getActiveSubscriptionMetadata(user._id);
+
+        // Safe conversion of Mongoose Document to JS Object
+        const userObj = user.toObject();
+
+        res.status(200).json({
+            success: true,
+            data: {
+                ...userObj, // Purane saare keys (abhaDetails, userAddress, familyMember etc.) safe rahenge
+                activeSubscription: subscriptionMeta // 👈 Additive injection for Frontend UI Badge/Vitals
+            }
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
