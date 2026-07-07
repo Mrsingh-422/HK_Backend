@@ -535,9 +535,13 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         // Deduct Subscription benefits for Free/Subscription trips
         if (fare.isFree) {
-            await deductBenefitCount(req.user.id, 'freeAmbulanceTripsCount');
+            // 🚨 SUBSCRIPTION DEDUCTION LOCK: Only deduct subscription trip points if ride is NOTUniversally Free SOS
+            if (serviceType !== 'Accident emergency') {
+                const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+                await deductBenefitCount(req.user.id, 'freeAmbulanceTripsCount');
+            }
 
-            // 🚨 Trigger Notification for Free Case Bookings (So nearby drivers are notified instantly)
+            // Trigger Notification for Free Case Bookings (So nearby drivers are notified instantly)
             await notifyAdminsAndVendor(
                 ambulanceId, 
                 'ambulance', 
@@ -645,57 +649,6 @@ const verifyAmbulancePayment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
-
-
-
-
-
-
-// const addReview = async (req, res) => {
-//     try {
-//         const { targetId, targetType, orderId, rating, comment } = req.body;
-
-//         // Check if user already reviewed this order
-//         const existing = await Review.findOne({ userId: req.user.id, orderId });
-//         if (existing) return res.status(400).json({ message: "Review already submitted for this order" });
-
-//         const review = await Review.create({
-//             userId: req.user.id,
-//             userName: req.user.name,
-//             targetId,
-//             targetType,
-//             orderId,
-//             rating,
-//             comment
-//         });
-
-//         res.status(201).json({ success: true, message: "Review added successfully", data: review });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
-
-// --- 2. UPDATE REVIEW ---
-// const updateReview = async (req, res) => {
-//     try {
-//         const { id } = req.params;
-//         const { rating, comment } = req.body;
-
-//         const review = await Review.findOneAndUpdate(
-//             { _id: id, userId: req.user.id },
-//             { $set: { rating, comment } },
-//             { new: true }
-//         );
-
-//         if (!review) return res.status(404).json({ message: "Review not found" });
-
-//         res.json({ success: true, message: "Review updated", data: review });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
-
-
-
-
-
 
 
 

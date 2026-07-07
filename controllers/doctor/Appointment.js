@@ -1,6 +1,7 @@
 const Appointment = require('../../models/Appointment');
 const Doctor = require('../../models/Doctor');
 const Prescription = require('../../models/Prescription');
+const Medicine = require('../../models/Medicine');
 const moment = require('moment');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
@@ -612,6 +613,48 @@ const getDoctorVideoConsults = async (req, res) => {
     }
 };
 
+/**
+ * 🚨 NEW: Search Master Medicine Database from Independent Doctor Panel
+ * Endpoint: GET /doctor/appointments/medicines/search?query=dolo&page=1
+ */
+const searchMasterMedicinesForDoctor = async (req, res) => {
+    try {
+        const { query, page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        let filter = {};
+        if (query) {
+            const regex = new RegExp(query, 'i');
+            filter = {
+                $or: [
+                    { name: regex },
+                    { salt_composition: regex },
+                    { manufacturers: regex }
+                ]
+            };
+        }
+
+        // Fetching required medicine metadata for prescriptions
+        const medicines = await Medicine.find(filter)
+            .select('name manufacturers salt_composition packaging mrp image_url')
+            .skip(skip)
+            .limit(parseInt(limit))
+            .sort({ name: 1 });
+
+        const total = await Medicine.countDocuments(filter);
+
+        res.json({
+            success: true,
+            total,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / limit),
+            data: medicines
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -621,6 +664,7 @@ module.exports = { getVendorDashboard,
     getDoctorStats, getMyConsultationFees, updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
     getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription,
     getPatientHistory, getPatientHistoryDetails,
-    getDoctorVideoConsults
+    getDoctorVideoConsults,
+    searchMasterMedicinesForDoctor
 
 };

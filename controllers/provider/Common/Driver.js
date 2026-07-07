@@ -86,13 +86,13 @@ const registerDriver = async (req, res) => {
 // endpoint: POST /provider/driver/login
 const loginDriver = async (req, res) => {
     try {
-        const { identifier, password } = req.body; // 'identifier' mein username ya phone aayega
+        const { identifier, password } = req.body; // 'identifier' holds username or phone
 
         if (!identifier || !password) {
             return res.status(400).json({ message: "Username/Phone and Password are required" });
         }
 
-        // Username OR Phone dono mein se kisi ek ko match karo
+        // Find by Username or Phone
         const driver = await Driver.findOne({
             $or: [
                 { username: identifier },
@@ -102,6 +102,14 @@ const loginDriver = async (req, res) => {
 
         if (!driver || !(await bcrypt.compare(String(password), driver.password))) {
             return res.status(400).json({ message: "Invalid credentials" });
+        }
+
+        // 🚨 STRICT EXPLICIT CHECK: Block login if Driver is disabled/inactive
+        if (driver.isActive === false) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "Access Denied: Your driver profile is suspended. Please contact your manager." 
+            });
         }
 
         // Token logic
@@ -125,7 +133,7 @@ const loginDriver = async (req, res) => {
         res.json({ 
             success: true, 
             token, 
-            vendorType: driver.vendorType, // Flutter ke liye specific key
+            vendorType: driver.vendorType, // Dynamic platform navigation helper
             data: driver 
         });
     } catch (error) { 
@@ -242,17 +250,49 @@ const deleteDriver = async (req, res) => {
 };
 
 // 6. TOGGLE STATUS (Online/Offline/Busy)
+// Endpoint: PATCH /provider/driver/status/:id
 const toggleDriverStatus = async (req, res) => {
     try {
         const { status } = req.body; // Available, Busy, Offline
+
+        if (!status || !['Available', 'Busy', 'Offline'].includes(status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Valid status value ('Available', 'Busy', 'Offline') is required." 
+            });
+        }
+
+        // Synchronize 'isOnline' boolean state based on dynamic string status transition:
+        // status is 'Offline'           => isOnline becomes false
+        // status is 'Available' / 'Busy' => isOnline becomes true
+        const isOnline = status !== 'Offline';
+
         const driver = await Driver.findOneAndUpdate(
             { _id: req.params.id, vendorId: req.user.id },
-            { status },
+            { 
+                $set: { 
+                    status, 
+                    isOnline: Boolean(isOnline) 
+                } 
+            },
             { new: true }
         );
-        if (!driver) return res.status(404).json({ message: "Driver not found" });
-        res.json({ success: true, message: `Status updated to ${status}`, data: driver });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        if (!driver) {
+            return res.status(404).json({ success: false, message: "Driver profile not found." });
+        }
+
+        res.json({ 
+            success: true, 
+            message: `Driver status successfully updated to ${status}.`, 
+            isOnline: driver.isOnline,
+            status: driver.status,
+            data: driver 
+        });
+
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 const vendorResetDriverPassword = async (req, res) => {

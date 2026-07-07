@@ -30,6 +30,9 @@ const initiateVideoCall = async (req, res) => {
         if (!patient) {
             return res.status(404).json({ success: false, message: "Patient details not found for this appointment." });
         }
+        appointment.status = 'In-Progress';
+                await appointment.save();
+                console.log(`[VideoCall Status Sync]: Appointment ID ${appointmentId} updated to 'In-Progress' by Doctor.`);
 
         // C. Database Safe Check: Prevent E11000 Duplicate Key Error
         let callData = await Call.findOne({ callId });
