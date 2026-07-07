@@ -139,10 +139,35 @@ const adminGetHospitalBookings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+const toggleStatusActiveInactive = async (req, res) => {
+    try {
+        const { hospitalId } = req.params;
+        const hospital = await Hospital.findById(hospitalId);
+ 
+        if (!hospital) {
+            return res.status(404).json({ success: false, message: "Hospital not found." });
+        }
+ 
+        hospital.isActive = !hospital.isActive;
+        await hospital.save();
+ 
+        return res.json({
+            success: true,
+            message: `Hospital status updated to ${hospital.isActive ? 'Active' : 'Inactive'}.`,
+            data: { hospitalId: hospital._id,
+                   isActive: hospital.isActive
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }  
+};
+ 
 
 module.exports = { 
     updateHospitalRescheduleLimit, 
     getHospitalRescheduleLimit ,
     adminGetApprovedHospitals,
-    adminGetHospitalBookings
+    adminGetHospitalBookings,
+    toggleStatusActiveInactive
 };

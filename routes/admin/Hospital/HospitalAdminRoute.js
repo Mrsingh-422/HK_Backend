@@ -5,7 +5,8 @@ const {
     updateHospitalRescheduleLimit,
     getHospitalRescheduleLimit,
     adminGetApprovedHospitals,
-    adminGetHospitalBookings
+    adminGetHospitalBookings,
+    toggleStatusActiveInactive
 } = require('../../../controllers/admin/Hospital/HospitalAdmin');
 
 // Base URL: /admin/hospital
@@ -15,6 +16,8 @@ router.get('/reschedule-limit', protect('admin'), checkRoleAccess(4), getHospita
 
 router.get('/approved-list', protect('admin'), checkRoleAccess(5), adminGetApprovedHospitals);
 router.get('/appointments', protect('admin'), checkRoleAccess(4), adminGetHospitalBookings);
+router.patch('/status/active-inactive/:hospitalId', protect('admin'), checkRoleAccess(4), toggleStatusActiveInactive);
+ 
 
 
 module.exports = router;

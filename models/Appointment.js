@@ -46,6 +46,7 @@ const appointmentSchema = new mongoose.Schema({
     // --- Pricing & Coupon Logic ---
     pricingBreakdown: {
         baseFee: { type: Number },
+        originalBaseFee: { type: Number, default: 0 }, // 🚨 NEW: Actual doctor consult fee before subscription
         visitCharges: { type: Number, default: 0 }, // Distance based
         extraCharges: { type: Number, default: 0 }, // Fast delivery/Emergency
         discountAmount: { type: Number, default: 0 },

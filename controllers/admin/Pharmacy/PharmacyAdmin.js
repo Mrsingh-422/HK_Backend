@@ -65,4 +65,32 @@ const adminGetPharmacyBookings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-module.exports = { adminGetApprovedPharmacies,adminGetPharmacyBookings };
+const toggleActiveInactivePharmacy = async (req, res) => {
+    try {
+        const { pharmacyId } = req.params;
+        const pharmacy = await Pharmacy.findById(pharmacyId);
+ 
+        if (!pharmacy) {
+            return res.status(404).json({ success: false, message: "pharmacy not found." });
+        }
+ 
+        const updatedPharmacy = await Pharmacy.findByIdAndUpdate(
+            pharmacyId,
+            { $set: { isActive: !pharmacy.isActive } },
+            { new: true }
+        );
+ 
+        return res.json({
+            success: true,
+            message: `Pharmacy status updated to ${updatedPharmacy.isActive ? 'Active' : 'Inactive'}.`,
+            data: {
+                pharmacyId: updatedPharmacy._id,
+                isActive: updatedPharmacy.isActive
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }  
+};
+ 
+module.exports = { adminGetApprovedPharmacies,adminGetPharmacyBookings , toggleActiveInactivePharmacy};

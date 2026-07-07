@@ -66,5 +66,29 @@ const adminGetNurseBookings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+const toggleActiveInactiveNurse = async (req, res) => {
+    try {
+        const { nurseId } = req.params;
+        const nurse = await Nurse.findById(nurseId);
+ 
+        if (!nurse) {
+            return res.status(404).json({ success: false, message: "Nurse not found." });
+        }
+ 
+        nurse.isActive = !nurse.isActive;
+        await nurse.save();
+ 
+        return res.json({
+            success: true,
+            message: `Lab status updated to ${nurse.isActive ? 'Active' : 'Inactive'}.`,
+            data: { nurseId: nurse._id,
+                   isActive: nurse.isActive
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }  
+};
+ 
 
-module.exports = {adminGetApprovedNurses, adminGetNurseBookings };
+module.exports = {adminGetApprovedNurses, adminGetNurseBookings , toggleActiveInactiveNurse};

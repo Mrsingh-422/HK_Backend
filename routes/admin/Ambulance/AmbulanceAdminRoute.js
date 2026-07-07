@@ -3,11 +3,13 @@ const router = express.Router();
 const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 const { 
     adminGetApprovedAmbulances,
-    adminGetAmbulanceBookings
+    adminGetAmbulanceBookings,
+    toggleActiveInactiveAmbulance
 } = require('../../../controllers/admin/Ambulance/AmbulanceAdmin');
 
 // Base URL: /admin/ambulance
 router.get('/approved-list', protect('admin'), checkRoleAccess(5),adminGetApprovedAmbulances); // Approved vendors list
 router.get('/bookings', protect('admin'), checkRoleAccess(39), adminGetAmbulanceBookings); // Specific vendor orders
+router.patch('/status/active-inactive/:ambulanceId', protect('admin'), checkRoleAccess(39), toggleActiveInactiveAmbulance); // Toggle ambulance status
 
 module.exports = router;

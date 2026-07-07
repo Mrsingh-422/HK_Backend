@@ -66,5 +66,30 @@ const adminGetAmbulanceBookings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+const toggleActiveInactiveAmbulance = async (req, res) => {
+    try {
+        const { ambulanceId } = req.params;
+        const ambulance = await Ambulance.findById(ambulanceId);
+ 
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "ambulance not found." });
+        }
+ 
+        ambulance.isActive = !ambulance.isActive;
+        await ambulance.save();
+ 
+        return res.json({
+            success: true,
+            message: `ambulance status updated to ${ambulance.isActive ? 'Active' : 'Inactive'}.`,
+            data: { ambulanceId: ambulance._id,
+                   isActive: ambulance.isActive
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }  
+};
+ 
+ 
 
-module.exports = { adminGetApprovedAmbulances, adminGetAmbulanceBookings };
+module.exports = { adminGetApprovedAmbulances, adminGetAmbulanceBookings , toggleActiveInactiveAmbulance};

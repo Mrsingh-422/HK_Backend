@@ -65,5 +65,28 @@ const adminGetLabBookings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
-module.exports = { adminGetApprovedLabs,adminGetLabBookings };
+const toggleActiveInactiveLab = async (req, res) => {
+    try {
+        const { labId } = req.params;
+        const lab = await Lab.findById(labId);
+ 
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "Lab not found." });
+        }
+ 
+        lab.isActive = !lab.isActive;
+        await lab.save();
+ 
+        return res.json({
+            success: true,
+            message: `Lab status updated to ${lab.isActive ? 'Active' : 'Inactive'}.`,
+            data: { labId: lab._id,
+                   isActive: lab.isActive
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }  
+};
+ 
+module.exports = { adminGetApprovedLabs,adminGetLabBookings ,toggleActiveInactiveLab};
