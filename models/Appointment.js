@@ -8,10 +8,10 @@ const appointmentSchema = new mongoose.Schema({
     bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null }, // For hospital admissions
 
     ambulanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance', default: null }, // Link to Ambulance if brought by driver
-    bedBookingType: { 
-        type: String, 
+    bedBookingType: {
+        type: String,
         enum: ['General-Bed', 'Emergency-Bed'], // general bed for hospital booking direct and emergency bed for ambulance brought patients
-        default: 'General-Bed' 
+        default: 'General-Bed'
     },
 
     patients: [{
@@ -20,11 +20,11 @@ const appointmentSchema = new mongoose.Schema({
         gender: { type: String, enum: ['Male', 'Female', 'Other'] },
         relation: { type: String, default: 'Self' },
         reasonForVisit: { type: String },
-        isMainUser: { type: Boolean, default: false } 
+        isMainUser: { type: Boolean, default: false }
     }],
     address: {
-        name: String,        
-        phone: String,       
+        name: String,
+        phone: String,
         houseNo: String,
         sector: String,
         landmark: String,
@@ -35,14 +35,14 @@ const appointmentSchema = new mongoose.Schema({
         addressType: { type: String, default: 'Home' }
     },
 
-    appointmentDate: { type: Date},
-    appointmentTime: { type: String }, 
+    appointmentDate: { type: Date },
+    appointmentTime: { type: String },
     rescheduleReason: { type: String, default: "" }, // 👈 Dynamic reason for doctor rescheduling
-    consultationType: { 
-        type: String, 
+    consultationType: {
+        type: String,
         enum: ['Video Consult', 'Clinic Visit', 'Home Visit']
     },
-    
+
     // --- Pricing & Coupon Logic ---
     pricingBreakdown: {
         baseFee: { type: Number },
@@ -61,22 +61,22 @@ const appointmentSchema = new mongoose.Schema({
     totalAmount: { type: Number }, // Final Payable
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
     transactionId: { type: String },
-    
+
     // System Fields
-    status: { 
-        type: String, 
-        enum: ['Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'], 
-        default: 'Pending' 
+    status: {
+        type: String,
+        enum: ['Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'],
+        default: 'Pending'
     },
     stayDuration: { type: Number, default: 0 }, // For Bed Booking (Number of days)
     bookingType: { type: String, enum: ['Appointment', 'Admission'], default: 'Appointment' },
-       bookingId: { type: String, unique: true },
-       triageLevel: { type: String, enum: ['Emergency', 'Very Urgent', 'Urgent', 'Routine'] },
+    bookingId: { type: String, unique: true },
+    triageLevel: { type: String, enum: ['Emergency', 'Very Urgent', 'Urgent', 'Routine'] },
     wardName: { type: String },
     bedNumber: { type: String },
-    specialServices: [{ 
-        serviceName: String, 
-        price: Number 
+    specialServices: [{
+        serviceName: String,
+        price: Number
     }],
 
     // For Hospital Admissions
@@ -88,21 +88,26 @@ const appointmentSchema = new mongoose.Schema({
     // for hospital transfer
     pendingDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null }, // 👈 Handover target doctor
     treatmentHistory: [{
-    fromDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
-    toDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
-    action: { 
-        type: String, 
-        enum: ['Initial-Assignment', 'Transfer-Initiated', 'Transfer-Accepted', 'Discharged'], 
-        default: 'Initial-Assignment' 
-    },
-    notes: { type: String, default: "" },
-    timestamp: { type: Date, default: Date.now },
-    
-    // --- NEW: ADDMISSION SHIFT DURATION TRACKING ---
-    startTime: { type: Date, default: null },
-    endTime: { type: Date, default: null },
-    durationDisplay: { type: String, default: "" } // e.g. "2 hr 15 mins"
-}],
+        fromDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
+        toDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
+        action: {
+            type: String,
+            enum: ['Initial-Assignment', 'Transfer-Initiated', 'Transfer-Accepted', 'Discharged'],
+            default: 'Initial-Assignment'
+        },
+        notes: { type: String, default: "" },
+        subscriptionDetails: {
+            isSubscriptionApplied: { type: Boolean, default: false }, // 🚨 NEW: True if booked via subscription
+            userSubscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserSubscription', default: null }, // 🚨 NEW: Reference to active subscriber sheet
+            planName: { type: String, default: "" } // 🚨 NEW: Active Plan Name (e.g. Basic Annual Care)
+        },
+        timestamp: { type: Date, default: Date.now },
+
+        // --- NEW: ADDMISSION SHIFT DURATION TRACKING ---
+        startTime: { type: Date, default: null },
+        endTime: { type: Date, default: null },
+        durationDisplay: { type: String, default: "" } // e.g. "2 hr 15 mins"
+    }],
     clinicalSummary: {
         diagnosis: { type: String, default: "" },
         investigation: { type: String, default: "" },
@@ -110,9 +115,9 @@ const appointmentSchema = new mongoose.Schema({
         dischargeNote: { type: String, default: "" },
         dischargedAt: { type: Date, default: null },
 
-        uploadedReports: [{ type: String }], 
+        uploadedReports: [{ type: String }],
 
-        
+
         // Supports updateClinicalSummary endpoint
         chiefComplaint: { type: String, default: "" },
         triagePriority: { type: String, default: "" },
@@ -128,7 +133,7 @@ const appointmentSchema = new mongoose.Schema({
         patientConditionAtRequest: { type: String, default: "" },
         priority: { type: String, enum: ['Most Urgent', 'Urgent', 'Routine'], default: 'Routine' },
         rejectionReason: { type: String, default: "" },
-        
+
         // Co-Doctor Clinical feedback notes
         specialistFeedback: [{
             observation: { type: String, default: "" },

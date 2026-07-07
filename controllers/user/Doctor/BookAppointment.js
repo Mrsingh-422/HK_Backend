@@ -348,22 +348,16 @@ const getCheckoutSummary = async (req, res) => {
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
 
-        // =========================================================================
-        // 🚨 CRITICAL SUBSCRIPTION FLOW: FAMILY MEMBERS VERIFICATION LOGIC
-        // =========================================================================
+        // 🚨 FAMILY MEMBERS VERIFICATION LOGIC
         const user = await User.findById(req.user.id).select('familyMember');
         if (!user) return res.status(404).json({ message: "User account not found" });
 
-        // Validate each patient in the request body
         for (const patient of patients) {
             const isSelf = patient.relation === 'Self' || patient.patientName.toLowerCase() === 'self';
-            
             if (!isSelf) {
-                // Check if patient exists in primary user's familyMember array in DB
                 const isRegisteredMember = user.familyMember.some(member => 
                     member.memberName.toLowerCase() === patient.patientName.toLowerCase()
                 );
-
                 if (!isRegisteredMember) {
                     return res.status(400).json({
                         success: false,
@@ -376,17 +370,38 @@ const getCheckoutSummary = async (req, res) => {
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
         let baseFee = doctor.fees[typeMap[consultationType]] || 0;
 
+        let originalBaseFee = baseFee; // Store the original fee before applying any subscription
+        let isSubscriptionApplied = false;
+        let planName = "";
+        let userSubscriptionId = null;
+
         // 🚨 SUBSCRIPTION CHECK: Free Doctor Consultations check karein
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
-        baseFee = docBenefit.amount; // Sets to 0 if benefit applied
+        
+        if (docBenefit.isApplied) {
+            baseFee = 0; // Value is waived
+            isSubscriptionApplied = true;
+
+            // Fetch plan name and active subscription ID dynamically to show on checkout screen
+            const UserSubscription = require('../../../models/UserSubscription');
+            const activeSub = await UserSubscription.findOne({
+                userId: req.user.id,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            }).populate('planId', 'name');
+
+            if (activeSub) {
+                planName = activeSub.planId?.name || "Premium Care Plan";
+                userSubscriptionId = activeSub._id;
+            }
+        }
 
         let visitCharge = 0;
         if (consultationType === 'Home Visit') {
             if (!address) return res.status(400).json({ message: "Address required for Home Visit" });
 
             const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-            
             if (chargeConfig) {
                 visitCharge = chargeConfig.fixedPrice; 
                 if (distance > chargeConfig.fixedDistance) {
@@ -417,6 +432,7 @@ const getCheckoutSummary = async (req, res) => {
             success: true,
             data: {
                 baseFee,
+                originalBaseFee, // 👈 Actual doctor consultation price
                 visitCharge, 
                 premiumFee,
                 servicesTotal,
@@ -424,7 +440,12 @@ const getCheckoutSummary = async (req, res) => {
                 subtotal,
                 totalPayable: subtotal - discount,
                 patients,
-                address: consultationType === 'Home Visit' ? address : null
+                address: consultationType === 'Home Visit' ? address : null,
+                subscriptionDetails: {
+                    isSubscriptionApplied, // 👈 True if booked via subscription
+                    userSubscriptionId,
+                    planName
+                }
             }
         });
     } catch (error) { 
@@ -477,7 +498,6 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 🚨 CRITICAL CHECK: Block booking if Doctor has turned off isOnline
         if (doctor.isOnline === false) {
             return res.status(400).json({
                 success: false,
@@ -496,8 +516,37 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "This slot is already booked." });
         }
 
+        // Evaluate Subscription state again on final database write to prevent payload tampering
+        const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
+        const rawDoctorFee = doctor.fees[typeMap[consultationType]] || 0;
+
+        let originalBaseFee = rawDoctorFee;
+        let isSubscriptionApplied = false;
+        let planName = "";
+        let userSubscriptionId = null;
+
+        const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
+        const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', rawDoctorFee);
+        
+        if (docBenefit.isApplied) {
+            isSubscriptionApplied = true;
+
+            const UserSubscription = require('../../../models/UserSubscription');
+            const activeSub = await UserSubscription.findOne({
+                userId: req.user.id,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            }).populate('planId', 'name');
+
+            if (activeSub) {
+                planName = activeSub.planId?.name || "Premium Care Plan";
+                userSubscriptionId = activeSub._id;
+            }
+        }
+
         const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
+        // Create Razorpay Order in paise
         const rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
 
         const appointment = await Appointment.create({
@@ -508,6 +557,7 @@ const bookAppointment = async (req, res) => {
             appointmentDate: new Date(appointmentDate),
             appointmentTime, 
             consultationType,
+            
             pricingBreakdown: {
                 baseFee: Number(pricingData.baseFee || 0),
                 visitCharges: Number(pricingData.visitCharges || 0),
@@ -515,12 +565,20 @@ const bookAppointment = async (req, res) => {
                 discountAmount: Number(pricingData.discountAmount || 0),
                 subtotal: Number(pricingData.subtotal || totalAmount)
             },
+            
             totalAmount: Number(totalAmount),
             bookingId: tempBookingId,
             status: 'Pending', 
             paymentStatus: 'Pending',
             transactionId: rzpOrder.id, 
-            'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString()
+            'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
+            
+            // 🚨 INTEGRATION SAVE: Save structural subscription metrics
+            subscriptionApplied: isSubscriptionActive, // sets boolean flag
+            subscriptionDetails: {
+                planId: activeSub ? activeSub.planId._id : null,
+                planName: activeSub ? activeSub.planId.name : null
+            }
         });
 
         res.status(201).json({ 
