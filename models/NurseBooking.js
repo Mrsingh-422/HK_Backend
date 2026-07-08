@@ -25,6 +25,7 @@ const nurseBookingSchema = new mongoose.Schema({
     // Pricing Breakdown
      priceBreakdown: {
         baseServicePrice: Number,    // Service final price * units
+        originalBasePrice: { type: Number, default: 0 }, // 🚨 NEW: Actual nurse base fee before subscription
         slotSurcharge: Number,       // Premium time/date fee
         consumableTotal: Number,     // Sum of all items selected
         couponDiscount: { type: Number, default: 0 }, // 👈 Added this
@@ -160,6 +161,11 @@ paymentDetails: {
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'NursingPrescriptionRequest',
     default: null 
+},
+subscriptionDetails: {
+    isSubscriptionApplied: { type: Boolean, default: false }, // 🚨 NEW
+    userSubscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserSubscription', default: null }, // 🚨 NEW
+    planName: { type: String, default: "" } // 🚨 NEW
 },
 
 

@@ -284,10 +284,32 @@ const getFinalFare = async (params, userId) => {
     const isFree = (serviceType === 'Accident emergency');
     let ambulanceCharge = isFree ? 0 : (amb.pricing?.fixedPrice || 2000);
     
-    // 🚨 SUBSCRIPTION CHECK: Medical ya Referral rides ke liye free checks apply karein
+    let originalAmbulanceCharge = ambulanceCharge; // 👈 Save actual ambulance charge
+    let isSubscriptionApplied = false;
+    let planName = "";
+    let userSubscriptionId = null;
+
+    // 🚨 SUBSCRIPTION CHECK: Only apply benefits logic if ride is NOT universally free SOS
     if (!isFree) {
+        const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const ambBenefit = await checkAndApplyBenefit(userId, 'freeAmbulanceTripsCount', ambulanceCharge);
-        ambulanceCharge = ambBenefit.amount; // Sets charge to 0 if free trips are left in plan
+        
+        if (ambBenefit.isApplied) {
+            ambulanceCharge = 0; // Value is waived
+            isSubscriptionApplied = true;
+
+            const UserSubscription = require('../../../models/UserSubscription');
+            const activeSub = await UserSubscription.findOne({
+                userId,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            }).populate('planId', 'name');
+
+            if (activeSub) {
+                planName = activeSub.planId?.name || "Premium Care Plan";
+                userSubscriptionId = activeSub._id;
+            }
+        }
     }
 
     let supportingStaffCharge = 0;
@@ -329,9 +351,18 @@ const getFinalFare = async (params, userId) => {
     }
 
     return { 
-        ambulanceCharge, supportingStaffCharge, subtotal, 
-        discount, total: subtotal - discount, isFree, 
-        couponId, finalCouponCode 
+        ambulanceCharge, 
+        originalAmbulanceCharge, // 👈 Original calculated pricing in return block
+        supportingStaffCharge, 
+        subtotal, 
+        discount, 
+        total: subtotal - discount, 
+        isFree, 
+        couponId, 
+        finalCouponCode,
+        isSubscriptionApplied, // 👈 Sets boolean flag
+        userSubscriptionId,
+        planName
     };
 };
 
@@ -469,7 +500,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
         }
 
-        // 9. Save Booking Record
+        // 9. Save Booking Record with complete dynamic parameters
         const booking = await Booking.create({
             bookingId: tempBookingId,
             caseReference: generateCaseRef(serviceType),
@@ -504,6 +535,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             },
             pricing: {
                 ambulanceCharge: fare.ambulanceCharge,
+                originalAmbulanceCharge: fare.originalAmbulanceCharge, // 🚨 SAVED: Actual ambulance base fee before subscription
                 supportingStaffCharge: fare.supportingStaffCharge,
                 subtotal: fare.subtotal,
                 discount: fare.discount,
@@ -518,7 +550,14 @@ const confirmAmbulanceBooking = async (req, res) => {
                 status: 'Searching', 
                 timestamp: new Date(),
                 note: `Booking request sent, searching for driver.` 
-            }]
+            }],
+
+            // 🚨 SAVED: Store strict audit tracking details
+            subscriptionDetails: {
+                isSubscriptionApplied: fare.isSubscriptionApplied,
+                userSubscriptionId: fare.userSubscriptionId,
+                planName: fare.planName
+            }
         });
 
         // 10. Update Coupon Usage if applied successfully
@@ -535,7 +574,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         // Deduct Subscription benefits for Free/Subscription trips
         if (fare.isFree) {
-            // 🚨 SUBSCRIPTION DEDUCTION LOCK: Only deduct subscription trip points if ride is NOTUniversally Free SOS
+            // SUBSCRIPTION DEDUCTION LOCK: Only deduct subscription trip points if ride is NOT Universally Free SOS
             if (serviceType !== 'Accident emergency') {
                 const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
                 await deductBenefitCount(req.user.id, 'freeAmbulanceTripsCount');

@@ -73,6 +73,7 @@ const ambulanceBookingSchema = new mongoose.Schema({
     // Screen 44: Price Breakdown
     pricing: {
         ambulanceCharge: { type: Number, default: 0 },
+        originalAmbulanceCharge: { type: Number, default: 0 }, // 🚨 NEW: Actual ambulance base fee before subscription
         supportingStaffCharge: { type: Number, default: 0 },
         subtotal: { type: Number, default: 0 }, // Price before discount
         discount: { type: Number, default: 0 }, // Same as couponDetails.discountValue
@@ -135,7 +136,12 @@ const ambulanceBookingSchema = new mongoose.Schema({
             type: String
         },
         paidAt: { type: Date, default: null }
-    }
+    },
+    subscriptionDetails: {
+    isSubscriptionApplied: { type: Boolean, default: false }, // 🚨 NEW
+    userSubscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserSubscription', default: null }, // 🚨 NEW
+    planName: { type: String, default: "" } // 🚨 NEW
+},
 
 }, { timestamps: true });
 

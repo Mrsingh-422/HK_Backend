@@ -393,7 +393,7 @@ const checkoutNurseBooking = async (req, res) => {
         const { 
             nurseId, serviceId, packageId, isPackage, selectedType, 
             startDate, endDate, startTime, endTime, isFasterService, 
-            patientCount, selectedConsumables, couponCode
+            patientCount, selectedConsumables, couponCode 
         } = req.body;
 
         const [item, config, delivery] = await Promise.all([
@@ -409,6 +409,7 @@ const checkoutNurseBooking = async (req, res) => {
         let slotSurcharge = 0;
         let units = 1;
 
+        // Triple pricing evaluation
         if (selectedType === 'For Multiple Days') {
             units = moment(endDate).diff(moment(startDate), 'days') + 1;
             basePrice = item.pricing.multipleDays.final * units;
@@ -433,9 +434,31 @@ const checkoutNurseBooking = async (req, res) => {
             if (pSlot) slotSurcharge = pSlot.extraFee;
         }
 
-        // 🚨 1. SUBSCRIPTION INTEGRATION (FREE NURSE VISITS) ---
+        let originalBasePrice = basePrice; // 👈 Save the original calculated pricing
+        let isSubscriptionApplied = false;
+        let planName = "";
+        let userSubscriptionId = null;
+
+        // 🚨 SUBSCRIPTION CHECK: Free Nurse visits limit verify karein
+        const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const nurseVisitBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseVisitsCount', basePrice);
-        basePrice = nurseVisitBenefit.amount; // 0 if benefit applied
+        
+        if (nurseVisitBenefit.isApplied) {
+            basePrice = 0; // Value is waived
+            isSubscriptionApplied = true;
+
+            const UserSubscription = require('../../../models/UserSubscription');
+            const activeSub = await UserSubscription.findOne({
+                userId: req.user.id,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            }).populate('planId', 'name');
+
+            if (activeSub) {
+                planName = activeSub.planId?.name || "Premium Care Plan";
+                userSubscriptionId = activeSub._id;
+            }
+        }
 
         const consumableTotal = (selectedConsumables || []).reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
         
@@ -473,10 +496,9 @@ const checkoutNurseBooking = async (req, res) => {
 
         let fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
 
-        // 🚨 2. SUBSCRIPTION INTEGRATION (FREE NURSE DELIVERY CHARGE) ---
         if (isFasterService) {
             const nurseDelivBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseDeliveriesCount', fasterCharge);
-            fasterCharge = nurseDelivBenefit.amount; // 0 if benefit applied
+            fasterCharge = nurseDelivBenefit.amount; 
         }
 
         const totalAfterDiscount = (subTotalForCoupon - couponDiscount) + fasterCharge;
@@ -489,15 +511,21 @@ const checkoutNurseBooking = async (req, res) => {
             success: true,
             breakdown: {
                 baseServicePrice: Math.round(basePrice * pCount),
+                originalBasePrice: Math.round(originalBasePrice * pCount), // 👈 Original Price in JSON response
                 slotSurcharge: Math.round(slotSurcharge * pCount),
                 consumableTotal: Math.round(consumableTotal * pCount),
-                couponDiscount: couponDiscount,
+                couponDiscount: couponDiscount, 
                 fasterServiceCharge: fasterCharge,
                 taxAmount: Math.round(tax),
                 totalPrice: Math.round(totalAfterDiscount + tax),
                 units,
                 pCount,
                 appliedCoupon: couponInfo
+            },
+            subscriptionDetails: {
+                isSubscriptionApplied, // 👈 True if subscription used for this booking
+                userSubscriptionId,
+                planName
             }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
@@ -516,7 +544,6 @@ const placeNurseBooking = async (req, res) => {
         const nurse = await Nurse.findById(nurseId);
         if (!nurse) return res.status(404).json({ message: "Nurse provider not found." });
 
-        // 🚨 CRITICAL CHECK: Block booking if Nurse is offline
         if (nurse.isOnline === false) {
             return res.status(400).json({
                 success: false,
@@ -532,6 +559,27 @@ const placeNurseBooking = async (req, res) => {
             rzpOrder = await createRazorpayOrder(priceBreakdown.totalPrice, `receipt_${bId}`);
         }
 
+        // Double check evaluation status for final DB saving
+        let isSubscriptionApplied = false;
+        let planName = "";
+        let userSubscriptionId = null;
+
+        if (priceBreakdown.baseServicePrice === 0) {
+            isSubscriptionApplied = true;
+
+            const UserSubscription = require('../../../models/UserSubscription');
+            const activeSub = await UserSubscription.findOne({
+                userId: req.user.id,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            }).populate('planId', 'name');
+
+            if (activeSub) {
+                planName = activeSub.planId?.name || "Premium Care Plan";
+                userSubscriptionId = activeSub._id;
+            }
+        }
+
         const booking = await NurseBooking.create({
             userId: req.user.id,
             nurseId,
@@ -544,7 +592,16 @@ const placeNurseBooking = async (req, res) => {
                 duration: schedule.duration,
                 basePrice: item.pricing.oneDay.final
             },
-            priceBreakdown,
+            priceBreakdown: {
+                baseServicePrice: Number(priceBreakdown.baseServicePrice || 0),
+                originalBasePrice: Number(priceBreakdown.originalBasePrice || 0), // 👈 Saves actual nurse price in DB
+                slotSurcharge: Number(priceBreakdown.slotSurcharge || 0),
+                consumableTotal: Number(priceBreakdown.consumableTotal || 0),
+                couponDiscount: Number(priceBreakdown.couponDiscount || 0),
+                fasterServiceCharge: Number(priceBreakdown.fasterServiceCharge || 0),
+                taxAmount: Number(priceBreakdown.taxAmount || 0),
+                totalPrice: Number(priceBreakdown.totalPrice || 0)
+            },
             appliedCoupon: appliedCoupon ? {
                 couponId: appliedCoupon.couponId,
                 discountAmount: priceBreakdown.couponDiscount,
@@ -557,7 +614,14 @@ const placeNurseBooking = async (req, res) => {
             selectedConsumables,
             paymentMethod: paymentMethod || 'COD',
             paymentStatus: 'Pending',
-            status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending'
+            status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending',
+            
+            // 🚨 INTEGRATION SAVE: Save structural subscription details
+            subscriptionDetails: {
+                isSubscriptionApplied,
+                userSubscriptionId,
+                planName
+            }
         });
 
         if (paymentMethod === 'COD') {
