@@ -11,7 +11,7 @@ const {
     getMyBookings, getBookingDetails ,
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
-    checkoutLabBooking,
+    checkoutLabBooking,getUniqueMainCategories,
     confirmPrescriptionBooking,verifyLabPayment,
     rateLabOrder,getPaginatedReviews,updateReviewByOrderId, updateReviewByVendorId,getReviewByOrderId,
     cancelBooking,
@@ -77,6 +77,7 @@ router.get('/delivery-charges', protect('user'), getLabDeliveryCharges); // NEW
 
 // Booking (Protected)
 router.post('/checkout', protect('user'), checkoutLabBooking);
+router.get('/main-categories', protect('user'), getUniqueMainCategories);
 router.post('/confirm-prescription', protect('user'), confirmPrescriptionBooking); // Prescription Flow Part 2
 router.post('/verify-payment', protect('user'), verifyLabPayment); // NEW
 router.post('/upload-prescription', protect('user'), prescriptionUploads.array('prescriptionImages', 5), uploadPrescriptionFlow);

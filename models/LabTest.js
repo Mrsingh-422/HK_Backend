@@ -7,7 +7,7 @@ const labTestSchema = new mongoose.Schema({
     
     // Inhe sync rakhenge Master se ya display ke liye easy rakhenge
     testName: { type: String }, 
-    mainCategory: { type: String, enum: ['Radiology', 'Pathology'] }, 
+    mainCategory: { type: String, required: true }, 
     sampleType: { type: String },
 
     // Lab Specific Data

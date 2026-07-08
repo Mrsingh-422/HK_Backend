@@ -59,15 +59,14 @@ const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid
 // endpoint: /user/cart/lab/add
 const addToLabCart = async (req, res) => {
     try {
-        const { labId, itemId, productType, forceReplace } = req.body; // productType: 'LabTest' or 'LabPackage'
+        const { labId, itemId, productType, forceReplace } = req.body; 
         const userId = req.user.id;
 
-        // 1. Fetch Item Data and Determine Category
         let itemData, newItemCategory;
         if (productType === 'LabTest') {
             itemData = await LabTest.findById(itemId);
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Test not found" });
-            newItemCategory = itemData.mainCategory; // Pathology or Radiology
+            newItemCategory = itemData.mainCategory; 
         } else {
             itemData = await LabPackage.findById(itemId);
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Package not found" });
@@ -78,28 +77,37 @@ const addToLabCart = async (req, res) => {
         if (!cart) cart = new Cart({ userId, labCart: { items: [] } });
 
         const hasItems = cart.labCart.items.length > 0;
-        const existingCategory = cart.labCart.categoryType;
+        const existingCategory = cart.labCart.categoryType; // Can be 'Radiology' or 'General'
         const existingLabId = cart.labCart.labId;
-
-        // --- NEW LOGIC: TYPE CHECK (Test vs Package) ---
-        // Cart mein pehle se jo items hain unka type kya hai?
         const existingProductType = hasItems ? cart.labCart.items[0].productType : null;
 
-        // 2. VALIDATIONS
+        // 1. Same Lab Validation
         const isDifferentLab = hasItems && existingLabId && existingLabId.toString() !== labId;
-        const isDifferentCategory = hasItems && existingCategory && existingCategory !== newItemCategory;
         
-        // Agar pehle se Test hai aur ab Package add kar rahe hain, ya vice-versa
+        // 2. Test vs Package type mismatch check (keeping your original constraint)
         const isDifferentType = hasItems && existingProductType && existingProductType !== productType;
+
+        // 3. NEW CRITICAL CATEGORY MIXING RULE:
+        // Radiology cannot mix with anything. Others can mix with each other.
+        let isDifferentCategory = false;
+        if (hasItems && existingCategory) {
+            const containsRadiology = existingCategory.toLowerCase() === 'radiology';
+            const incomingIsRadiology = newItemCategory && newItemCategory.toLowerCase() === 'radiology';
+
+            if (incomingIsRadiology && !containsRadiology) {
+                isDifferentCategory = true; // Block: Mixed cart contains Non-Radiology, trying to add Radiology
+            } else if (!incomingIsRadiology && containsRadiology) {
+                isDifferentCategory = true; // Block: Cart has Radiology, trying to add Non-Radiology
+            }
+        }
 
         if ((isDifferentLab || isDifferentCategory || isDifferentType) && !forceReplace) {
             let message = "";
             if (isDifferentLab) {
                 message = "Your cart has items from another lab. Replace them?";
             } else if (isDifferentCategory) {
-                message = `Your cart already contains ${existingCategory} items. You cannot add ${newItemCategory} items in the same order. Replace cart?`;
+                message = "Radiology scans cannot be ordered with other test categories in the same slot. Replace cart?";
             } else if (isDifferentType) {
-                // Specific message for Test vs Package
                 const existingLabel = existingProductType === 'LabTest' ? 'Tests' : 'Packages';
                 const incomingLabel = productType === 'LabTest' ? 'Test' : 'Package';
                 message = `Your cart already contains Lab ${existingLabel}. You cannot add a ${incomingLabel} to this order. Replace cart?`;
@@ -112,16 +120,14 @@ const addToLabCart = async (req, res) => {
             });
         }
 
-        // 3. FORCE REPLACE: Agar user ne popup mein "Yes" kiya
         if (forceReplace) { 
             cart.labCart.items = []; 
         }
 
-        // 4. Update Meta Data
         cart.labCart.labId = labId;
-        cart.labCart.categoryType = newItemCategory;
+        // Save 'Radiology' or 'General' as categoryType to protect future validations
+        cart.labCart.categoryType = (newItemCategory && newItemCategory.toLowerCase() === 'radiology') ? 'Radiology' : 'General';
 
-        // 5. Add or Update Item
         const itemIndex = cart.labCart.items.findIndex(i => i.itemId.toString() === itemId);
         if (itemIndex > -1) {
             cart.labCart.items[itemIndex].quantity += 1;

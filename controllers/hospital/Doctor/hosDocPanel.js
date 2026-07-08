@@ -474,47 +474,70 @@ const getHospitalColleagues = async (req, res) => {
 // --- 7. DISCHARGE SUMMARY (Updated with safe atomic $set and Multiple file uploads) ---
 const submitDischargeSummary = async (req, res) => {
     try {
-        const { appointmentId, diagnosis, investigation, treatmentResult, dischargeNote } = req.body;
+        const body = req.body || {};
+        
+        // 🚀 FIX: Robust check to fetch appointmentId from both Form-Data Body AND Query parameters
+        const appointmentId = body.appointmentId || req.query.appointmentId;
+
+        // Strict input parameter validation check with clean instructions
+        if (!appointmentId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Validation Error: 'appointmentId' is required in Multipart Body or URL Query Parameters (?appointmentId=...)." 
+            });
+        }
 
         const now = new Date();
 
-        // 1. Close Active Doctor's shift
+        // Find Patient Admission Document
         const appointmentObj = await Appointment.findById(appointmentId);
-        if (!appointmentObj) return res.status(404).json({ success: false, message: "Case not found" });
+        if (!appointmentObj) {
+            return res.status(404).json({ success: false, message: "Patient Admission Record Not Found in database." });
+        }
 
+        // 1. Close Active Doctor's shift
         const activeShift = appointmentObj.treatmentHistory.find(h => 
-            h.toDoctorId && h.toDoctorId.toString() === req.user.id && !h.endTime
+            h.toDoctorId && h.toDoctorId.toString() === req.user.id.toString() && !h.endTime
         );
         if (activeShift) {
             activeShift.endTime = now;
             activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
         }
 
-        // 2. Fetch uploaded multiple files paths from multer
+        // 2. Fetch uploaded multiple files paths from multer fields uploader
         const files = req.files || [];
         const reportPaths = files.map(f => `/uploads/doctor_reports/${f.filename}`);
 
+        // Safe array mapping to append newly uploaded reports with existing ones
+        let updatedReports = (appointmentObj.clinicalSummary && appointmentObj.clinicalSummary.uploadedReports) 
+            ? appointmentObj.clinicalSummary.uploadedReports 
+            : [];
+            
+        if (reportPaths.length > 0) {
+            updatedReports = [...updatedReports, ...reportPaths];
+        }
+
         const updateData = {
-            status: 'Discharge-Pending',
+            status: 'Discharge-Pending', // Ready for final hospital checkout billing
             clinicalSummary: {
-                diagnosis: diagnosis || "",
-                investigation: investigation || "",
-                treatmentResult: treatmentResult || "",
-                dischargeNote: dischargeNote || "",
+                diagnosis: body.diagnosis || (appointmentObj.clinicalSummary?.diagnosis) || "",
+                investigation: body.investigation || (appointmentObj.clinicalSummary?.investigation) || "",
+                treatmentResult: body.treatmentResult || (appointmentObj.clinicalSummary?.treatmentResult) || "",
+                dischargeNote: body.dischargeNote || (appointmentObj.clinicalSummary?.dischargeNote) || "",
                 dischargedAt: now,
-                uploadedReports: reportPaths // 👈 Saved multiple files paths array securely!
+                uploadedReports: updatedReports // Safe mapped medical files paths
             }
         };
 
-        // Push Discharged state to timeline
+        // Push Discharged state to timeline history
         appointmentObj.treatmentHistory.push({
             fromDoctorId: req.user.id,
             action: 'Discharged',
-            notes: "Clinical discharge summary and medical reports submitted.",
+            notes: "Clinical discharge summary and medical reports submitted by duty physician.",
             timestamp: now
         });
 
-        // 3. Safe DB atomic update
+        // 3. Safe DB atomic update using direct update
         const updatedAppt = await Appointment.findByIdAndUpdate(
             appointmentId,
             { 
@@ -532,7 +555,7 @@ const submitDischargeSummary = async (req, res) => {
 
     } catch (error) { 
         console.error("Discharge summary error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        res.status(500).json({ success: false, message: "File processing or body parser error: " + error.message }); 
     }
 };
 // --- API: UPLOAD & ATTACH PATIENT CLINICAL REPORTS (Independent Multi-upload - NEW API) ---

@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const masterLabTestSchema = new mongoose.Schema({
     testName: { type: String, required: true, unique: true },
     testCode: { type: String }, // Internal unique code (e.g., LPL026)
-    mainCategory: { type: String, enum: ['Radiology', 'Pathology'], required: true },
+    mainCategory: { type: String, required: true }, 
     category: { type: String }, // e.g. "Diabetes", "Fever"
     sampleType: { type: String }, // e.g. "Blood", "Urine", "NA"
     

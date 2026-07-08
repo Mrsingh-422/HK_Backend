@@ -1045,7 +1045,16 @@ const checkoutLabBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cart is empty" });
         }
 
-        // 🚨 CRITICAL CHECK: Block booking if Lab is offline
+        // 🚨 CRITICAL RULE: Block Radiology Home Collection Checkout
+        if (collectionType === 'Home Collection') {
+            if (cart.labCart.categoryType && cart.labCart.categoryType.toLowerCase() === 'radiology') {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Radiology scans require specialised diagnostics equipment and cannot be booked for Home Collection. Please select 'Visit Lab' / Walk-In." 
+                });
+            }
+        }
+
         const targetLab = await Lab.findById(cart.labCart.labId);
         if (!targetLab || targetLab.isOnline === false) {
             return res.status(400).json({
@@ -1129,6 +1138,20 @@ const checkoutLabBooking = async (req, res) => {
     }
 };
 
+// 🚨 NEW API ENDPOINT: Fetch unique main categories dynamically
+const getUniqueMainCategories = async (req, res) => {
+    try {
+        const categories = await MasterLabTest.distinct("mainCategory", { isActive: true });
+        res.json({
+            success: true,
+            data: categories // Output example: ["Pathology", "Radiology", "Cardiology", "Neurology"...]
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 
 // Helper to map patient IDs to full objects
@@ -1148,6 +1171,35 @@ const bookLabTest = async (req, res) => {
             labId, patients, items, collectionType, isRapid,
             appointmentDate, appointmentTime, address, couponCode, paymentMethod 
         } = req.body;
+
+        // 🚨 CRITICAL WALK-IN VALIDATION FOR DIRECT BOOKINGS (NO-CART FLOW)
+        if (collectionType === 'Home Collection') {
+            if (items.tests && items.tests.length > 0) {
+                for (let t of items.tests) {
+                    const testData = await LabTest.findById(t.testId);
+                    if (testData && testData.mainCategory && testData.mainCategory.toLowerCase() === 'radiology') {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Direct booking failed: '${testData.testName}' belongs to Radiology and cannot be collected at home.`
+                        });
+                    }
+                }
+            }
+            if (items.packages && items.packages.length > 0) {
+                for (let p of items.packages) {
+                    const pkgData = await LabPackage.findById(p.packageId).populate('tests');
+                    if (pkgData) {
+                        const hasRadiology = pkgData.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
+                        if (hasRadiology || (pkgData.mainCategory && pkgData.mainCategory.toLowerCase() === 'radiology')) {
+                            return res.status(400).json({
+                                success: false,
+                                message: `Direct booking failed: Package '${pkgData.packageName}' contains Radiology tests and cannot be collected at home.`
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         const tempBookingId = `ORD-${Date.now().toString().slice(-6)}${crypto.randomInt(100, 999)}`;
         const bill = await calculateBill(labId, items, patients.length, collectionType, couponCode, isRapid);
@@ -1180,7 +1232,6 @@ const bookLabTest = async (req, res) => {
         });
 
         if (paymentMethod === 'COD') {
-            // 🚨 Trigger Notification for COD Direct Lab Bookings
             await notifyAdminsAndVendor(
                 labId,
                 'lab',
@@ -2531,7 +2582,7 @@ module.exports = {
     getLabSlots, getLabDeliveryCharges,
     bookLabTest, uploadPrescriptionFlow, 
     getMyBookings, getBookingDetails ,
-    checkoutLabBooking,
+    checkoutLabBooking,getUniqueMainCategories,
     getLabsByMasterTest, getLabsByMasterPackage,
     getMasterTestDetails, getMasterPackageDetails,
     cancelBooking, confirmPrescriptionBooking,verifyLabPayment, rateLabOrder ,getPaginatedReviews,updateReviewByOrderId, updateReviewByVendorId,getReviewByOrderId,

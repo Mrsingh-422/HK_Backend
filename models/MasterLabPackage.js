@@ -5,7 +5,7 @@ const masterPackageSchema = new mongoose.Schema({
     packageName: { type: String, required: true, unique: true }, 
     shortDescription: String, 
     longDescription: String, 
-    mainCategory: { type: String, enum: ['Radiology', 'Pathology'], default: 'Pathology' },
+    mainCategory: { type: String, default: 'Pathology' },
     category: { type: String }, // e.g. "Full Body", "Diabetes"
 
     // Technical Details

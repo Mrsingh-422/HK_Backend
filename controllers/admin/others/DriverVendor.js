@@ -1,88 +1,173 @@
 const Driver = require('../../../models/Driver');
+const Ambulance = require('../../../models/Ambulance');
 
-// 1. GET ALL DRIVERS (For Admin Table with isActive & isOnline states)
+// 1. GET ALL DRIVERS (Vendor Drivers + Ambulance Drivers Merged)
 const getAllDriversAdmin = async (req, res) => {
     try {
-        // .populate('vendorId') se humein Vendor ka naam milega (Lab Name, Pharmacy Name etc.)
-        const drivers = await Driver.find()
-            .populate({ path: 'vendorId', select: 'name clinicName pharmacyName labName vendorType' }) 
-            .sort({ createdAt: -1 });
+        // Parallel queries execution for better efficiency
+        const [drivers, ambulances] = await Promise.all([
+            Driver.find()
+                .populate({ path: 'vendorId', select: 'name clinicName pharmacyName labName vendorType' })
+                .lean(),
+            Ambulance.find()
+                .populate({ path: 'hospitalId', select: 'name' })
+                .lean()
+        ]);
 
-        // Data transform karein taaki UI se match kare
-        const transformedData = drivers.map(driver => ({
+        // Transform Regular Vendor Drivers
+        const transformedDrivers = drivers.map(driver => ({
             id: driver._id,
             vendorName: driver.vendorId?.name || driver.vendorId?.labName || driver.vendorId?.pharmacyName || "N/A",
             username: driver.username,
             driverName: driver.name,
             phone: driver.phone,
             email: driver.email || "N/A",
-            imageUrl: driver.profilePic,
-            onlineStatus: driver.isOnline !== false, // Treats undefined or true as Online
-            isActive: driver.isActive !== false,     // 🚨 Passes account activation state to Admin Table UI
-            vehicle: driver.vehicleType,
-            vehicleNumber: driver.vehicleNumber,
-            licenseNumber: driver.documents?.license,
-            driverType: driver.vendorType,
+            imageUrl: driver.profilePic || null,
+            onlineStatus: driver.isOnline !== false, 
+            isActive: driver.isActive !== false,     
+            vehicle: driver.vehicleType || "N/A",
+            vehicleNumber: driver.vehicleNumber || "N/A",
+            licenseNumber: driver.documents?.license || "N/A",
+            driverType: driver.vendorType, // 'Lab', 'Pharmacy' etc.
+            createdAt: driver.createdAt
         }));
 
-        res.json({ success: true, data: transformedData });
+        // Transform Ambulance Drivers
+        const transformedAmbulances = ambulances.map(amb => ({
+            id: amb._id,
+            vendorName: amb.hospitalId?.name || "Independent", // Show Hospital Name, fallback to Independent
+            username: amb.email || amb.phone || "N/A",         // Uses unique email/phone identifier
+            driverName: amb.driverInfo?.fullName || amb.name,  // Fallback to general service name
+            phone: amb.phone || "N/A",
+            email: amb.email || "N/A",
+            imageUrl: null,                                    // Ambulance schema doesn't have profile pic field
+            onlineStatus: amb.isOnline !== false,
+            isActive: amb.isActive !== false,
+            vehicle: amb.vehicleType || "N/A",
+            vehicleNumber: amb.vehicleNumber || "N/A",
+            licenseNumber: amb.drivingLicenseNumber || "N/A",
+            driverType: 'Ambulance',                           // Classified as Ambulance category
+            createdAt: amb.createdAt
+        }));
+
+        // Merge both arrays and sort by creation date descending
+        const combinedDriversList = [...transformedDrivers, ...transformedAmbulances].sort(
+            (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+        );
+
+        res.json({ success: true, data: combinedDriversList });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 2. TOGGLE ACCOUNT ACTIVATION STATUS (Admin Account Suspension Blocker)
+// 2. TOGGLE ACCOUNT ACTIVATION STATUS (Polymorphic Handler)
 const toggleDriverStatus = async (req, res) => {
     try {
-        const driver = await Driver.findById(req.params.id);
-        if (!driver) return res.status(404).json({ message: "Driver not found" });
+        const { id } = req.params;
 
-        // Toggle account validation state (Treats undefined as true and toggles to false)
-        const newActiveState = driver.isActive === false ? true : false;
-        driver.isActive = newActiveState;
+        // Step A: Search inside regular drivers first
+        let target = await Driver.findById(id);
+        let modelType = 'Driver';
 
-        // Failsafe auto-sync:
-        // Case A: If admin deactivates/suspends the account, force statuses to Offline
-        if (newActiveState === false) {
-            driver.status = 'Offline';
-            driver.isOnline = false;
-        } 
-        // Case B: If admin re-enables the account, default status back to Available
-        else {
-            driver.status = 'Available';
-            driver.isOnline = true;
+        // Step B: If not found, look up inside Ambulance schema
+        if (!target) {
+            target = await Ambulance.findById(id);
+            modelType = 'Ambulance';
         }
 
-        await driver.save();
+        if (!target) {
+            return res.status(404).json({ success: false, message: "Resource not found in Drivers or Ambulances" });
+        }
+
+        const newActiveState = target.isActive === false ? true : false;
+        target.isActive = newActiveState;
+
+        // Update operational statuses based on schema structural paths
+        if (modelType === 'Driver') {
+            if (newActiveState === false) {
+                target.status = 'Offline';
+                target.isOnline = false;
+            } else {
+                target.status = 'Available';
+                target.isOnline = true;
+            }
+        } else {
+            // Ambulance model specific status sync
+            target.isOnline = newActiveState;
+        }
+
+        await target.save();
 
         res.json({ 
             success: true, 
-            message: `Driver status updated. Active: ${driver.isActive}, Status: ${driver.status}`, 
-            isActive: driver.isActive,
-            status: driver.status 
+            message: `${modelType} account status updated successfully.`, 
+            isActive: target.isActive,
+            isOnline: target.isOnline
         });
 
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 3. GET SINGLE DRIVER DETAILS (For Modal)
+// 3. GET SINGLE DRIVER DETAILS (Polymorphic Modal Detail Viewer)
 const getDriverDetails = async (req, res) => {
     try {
-        const driver = await Driver.findById(req.params.id).populate('vendorId');
-        if (!driver) return res.status(404).json({ message: "Driver not found" });
-        res.json({ success: true, data: driver });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const { id } = req.params;
+
+        // Check inside Regular drivers first
+        let driverDetails = await Driver.findById(id).populate('vendorId').lean();
+        let sourceCollection = 'VendorDriver';
+
+        // Check inside Ambulances if not found
+        if (!driverDetails) {
+            driverDetails = await Ambulance.findById(id).populate('hospitalId').lean();
+            sourceCollection = 'Ambulance';
+        }
+
+        if (!driverDetails) {
+            return res.status(404).json({ success: false, message: "Details not found" });
+        }
+
+        res.json({ 
+            success: true, 
+            source: sourceCollection, 
+            data: driverDetails 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// 4. DELETE DRIVER (Admin Action)
+// 4. DELETE DRIVER (Polymorphic Admin Action)
 const deleteDriverAdmin = async (req, res) => {
     try {
-        const deleted = await Driver.findByIdAndDelete(req.params.id);
-        if (!deleted) return res.status(404).json({ message: "Driver not found" });
-        res.json({ success: true, message: "Driver removed successfully" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const { id } = req.params;
+
+        // Try deleting from Regular Drivers
+        let deleted = await Driver.findByIdAndDelete(id);
+        let type = 'Vendor Driver';
+
+        // Try deleting from Ambulances if not found in first run
+        if (!deleted) {
+            deleted = await Ambulance.findByIdAndDelete(id);
+            type = 'Ambulance Driver';
+        }
+
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: "Resource not found to delete" });
+        }
+
+        res.json({ success: true, message: `${type} removed successfully from systems` });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-module.exports = { getAllDriversAdmin, toggleDriverStatus, getDriverDetails, deleteDriverAdmin };
+module.exports = { 
+    getAllDriversAdmin, 
+    toggleDriverStatus, 
+    getDriverDetails, 
+    deleteDriverAdmin 
+};
