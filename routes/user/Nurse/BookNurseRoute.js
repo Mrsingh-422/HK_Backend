@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer');
 const { 
-    getNurses, getNurseDetails,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, getMyNurseBookings, rateNurseService,
+    getNurses, getNurseDetails,searchNursesAndServices,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
     uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking
 } = require('../../../controllers/user/Nurse/BookNurse');
@@ -13,6 +13,7 @@ const {
 // Search/Filter list (POST is preferred for complex filters)
 router.post('/list', getNurses); 
 router.get('/details/:id', getNurseDetails);
+router.get('/search-suggestions', searchNursesAndServices);
 
 router.get('/packages/nurse', getGlobalPackages); // For users to see global packages offered by nurses (Screen 6) - Optional, can be integrated into /list with a filter
 

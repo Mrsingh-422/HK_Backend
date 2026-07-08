@@ -135,6 +135,102 @@ const getNurseDetails = async (req, res) => {
     }
 };
 
+// NEW CONTROLLER: SEARCH NURSES, SERVICES & PACKAGES WITH SUGGESTIONS
+// endpoint: GET /user/nurse/search-suggestions?q=query_text
+const searchNursesAndServices = async (req, res) => {
+    try {
+        const { q } = req.query; // 'q' contains the typed query string
+
+        // Agar query empty hai ya sirf white spaces hain
+        if (!q || !q.trim()) {
+            return res.json({
+                success: true,
+                data: {
+                    suggestions: [],
+                    providers: [],
+                    services: [],
+                    packages: []
+                }
+            });
+        }
+
+        const regex = new RegExp(q.trim(), 'i');
+
+        // 1. QUERY PROVIDERS (Nurses bureaus that are Approved and Active)
+        const providers = await Nurse.find({
+            profileStatus: 'Approved',
+            isActive: true,
+            name: regex
+        })
+        .select('name profileImage city speciality experienceYears rating totalReviews isOnline location')
+        .limit(10)
+        .lean();
+
+        // 2. QUERY SERVICES (Populate only if the associated provider is Active & Approved)
+        const services = await NurseService.find({
+            title: regex,
+            status: 'Approved',
+            isActive: true
+        })
+        .populate({
+            path: 'nurseId',
+            match: { profileStatus: 'Approved', isActive: true },
+            select: 'name profileImage rating city experienceYears isOnline'
+        })
+        .limit(10)
+        .lean();
+
+        // Filter out services where the provider is inactive/null due to match conditions
+        const validServices = services.filter(s => s.nurseId);
+
+        // 3. QUERY PACKAGES (Populate only if associated provider is Active & Approved)
+        const packages = await NursePackage.find({
+            packageName: regex,
+            status: 'Approved',
+            isActive: true
+        })
+        .populate({
+            path: 'nurseId',
+            match: { profileStatus: 'Approved', isActive: true },
+            select: 'name profileImage rating city experienceYears isOnline'
+        })
+        .limit(10)
+        .lean();
+
+        // Filter out packages where the provider is inactive
+        const validPackages = packages.filter(p => p.nurseId);
+
+        // 4. GENERATE AUTOCOMPLETE SUGGESTIONS LIST (Flat array of strings for easy UI type-ahead)
+        const suggestions = [];
+
+        // Add top matching provider names
+        providers.slice(0, 4).forEach(p => suggestions.push(p.name));
+        
+        // Add top matching service titles
+        validServices.slice(0, 4).forEach(s => suggestions.push(s.title));
+
+        // Add top matching package names
+        validPackages.slice(0, 4).forEach(p => suggestions.push(p.packageName));
+
+        // Remove any duplicates from the suggestion list
+        const uniqueSuggestions = [...new Set(suggestions)];
+
+        res.json({
+            success: true,
+            data: {
+                suggestions: uniqueSuggestions, // Used for quick autocomplete dropdown
+                providers,                      // Matched Nurse bureaus
+                services: validServices,        // Matched individual treatments
+                packages: validPackages         // Matched health bundles
+            }
+        });
+
+    } catch (error) {
+        console.error("Search suggestions API error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 const getNurseDeliveryConfig = async (req, res) => {
     try {
@@ -172,6 +268,7 @@ const getNurseDeliveryConfig = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 const checkRangeAvailability = async (req, res) => {
@@ -979,6 +1076,6 @@ const rateNurseBooking = async (req, res) => {
     }
 };
 
-module.exports = { getNurses,getNurseDetails,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService, rateNurseBooking,
+module.exports = { getNurses,getNurseDetails,searchNursesAndServices,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService, rateNurseBooking,
     getAppointmentStatus, 
     uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon };

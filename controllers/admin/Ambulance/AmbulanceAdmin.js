@@ -89,7 +89,50 @@ const toggleActiveInactiveAmbulance = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }  
 };
+ const adminGetAllAmbulances = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 25; // 👈 25 items limit
+        const skip = (page - 1) * limit;
+        const { profileStatus, search } = req.query;
+ 
+        const query = {};
+ 
+        // 1. Profile Status Filter (Approved, Pending, Rejected, Incomplete)
+        if (profileStatus && profileStatus !== 'All') {
+            query.profileStatus = profileStatus;
+        }
+ 
+        // 2. Search Filter (By Name or Phone)
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { phone: { $regex: search, $options: 'i' } }
+            ];
+        }
+ 
+       
+        const ambulances = await Ambulance.find(query)
+            .select('name phone email vehicleNumber vehicleType profileStatus isActive country state city')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+ 
+        const total = await Ambulance.countDocuments(query);
+ 
+        res.json({
+            success: true,
+            count: ambulances.length,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: ambulances
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
  
  
 
-module.exports = { adminGetApprovedAmbulances, adminGetAmbulanceBookings , toggleActiveInactiveAmbulance};
+module.exports = { adminGetApprovedAmbulances, adminGetAmbulanceBookings , toggleActiveInactiveAmbulance, adminGetAllAmbulances};
