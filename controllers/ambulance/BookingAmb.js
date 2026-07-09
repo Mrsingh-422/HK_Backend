@@ -410,67 +410,95 @@ const verifyPickupOtp = async (req, res) => {
     }
 };
 
-// --- 2. UPDATE RE-ROUTE TRANSIT (Strict Hospital Swap & Record Transfer) ---
+// --- STRICT ID SANITIZER FOR CONSOLE (Crash Prevention) ---
+const sanitizeObjectId = (id) => {
+    if (id && id !== 'null' && id !== 'undefined' && mongoose.Types.ObjectId.isValid(id)) {
+        return id;
+    }
+    return null;
+};
+
+// --- DYNAMIC RE-ROUTE (Strict Hospital Swap & Record Transfer) ---
 const reRouteAmbulance = async (req, res) => {
     try {
         const { id } = req.params; // Booking ID
         const { newHospitalId, reason } = req.body;
 
-        const booking = await Booking.findById(id);
+        // 1. Sanitize the Input IDs first to block CastErrors
+        const cleanBookingId = sanitizeObjectId(id);
+        const cleanNewHospitalId = sanitizeObjectId(newHospitalId);
+
+        if (!cleanBookingId) {
+            return res.status(400).json({ success: false, message: "Valid Booking ID is required." });
+        }
+        if (!cleanNewHospitalId) {
+            return res.status(400).json({ success: false, message: "Valid target Hospital ID is required for re-routing." });
+        }
+
+        const booking = await Booking.findById(cleanBookingId);
         if (!booking) return res.status(404).json({ success: false, message: "Transit booking not found." });
 
         const oldHospitalId = booking.hospitalId;
-        const oldHospital = await Hospital.findById(oldHospitalId);
-        const newHospital = await Hospital.findById(newHospitalId);
+        const oldHospital = oldHospitalId ? await Hospital.findById(oldHospitalId) : null;
+        const newHospital = await Hospital.findById(cleanNewHospitalId);
 
-        if (!newHospital) return res.status(404).json({ success: false, message: "New target hospital not found." });
+        if (!newHospital) return res.status(404).json({ success: false, message: "New target hospital not found in database." });
 
-        // Update Destination
-        booking.hospitalId = newHospitalId;
+        // Update target Hospital Destination
+        booking.hospitalId = cleanNewHospitalId;
         booking.trackingTimeline.push({
             status: 'Re-Routed',
             timestamp: new Date(),
-            note: `Re-routed from ${oldHospital ? oldHospital.name : 'Old Hospital'} to ${newHospital.name}. Reason: ${reason}`
+            note: `Re-routed from ${oldHospital ? oldHospital.name : 'Unassigned/Trauma Center'} to ${newHospital.name}. Reason: ${reason || 'Mechanical/Clinical decision'}`
         });
         await booking.save();
 
         // =========================================================================
-        // 🚨 DYNAMIC ADMISSION RECORD SWAP
+        // 🚨 ADMISSION RECORD SWAP
         // Find the active pre-arrival Appointment record and transfer it to the new hospital
         // =========================================================================
         const activeAdmission = await Appointment.findOne({ 
-            transactionId: booking.bookingId, // Mapped via ambulance booking ref
+            transactionId: booking.bookingId, // Mapped via booking ID reference
             status: 'Hospital-Pending'
         });
 
         if (activeAdmission) {
-            // Update hospital reference in the existing admission record
-            activeAdmission.hospitalId = newHospitalId;
+            // Update hospital reference in the admission document
+            activeAdmission.hospitalId = cleanNewHospitalId;
             await activeAdmission.save();
 
             // 🟢 Send cancellation/removal notification to Old Hospital
-            await notifyAdminsAndVendor(
-                oldHospitalId,
-                'hospital',
-                "ℹ️ Emergency Case Diverted",
-                `Incoming patient from Ambulance #${booking.bookingId} has been re-routed to another hospital.`
-            );
+            if (oldHospitalId) {
+                await notifyAdminsAndVendor(
+                    oldHospitalId,
+                    'hospital',
+                    "ℹ️ Emergency Case Diverted",
+                    `Incoming patient from Ambulance #${booking.bookingId} has been re-routed to another hospital.`
+                );
+            }
 
-            // 🟢 Send new incoming notification to New Hospital (with Patient Images & Details)
+            // 🟢 Send new incoming notification to New Hospital
             await notifyAdminsAndVendor(
-                newHospitalId,
+                cleanNewHospitalId,
                 'hospital',
                 "🚨 Emergency Case Re-Routed to You!",
-                `An incoming emergency patient from Ambulance #${booking.bookingId} has been diverted to your facility. Reason: ${reason}`,
+                `An incoming emergency patient from Ambulance #${booking.bookingId} has been diverted to your facility. Reason: ${reason || 'Emergency Re-route'}`,
                 { appointmentId: activeAdmission._id.toString(), type: 'emergency_re_routed' }
             );
         }
 
-        res.json({ success: true, message: `Successfully re-routed to ${newHospital.name}. Pre-arrival data transferred.`, data: booking });
+        res.json({ 
+            success: true, 
+            message: `Successfully re-routed to ${newHospital.name}. Pre-arrival data transferred.`, 
+            data: booking 
+        });
+
     } catch (error) {
+        console.error("Re-route API error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 // --- 7. GET DRIVER DASHBOARD COUNTS (NEW API - Figma Screen 1/2) ---
