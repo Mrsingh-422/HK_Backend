@@ -280,165 +280,110 @@ const toggleDoctorOnlineStatus = async (req, res) => {
 // Endpoint: PUT /api/auth/doctor/update-profile
 
 const updateDoctorProfile = async (req, res) => {
-
     try {
-
         const doctorId = req.user.id; // From Protect Middleware
-
         const updates = req.body;
+
+        // 🚨 CRITICAL: Fetch current profile to handle existing image cleanups
+        const existingDoc = await Doctor.findById(doctorId);
+        if (!existingDoc) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' });
+        }
  
         // 1. Block authorized/sensitive fields from being updated
-
         delete updates.email;
-
         delete updates.phone;
-
         delete updates.password;
-
         delete updates.role;
-
         delete updates.profileStatus;
-
         delete updates.rejectionReason;
  
         // 2. Block documents from being edited or overwritten
-
         delete updates.documents;
  
         // 3. Safe JSON Parsing for multipart/form-data fields
-
-        // यह मल्टिपार्ट फॉर्म डेटा से आने वाली स्ट्रिंग्स को असली एरे/ऑब्जेक्ट में बदल देगा
-
         if (updates.availability) {
-
             try {
-
                 updates.availability = typeof updates.availability === 'string' 
-
                     ? JSON.parse(updates.availability) 
-
                     : updates.availability;
-
             } catch (e) {
-
                 console.error("Error parsing availability:", e.message);
-
             }
-
         }
  
         if (updates.languages) {
-
             try {
-
                 updates.languages = typeof updates.languages === 'string' 
-
                     ? JSON.parse(updates.languages) 
-
                     : updates.languages;
-
             } catch (e) {}
-
         }
  
         if (updates.fees) {
-
             try {
-
                 updates.fees = typeof updates.fees === 'string' 
-
                     ? JSON.parse(updates.fees) 
-
                     : updates.fees;
-
             } catch (e) {}
-
         }
  
         if (updates.consultationStatus) {
-
             try {
-
                 updates.consultationStatus = typeof updates.consultationStatus === 'string' 
-
                     ? JSON.parse(updates.consultationStatus) 
-
                     : updates.consultationStatus;
-
             } catch (e) {}
-
         }
  
         if (updates.treatedConditions) {
-
             try {
-
                 updates.treatedConditions = typeof updates.treatedConditions === 'string' 
-
                     ? JSON.parse(updates.treatedConditions) 
-
                     : updates.treatedConditions;
-
             } catch (e) {}
-
         }
  
         if (updates.competencies) {
-
             try {
-
                 updates.competencies = typeof updates.competencies === 'string' 
-
                     ? JSON.parse(updates.competencies) 
-
                     : updates.competencies;
-
             } catch (e) {}
-
         }
  
-        // Handle Profile Image Update (If uploaded)
-
-        if (req.files && req.files.profileImage) {
-
+        // 4. Handle Profile Image Cleanup & Update
+        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+            if (existingDoc.profileImage) {
+                deleteFile(existingDoc.profileImage); // Cleanup old file from server
+            }
             updates.profileImage = req.files.profileImage[0].path;
+        }
 
+        // 5. Handle Signature Image Cleanup & Update (For Prescriptions)
+        if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
+            if (existingDoc.signatureImage) {
+                deleteFile(existingDoc.signatureImage); // Cleanup old file from server
+            }
+            updates.signatureImage = req.files.signatureImage[0].path;
         }
  
         // Nested objects (fees, availability, alternatePhone) are updated using $set safely
-
         const updatedDoctor = await Doctor.findByIdAndUpdate(
-
             doctorId,
-
             { $set: updates },
-
             { new: true, runValidators: true }
-
-        );
- 
-        if (!updatedDoctor) {
-
-            return res.status(404).json({ success: false, message: 'Doctor not found' });
-
-        }
+        ).select('-password');
  
         res.json({
-
             success: true,
-
             message: 'Profile updated successfully',
-
             data: updatedDoctor
-
         });
  
     } catch (error) {
-
         res.status(500).json({ success: false, message: error.message });
-
     }
-
 };
  
  

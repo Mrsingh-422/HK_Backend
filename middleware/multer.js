@@ -51,6 +51,7 @@ const doctorDocUploads = multer({
     limits: { fileSize: 5 * 1024 * 1024 }
 }).fields([
     { name: 'profileImage', maxCount: 1 },
+    { name: 'signatureImage', maxCount: 1 },
     { name: 'certificates', maxCount: 10 },
     { name: 'qualificationDoc', maxCount: 1 },
     { name: 'licenseDoc', maxCount: 1 },
@@ -71,6 +72,7 @@ const labDocUploads = multer({
     limits: { fileSize: 5 * 1024 * 1024 }
 }).fields([
     { name: 'profileImage', maxCount: 1 },
+    { name: 'signatureImage', maxCount: 1 },
     { name: 'labImages', maxCount: 10 },
     { name: 'labCertificates', maxCount: 10 },
     { name: 'labLicenses', maxCount: 10 },

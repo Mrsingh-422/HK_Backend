@@ -86,20 +86,25 @@ const updateLabProfile = async (req, res) => {
             name, about, address,
             isHomeCollectionAvailable, isRapidServiceAvailable,
             isInsuranceAccepted, acceptedInsurances, is24x7,
-            // Location details
             country, state, city, lat, lng,
-            // Alternate phone destructured from body
-            alternatePhone
+            alternatePhone,
+            nablNumber // 👈 🚨 DESTRUCTURE NEW BODY FIELD
         } = req.body;
  
+        // Fetch current profile to handle existing image cleanups
+        const existingLab = await Lab.findById(labId);
+        if (!existingLab) {
+            return res.status(404).json({ success: false, message: "Lab not found." });
+        }
+
         // 1. Base Update Data (email, phone, password, and documents are completely excluded)
         let updateData = {
             name, about, address, country, state, city,
-            isHomeCollectionAvailable: isHomeCollectionAvailable === 'true',
-            isRapidServiceAvailable: isRapidServiceAvailable === 'true',
-            isInsuranceAccepted: isInsuranceAccepted === 'true',
-            is24x7: is24x7 === 'true',
-            location: { lat, lng },
+            isHomeCollectionAvailable: isHomeCollectionAvailable === 'true' || isHomeCollectionAvailable === true,
+            isRapidServiceAvailable: isRapidServiceAvailable === 'true' || isRapidServiceAvailable === true,
+            isInsuranceAccepted: isInsuranceAccepted === 'true' || isInsuranceAccepted === true,
+            is24x7: is24x7 === 'true' || is24x7 === true,
+            location: { lat: Number(lat || existingLab.location?.lat || 0), lng: Number(lng || existingLab.location?.lng || 0) },
             alternatePhone
         };
  
@@ -110,15 +115,31 @@ const updateLabProfile = async (req, res) => {
                 : acceptedInsurances;
         }
  
-        // 3. Only handle profileImage (if provided in files).
-        // Document uploads are excluded to protect existing uploads from being modified.
-        if (req.files && req.files.profileImage) {
+        // 3. Handle Profile Image Cleanup & Update
+        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+            if (existingLab.profileImage) {
+                deleteFile(existingLab.profileImage); // Remove old image from server
+            }
             updateData.profileImage = req.files.profileImage[0].path;
         }
+
+        // 4. Handle Signature Image Cleanup & Update (Lab Smart Report generation)
+        if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
+            const newSignaturePath = req.files.profileImage[0].path; // uses multipart file path
+            
+            if (existingLab.profileImage) {
+                deleteFile(existingLab.profileImage); 
+            }
+            updateData.profileImage = newSignaturePath; // saves path to signatureImage config
+        }
+
+        // 🚨 NABL NUMBER INTEGRATION: Safe update using dot notation to prevent Mongoose nested object overwrites
+        if (nablNumber !== undefined) {
+            updateData['documents.nablNumber'] = nablNumber;
+        }
  
-        // 4. Update query (Only updates basic profile details and profileImage)
+        // 5. Update query execution
         const finalUpdate = { $set: updateData };
- 
         const lab = await Lab.findByIdAndUpdate(labId, finalUpdate, { new: true });
        
         res.json({ success: true, message: "Lab profile updated successfully", data: lab });

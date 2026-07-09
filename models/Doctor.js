@@ -72,6 +72,7 @@ const doctorSchema = new mongoose.Schema({
     averageRating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
     profileImage: { type: String, default: null },
+    signatureImage: { type: String, default: null },
     documents: [{ type: String }],
 
     profileStatus: {

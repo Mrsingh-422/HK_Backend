@@ -98,12 +98,17 @@ const updateDoctorProfile = async (req, res) => {
     try {
         const doctorId = req.user.id;
        
+        // Fetch current profile to handle existing image cleanups
+        const existingDoc = await Doctor.findById(doctorId);
+        if (!existingDoc) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' });
+        }
+
         // Allowed professional fields for self-update (Excludes role, email, phone, documents, password, profileStatus)
         const {
             name, country, state, city, address,
             qualification, speciality, about, experienceYears,
             languages, fees, consultationStatus,
-            // Destructured alternate phone
             alternatePhone
         } = req.body;
  
@@ -117,9 +122,9 @@ const updateDoctorProfile = async (req, res) => {
         if (speciality) updates.speciality = speciality;
         if (about) updates.about = about;
         if (experienceYears) updates.experienceYears = Number(experienceYears);
-        if (alternatePhone) updates.alternatePhone = alternatePhone; // Added to update payload
+        if (alternatePhone) updates.alternatePhone = alternatePhone; 
        
-        // Handle languages array parsing
+        // Handle languages array parsing safely
         if (languages) {
             updates.languages = Array.isArray(languages) ? languages : JSON.parse(languages);
         }
@@ -134,9 +139,22 @@ const updateDoctorProfile = async (req, res) => {
             updates.consultationStatus = typeof consultationStatus === 'string' ? JSON.parse(consultationStatus) : consultationStatus;
         }
  
-        // Handle single profile image upload from multer fields
-        if (req.files && req.files.profileImage) {
+        // Handle Profile Image Cleanup & Update
+        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+            const { deleteFile } = require('../../../utils/fileHandler'); // Relative import verification
+            if (existingDoc.profileImage) {
+                deleteFile(existingDoc.profileImage); // Cleanup old file from server disk
+            }
             updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
+        }
+
+        // 🚨 NEW: Handle Signature Image Cleanup & Update (For Prescriptions)
+        if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
+            const { deleteFile } = require('../../../utils/fileHandler');
+            if (existingDoc.signatureImage) {
+                deleteFile(existingDoc.signatureImage); // Cleanup old file from server disk
+            }
+            updates.signatureImage = `/uploads/doctors/${req.files.signatureImage[0].filename}`;
         }
  
         const updatedDoctor = await Doctor.findByIdAndUpdate(

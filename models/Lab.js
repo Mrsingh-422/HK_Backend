@@ -21,6 +21,8 @@ const labSchema = new mongoose.Schema({
 
 
     profileImage: { type: String, default: null },
+    signatureImage: { type: String, default: null },
+
 
     // Location Details
     country: { type: String, default: null },
@@ -45,6 +47,7 @@ const labSchema = new mongoose.Schema({
         issuingAuthority: { type: String },
         gstNumber: { type: String },
         experience: { type: String },
+        nablNumber: { type: String, default: "" }, 
 
         // Drug License Type (Figma Screenshot 3 options)
         drugLicenseType: {
