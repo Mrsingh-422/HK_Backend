@@ -339,30 +339,49 @@ const validateCoupon = async (req, res) => {
 // for condtional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
 const getCheckoutSummary = async (req, res) => {
     try {
+        let body = { ...req.body };
+
+        // 🚨 SAFE MULTIPART PARSER: Parse stringified fields from frontend if necessary
+        if (typeof body.patients === 'string') {
+            try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
+        }
+        if (typeof body.address === 'string') {
+            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
+        }
+        if (typeof body.specialServices === 'string') {
+            try { body.specialServices = JSON.parse(body.specialServices); } catch (e) { body.specialServices = []; }
+        }
+
         const { 
             doctorId, consultationType, couponCode, 
             distance = 0, timeSlot, appointmentDate, 
             specialServices = [], patients = [], address = null 
-        } = req.body;
+        } = body;
 
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
 
-        // 🚨 FAMILY MEMBERS VERIFICATION LOGIC
+        // 🚨 FAMILY MEMBERS VERIFICATION LOGIC (With safe navigation guards)
         const user = await User.findById(req.user.id).select('familyMember');
         if (!user) return res.status(404).json({ message: "User account not found" });
 
-        for (const patient of patients) {
-            const isSelf = patient.relation === 'Self' || patient.patientName.toLowerCase() === 'self';
-            if (!isSelf) {
-                const isRegisteredMember = user.familyMember.some(member => 
-                    member.memberName.toLowerCase() === patient.patientName.toLowerCase()
-                );
-                if (!isRegisteredMember) {
-                    return res.status(400).json({
-                        success: false,
-                        message: `Access Blocked: Patient '${patient.patientName}' is not registered under your family profile. Please add them first to apply your elder care subscription benefits.`
-                    });
+        if (patients && Array.isArray(patients)) {
+            for (const patient of patients) {
+                // Safeguard against missing/different keys (patientName vs name)
+                const pName = patient.patientName || patient.name || "Self";
+                const isSelf = patient.relation === 'Self' || pName.toLowerCase() === 'self';
+                
+                if (!isSelf) {
+                    const isRegisteredMember = user.familyMember.some(member => 
+                        member.memberName && member.memberName.toLowerCase() === pName.toLowerCase()
+                    );
+
+                    if (!isRegisteredMember) {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Access Blocked: Patient '${pName}' is not registered under your family profile. Please add them first to apply your elder care subscription benefits.`
+                        });
+                    }
                 }
             }
         }
@@ -370,20 +389,19 @@ const getCheckoutSummary = async (req, res) => {
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
         let baseFee = doctor.fees[typeMap[consultationType]] || 0;
 
-        let originalBaseFee = baseFee; // Store the original fee before applying any subscription
+        let originalBaseFee = baseFee; 
         let isSubscriptionApplied = false;
         let planName = "";
         let userSubscriptionId = null;
 
-        // 🚨 SUBSCRIPTION CHECK: Free Doctor Consultations check karein
+        // SUBSCRIPTION CHECK: Free Doctor Consultations check karein
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
         
         if (docBenefit.isApplied) {
-            baseFee = 0; // Value is waived
+            baseFee = 0; 
             isSubscriptionApplied = true;
 
-            // Fetch plan name and active subscription ID dynamically to show on checkout screen
             const UserSubscription = require('../../../models/UserSubscription');
             const activeSub = await UserSubscription.findOne({
                 userId: req.user.id,
@@ -432,7 +450,7 @@ const getCheckoutSummary = async (req, res) => {
             success: true,
             data: {
                 baseFee,
-                originalBaseFee, // 👈 Actual doctor consultation price
+                originalBaseFee, 
                 visitCharge, 
                 premiumFee,
                 servicesTotal,
@@ -442,7 +460,7 @@ const getCheckoutSummary = async (req, res) => {
                 patients,
                 address: consultationType === 'Home Visit' ? address : null,
                 subscriptionDetails: {
-                    isSubscriptionApplied, // 👈 True if booked via subscription
+                    isSubscriptionApplied, 
                     userSubscriptionId,
                     planName
                 }
@@ -459,7 +477,20 @@ const bookAppointment = async (req, res) => {
     try {
         console.log("Incoming Appointment Booking Request:", req.body);
 
-        let { 
+        let body = { ...req.body };
+
+        // 🚨 SAFE MULTIPART PARSER: Auto-evaluates and parses dynamic strings to valid objects
+        if (typeof body.patients === 'string') {
+            try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
+        }
+        if (typeof body.address === 'string') {
+            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
+        }
+        if (typeof body.pricingBreakdown === 'string') {
+            try { body.pricingBreakdown = JSON.parse(body.pricingBreakdown); } catch (e) { body.pricingBreakdown = {}; }
+        }
+
+        const { 
             doctorId, 
             appointmentDate, 
             timeSlot,          
@@ -468,7 +499,7 @@ const bookAppointment = async (req, res) => {
             address,
             pricingBreakdown,  
             totalAmount        
-        } = req.body;
+        } = body;
 
         const appointmentTime = timeSlot; 
         const pricingData = pricingBreakdown; 
@@ -518,9 +549,7 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "This slot is already booked." });
         }
 
-        // =========================================================================
-        // 🚨 CRITICAL FIX: Safe Function Scoping for Subscription variables
-        // =========================================================================
+        // Subscription variables
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
         const rawDoctorFee = doctor.fees[typeMap[consultationType]] || 0;
 
@@ -550,22 +579,22 @@ const bookAppointment = async (req, res) => {
 
         const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-        // Create Razorpay Order
-        const rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
+        // Create Razorpay Order (Safe integer parsing)
+        const rzpOrder = await createRazorpayOrder(Number(totalAmount), `receipt_${tempBookingId}`);
 
         // Save Appointment record
         const appointment = await Appointment.create({
             userId: req.user.id,
             doctorId,
-            patients: typeof patients === 'string' ? JSON.parse(patients) : patients,
-            address: consultationType === 'Home Visit' ? (typeof address === 'string' ? JSON.parse(address) : address) : undefined,
+            patients: patients,
+            address: consultationType === 'Home Visit' ? address : undefined,
             appointmentDate: new Date(appointmentDate),
             appointmentTime, 
             consultationType,
             
             pricingBreakdown: {
                 baseFee: Number(pricingData.baseFee || 0),
-                originalBaseFee: Number(originalBaseFee), // 👈 Saves actual doctor consultation fee before discount
+                originalBaseFee: Number(originalBaseFee), 
                 visitCharges: Number(pricingData.visitCharges || 0),
                 extraCharges: Number(pricingData.extraCharges || 0),
                 discountAmount: Number(pricingData.discountAmount || 0),
@@ -579,7 +608,6 @@ const bookAppointment = async (req, res) => {
             transactionId: rzpOrder.id, 
             'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
 
-            // 🚨 CRITICAL FIX: Safe execution mapping matching your Step 1 Schema
             subscriptionDetails: {
                 isSubscriptionApplied: isSubscriptionApplied,
                 userSubscriptionId: userSubscriptionId,
