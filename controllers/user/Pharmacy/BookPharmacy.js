@@ -1414,8 +1414,9 @@ const verifyPharmacyPayment = async (req, res) => {
 
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-        // 🚨 SUBSCRIPTION DEDUCTION: Online Pharmacy Delivery Benefit deduct karein
-        if (order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection') {
+        // 🚨 LOGICAL RESOLVE: Only deduct subscription deliveries count if delivery charge was waived to 0
+        if ((order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection') && order.billSummary?.deliveryCharge === 0) {
+            const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
             await deductBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
         }
 

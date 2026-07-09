@@ -1467,8 +1467,9 @@ const verifyLabPayment = async (req, res) => {
 
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
 
-        // 🚨 SUBSCRIPTION DEDUCTION: Online Lab Delivery Benefit deduct karein
-        if (booking.collectionType === 'Home Collection') {
+        // 🚨 LOGICAL RESOLVE: Only deduct subscription deliveries count if delivery charge was waived to 0
+        if (booking.collectionType === 'Home Collection' && booking.billSummary?.homeVisitCharge === 0) {
+            const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
             await deductBenefitCount(booking.userId, 'freeLabDeliveriesCount');
         }
 

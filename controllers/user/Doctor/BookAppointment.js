@@ -473,6 +473,7 @@ const bookAppointment = async (req, res) => {
         const appointmentTime = timeSlot; 
         const pricingData = pricingBreakdown; 
 
+        // 1. Basic Validations
         if (!doctorId || !appointmentDate || !appointmentTime) {
             return res.status(400).json({ 
                 success: false, 
@@ -487,6 +488,7 @@ const bookAppointment = async (req, res) => {
             });
         }
 
+        // 2. Strict Independent Doctor Role Validation
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor not found." });
@@ -516,7 +518,9 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "This slot is already booked." });
         }
 
-        // Evaluate Subscription state again on final database write to prevent payload tampering
+        // =========================================================================
+        // 🚨 CRITICAL FIX: Safe Function Scoping for Subscription variables
+        // =========================================================================
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
         const rawDoctorFee = doctor.fees[typeMap[consultationType]] || 0;
 
@@ -546,9 +550,10 @@ const bookAppointment = async (req, res) => {
 
         const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-        // Create Razorpay Order in paise
+        // Create Razorpay Order
         const rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
 
+        // Save Appointment record
         const appointment = await Appointment.create({
             userId: req.user.id,
             doctorId,
@@ -560,6 +565,7 @@ const bookAppointment = async (req, res) => {
             
             pricingBreakdown: {
                 baseFee: Number(pricingData.baseFee || 0),
+                originalBaseFee: Number(originalBaseFee), // 👈 Saves actual doctor consultation fee before discount
                 visitCharges: Number(pricingData.visitCharges || 0),
                 extraCharges: Number(pricingData.extraCharges || 0),
                 discountAmount: Number(pricingData.discountAmount || 0),
@@ -572,12 +578,12 @@ const bookAppointment = async (req, res) => {
             paymentStatus: 'Pending',
             transactionId: rzpOrder.id, 
             'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
-            
-            // 🚨 INTEGRATION SAVE: Save structural subscription metrics
-            subscriptionApplied: isSubscriptionActive, // sets boolean flag
+
+            // 🚨 CRITICAL FIX: Safe execution mapping matching your Step 1 Schema
             subscriptionDetails: {
-                planId: activeSub ? activeSub.planId._id : null,
-                planName: activeSub ? activeSub.planId.name : null
+                isSubscriptionApplied: isSubscriptionApplied,
+                userSubscriptionId: userSubscriptionId,
+                planName: planName
             }
         });
 
@@ -634,8 +640,11 @@ const verifyDoctorPayment = async (req, res) => {
             return res.status(404).json({ success: false, message: "Appointment record not found." });
         }
 
-        // 🚨 SUBSCRIPTION DEDUCTION: Successful consultation deduct karein
-        await deductBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
+        // 🚨 LOGICAL RESOLVE: Only deduct subscription count if the consultation was free via plan (baseFee is 0)
+        if (appointment.pricingBreakdown?.baseFee === 0) {
+            const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+            await deductBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
+        }
 
         await notifyAdminsAndVendor(
             appointment.doctorId._id,

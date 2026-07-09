@@ -675,8 +675,7 @@ const verifyAmbulancePayment = async (req, res) => {
         booking.paymentDetails = rzpDetails; 
         await booking.save();
 
-        // 🚨 SUBSCRIPTION DEDUCTION: Successful online payment confirm hone par trip deduct karein
-        await deductBenefitCount(booking.userId, 'freeAmbulanceTripsCount');
+        // 🚨 LOGICAL RESOLVE: No deduction here because this was a paid transaction (isFree: false flow)
 
         res.json({
             success: true,
