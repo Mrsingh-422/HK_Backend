@@ -7,6 +7,7 @@ const crypto = require('crypto'); // 👈 FIX 2: Added missing crypto module imp
 const mongoose = require('mongoose');
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../utils/notification'); // 👈 FIX 3: Added missing notification helper import
 const Review = require('../../models/Review');
+const Hospital = require('../../models/Hospital');
 
 
 const getMyActiveTrip = async (req, res) => {
