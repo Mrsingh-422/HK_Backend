@@ -1263,6 +1263,91 @@ const getBookingTrackingDetails = async (req, res) => {
 
 };
 
+// =======================================================
+// GET SINGLE PHLEBOTOMIST DETAIL WITH ACTIVE PATIENT INFO
+// =======================================================
+// Endpoint: GET /provider/labs/phlebotomist-detail/:phlebotomistId
+const getPhlebotomistActiveDetail = async (req, res) => {
+    try {
+        const { phlebotomistId } = req.params;
+        const labId = req.user.id;
+ 
+        // 1. Phlebotomist details fetch karein aur verify karein ki yeh usi lab ka hai
+        const phlebotomist = await Driver.findOne({ _id: phlebotomistId, vendorId: labId });
+        if (!phlebotomist) {
+            return res.status(404).json({
+                success: false,
+                message: "Phlebotomist not found or unauthorized."
+            });
+        }
+ 
+        // Base response tayyar karein (Driver profile)
+        const responseData = {
+            phlebotomist: {
+                id: phlebotomist._id,
+                name: phlebotomist.name,
+                phone: phlebotomist.phone,
+                status: phlebotomist.status,
+                profilePic: phlebotomist.profilePic || null,
+                vehicleNumber: phlebotomist.vehicleNumber || null,
+                vehicleType: phlebotomist.vehicleType || null,
+                address: phlebotomist.address || null
+            },
+            activeBooking: null // By default isko null rakhenge
+        };
+ 
+        // 2. Agar driver 'Busy' hai, toh unka active task aur patient details fetch karein
+        if (phlebotomist.status === 'Busy') {
+            const activeBooking = await LabBooking.findOne({
+                phlebotomistId: phlebotomistId,
+                // Active task statuses jab tak sample lab me deposit nahi ho jata
+                status: { $in: ['Phlebotomist Assigned', 'Sample Collected'] }
+            }).populate('userId', 'name phone email');
+ 
+            if (activeBooking) {
+                const addr = activeBooking.address;
+                const formattedAddress = addr
+                    ? `${addr.houseNo ? addr.houseNo + ', ' : ''}${addr.sector ? addr.sector + ', ' : ''}${addr.landmark ? addr.landmark + ', ' : ''}${addr.city || ''}, ${addr.state || ''} - ${addr.pincode || ''}`
+                    : "Address Details N/A";
+ 
+                const primaryPatientName = activeBooking.patients?.[0]?.name || activeBooking.userId?.name || "Patient";
+                const primaryPatientPhone = activeBooking.address?.phone || activeBooking.userId?.phone || "N/A";
+ 
+                responseData.activeBooking = {
+                    bookingMongoId: activeBooking._id,
+                    bookingId: activeBooking.bookingId, // custom code string
+                    bookingType: activeBooking.bookingType,
+                    status: activeBooking.status,
+                    amount: activeBooking.billSummary?.totalAmount || 0,
+                    appointmentDate: activeBooking.appointmentDate,
+                    appointmentTime: activeBooking.appointmentTime,
+                    patientDetails: {
+                        name: primaryPatientName,
+                        phone: primaryPatientPhone,
+                        address: formattedAddress,
+                        patientsCount: activeBooking.patients?.length || 1
+                    },
+                    // Visual map rendering ya tracking timeline ke liye timestamps
+                    timeline: {
+                        startedAt: activeBooking.startedAt,
+                        arrivedAt: activeBooking.arrivedAt,
+                        collectedAt: activeBooking.collectedAt
+                    }
+                };
+            }
+        }
+ 
+        res.status(200).json({
+            success: true,
+            data: responseData
+        });
+ 
+    } catch (error) {
+        console.error("Error in getPhlebotomistActiveDetail:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
  
 
 
@@ -1295,6 +1380,7 @@ module.exports = {
     getAvailablePhlebotomists,              
     reassignDriverStaff   ,
     getBookingTrackingDetails,
+    getPhlebotomistActiveDetail
     
  
 };

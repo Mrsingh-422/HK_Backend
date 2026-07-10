@@ -27,7 +27,8 @@ const {
     rejectLabPrescriptionRequest,
     getAvailablePhlebotomists,
     reassignDriverStaff,
-    getBookingTrackingDetails
+    getBookingTrackingDetails,
+    getPhlebotomistActiveDetail
 } = require('../../../controllers/provider/Lab/LabsOrder');
 
 // Base URL: /provider/labs
@@ -104,6 +105,7 @@ router.patch('/reassign-staff/:orderId', protect('provider'), reassignDriverStaf
  
 // Get live tracking detail schema for modal popups
 router.get('/booking-tracking/:orderId', protect('provider'), getBookingTrackingDetails);
+router.get('/phlebotomist-detail/:phlebotomistId', protect('provider'), getPhlebotomistActiveDetail);
  
 
 
