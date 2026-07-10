@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
 const { sendPushNotification } = require('../../../utils/notification'); 
+const { deleteFile } = require('../../../utils/fileHandler');
 
 
 // 1. GET DASHBOARD STATS (Updated with Priority Count)

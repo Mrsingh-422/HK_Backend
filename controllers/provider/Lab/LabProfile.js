@@ -4,6 +4,8 @@ const LabPackage = require('../../../models/LabPackage');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getLocationFilter } = require('../../../middleware/authMiddleware');
+const { sendPushNotification } = require('../../../utils/notification');
+const { deleteFile } = require('../../../utils/fileHandler'); // Import the deleteFile utility
 
 // 1. GET PROFILE (Figma: Settings / My Profile)
 // endpoint: GET /provider/labs/profile
