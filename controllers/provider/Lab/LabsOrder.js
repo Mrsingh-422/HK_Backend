@@ -293,7 +293,7 @@ const getReportTemplatesDropdown = async (req, res) => {
 const getReportData = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { patientId } = req.query; // 👈 Mapped to target specific patient [cite: custom_context]
+        const { patientId } = req.query;
 
         // Fetch Booking with populated Lab profile
         const booking = await LabBooking.findById(orderId).populate('labId').lean();
@@ -301,16 +301,41 @@ const getReportData = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // 🚨 MAPPED: Fetch draft specifically for this patient to prevent data mix-ups [cite: custom_context]
+        // Mapped: Fetch draft specifically for this patient to prevent data mix-ups
         let testResults = null;
         if (booking.testResults) {
             if (patientId && booking.testResults[patientId]) {
                 testResults = booking.testResults[patientId];
             } else {
-                // Fallback to first available key
                 const keys = Object.keys(booking.testResults);
                 testResults = keys.length > 0 ? booking.testResults[keys[0]] : booking.testResults;
             }
+        }
+
+        // --- NEW CONDITIONAL ADDRESS LOGIC ---
+        let reportCollectionAddress = null;
+
+        if (booking.collectionType === 'Home Collection') {
+            const addr = booking.address;
+            if (addr) {
+                // Construct full formatted address string from the booking's address object
+                reportCollectionAddress = [
+                    addr.houseNo,
+                    addr.sector,
+                    addr.landmark,
+                    addr.city,
+                    addr.state,
+                    addr.pincode ? `- ${addr.pincode}` : ''
+                ]
+                .filter(part => part && part.trim() !== '') // Remove empty fields
+                .join(', ')
+                .replace(', -', ' -'); // Clean up spacing before the pincode
+            } else {
+                reportCollectionAddress = "Home Collection (Address Details Missing)";
+            }
+        } else {
+            // For 'Visit Lab', return null or a designated walk-in string
+            reportCollectionAddress = "Walk-In (Visit Lab)";
         }
 
         res.json({
@@ -320,10 +345,12 @@ const getReportData = async (req, res) => {
                 appointmentId: booking._id,
                 appointmentDate: booking.appointmentDate,
                 barcode: booking.barcode || "E4708538",
+                collectionType: booking.collectionType, // Returned so the PDF engine/frontend knows the setup
+                collectionAddress: reportCollectionAddress, // Handled conditionally on backend
                 labName: booking.labId?.name || "HealthKangaroo Labs",
                 labAddress: `${booking.labId?.city || ''}, ${booking.labId?.state || ''}`,
                 patients: booking.patients, 
-                testResults: testResults // 👈 Clean partitioned parameters
+                testResults: testResults 
             }
         });
     } catch (error) {

@@ -4,60 +4,64 @@ const Ambulance = require('../../../models/Ambulance');
 // 1. GET ALL DRIVERS (Vendor Drivers + Ambulance Drivers Merged)
 const getAllDriversAdmin = async (req, res) => {
     try {
-        // Parallel queries execution for better efficiency
-        const [drivers, ambulances] = await Promise.all([
-            Driver.find()
-                .populate({ path: 'vendorId', select: 'name clinicName pharmacyName labName vendorType' })
-                .lean(),
-            Ambulance.find()
-                .populate({ path: 'hospitalId', select: 'name' })
-                .lean()
-        ]);
-
-        // Transform Regular Vendor Drivers
-        const transformedDrivers = drivers.map(driver => ({
+        // Query parameters extract karein
+        const { country, city, state, district } = req.query;
+ 
+        // Dynamic MongoDB query object build karein
+        let filter = {};
+ 
+        // 1. Country Filter
+        if (country) {
+            filter.country = { $regex: country, $options: 'i' }; // Case-insensitive search
+        }
+ 
+        // 2. City Filter
+        if (city) {
+            filter.city = { $regex: city, $options: 'i' }; // Case-insensitive search
+        }
+ 
+        // 3. State / District Filter
+        // Note: Model me 'state' field hai, isliye agar admin state ya district me se
+        // kuch bhi bhejta hai, toh use hum database ke 'state' field se match karenge.
+        const stateOrDistrict = state || district;
+        if (stateOrDistrict) {
+            filter.state = { $regex: stateOrDistrict, $options: 'i' }; // Case-insensitive search
+        }
+ 
+        // Filter lagakar Drivers fetch karein
+        const drivers = await Driver.find(filter)
+            .populate({ path: 'vendorId', select: 'name clinicName pharmacyName labName vendorType' })
+            .sort({ createdAt: -1 });
+ 
+        // Data transform karein taaki UI se match kare
+        const transformedData = drivers.map(driver => ({
             id: driver._id,
             vendorName: driver.vendorId?.name || driver.vendorId?.labName || driver.vendorId?.pharmacyName || "N/A",
             username: driver.username,
             driverName: driver.name,
             phone: driver.phone,
             email: driver.email || "N/A",
-            imageUrl: driver.profilePic || null,
-            onlineStatus: driver.isOnline !== false, 
-            isActive: driver.isActive !== false,     
-            vehicle: driver.vehicleType || "N/A",
-            vehicleNumber: driver.vehicleNumber || "N/A",
-            licenseNumber: driver.documents?.license || "N/A",
-            driverType: driver.vendorType, // 'Lab', 'Pharmacy' etc.
-            createdAt: driver.createdAt
+            imageUrl: driver.profilePic,
+            onlineStatus: driver.status === 'Available', // UI Toggle logic
+            vehicle: driver.vehicleType,
+            vehicleNumber: driver.vehicleNumber,
+            licenseNumber: driver.documents?.license,
+            driverType: driver.vendorType,
+            // Location fields transform me include karein taaki UI par show ho sakein
+            country: driver.country || "N/A",
+            state: driver.state || "N/A",
+            city: driver.city || "N/A",
+            address: driver.address || "N/A"
         }));
-
-        // Transform Ambulance Drivers
-        const transformedAmbulances = ambulances.map(amb => ({
-            id: amb._id,
-            vendorName: amb.hospitalId?.name || "Independent", // Show Hospital Name, fallback to Independent
-            username: amb.email || amb.phone || "N/A",         // Uses unique email/phone identifier
-            driverName: amb.driverInfo?.fullName || amb.name,  // Fallback to general service name
-            phone: amb.phone || "N/A",
-            email: amb.email || "N/A",
-            imageUrl: null,                                    // Ambulance schema doesn't have profile pic field
-            onlineStatus: amb.isOnline !== false,
-            isActive: amb.isActive !== false,
-            vehicle: amb.vehicleType || "N/A",
-            vehicleNumber: amb.vehicleNumber || "N/A",
-            licenseNumber: amb.drivingLicenseNumber || "N/A",
-            driverType: 'Ambulance',                           // Classified as Ambulance category
-            createdAt: amb.createdAt
-        }));
-
-        // Merge both arrays and sort by creation date descending
-        const combinedDriversList = [...transformedDrivers, ...transformedAmbulances].sort(
-            (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
-        );
-
-        res.json({ success: true, data: combinedDriversList });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+ 
+        res.json({
+            success: true,
+            count: transformedData.length,
+            data: transformedData
+        });
+ 
+    } catch (error) {
+        res.status(500).json({ message: error.message });
     }
 };
 
