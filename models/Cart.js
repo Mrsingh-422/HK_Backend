@@ -6,7 +6,7 @@ const cartSchema = new mongoose.Schema({
     // --- LAB SECTION ---
     labCart: {
         labId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lab' },
-        categoryType: { type: String, enum: ['Pathology', 'Radiology', 'Package', null], default: null },
+        categoryType: { type: String, default: null },
         items: [{
             productType: { 
                 type: String, 
@@ -15,7 +15,7 @@ const cartSchema = new mongoose.Schema({
             },
             itemId: { 
                 type: mongoose.Schema.Types.ObjectId, 
-                refPath: 'labCart.items.productType', // Yeh ab sahi model dhund lega
+                refPath: 'labCart.items.productType', // Dynamic reference path remains intact
                 required: true 
             },
             name: String,

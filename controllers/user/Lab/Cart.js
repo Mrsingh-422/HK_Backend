@@ -68,36 +68,40 @@ const addToLabCart = async (req, res) => {
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Test not found" });
             newItemCategory = itemData.mainCategory; 
         } else {
-            itemData = await LabPackage.findById(itemId);
+            // 🚨 FIX: Populate nested tests from MasterLabTest to check their categories [cite: 1.1.2]
+            itemData = await LabPackage.findById(itemId).populate({
+                path: 'tests',
+                model: 'MasterLabTest',
+                select: 'mainCategory'
+            });
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Package not found" });
-            newItemCategory = itemData.mainCategory || 'Pathology';
+            
+            // 🚨 SAFE CHECK: Agar package ke andar ek bhi test Radiology category ka hai, 
+            // toh is package ko strictly 'Radiology' treat kiya jayega
+            const hasRadiology = itemData.tests && itemData.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
+            newItemCategory = hasRadiology ? 'Radiology' : 'General';
         }
 
         let cart = await Cart.findOne({ userId });
         if (!cart) cart = new Cart({ userId, labCart: { items: [] } });
 
         const hasItems = cart.labCart.items.length > 0;
-        const existingCategory = cart.labCart.categoryType; // Can be 'Radiology' or 'General'
+        const existingCategory = cart.labCart.categoryType; 
         const existingLabId = cart.labCart.labId;
         const existingProductType = hasItems ? cart.labCart.items[0].productType : null;
 
-        // 1. Same Lab Validation
         const isDifferentLab = hasItems && existingLabId && existingLabId.toString() !== labId;
-        
-        // 2. Test vs Package type mismatch check (keeping your original constraint)
         const isDifferentType = hasItems && existingProductType && existingProductType !== productType;
 
-        // 3. NEW CRITICAL CATEGORY MIXING RULE:
-        // Radiology cannot mix with anything. Others can mix with each other.
         let isDifferentCategory = false;
         if (hasItems && existingCategory) {
             const containsRadiology = existingCategory.toLowerCase() === 'radiology';
             const incomingIsRadiology = newItemCategory && newItemCategory.toLowerCase() === 'radiology';
 
             if (incomingIsRadiology && !containsRadiology) {
-                isDifferentCategory = true; // Block: Mixed cart contains Non-Radiology, trying to add Radiology
+                isDifferentCategory = true; 
             } else if (!incomingIsRadiology && containsRadiology) {
-                isDifferentCategory = true; // Block: Cart has Radiology, trying to add Non-Radiology
+                isDifferentCategory = true; 
             }
         }
 
@@ -125,7 +129,6 @@ const addToLabCart = async (req, res) => {
         }
 
         cart.labCart.labId = labId;
-        // Save 'Radiology' or 'General' as categoryType to protect future validations
         cart.labCart.categoryType = (newItemCategory && newItemCategory.toLowerCase() === 'radiology') ? 'Radiology' : 'General';
 
         const itemIndex = cart.labCart.items.findIndex(i => i.itemId.toString() === itemId);
@@ -148,6 +151,7 @@ const addToLabCart = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
 
 // 2. UPDATE QUANTITY (Inc/Dec)
 const updateCartQuantity = async (req, res) => {

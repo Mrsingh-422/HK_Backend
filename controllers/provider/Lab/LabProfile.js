@@ -88,7 +88,7 @@ const updateLabProfile = async (req, res) => {
             isInsuranceAccepted, acceptedInsurances, is24x7,
             country, state, city, lat, lng,
             alternatePhone,
-            nablNumber // 👈 🚨 DESTRUCTURE NEW BODY FIELD
+            nablNumber 
         } = req.body;
  
         // Fetch current profile to handle existing image cleanups
@@ -123,22 +123,22 @@ const updateLabProfile = async (req, res) => {
             updateData.profileImage = req.files.profileImage[0].path;
         }
 
-        // 4. Handle Signature Image Cleanup & Update (Lab Smart Report generation)
+        // 🚨 4. FIXED SIGNATURE UPLOAD: Corrected variable referencing & database keys
         if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
-            const newSignaturePath = req.files.profileImage[0].path; // uses multipart file path
+            const newSignaturePath = req.files.signatureImage[0].path; // 👈 Corrected (signatureImage used)
             
-            if (existingLab.profileImage) {
-                deleteFile(existingLab.profileImage); 
+            if (existingLab.signatureImage) {
+                deleteFile(existingLab.signatureImage); // 👈 Corrected (deletes old signature, not profileImage)
             }
-            updateData.profileImage = newSignaturePath; // saves path to signatureImage config
+            updateData.signatureImage = newSignaturePath; // 👈 Corrected (saves to signatureImage key in DB)
         }
 
-        // 🚨 NABL NUMBER INTEGRATION: Safe update using dot notation to prevent Mongoose nested object overwrites
+        // 5. NABL NUMBER INTEGRATION: Safe update using dot notation to prevent Mongoose nested object overwrites
         if (nablNumber !== undefined) {
             updateData['documents.nablNumber'] = nablNumber;
         }
  
-        // 5. Update query execution
+        // 6. Update query execution
         const finalUpdate = { $set: updateData };
         const lab = await Lab.findByIdAndUpdate(labId, finalUpdate, { new: true });
        

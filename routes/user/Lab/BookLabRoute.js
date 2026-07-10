@@ -20,7 +20,7 @@ const {
     getWomenCategories,getWomenTestsByCategory,
     
     // Prescription Flow
-    scanLabPrescription,
+    scanLabPrescription,searchMasterTestsForPrescription,
     createLabPrescriptionRequest,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
@@ -112,6 +112,7 @@ router.post(
     prescriptionUploads.single('prescriptionFile'), // Utilizes standard single upload config
     scanLabPrescription
 );
+router.get('/prescription/search-tests', protect('user'), searchMasterTestsForPrescription);
 router.post(
     '/prescription-request', 
     protect('user'), 
