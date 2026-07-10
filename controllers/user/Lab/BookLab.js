@@ -2318,58 +2318,47 @@ const scanLabPrescription = async (req, res) => {
 
 const searchMasterTestsForPrescription = async (req, res) => {
     try {
-        const { query } = req.query; // search bar से आ रहा कीवर्ड (उदा. "Blood")
-        
-        if (!query || query.trim().length < 2) {
-            return res.json({ success: true, data: [] });
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { query } = req.query;
+
+        let matchQuery = { isActive: true };
+
+        // Apply regex search on testName if query is provided and meets the character threshold
+        if (query && query.trim().length >= 2) {
+            matchQuery.testName = new RegExp(query.trim(), 'i');
         }
 
-        const searchRegex = new RegExp(query, 'i');
+        // Fetch counts and paginated documents in parallel for optimization
+        const [tests, total] = await Promise.all([
+            MasterLabTest.find(matchQuery)
+                .select('_id testName mainCategory category standardMRP sampleType')
+                .sort({ testName: 1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            MasterLabTest.countDocuments(matchQuery)
+        ]);
 
-        // 1. Master Lab Tests में सर्च करें
-        const matchedTests = await MasterLabTest.find({
-            isActive: true,
-            testName: searchRegex
-        })
-        .select('_id testName mainCategory category standardMRP sampleType')
-        .limit(15)
-        .lean();
-
-        // 2. Master Lab Packages में सर्च करें (यदि यूजर पैकेज भी सर्च करना चाहे)
-        const matchedPackages = await MasterLabPackage.find({
-            isActive: true,
-            packageName: searchRegex
-        })
-        .select('_id packageName mainCategory category standardMRP')
-        .limit(10)
-        .lean();
-
-        // 3. दोनों को एक यूनिफाइड फॉर्मेट में मर्ज करें
-        const unifiedResults = [
-            ...matchedTests.map(t => ({
-                id: t._id,
-                name: t.testName,
-                mainCategory: t.mainCategory,
-                category: t.category,
-                price: t.standardMRP || 0,
-                type: 'LabTest', // frontend के लिए आइडेंटिफायर
-                sampleType: t.sampleType || "N/A"
-            })),
-            ...matchedPackages.map(p => ({
-                id: p._id,
-                name: p.packageName,
-                mainCategory: p.mainCategory || "Package",
-                category: p.category,
-                price: p.standardMRP || 0,
-                type: 'LabPackage',
-                sampleType: "Multiple"
-            }))
-        ];
+        // Map results to the clean model format expected by the frontend
+        const formattedResults = tests.map(t => ({
+            id: t._id,
+            name: t.testName,
+            mainCategory: t.mainCategory,
+            category: t.category,
+            price: t.standardMRP || 0,
+            type: 'LabTest',
+            sampleType: t.sampleType || "N/A"
+        }));
 
         res.json({
             success: true,
-            count: unifiedResults.length,
-            data: unifiedResults
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            limit,
+            data: formattedResults
         });
 
     } catch (error) {
