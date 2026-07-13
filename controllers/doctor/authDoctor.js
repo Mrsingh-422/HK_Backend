@@ -1,6 +1,7 @@
 const Doctor = require('../../models/Doctor');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { deleteFile } = require('../../utils/fileHandler'); // Import the deleteFile utility
 
 // Helper: Generate Token (Lifetime for Dev, 30d for Prod)
 const generateToken = (id, role) => {

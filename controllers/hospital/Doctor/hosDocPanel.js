@@ -13,6 +13,8 @@ const moment = require('moment');
 const crypto = require('crypto');
 const Bed = require('../../../models/Bed'); 
 const Medicine = require('../../../models/Medicine'); // 👈 ADD THIS AT THE TOP OF IMPORTS
+const { sendPushNotification } = require('../../../utils/notification');
+const { deleteFile } = require('../../../utils/fileHandler'); // Import the deleteFile utility
 
 
 // --- 11. GET MY DOCTOR PROFILE DETAILS (GET API) ---
@@ -174,16 +176,6 @@ const updateDoctorProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
- 
-
-
-
-
-
-
-
-
-
 
 // Helper to calculate human readable duration display
 const calculateDurationDisplay = (start, end) => {
@@ -407,64 +399,6 @@ const acceptTransfer = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 4. GET ASSIGNED & PENDING INCOMING CASES (Updated)
-// const getAssignedCases = async (req, res) => {
-//     try {
-//         const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'history', 'discharge'
-//         let query = {};
-
-//         // Case A: Active patients currently assigned to me (EXCLUDED Discharge-Pending!)
-//         if (tab === 'active') {
-//             query = { 
-//                 doctorId: req.user.id, 
-//                 pendingDoctorId: null,
-//                 status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } // 👈 Ready to discharge wale beds active se hat gaye
-//             };
-//         } 
-//         // Case B: Ready for Discharge patients (Waiting for Admin Billing)
-//         else if (tab === 'discharge') {
-//             query = {
-//                 doctorId: req.user.id,
-//                 pendingDoctorId: null,
-//                 status: 'Discharge-Pending' // 👈 Strictly Discharge-Pending beds only
-//             };
-//         }
-//         // Case C: Incoming pending handover requests
-//         else if (tab === 'pending') {
-//             query = { pendingDoctorId: req.user.id };
-//         } 
-//         // Case D: History Patients (Treated in past)
-//         else if (tab === 'history') {
-//             query = {
-//                 $and: [
-//                     { 
-//                         $or: [
-//                             { "treatmentHistory.fromDoctorId": req.user.id },
-//                             { "treatmentHistory.toDoctorId": req.user.id }
-//                         ] 
-//                     },
-//                     {
-//                         $or: [
-//                             { doctorId: { $ne: req.user.id } }, // currently with another doctor
-//                             { status: 'Completed' }             // fully discharged
-//                         ]
-//                     }
-//                 ]
-//             };
-//         }
-
-//         if (type === 'Emergency') query.triageLevel = 'Emergency';
-//         if (type === 'Admission') query.bookingType = 'Admission';
-//         if (status) query.status = status;
-
-//         const cases = await Appointment.find(query)
-//             .populate('userId', 'name profilePic phone age gender')
-//             .sort({ updatedAt: -1 });
-
-//         res.json({ success: true, count: cases.length, data: cases });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
-
 // --- 6. GET COLLEAGUES (Fixed Privacy data leak) ---
 const getHospitalColleagues = async (req, res) => {
     try {
@@ -487,8 +421,6 @@ const getHospitalColleagues = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 7. DISCHARGE SUMMARY ---
-// --- 7. DISCHARGE SUMMARY (Fixed: Setting status to 'Discharge-Pending' for billing sync) ---
 // --- 7. DISCHARGE SUMMARY (Updated with safe atomic $set and Multiple file uploads) ---
 const submitDischargeSummary = async (req, res) => {
     try {

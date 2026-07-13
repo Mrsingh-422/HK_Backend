@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
+const { docPrescriptionUpload } = require('../../middleware/multer');
 
 const { getVendorDashboard,
     getDoctorBookings,
@@ -12,7 +13,7 @@ const { getVendorDashboard,
     getDoctorStats,
     getMyConsultationFees, 
     updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
-    getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription,
+    getPrescriptionDetails, updatePrescription, resendPrescription,getAppointmentClinicalDetails, createPrescription,
     getPatientHistory, getPatientHistoryDetails,
     getDoctorVideoConsults,searchMasterMedicinesForDoctor
 } = require('../../controllers/doctor/Appointment');
@@ -42,8 +43,9 @@ router.put('/profile/update-fees', protect('doctor'), updateConsultationFees);
 
 router.post('/reschedule/:id', protect('doctor'), rescheduleAppointment);
 
+router.get('/details/:id', protect('doctor'), getAppointmentClinicalDetails);
 // Create new prescription
-router.post('/create-prescription', protect('doctor'), createPrescription);
+router.post('/create-prescription', protect('doctor'), docPrescriptionUpload, createPrescription);
 router.get('/all-prescription', protect('doctor'), getAllPrescriptions);
 router.get('/prescription/:id', protect('doctor'), getPrescriptionDetails);
  

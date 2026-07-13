@@ -813,6 +813,29 @@ const labReportUpload = multer({
     limits: { fileSize: 15 * 1024 * 1024 } // 15MB limit
 }).single('reportFile'); // 👈 Custom key matching 'reportFile' schema attribute
 
+// ==========================================
+// 43. DOCTOR DIGITAL PRESCRIPTION PDF CONFIGURATION
+// ==========================================
+const docPrescriptionDir = 'public/uploads/doctor_prescriptions';
+ensureDir(docPrescriptionDir);
+
+const docPrescriptionUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, docPrescriptionDir),
+        filename: (req, file, cb) => cb(null, `digital-rx-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        // Strictly accept only PDF clinical documents
+        if (file.mimetype === 'application/pdf') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only PDF clinical files are allowed!'), false);
+        }
+    },
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+}).single('prescriptionPdf'); // Multipart form field key
+
+
 
 module.exports = { 
     hospitalUploads,
@@ -860,6 +883,7 @@ module.exports = {
     pharmacyDeliveryUpload,
 
     nursingPrescriptionUploads,
-    labReportUpload
+    labReportUpload,
+    docPrescriptionUpload
 
 };  

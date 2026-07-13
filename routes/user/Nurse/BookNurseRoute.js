@@ -5,7 +5,8 @@ const { prescriptionUploads } = require('../../../middleware/multer');
 const { 
     getNurses, getNurseDetails,searchNursesAndServices,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
-    uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking
+    uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking,getNursePackagesList,
+    getNursePackageDetails,
 } = require('../../../controllers/user/Nurse/BookNurse');
 
 // Base URL: /user/nurse
@@ -45,5 +46,13 @@ router.post('/search', searchNurses);
 
 
 router.post('/rate', protect('user'), rateNurseBooking);
+
+///////////////////////// new api for flutter ///////////////////////////////
+// 1. List of Packages (Filtered by optional nurseId query)
+router.get('/packages/list', getNursePackagesList);
+
+// 2. Single Package Detail
+router.get('/packages/details/:packageId', getNursePackageDetails);
+
 
 module.exports = router;

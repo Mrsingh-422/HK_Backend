@@ -72,19 +72,45 @@ const changePassword = async (req, res) => {
 };
 
 // Update Profile Details (Figma Screen 13)
+// const updateProfile = async (req, res) => {
+//     try {
+//         const { name, phone, email, address } = req.body;
+//         const updateData = { name, phone, username: email, address };
+
+//         if (req.file) {
+//             updateData.profilePic = req.file.path;
+//         }
+
+//         const driver = await Driver.findByIdAndUpdate(req.user.id, updateData, { new: true });
+//         res.json({ success: true, message: "Profile updated successfully", data: driver });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
 const updateProfile = async (req, res) => {
     try {
-        const { name, phone, email, address } = req.body;
-        const updateData = { name, phone, username: email, address };
-
+        const { name, address, alternateNumber } = req.body;
+        const updateData = { name, address, alternateNumber };
+ 
+       
         if (req.file) {
             updateData.profilePic = req.file.path;
         }
-
-        const driver = await Driver.findByIdAndUpdate(req.user.id, updateData, { new: true });
+ 
+        const driver = await Driver.findByIdAndUpdate(
+            req.user.id,
+            updateData,
+            { new: true, runValidators: true }
+        );
+ 
+        if (!driver) {
+            return res.status(404).json({ success: false, message: "Driver not found" });
+        }
+ 
         res.json({ success: true, message: "Profile updated successfully", data: driver });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
 };
+ 
 
 // Switch Online / Offline Status (Figma Screen 3)
 const toggleDriverStatus = async (req, res) => {

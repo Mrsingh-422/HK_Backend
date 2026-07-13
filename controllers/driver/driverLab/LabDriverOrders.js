@@ -120,19 +120,52 @@ const changePassword = async (req, res) => {
 };
 
 // Update Profile Details
+// const updateProfile = async (req, res) => {
+//     try {
+//         const { name, phone, email, address } = req.body;
+//         const updateData = { name, phone, username: email, address };
+
+//         if (req.files && req.files.profilePic) {
+//             updateData.profilePic = req.files.profilePic[0].path;
+//         }
+
+//         const driver = await Driver.findByIdAndUpdate(req.user.id, updateData, { new: true });
+//         res.json({ success: true, message: "Profile updated successfully", data: driver });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
 const updateProfile = async (req, res) => {
     try {
-        const { name, phone, email, address } = req.body;
-        const updateData = { name, phone, username: email, address };
-
+ 
+        const { name, address, alternateNumber } = req.body;
+       
+        const updateData = {
+            name,
+            address,
+            alternateNumber
+        };
+ 
+       
         if (req.files && req.files.profilePic) {
             updateData.profilePic = req.files.profilePic[0].path;
         }
-
-        const driver = await Driver.findByIdAndUpdate(req.user.id, updateData, { new: true });
+ 
+       
+        const driver = await Driver.findByIdAndUpdate(
+            req.user.id,
+            updateData,
+            { new: true, runValidators: true }
+        );
+ 
+        if (!driver) {
+            return res.status(404).json({ success: false, message: "Driver profile not found" });
+        }
+ 
         res.json({ success: true, message: "Profile updated successfully", data: driver });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
+ 
 
 // Switch Duty Availability Status (Figma Screen 4, 5)
 const toggleDriverStatus = async (req, res) => {

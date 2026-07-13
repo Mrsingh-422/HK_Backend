@@ -363,40 +363,129 @@ const getAllPrescriptions = async (req, res) => {
 // endpoint: GET /doctor/prescriptions/:id
 const getPrescriptionDetails = async (req, res) => {
     try {
-        const prescription = await Prescription.findById(req.params.id)
-            .populate('userId', 'name phone')
-            .populate('appointmentId');
- 
-        if (!prescription) return res.status(404).json({ message: "Prescription not found" });
- 
-        // Logic for "Delivery Info" section in Figma
-        const deliveryInfo = {
-            sentTo: prescription.userId?.name,
-            sentTime: moment(prescription.createdAt).format('hh:mm A'),
-            status: 'Delivered' // Mock status as per design
+        const { id } = req.params;
+
+        // 1. Validate ObjectId format to prevent database casting crashes
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid ID format. Must be a 24-character hexadecimal string." 
+            });
+        }
+
+        // 2. Hybrid Query: Search by Prescription _id OR associated appointmentId
+        // This prevents rejections if the frontend developer passes the appointment ID
+        const prescription = await Prescription.findOne({
+            $or: [
+                { _id: id },
+                { appointmentId: id }
+            ]
+        })
+        .populate({
+            path: 'userId',
+            select: 'name phone gender dob userAddress profilePic'
+        })
+        .populate({
+            path: 'appointmentId',
+            select: 'bookingId appointmentDate appointmentTime patients address consultationType'
+        });
+
+        // 3. Fallback check
+        if (!prescription) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `Prescription not found for the provided ID: ${id}` 
+            });
+        }
+
+        // --- Rest of your dynamic mapping logic remains exactly the same ---
+        let patientProfile = {
+            appointmentId: "N/A",
+            date: moment(prescription.createdAt).format('DD/MM/YYYY'),
+            time: moment(prescription.createdAt).format('hh:mm A'),
+            name: "Unknown",
+            gender: "N/A",
+            age: "N/A",
+            address: "N/A"
         };
- 
+
+        const appointment = prescription.appointmentId;
+        const user = prescription.userId;
+
+        if (appointment) {
+            const targetPatient = appointment.patients?.[0];
+            patientProfile.appointmentId = appointment.bookingId || "N/A";
+            patientProfile.date = appointment.appointmentDate 
+                ? moment(appointment.appointmentDate).format('DD/MM/YYYY') 
+                : patientProfile.date;
+            patientProfile.time = appointment.appointmentTime || patientProfile.time;
+            patientProfile.name = targetPatient?.patientName || user?.name || "Patient";
+            patientProfile.gender = targetPatient?.gender || user?.gender || "N/A";
+            patientProfile.age = targetPatient?.patientAge ? `${targetPatient.patientAge} Years` : "N/A";
+
+            const addr = appointment.address;
+            if (addr) {
+                patientProfile.address = [
+                    addr.houseNo,
+                    addr.sector,
+                    addr.landmark,
+                    addr.city,
+                    addr.pincode ? `- ${addr.pincode}` : ''
+                ]
+                .filter(part => part && part.trim() !== '')
+                .join(', ')
+                .replace(', -', ' -');
+            }
+        } else if (user) {
+            patientProfile.name = user.name;
+            patientProfile.gender = user.gender || "N/A";
+            if (user.dob) {
+                const birthDate = moment(user.dob);
+                const years = moment().diff(birthDate, 'years');
+                patientProfile.age = `${years} Years`;
+            }
+
+            const defaultAddr = user.userAddress?.find(addr => addr.isDefault) || user.userAddress?.[0];
+            if (defaultAddr) {
+                patientProfile.address = [
+                    defaultAddr.houseNo,
+                    defaultAddr.sector,
+                    defaultAddr.landmark,
+                    defaultAddr.city,
+                    defaultAddr.pincode ? `- ${defaultAddr.pincode}` : ''
+                ]
+                .filter(part => part && part.trim() !== '')
+                .join(', ')
+                .replace(', -', ' -');
+            }
+        }
+
         res.json({
             success: true,
             data: {
-                patientInfo: {
-                    name: prescription.appointmentId?.patients[0]?.patientName || prescription.userId?.name,
-                    age: prescription.appointmentId?.patients[0]?.patientAge,
-                    gender: prescription.appointmentId?.patients[0]?.gender,
-                    phone: prescription.userId?.phone
-                },
+                patientDetails: patientProfile,
                 clinicalDetails: {
-                    symptoms: prescription.additionalNotes, // Or map from diagnosis
-                    diagnosis: prescription.diagnosis,
-                    medicines: prescription.medicines
+                    chiefComplaints: prescription.chiefComplaints || "",
+                    diagnosis: prescription.diagnosis || [],
+                    medicines: prescription.medicines || []
                 },
-                deliveryInfo
+                advisedSections: {
+                    advisedInvestigations: prescription.advisedInvestigations || "None",
+                    adviceGiven: prescription.adviceGiven || "",
+                    specialInstructions: prescription.specialInstructions || "",
+                    nextAppointment: prescription.nextAppointment || ""
+                },
+                pdfUrl: prescription.pdfUrl || null,
+                createdAt: prescription.createdAt
             }
         });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Error in getPrescriptionDetails:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
  
 // 3. EDIT PRESCRIPTION (Figma: "Edit" Button)
 const updatePrescription = async (req, res) => {
@@ -424,6 +513,73 @@ const resendPrescription = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// GET: Fetch complete clinical header details for a specific active appointment
+// Endpoint: GET /doctor/appointments/details/:id
+const getAppointmentClinicalDetails = async (req, res) => {
+    try {
+        const appointmentId = req.params.id;
+
+        // Query the appointment and populate patient base user account and prescribing doctor profile
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            doctorId: req.user.id
+        })
+        .populate('userId', 'name phone email profilePic')
+        .populate('doctorId', 'name qualification speciality councilNumber councilName licensingAuthority');
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
+        }
+
+        // Identify the target patient from the patients array (typically the first index)
+        const primaryPatient = appointment.patients?.[0] || {};
+
+        // Format user's clinical address dynamically
+        const addr = appointment.address;
+        const formattedAddress = addr
+            ? `${addr.houseNo ? addr.houseNo + ', ' : ''}${addr.sector ? addr.sector + ', ' : ''}${addr.landmark ? addr.landmark + ', ' : ''}${addr.city || ''}, ${addr.state || ''} - ${addr.pincode || ''}`
+            : "Address Not Specified";
+
+        // Map data strictly to match the headers shown on your prescription screenshot
+        const responseData = {
+            appointmentHeader: {
+                appointmentId: appointment.bookingId || appointment._id,
+                appointmentDate: moment(appointment.appointmentDate).format('DD/MM/YYYY'),
+                appointmentTime: appointment.appointmentTime || "N/A",
+                consultationType: appointment.consultationType
+            },
+            patientDetails: {
+                patientMongoId: primaryPatient._id || null,
+                name: primaryPatient.patientName || appointment.userId?.name || "N/A",
+                age: primaryPatient.patientAge || "N/A",
+                gender: primaryPatient.gender || "N/A",
+                address: formattedAddress,
+                phone: appointment.userId?.phone || "N/A",
+                reasonForVisit: primaryPatient.reasonForVisit || ""
+            },
+            doctorCredentials: {
+                name: appointment.doctorId?.name,
+                qualifications: appointment.doctorId?.qualification || "MBBS, MD", // Matches "MBBS, MD" from image
+                speciality: appointment.doctorId?.speciality || "General Physician",
+                councilDetails: appointment.doctorId?.councilNumber 
+                    ? `${appointment.doctorId.councilName || 'Medical Council'} No. : ${appointment.doctorId.councilNumber}`
+                    : "Not Registered" // Matches "Punjab Medical Council No. : 162542"
+            }
+        };
+
+        res.json({
+            success: true,
+            data: responseData
+        });
+
+    } catch (error) {
+        console.error("Error fetching clinical details:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 // POST: Create a new prescription
 // endpoint: POST /doctor/prescriptions/create
 const createPrescription = async (req, res) => {
@@ -431,42 +587,64 @@ const createPrescription = async (req, res) => {
         const {
             userId,
             appointmentId,
+            chiefComplaints,
             diagnosis,
-            medicines,
-            additionalNotes,
-            isManualUpload,
-            prescriptionImages
+            medicines, // Expected as a JSON string or parsed array
+            advisedInvestigations,
+            adviceGiven,
+            specialInstructions,
+            nextAppointment,
+            additionalNotes
         } = req.body;
- 
-        // 1. Create Prescription Entry
+
+        if (!userId) {
+            return res.status(400).json({ success: false, message: "User/Patient ID is required." });
+        }
+
+        // Validate if frontend successfully generated and sent the PDF file
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: "Compiled prescription PDF file is missing." });
+        }
+
+        // Parse nested arrays if they are received as strings from multipart/form-data
+        const parsedMedicines = typeof medicines === 'string' ? JSON.parse(medicines) : medicines;
+        const parsedDiagnosis = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : diagnosis;
+
+        // Create new prescription document
         const newPrescription = new Prescription({
             doctorId: req.user.id,
             userId,
-            appointmentId: appointmentId || null,
-            diagnosis,
-            medicines,
-            additionalNotes,
-            isManualUpload: isManualUpload || false,
-            prescriptionImages: prescriptionImages || []
+            appointmentId: appointmentId && appointmentId !== "null" ? appointmentId : null,
+            chiefComplaints: chiefComplaints || "",
+            diagnosis: parsedDiagnosis || [],
+            medicines: parsedMedicines || [],
+            advisedInvestigations: advisedInvestigations || "None",
+            adviceGiven: adviceGiven || "",
+            specialInstructions: specialInstructions || "",
+            nextAppointment: nextAppointment || "",
+            additionalNotes: additionalNotes || "",
+            isManualUpload: false,
+            pdfUrl: `/uploads/doctor_prescriptions/${req.file.filename}` // Server path for client rendering
         });
- 
+
         const savedPrescription = await newPrescription.save();
- 
-        // 2. Agar Appointment ID hai, toh Appointment Status update karein
-        if (appointmentId) {
+
+        // If linked to an appointment, transition status to Completed
+        if (appointmentId && appointmentId !== "null") {
             await Appointment.findByIdAndUpdate(appointmentId, {
                 status: 'Completed'
             });
         }
- 
+
         res.status(201).json({
             success: true,
-            message: "Prescription created successfully",
+            message: "Prescription successfully generated and saved!",
             data: savedPrescription
         });
- 
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Prescription Creation Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -662,7 +840,7 @@ module.exports = { getVendorDashboard,
     getDoctorBookings, getTodayBookings, confirmAppointment,
     doctorCancelAppointment, startVisit, completeWithPrescription,
     getDoctorStats, getMyConsultationFees, updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
-    getPrescriptionDetails, updatePrescription, resendPrescription, createPrescription,
+    getPrescriptionDetails, updatePrescription, resendPrescription,getAppointmentClinicalDetails, createPrescription,
     getPatientHistory, getPatientHistoryDetails,
     getDoctorVideoConsults,
     searchMasterMedicinesForDoctor

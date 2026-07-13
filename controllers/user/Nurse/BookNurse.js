@@ -1076,6 +1076,53 @@ const rateNurseBooking = async (req, res) => {
     }
 };
 
+// for flutter new api 2
+// 1. GET NURSE PACKAGES LIST
+// endpoint: GET /user/nurse/packages/list
+const getNursePackagesList = async (req, res) => {
+    try {
+        const { nurseId } = req.query; // Optional filter by specific Nurse bureau
+        let query = { status: 'Approved', isActive: true };
+        
+        if (nurseId) {
+            query.nurseId = nurseId;
+        }
+        
+        const packages = await NursePackage.find(query)
+            .populate('nurseId', 'name profileImage rating city')
+            .populate('includedServices', 'title type description')
+            .lean();
+            
+        res.json({ success: true, count: packages.length, data: packages });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. GET NURSE PACKAGE DETAILS
+// endpoint: GET /user/nurse/packages/details/:packageId
+const getNursePackageDetails = async (req, res) => {
+    try {
+        const { packageId } = req.params;
+        
+        const nursePackage = await NursePackage.findById(packageId)
+            .populate('nurseId', 'name profileImage rating city address location speciality experienceYears')
+            .populate('includedServices')
+            .populate('consumablesUsed.masterItemId')
+            .lean();
+            
+        if (!nursePackage || nursePackage.status !== 'Approved') {
+            return res.status(404).json({ success: false, message: "Package not found or inactive by admin." });
+        }
+        
+        res.json({ success: true, data: nursePackage });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { getNurses,getNurseDetails,searchNursesAndServices,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService, rateNurseBooking,
     getAppointmentStatus, 
-    uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon };
+    uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon,getNursePackagesList,
+    getNursePackageDetails, };

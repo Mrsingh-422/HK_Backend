@@ -7,12 +7,14 @@ const driverSchema = new mongoose.Schema({
 
     name: { type: String, required: true },
     phone: { type: String, required: true, unique: true }, // Phone unique kar diya
+    alternateNumber: { type: String },
     password: { type: String, required: true, select: false },
     username: { type: String, unique: true, required: true }, // Username unique hai
 
     country:{type:String},
     state: { type: String },
     city:{type:String},
+
     
     // Figma Screenshot fields
     profilePic: { type: String },
