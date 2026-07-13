@@ -1088,12 +1088,20 @@ const getNursePackagesList = async (req, res) => {
             query.nurseId = nurseId;
         }
         
+        // 🌟 optimization: Select only required fields to match Figma card
         const packages = await NursePackage.find(query)
-            .populate('nurseId', 'name profileImage rating city')
-            .populate('includedServices', 'title type description')
+            .select('_id packageName includedServices') // pricing aur bakis keys remove kar di hain
+            .populate({
+                path: 'includedServices',
+                select: 'description' // Figma bullet points ke liye sirf description select kiya hai
+            })
             .lean();
             
-        res.json({ success: true, count: packages.length, data: packages });
+        res.json({ 
+            success: true, 
+            count: packages.length, 
+            data: packages 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
