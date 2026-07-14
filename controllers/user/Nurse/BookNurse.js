@@ -1129,8 +1129,43 @@ const getNursePackageDetails = async (req, res) => {
     }
 };
 
+// NEW CONTROLLER: GET SUPPORTED MEDICAL CONDITIONS / SPECIALITIES
+// endpoint: GET /user/nurse/medical-conditions
+const getMedicalConditions = async (req, res) => {
+    try {
+        // Fetch unique approved & active nurse specialities from the Nurse collection
+        const specialities = await Nurse.distinct('speciality', {
+            profileStatus: 'Approved',
+            isActive: true,
+            speciality: { $nin: [null, ""] } 
+        });
+
+        // Filter out empty/null values
+        let data = specialities.filter(Boolean);
+
+        // 🌟 Fallback Logic: Agar DB se koi bhi speciality nahi milti, to ye 4 categories return hongi
+        if (data.length === 0) {
+            data = [
+                "Home Care Nurse",
+                "Cancer Care Nurse",
+                "ICU Care Nurse",
+                "Complete Care Nurse"
+            ];
+        }
+
+        res.json({
+            success: true,
+            count: data.length,
+            data // Returns active DB specialities or fallback 4 default categories
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 module.exports = { getNurses,getNurseDetails,searchNursesAndServices,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService, rateNurseBooking,
     getAppointmentStatus, 
     uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon,getNursePackagesList,
-    getNursePackageDetails, };
+    getNursePackageDetails,getMedicalConditions };
