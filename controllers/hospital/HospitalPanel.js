@@ -7,7 +7,6 @@ const Coupon = require('../../models/Coupon');
 const Specialization = require('../../models/Specialization');
 const Ambulance = require('../../models/Ambulance');
 const Wallet = require('../../models/Wallet');
-const HospitalDoctor = require('../../models/HospitalDoctor');
 const Review = require('../../models/Review');
 const Availability = require('../../models/Availability');
 const AmbulanceBooking = require('../../models/AmbulanceBooking');
@@ -441,7 +440,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
         const hospitalId = req.user.id;
 
         const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
-        if (!appointment) return res.status(404).json({ message: "Admission Record Not Found" });
+        if (!appointment) return res.status(404).json({ success: false, message: "Admission Record Not Found" });
 
         let overstayCharge = 0;
         let actualEndDate = new Date();
@@ -481,7 +480,20 @@ const generateFinalBillAndDischarge = async (req, res) => {
             appointment.specialServices.push({ serviceName: `Overstay Bed Surcharge`, price: overstayCharge });
         }
 
-        // Auto-close any active bedside specialist care shifts on final admin discharge
+        // 1. Auto-close the Primary Doctor's open active shift
+        if (appointment.doctorId) {
+            const activePrimaryShift = appointment.treatmentHistory.find(h => 
+                h.toDoctorId && 
+                h.toDoctorId.toString() === appointment.doctorId.toString() && 
+                !h.endTime
+            );
+            if (activePrimaryShift) {
+                activePrimaryShift.endTime = actualEndDate;
+                activePrimaryShift.durationDisplay = calcDuration(activePrimaryShift.startTime, actualEndDate);
+            }
+        }
+
+        // 2. Auto-close any active bedside specialist care shifts
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(careMember => {
                 if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
@@ -756,7 +768,6 @@ const getAllHospitalAdmissions = async (req, res) => {
         const hospitalId = req.user.id;
         const { status, bedBookingType } = req.query;
 
-        // Base Query: Direct self-bookings only (checks both explicit null and field missing)
         let query = { 
             hospitalId, 
             bookingType: 'Admission',
@@ -772,6 +783,7 @@ const getAllHospitalAdmissions = async (req, res) => {
         const admissions = await Appointment.find(query)
             .populate('userId', 'name phone')
             .populate('doctorId', 'name speciality')
+            .populate('pendingDoctorId', 'name speciality') // 👈 Populates the pending handover target doctor
             .sort({ createdAt: -1 });
 
         res.json({ success: true, data: admissions });
@@ -1328,7 +1340,20 @@ const emergencyDischarge = async (req, res) => {
             appointment.specialServices.push({ serviceName: `Overstay Bed Surcharge`, price: overstayCharge });
         }
 
-        // Auto-close any active bedside specialist care shifts on final emergency discharge
+        // 1. Auto-close the Primary Doctor's open active shift
+        if (appointment.doctorId) {
+            const activePrimaryShift = appointment.treatmentHistory.find(h => 
+                h.toDoctorId && 
+                h.toDoctorId.toString() === appointment.doctorId.toString() && 
+                !h.endTime
+            );
+            if (activePrimaryShift) {
+                activePrimaryShift.endTime = actualEndDate;
+                activePrimaryShift.durationDisplay = calcDuration(activePrimaryShift.startTime, actualEndDate);
+            }
+        }
+
+        // 2. Auto-close any active bedside specialist care shifts
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(careMember => {
                 if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
@@ -1428,15 +1453,28 @@ const getHospitalCaseDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
         }
 
-        // Fetch latest prescription dynamically to check medicines list & Diet Plan PDF
-        const Prescription = require('../../models/Prescription'); // Natively loaded
+        // Fetch latest prescription dynamically
+        const Prescription = require('../../models/Prescription'); 
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
+
+        // --- NEW: DYNAMIC AMBULANCE TELEMETRY SYNC ---
+        let ambulanceBooking = null;
+        if (patient.ambulanceId) {
+            const AmbulanceBooking = require('../../models/AmbulanceBooking');
+            ambulanceBooking = await AmbulanceBooking.findOne({
+                $or: [
+                    { bookingId: patient.bookingId },
+                    { bookingId: patient.transactionId } // Fallback tracking check
+                ]
+            }).lean();
+        }
 
         res.json({ 
             success: true, 
             data: {
                 patient,
-                prescription: prescription || null
+                prescription: prescription || null,
+                ambulanceTelemetry: ambulanceBooking // Injects complete transit details, triage levels, and onsite photos
             }
         });
     } catch (error) {

@@ -835,6 +835,37 @@ const docPrescriptionUpload = multer({
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 }).single('prescriptionPdf'); // Multipart form field key
 
+// ==========================================
+// 44. HOSPITAL DOCTOR DUAL PRESCRIPTION CONFIGURATION
+// ==========================================
+const hospitalPrescriptionUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            // Dynamically route files to their respective target directories
+            const dir = file.fieldname === 'dietPlanPdf' 
+                ? 'public/uploads/diet_plans' 
+                : 'public/uploads/doctor_prescriptions';
+            cb(null, dir);
+        },
+        filename: (req, file, cb) => {
+            const prefix = file.fieldname === 'dietPlanPdf' ? 'diet' : 'digital-rx';
+            cb(null, `${prefix}-${Date.now()}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'application/pdf') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only PDF documents are allowed!'), false);
+        }
+    },
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit per file
+}).fields([
+    { name: 'prescriptionPdf', maxCount: 1 }, // Compiled prescription sheet PDF
+    { name: 'dietPlanPdf', maxCount: 1 }       // Optional patient diet plan PDF
+]);
+
+
 
 
 module.exports = { 
@@ -884,6 +915,6 @@ module.exports = {
 
     nursingPrescriptionUploads,
     labReportUpload,
-    docPrescriptionUpload
+    docPrescriptionUpload,hospitalPrescriptionUploads
 
 };  

@@ -270,9 +270,19 @@ const getDocDashboard = async (req, res) => {
 
 // --- 4. CREATE PRESCRIPTION (Fixed Array Safe Map Logic) ---
 // --- 4. CREATE PRESCRIPTION (Updated with Safe Multipart and Diet Plan PDF support) ---
+// --- 4. CREATE PRESCRIPTION (Updated with Screenshot Fields & Dual PDF Support) ---
 const processPrescription = async (req, res) => {
     try {
-        const { appointmentId, diagnosis, medicines, advice } = req.body;
+        const { 
+            appointmentId, 
+            diagnosis, 
+            medicines, 
+            advice,
+            advisedInvestigations,   // Matches "Advise Investigation" from image
+            adviceGiven,             // Matches "Advice Given" from image
+            specialInstructions,     // Matches "Any Special Instruction Given" from image
+            nextAppointment          // Matches "Next Appointment" from image
+        } = req.body;
 
         const appointment = await Appointment.findById(appointmentId);
         if (!appointment) return res.status(404).json({ success: false, message: "Appointment record not found" });
@@ -294,10 +304,17 @@ const processPrescription = async (req, res) => {
         const diagnosisArray = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : (Array.isArray(diagnosis) ? diagnosis : []);
         const medicinesArray = typeof medicines === 'string' ? JSON.parse(medicines) : (Array.isArray(medicines) ? medicines : []);
 
-        // Extract uploaded diet plan PDF path safely from multer
+        // Process dynamic file fields uploaded from multer
+        let prescriptionPdfPath = null;
         let dietPlanPath = null;
-        if (req.file) {
-            dietPlanPath = `/uploads/diet_plans/${req.file.filename}`;
+
+        if (req.files) {
+            if (req.files.prescriptionPdf && req.files.prescriptionPdf[0]) {
+                prescriptionPdfPath = `/uploads/doctor_prescriptions/${req.files.prescriptionPdf[0].filename}`;
+            }
+            if (req.files.dietPlanPdf && req.files.dietPlanPdf[0]) {
+                dietPlanPath = `/uploads/diet_plans/${req.files.dietPlanPdf[0].filename}`;
+            }
         }
 
         const prescription = await Prescription.create({
@@ -305,12 +322,26 @@ const processPrescription = async (req, res) => {
             doctorId: req.user.id,
             userId: appointment.userId,
             diagnosis: diagnosisArray,
-            medicines: medicinesArray, // Saves multiple medicines array seamlessly
-            additionalNotes: advice,
-            dietPlanPdf: dietPlanPath // Saves optional diet plan PDF path link
+            medicines: medicinesArray, 
+            additionalNotes: advice || adviceGiven || "",
+            
+            // New database keys mapped from prescription screenshot
+            advisedInvestigations: advisedInvestigations || "None",
+            adviceGiven: adviceGiven || "",
+            specialInstructions: specialInstructions || "",
+            nextAppointment: nextAppointment || "",
+            
+            // PDF Storage Links
+            pdfUrl: prescriptionPdfPath, // Path to compiled prescription layout
+            dietPlanPdf: dietPlanPath     // Path to optional patient diet plan PDF
         });
 
-        res.status(201).json({ success: true, message: "Prescription added successfully", data: prescription });
+        res.status(201).json({ 
+            success: true, 
+            message: "Prescription and digital documentation compiled successfully.", 
+            data: prescription 
+        });
+
     } catch (error) { 
         console.error("Prescription Creation Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
@@ -508,6 +539,85 @@ const submitDischargeSummary = async (req, res) => {
         res.status(500).json({ success: false, message: "File processing or body parser error: " + error.message }); 
     }
 };
+
+// GET: Public QR Code verification endpoint (No Auth Required)
+// --- 17. PUBLIC QR CODE DISCHARGE VERIFICATION (No Auth Required) ---
+const verifyDischargeSheet = async (req, res) => {
+    try {
+        const { id } = req.params; // Appointment/Admission ID
+
+        // Query the admission record with limited details for public validation
+        const appt = await Appointment.findById(id)
+            .populate('hospitalId', 'name address city state')
+            .populate('doctorId', 'name speciality qualification');
+
+        if (!appt) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Verification Failed: Invalid or expired discharge document." 
+            });
+        }
+
+        // Fetch corresponding prescription medications
+        const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
+
+        // Build the structured dataset to populate the printable template
+        const dynamicHandoffDoctors = appt.bedsideCareTeam
+            .filter(member => ['Completed', 'Accepted', 'In-Progress'].includes(member.status))
+            .map(member => ({
+                name: member.doctorId?.name || "Specialist",
+                department: `Department of ${member.doctorId?.speciality || 'Medicine'}`
+            }));
+
+        const verificationData = {
+            verifiedStatus: "AUTHENTIC_DOCUMENT",
+            verifiedAt: new Date(),
+            header: {
+                hospitalName: appt.hospitalId?.name || "RADIUS HOSPITAL",
+                hospitalAddress: appt.hospitalId?.address || "Mohali, Punjab",
+                leadDoctor: {
+                    name: appt.doctorId?.name,
+                    title: `Department of ${appt.doctorId?.speciality || 'Medicine'}`,
+                    qualification: appt.doctorId?.qualification || "MD"
+                },
+                collaborativeDoctors: dynamicHandoffDoctors
+            },
+            patientDetails: {
+                appointmentId: appt.bookingId,
+                name: appt.userId?.name || "Verified Patient",
+                gender: appt.userId?.gender || "N/A",
+                age: appt.userId?.age || "N/A",
+                dateOfAdmission: appt.startDate ? moment(appt.startDate).format("YYYY-MM-DD") : "N/A",
+                dateOfDischarge: appt.endDate ? moment(appt.endDate).format("YYYY-MM-DD") : "N/A",
+                chiefComplaints: appt.clinicalSummary?.chiefComplaint || appt.patients?.[0]?.reasonForVisit || "N/A",
+                diagnosis: appt.clinicalSummary?.diagnosis || "N/A",
+                conditionDuringDischarge: appt.clinicalSummary?.treatmentResult || "Recovered & Stable"
+            },
+            medications: prescription ? prescription.medicines.map((med, idx) => ({
+                sNo: String(idx + 1).padStart(2, '0'),
+                medicineName: med.name,
+                dose: med.dosage,
+                time: med.frequency,
+                duration: med.duration
+            })) : [],
+            followUp: {
+                adviseInvestigation: appt.clinicalSummary?.investigation || "ECG Normal, Blood counts stable",
+                adviceGiven: appt.clinicalSummary?.dischargeNote || "Avoid excess salt and drink warm water.",
+                anySpecialInstructionGiven: "This digital Discharge Document is not valid for Medico Legal purpose."
+            }
+        };
+
+        res.json({
+            success: true,
+            data: verificationData
+        });
+
+    } catch (error) {
+        console.error("Public verification error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // --- API: UPLOAD & ATTACH PATIENT CLINICAL REPORTS (Independent Multi-upload - NEW API) ---
 // Endpoint: POST /hospital-doctor/panel/case/upload-reports/:id
 const uploadPatientReports = async (req, res) => {
@@ -1223,7 +1333,7 @@ module.exports = {
     getDocDashboard, getAssignedCases, getPatientDetails, 
     processPrescription, transferPatient, acceptTransfer,
      getHospitalColleagues,
-    submitDischargeSummary,uploadPatientReports, updateDutyStatus, getMedicineList, updateClinicalSummary,
+    submitDischargeSummary,verifyDischargeSheet,uploadPatientReports, updateDutyStatus, getMedicineList, updateClinicalSummary,
 
     requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
     getPrintableDischargeSummary,

@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { doctorDocUploads,doctorReportUploads,dietPlanUploads } = require('../../../middleware/multer');
+const { doctorDocUploads,doctorReportUploads,dietPlanUploads,hospitalPrescriptionUploads } = require('../../../middleware/multer');
 const { 
     getMyDoctorProfile,
         updateDoctorProfile,
@@ -14,7 +14,7 @@ const {
     processPrescription, 
     getHospitalColleagues, 
     transferPatient, acceptTransfer,
-    submitDischargeSummary, uploadPatientReports,
+    submitDischargeSummary,verifyDischargeSheet, uploadPatientReports,
     updateDutyStatus,getMedicineList, updateClinicalSummary,
 
     requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
@@ -35,14 +35,21 @@ router.get('/dashboard', protect('hospital-doctor'), getDocDashboard);
 router.get('/cases', protect('hospital-doctor'), getAssignedCases);
 router.get('/case-details/:id', protect('hospital-doctor'), getPatientDetails);
 
-router.post('/prescription/add', protect('hospital-doctor'),dietPlanUploads, processPrescription);
-
+router.post(
+    '/prescription/add', 
+    protect('hospital-doctor'), 
+    hospitalPrescriptionUploads, // 👈 Replaced dietPlanUploads here
+    processPrescription
+);
 router.get('/colleagues', protect('hospital-doctor'), getHospitalColleagues); // For transfer dropdown
 router.post('/case/transfer', protect('hospital-doctor'), transferPatient);
 router.post('/case/accept-transfer', protect('hospital-doctor'), acceptTransfer); // 👈 ADD THIS ROUTE
 
 
 router.post('/case/discharge-summary', protect('hospital-doctor'), submitDischargeSummary);
+
+router.get('/verify-discharge/:id', verifyDischargeSheet);
+
 router.post('/case/upload-reports/:id', protect('hospital-doctor'), doctorReportUploads, uploadPatientReports);
 router.patch('/status/duty-toggle', protect('hospital-doctor'), updateDutyStatus); // NO 403 ERROR NOW
 

@@ -33,10 +33,6 @@ const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/
 const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 
 
-
-
-
-
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
 const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime, userId) => {
     let rawItemTotalWithoutPromo = 0; 
@@ -630,15 +626,12 @@ const getPharmacyDetails = async (req, res) => {
 
 const getTrendingMedicinesNearUser = async (req, res) => {
     try {
-        // 1. Coordinates Logic (User GPS or Delhi Fallback)
         const lat = req.body.lat || req.query.lat || DEFAULT_LAT;
         const lng = req.body.lng || req.query.lng || DEFAULT_LNG;
 
-        // 2. Fetch Radius Limit for Pharmacies
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 50;
 
-        // 3. Pehle Approved & Active Pharmacies dhoondo jo radius ke andar hain
         const allPharmacies = await Pharmacy.find({ 
             profileStatus: 'Approved', 
             isActive: true 
@@ -658,8 +651,6 @@ const getTrendingMedicinesNearUser = async (req, res) => {
             return res.json({ success: true, message: "No pharmacies found near you", data: [] });
         }
 
-        // 4. In Pharmacies ke inventory se unique Medicines uthao
-        // Aggregation use kar rahe hain taaki duplicate medicines na aayein
         const trendingMeds = await MedicineInventory.aggregate([
             { 
                 $match: { 
@@ -671,14 +662,14 @@ const getTrendingMedicinesNearUser = async (req, res) => {
             {
                 $group: {
                     _id: "$medicineId",
-                    bestPrice: { $min: "$vendor_price" }, // Paas ki shops mein sabse sasta rate
-                    availableAt: { $first: "$pharmacyId" } // Example shop
+                    bestPrice: { $min: "$vendor_price" }, 
+                    availableAt: { $first: "$pharmacyId" } 
                 }
             },
-            { $limit: 20 }, // Trending list ke liye top 20
+            { $limit: 20 }, 
             {
                 $lookup: {
-                    from: "medicines", // Medicine collection name
+                    from: "medicines", 
                     localField: "_id",
                     foreignField: "_id",
                     as: "details"
@@ -704,7 +695,8 @@ const getTrendingMedicinesNearUser = async (req, res) => {
                             0
                         ]
                     },
-                    salt: "$details.salt_composition"
+                    salt: "$details.salt_composition",
+                    isAvailable: { $literal: true } // 👈 Since matched strictly from active inventory stock [1]
                 }
             }
         ]);
@@ -730,10 +722,8 @@ const getStandardMedicineCatalog = async (req, res) => {
         const limit = 20;
         const skip = (page - 1) * limit;
         
-        // Extract category and subCategory from query params
         const { category, subCategory } = req.query;
 
-        // 1. Build Dynamic bread_crumb Filter (From getMedicineCategoryDetails logic)
         let filter = {};
         if (category) {
             const breadcrumbRegex = subCategory 
@@ -742,19 +732,16 @@ const getStandardMedicineCatalog = async (req, res) => {
             filter.bread_crumb = breadcrumbRegex;
         }
 
-        // 2. Build Pipeline
         const pipeline = [];
 
-        // Apply category filter if provided
         if (category) {
             pipeline.push({ $match: filter });
         }
 
-        // Maintain the standard catalog logic
         pipeline.push(
             {
                 $lookup: {
-                    from: "medicineinventories", // Collection name
+                    from: "medicineinventories",
                     localField: "_id",
                     foreignField: "medicineId",
                     as: "sellers"
@@ -762,20 +749,40 @@ const getStandardMedicineCatalog = async (req, res) => {
             },
             {
                 $addFields: {
-                    vendorCount: { $size: "$sellers" },
-                    minPrice: {
-                        $cond: {
-                            if: { $gt: [{ $size: "$sellers" }, 0] },
-                            then: { $min: "$sellers.vendor_price" },
-                            else: null 
+                    // Filter only those sellers who actually have active stock [1]
+                    activeSellers: {
+                        $filter: {
+                            input: "$sellers",
+                            as: "seller",
+                            cond: {
+                                $and: [
+                                    { $eq: ["$$seller.is_available", true] },
+                                    { $gt: ["$$seller.stock_quantity", 0] }
+                                ]
+                            }
                         }
                     }
                 }
             },
+            {
+                $addFields: {
+                    vendorCount: { $size: "$sellers" },
+                    // Calculate minPrice strictly from in-stock sellers
+                    minPrice: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$activeSellers" }, 0] },
+                            then: { $min: "$activeSellers.vendor_price" },
+                            else: null 
+                        }
+                    },
+                    // 🚨 NEW: isAvailable key checking if at-least one seller has stock
+                    isAvailable: { $gt: [{ $size: "$activeSellers" }, 0] }
+                }
+            },
             { 
-                // Remove raw sellers list to keep payload clean
                 $project: {
-                    sellers: 0 
+                    sellers: 0,
+                    activeSellers: 0
                 }
             },
             { 
@@ -789,13 +796,11 @@ const getStandardMedicineCatalog = async (req, res) => {
             }
         );
 
-        // Fetch paginated data and dynamic count in parallel for optimization
         const [aggregate, total] = await Promise.all([
             Medicine.aggregate(pipeline),
             Medicine.countDocuments(filter)
         ]);
 
-        // Keep the exact same response structure
         res.json({
             success: true,
             total,
@@ -808,14 +813,14 @@ const getStandardMedicineCatalog = async (req, res) => {
     }
 };
 
+
 // 2. GET medicine with all VENDORS FOR A SPECIFIC MEDICINE
 // endpoint: GET /user/medicine/vendors/:medicineId?lat=28.6&lng=77.2
 const getMedicineVendors = async (req, res) => {
     try {
         const { medicineId } = req.params;
+        const today = new Date();
         
-        // --- SAFE COORDINATE EXTRACTION ---
-        // Optional chaining (?.) use kiya hai taaki agar body missing ho toh crash na ho
         const filterLat = req?.body?.lat || req?.query?.lat || DEFAULT_LAT;
         const filterLng = req?.body?.lng || req?.query?.lng || DEFAULT_LNG;
 
@@ -847,7 +852,6 @@ const getMedicineVendors = async (req, res) => {
             const pharmacy = item.pharmacyId;
             let distance = null;
 
-            // --- SAFE LOCATION CHECK ---
             if (pharmacy.location && typeof pharmacy.location.lat !== 'undefined') {
                 distance = await getDistance(
                     parseFloat(filterLat), 
@@ -861,6 +865,15 @@ const getMedicineVendors = async (req, res) => {
                 if (minPriceFound === null || item.vendor_price < minPriceFound) {
                     minPriceFound = item.vendor_price;
                 }
+
+                // 🚨 SYNC: Check if there is an active BOGO offer for this medicine at this pharmacy [1]
+                const activePromo = await PharmacyComboOffer.findOne({
+                    pharmacyId: pharmacy._id,
+                    medicineId: medObjectId,
+                    isActive: true,
+                    startDate: { $lte: today },
+                    expiryDate: { $gte: today }
+                }).lean();
 
                 availableInPharmacies.push({
                     pharmacyId: pharmacy._id,
@@ -877,7 +890,16 @@ const getMedicineVendors = async (req, res) => {
                     stock: item.stock_quantity,
                     isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
                     isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
-                    inventoryId: item._id
+                    inventoryId: item._id,
+                    
+                    // 🚨 Added live combo offer metadata to provide identical badges on alternative route [1]
+                    comboOffer: activePromo ? {
+                        offerId: activePromo._id,
+                        campaignDisplayName: activePromo.campaignDisplayName,
+                        buyQty: activePromo.buyQty,
+                        getFreeQty: activePromo.getFreeQty,
+                        images: activePromo.images || []
+                    } : null
                 });
             }
         }
@@ -904,10 +926,6 @@ const getMedicineVendors = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
-   
-
-
 
 
 // --- NEW: GET PHARMACY SLOTS (Mirroring Lab) ---
@@ -1194,7 +1212,6 @@ const checkoutMedicineOrder = async (req, res) => {
 
 // ==========================================
 // 1. PLACE ORDER (With Strict Backend Prescription Restrictions)
-// Replacing placeOrder in controllers/user/Pharmacy/BookPharmacy.js
 // ==========================================
 const placeOrder = async (req, res) => {
     try {
@@ -1353,7 +1370,6 @@ const placeOrder = async (req, res) => {
 
 // ==========================================
 // 2. VERIFY PHARMACY PAYMENT & REDUCE STOCK
-// Replacing verifyPharmacyPayment inside controllers/user/Pharmacy/BookPharmacy.js
 // ==========================================
 const verifyPharmacyPayment = async (req, res) => {
     try {
@@ -1439,8 +1455,6 @@ const verifyPharmacyPayment = async (req, res) => {
     }
 };
 
-
-
 const uploadPrescription = async (req, res) => {
     try {
         const { address, pharmacyId } = req.body;
@@ -1497,7 +1511,6 @@ const cancelMedicineOrder = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
-
 
 
 const getOrderHistory = async (req, res) => {
@@ -1746,13 +1759,11 @@ const getHighestDiscountMedicines = async (req, res) => {
 
         const pipeline = [
             {
-                // Match only those medicines that have valid MRP values
                 $match: {
                     mrp: { $exists: true, $ne: null, $ne: "" }
                 }
             },
             {
-                // Fetch dynamic lowest vendor price from inventory
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -1775,7 +1786,6 @@ const getHighestDiscountMedicines = async (req, res) => {
             },
             {
                 $addFields: {
-                    // Choose seller price if available, otherwise master price
                     minimumPrice: {
                         $cond: [
                             "$isInventoryAvailable",
@@ -1783,12 +1793,11 @@ const getHighestDiscountMedicines = async (req, res) => {
                             "$numDocBestPrice"
                         ]
                     },
-                    isAvailable: "$isInventoryAvailable"
+                    isAvailable: "$isInventoryAvailable" // 👈 Dynamic Available Check mapped
                 }
             },
             {
                 $addFields: {
-                    // Dynamic discount percentage calculation
                     discountPercentage: {
                         $cond: {
                             if: { $gt: ["$numMRP", 0] },
@@ -1809,13 +1818,11 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             {
-                // Filter out items with 0% discount
                 $match: {
                     discountPercentage: { $gt: 0 }
                 }
             },
             {
-                // Sort by highest discount percentage in decreasing order
                 $sort: {
                     discountPercentage: -1,
                     name: 1
@@ -1827,7 +1834,6 @@ const getHighestDiscountMedicines = async (req, res) => {
                 } 
             },
             {
-                // Dynamic Facet stage: Calculates total count & paginated records in parallel
                 $facet: {
                     metadata: [{ $count: "total" }],
                     data: [{ $skip: skip }, { $limit: limit }]
@@ -1837,7 +1843,6 @@ const getHighestDiscountMedicines = async (req, res) => {
 
         const result = await Medicine.aggregate(pipeline);
         
-        // Safety checks to handle empty database states gracefully
         const total = result[0].metadata[0]?.total || 0;
         const data = result[0].data || [];
 
@@ -1978,7 +1983,7 @@ const estimateRxPrices = async (req, res) => {
     }
 };
 
-// 2. GET SINGLE REQUEST DETAILS (फिग्मा प्रोग्रेस बार और बिल देखने के लिए)
+// 2. GET SINGLE REQUEST DETAILS
 const getUserPrescriptionRequestDetails = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -2061,7 +2066,6 @@ const createPrescriptionRequest = async (req, res) => {
 
 // ==========================================
 // 3. PAY AND CONVERT REQUEST TO FINAL ORDER (Prescription Review Flow)
-// Replacing payAndConfirmOrder in controllers/user/Pharmacy/BookPharmacy.js
 // ==========================================
 const payAndConfirmOrder = async (req, res) => {
     try {
@@ -2224,10 +2228,8 @@ const payAndConfirmOrder = async (req, res) => {
     }
 };
 
-
 // ==========================================
 // 4. VERIFY PRESCRIPTION REQUEST PAYMENT SIGNATURE
-// Replacing verifyPrescriptionRequestPayment in controllers/user/Pharmacy/BookPharmacy.js
 // ==========================================
 const verifyPrescriptionRequestPayment = async (req, res) => {
     try {
@@ -2411,7 +2413,6 @@ const ratePharmacyOrder = async (req, res) => {
     }
 };
 
-
 // GET ALL ACTIVE COMBO OFFERS FROM ALL APPROVED PHARMACIES (WITH PAGINATION OF 25)
 const getGlobalActiveComboOffers = async (req, res) => {
     try {
@@ -2554,9 +2555,6 @@ const getComboOfferDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
-
-
 
 
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
