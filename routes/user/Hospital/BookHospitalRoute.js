@@ -34,7 +34,7 @@ router.post('/validate-coupon', protect('user'), validateHospitalCoupon); // Val
 
 router.post('/check-availability', getAvailableBedsForRange);
 // Payment & Logic
-router.post('/checkout-summary', getHospitalCheckoutSummary);
+router.post('/checkout-summary', protect('user'), getHospitalCheckoutSummary);
 router.post('/book', protect('user'), insuranceUpload.single('insuranceDocument'), finalHospitalBooking);
 router.post('/verify-payment', protect('user'), verifyHospitalPayment);
 
