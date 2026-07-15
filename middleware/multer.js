@@ -868,6 +868,7 @@ const hospitalPrescriptionUploads = multer({
 
 
 
+
 module.exports = { 
     hospitalUploads,
     contentUploads,

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
+const { insuranceUpload } = require('../../../middleware/multer');
 const { 
     getHospitals, 
     getWards, getBedGrid, getDoctorsByHospitalId,getServicesByHospitalId,
@@ -34,7 +35,7 @@ router.post('/validate-coupon', protect('user'), validateHospitalCoupon); // Val
 router.post('/check-availability', getAvailableBedsForRange);
 // Payment & Logic
 router.post('/checkout-summary', getHospitalCheckoutSummary);
-router.post('/book', protect('user'), finalHospitalBooking);
+router.post('/book', protect('user'), insuranceUpload.single('insuranceDocument'), finalHospitalBooking);
 router.post('/verify-payment', protect('user'), verifyHospitalPayment);
 
 router.patch('/cancel/:id', protect('user'), cancelBedBooking);

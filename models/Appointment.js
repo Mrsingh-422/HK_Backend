@@ -8,11 +8,13 @@ const appointmentSchema = new mongoose.Schema({
     bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null }, // For hospital admissions
 
     ambulanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance', default: null }, // Link to Ambulance if brought by driver
+    bookingType: { type: String, enum: ['Appointment', 'Admission'], default: 'Appointment' },
     bedBookingType: {
         type: String,
         enum: ['General-Bed', 'Emergency-Bed'], // general bed for hospital booking direct and emergency bed for ambulance brought patients
         default: 'General-Bed'
     },
+    bookingReason: { type: String, default: "" },       // Reason for bed booking
 
     patients: [{
         patientName: { type: String, required: true },
@@ -57,6 +59,9 @@ const appointmentSchema = new mongoose.Schema({
         couponCode: { type: String },
         discountValue: { type: Number }
     },
+    hasInsurance: { type: Boolean, default: false },
+    insuranceDocument: { type: String, default: null }, // Path to uploaded PDF or image
+
 
     totalAmount: { type: Number }, // Final Payable
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
@@ -69,7 +74,6 @@ const appointmentSchema = new mongoose.Schema({
         default: 'Pending'
     },
     stayDuration: { type: Number, default: 0 }, // For Bed Booking (Number of days)
-    bookingType: { type: String, enum: ['Appointment', 'Admission'], default: 'Appointment' },
     bookingId: { type: String, unique: true },
     triageLevel: { type: String, enum: ['Emergency', 'Very Urgent', 'Urgent', 'Routine'] },
     wardName: { type: String },

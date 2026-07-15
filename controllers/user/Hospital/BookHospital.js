@@ -578,145 +578,240 @@ const getHospitalCheckoutSummary = async (req, res) => {
 // Replacing finalHospitalBooking inside controllers/user/Hospital/BookHospital.js
 const finalHospitalBooking = async (req, res) => {
     try {
-        const {
-            hospitalId, doctorId, bedId, bookingType, triageLevel,
-            startDate, endDate, appointmentDate, appointmentTime, patients, pricing,
-            specialServices, couponId, couponCode, paymentMethod = 'Online' 
+        const { 
+            hospitalId, 
+            bedId, 
+            startDate, 
+            endDate, 
+            patients, 
+            address,
+            bookingReason,      // Captures the reason for bed booking
+            hasInsurance,       // Captures insurance status ("true" / "false")
+            paymentMethod,
+            couponCode 
         } = req.body;
 
-        const hospital = await Hospital.findById(hospitalId);
-        if (!hospital) return res.status(404).json({ success: false, message: "Hospital not found." });
+        const userId = req.user.id;
 
-        // 🚨 CRITICAL CHECK: Block booking if Hospital is offline
-        if (hospital.isOnline === false) {
-            return res.status(400).json({
-                success: false,
-                message: "Booking Blocked: Hospital is currently offline and not accepting admissions."
-            });
-        }
+        // 1. Process files uploaded by Multer
+        let insuranceDocPath = null;
+        const isInsuranceApplied = hasInsurance === 'true' || hasInsurance === true;
 
-        if (bedId && startDate && endDate) {
-            const start = moment(startDate).startOf('day').toDate();
-            const end = moment(endDate).endOf('day').toDate();
-
-            const isAlreadyBooked = await Appointment.findOne({
-                bedId,
-                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
-                $and: [
-                    { startDate: { $lte: end } },
-                    { endDate: { $gte: start } }
-                ]
-            });
-
-            if (isAlreadyBooked) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Selected dates ke liye ye bed pehle se hi occupied hai. Kripya koi dusra bed ya date select karein."
+        if (isInsuranceApplied) {
+            if (req.file) {
+                insuranceDocPath = `/uploads/insurance/${req.file.filename}`;
+            } else {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Validation Error: Insurance document file is required when 'hasInsurance' is true." 
                 });
             }
         }
 
-        const tempBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        let rzpOrder = null;
-
-        if (paymentMethod !== 'COD') {
-            rzpOrder = await createRazorpayOrder(pricing.totalPayable, `receipt_${tempBookingId}`);
+        // 2. Fetch Target Bed and Ward details
+        const bed = await Bed.findById(bedId);
+        if (!bed) {
+            return res.status(404).json({ success: false, message: "Selected Bed not found in the system." });
+        }
+        if (bed.status === 'Maintenance') {
+            return res.status(400).json({ success: false, message: "Selected bed is currently under maintenance." });
         }
 
-        let wardName = "";
-        let bedNumber = "";
+        const ward = await Ward.findById(bed.wardId);
+        const wardName = ward ? ward.name : "N/A";
 
-        if (paymentMethod === 'COD' && bedId) {
-            const bed = await Bed.findById(bedId).populate('wardId');
-            if (bed) {
-                bedNumber = bed.bedNumber;
-                if (bed.wardId) {
-                    wardName = bed.wardId.name;
-                    await Ward.findByIdAndUpdate(bed.wardId._id, { $inc: { availableBeds: -1 } });
-                }
-            }
-            await Bed.findByIdAndUpdate(bedId, { status: 'Reserved' }); 
-        } else if (paymentMethod !== 'COD' && bedId) {
-            const bed = await Bed.findById(bedId).populate('wardId');
-            if (bed) {
-                bedNumber = bed.bedNumber;
-                if (bed.wardId) wardName = bed.wardId.name;
-            }
+        // 3. Dates validation & Overlapping booking check
+        const start = moment(startDate).startOf('day').toDate();
+        const end = moment(endDate).endOf('day').toDate();
+        const stayDuration = moment(end).diff(moment(start), 'days') + 1;
+
+        if (stayDuration <= 0) {
+            return res.status(400).json({ success: false, message: "End Date must be after Start Date." });
         }
 
-        const appointment = await Appointment.create({
-            userId: req.user.id,
-            hospitalId,
-            doctorId: doctorId || null,
-            bedId: bedId || null,
-            bookingType,
-            triageLevel,
-            startDate: startDate ? new Date(startDate) : undefined,
-            endDate: endDate ? new Date(endDate) : undefined,
-            appointmentDate: appointmentDate ? new Date(appointmentDate) : undefined,
-            appointmentTime,
-            patients,
-            specialServices: specialServices || [],
-            pricingBreakdown: {
-                baseFee: pricing.baseFee,
-                visitCharges: pricing.visitCharges || 0,
-                extraCharges: pricing.extraCharges || 0,
-                discountAmount: pricing.discountAmount || 0,
-                subtotal: pricing.subtotal
-            },
-            couponDetails: couponId ? { couponId, couponCode, discountValue: pricing.discountAmount } : undefined,
-            totalAmount: pricing.totalPayable,
-            bookingId: tempBookingId,
-            status: paymentMethod === 'COD' ? 'Hospital-Pending' : 'Pending',
-            paymentStatus: 'Pending',
-            transactionId: rzpOrder ? rzpOrder.id : undefined,
-            wardName,
-            bedNumber
+        const isAlreadyBooked = await Appointment.findOne({
+            bedId: bedId,
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] },
+            $and: [
+                { startDate: { $lte: end } },
+                { endDate: { $gte: start } }
+            ]
         });
 
-        if (paymentMethod === 'COD') {
-            if (couponId) {
-                const existingUsage = await Coupon.findOne({ _id: couponId, "usedBy.userId": req.user.id });
-                if (existingUsage) {
-                    await Coupon.updateOne(
-                        { _id: couponId, "usedBy.userId": req.user.id },
-                        { $inc: { "usedBy.$.usageCount": 1 } }
-                    );
-                } else {
-                    await Coupon.findByIdAndUpdate(couponId, { 
-                        $push: { usedBy: { userId: req.user.id, usageCount: 1 } } 
-                    });
+        if (isAlreadyBooked) {
+            return res.status(400).json({
+                success: false,
+                message: "This bed is already booked or occupied for the selected date range. Please select another bed or date range."
+            });
+        }
+
+        // 4. Base Price Calculation (Beds pricing * Stay Duration)
+        const basePrice = bed.pricePerDay * stayDuration;
+        let originalBasePrice = basePrice;
+        let finalBasePrice = basePrice;
+        let isSubscriptionApplied = false;
+        let planName = "";
+        let userSubscriptionId = null;
+
+        // 5. Subscription benefit check
+        const admissionBenefit = await checkAndApplyBenefit(userId, 'freeHospitalStaysCount', basePrice);
+        if (admissionBenefit.isApplied) {
+            finalBasePrice = 0; // Price waived
+            isSubscriptionApplied = true;
+
+            const activeSub = await UserSubscription.findOne({
+                userId,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            }).populate('planId', 'name');
+
+            if (activeSub) {
+                planName = activeSub.planId?.name || "Premium Care Plan";
+                userSubscriptionId = activeSub._id;
+            }
+        }
+
+        // 6. Coupon Processing
+        let couponDiscount = 0;
+        let couponDetailsObj = null;
+
+        if (couponCode) {
+            const coupon = await Coupon.findOne({
+                couponName: couponCode.toUpperCase(),
+                isActive: true,
+                expiryDate: { $gte: new Date() },
+                $or: [
+                    { vendorId: hospitalId },
+                    { isAdminCreated: true, vendorType: { $in: ['Hospital', 'All'] } }
+                ]
+            });
+
+            if (coupon && finalBasePrice >= coupon.minOrderAmount) {
+                const userUsage = coupon.usedBy.find(u => u.userId.toString() === userId.toString());
+                const usageCount = userUsage ? userUsage.usageCount : 0;
+
+                if (usageCount < coupon.maxUsagePerUser) {
+                    let discount = (finalBasePrice * coupon.discountPercentage) / 100;
+                    if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
+
+                    couponDiscount = Math.round(discount);
+                    couponDetailsObj = {
+                        couponId: coupon._id,
+                        couponCode: coupon.couponName,
+                        discountValue: couponDiscount
+                    };
                 }
             }
+        }
 
-            if (doctorId) {
-                await deductBenefitCount(req.user.id, 'freeDoctorAppointmentsCount');
+        const totalAmount = finalBasePrice - couponDiscount;
+
+        // 7. Generate Unique Booking ID
+        const tempBookingId = `HKH-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+
+        // 8. Handle Online Payments via Razorpay
+        let rzpOrder = null;
+        if (paymentMethod !== 'COD' && totalAmount > 0) {
+            rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
+        }
+
+        // 9. Parse patients and address inputs
+        const parsedPatients = typeof patients === 'string' ? JSON.parse(patients) : patients;
+        const parsedAddress = typeof address === 'string' ? JSON.parse(address) : address;
+
+        // 10. Save Admission Booking
+        const booking = await Appointment.create({
+            bookingId: tempBookingId,
+            userId,
+            hospitalId,
+            bedId,
+            wardName,
+            bedNumber: bed.bedNumber,
+            bookingType: 'Admission',
+            patients: parsedPatients,
+            address: parsedAddress,
+            startDate: start,
+            endDate: end,
+            stayDuration,
+            
+            // Screenshot fields
+            bookingReason: bookingReason || "",
+            hasInsurance: isInsuranceApplied,
+            insuranceDocument: insuranceDocPath,
+
+            // Pricing structure
+            pricingBreakdown: {
+                baseFee: finalBasePrice,
+                originalBaseFee: originalBasePrice,
+                discountAmount: couponDiscount,
+                subtotal: finalBasePrice
+            },
+            couponDetails: couponDetailsObj,
+            totalAmount: Math.round(totalAmount),
+            
+            paymentMethod: paymentMethod || 'Online',
+            paymentStatus: paymentMethod === 'COD' || totalAmount === 0 ? 'Pending' : 'Pending',
+            status: paymentMethod === 'COD' || totalAmount === 0 ? 'Hospital-Pending' : 'Pending', // Online requires signature verification first
+
+            // Subscription timeline audit
+            treatmentHistory: [{
+                action: 'Initial-Assignment',
+                notes: `Admitted via Hospital Booking Flow.`,
+                subscriptionDetails: {
+                    isSubscriptionApplied,
+                    userSubscriptionId,
+                    planName
+                },
+                timestamp: new Date()
+            }]
+        });
+
+        // 11. Handle COD / Free bypass flow directly
+        if (paymentMethod === 'COD' || totalAmount === 0) {
+            if (isSubscriptionApplied) {
+                await deductBenefitCount(userId, 'freeHospitalStaysCount');
             }
+
+            if (couponDetailsObj) {
+                await Coupon.findByIdAndUpdate(couponDetailsObj.couponId, {
+                    $push: { usedBy: { userId, usageCount: 1 } }
+                });
+            }
+
+            // Lock bed status & update Ward occupancy
+            bed.status = 'Occupied';
+            await bed.save();
+            await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
 
             await notifyAdminsAndVendor(
                 hospitalId,
                 'hospital',
-                "New Bed Admission requested (COD)!",
-                `COD Admission request placed for date range: ${moment(startDate).format('YYYY-MM-DD')} to ${moment(endDate).format('YYYY-MM-DD')}.`,
-                { appointmentId: appointment._id.toString(), type: 'new_admission_cod' }
+                "New Admission Requested (COD)!",
+                `Admission request #${tempBookingId} has been successfully submitted.`,
+                { bookingId: booking._id.toString(), type: 'new_hospital_booking' }
             );
 
-            return res.status(201).json({ success: true, bookingId: tempBookingId, data: appointment });
+            return res.status(201).json({
+                success: true,
+                message: "Admission request successfully submitted!",
+                data: booking
+            });
         }
 
-        res.status(201).json({ 
-            success: true, 
+        // 12. Online payment workflow (Razorpay Order details returned)
+        res.status(201).json({
+            success: true,
             message: "Razorpay order created. Complete payment to confirm.",
             key_id: process.env.RAZORPAY_KEY_ID,
-            amount: rzpOrder.amount, 
+            amount: rzpOrder.amount,
             razorpayOrderId: rzpOrder.id,
-            appointmentId: appointment._id,
-            bookingId: tempBookingId
+            bookingId: tempBookingId,
+            appointmentId: booking._id
         });
 
-    } catch (error) { 
-        console.error("Booking Error:", error);
-        res.status(500).json({ message: error.message }); 
+    } catch (error) {
+        console.error("Critical finalHospitalBooking Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
