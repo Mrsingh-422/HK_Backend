@@ -126,7 +126,12 @@ const appointmentSchema = new mongoose.Schema({
         chiefComplaint: { type: String, default: "" },
         triagePriority: { type: String, default: "" },
         admissionNote: { type: String, default: "" },
-        bloodGroup: { type: String, default: "" }
+        bloodGroup: { type: String, default: "" },
+
+        // 🚨 ADD THESE NEW KEYS FOR THE PRINTABLE DISCHARGE SHEET:
+        dateOfSurgery: { type: Date, default: null },
+        conditionDuringAdmission: { type: String, default: "" },
+        conditionDuringDischarge: { type: String, default: "" }
     },
 
     // --- NEW: DYNAMIC BEDSIDE CARE TEAM CO-DOCTORS ARRAY ---

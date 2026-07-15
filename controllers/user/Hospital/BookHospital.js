@@ -7,6 +7,7 @@ const Coupon = require('../../../models/Coupon');
 const Doctor = require('../../../models/Doctor');
 const User = require('../../../models/User');
 const BedRescheduleLimit = require('../../../models/BedRescheduleLimit'); // 👈 Ye import hona zaroori hai!
+const UserSubscription = require('../../../models/UserSubscription');
 
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const Review = require('../../../models/Review');
@@ -462,115 +463,129 @@ const getAvailableBedsForRange = async (req, res) => {
 // for conditional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
+        let body = { ...req.body };
+
+        // 1. SAFE MULTIPART PARSER: Parse stringified fields from frontend if necessary
+        if (typeof body.patients === 'string') {
+            try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
+        }
+        if (typeof body.address === 'string') {
+            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
+        }
+        if (typeof body.specialServices === 'string') {
+            try { body.specialServices = JSON.parse(body.specialServices); } catch (e) { body.specialServices = []; }
+        }
+
         const { 
             hospitalId, 
-            doctorId, 
             bedId, 
-            consultationType, 
-            couponCode, 
-            specialServices, 
             startDate, 
-            endDate,
-            triageLevel,
-            patients // patients list passed in request body
-        } = req.body;
+            endDate, 
+            couponCode, 
+            patients = [], 
+            address = null,
+            specialServices = []
+        } = body;
 
-        // =========================================================================
-        // 🚨 CRITICAL SUBSCRIPTION FLOW: FAMILY MEMBERS VERIFICATION LOGIC
-        // =========================================================================
-        const user = await User.findById(req.user.id).select('familyMember');
-        if (!user) return res.status(404).json({ message: "User account not found" });
+        // 2. Mandatory parameters validation check
+        if (!hospitalId || !bedId || !startDate || !endDate) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Validation Error: Required fields (hospitalId, bedId, startDate, endDate) are missing." 
+            });
+        }
 
-        if (patients && Array.isArray(patients)) {
-            for (const patient of patients) {
-                const isSelf = patient.relation === 'Self' || patient.patientName?.toLowerCase() === 'self';
-                
-                if (!isSelf) {
-                    const isRegisteredMember = user.familyMember.some(member => 
-                        member.memberName.toLowerCase() === (patient.patientName || patient.name).toLowerCase()
-                    );
+        // 3. Fetch Bed and prevent null reference crashes
+        const bed = await Bed.findById(bedId);
+        if (!bed) {
+            return res.status(404).json({ success: false, message: "Selected Bed not found in the system." });
+        }
 
-                    if (!isRegisteredMember) {
-                        return res.status(400).json({
-                            success: false,
-                            message: `Access Blocked: Patient '${patient.patientName || patient.name}' is not registered under your family profile. Unable to apply subscription benefits.`
-                        });
-                    }
-                }
+        // 4. Safe stay duration calculation using moment
+        const start = moment(startDate).startOf('day');
+        const end = moment(endDate).endOf('day');
+        const stayDuration = end.diff(start, 'days') + 1;
+
+        if (isNaN(stayDuration) || stayDuration <= 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Date validation error: Check-out date must be scheduled after check-in date." 
+            });
+        }
+
+        const dailyRate = bed.pricePerDay || 500;
+        const baseFee = dailyRate * stayDuration;
+
+        let originalBaseFee = baseFee; 
+        let finalBaseFee = baseFee;
+        let isSubscriptionApplied = false;
+        let planName = "";
+        let userSubscriptionId = null;
+
+        // 5. Subscription benefit check (Checks if patient consultation/bed stay has active benefits)
+        const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
+        const admissionBenefit = await checkAndApplyBenefit(req.user.id, 'freeHospitalStaysCount', baseFee);
+        
+        if (admissionBenefit.isApplied) {
+            finalBaseFee = 0; // Price waived to 0
+            isSubscriptionApplied = true;
+
+            const UserSubscription = require('../../../models/UserSubscription');
+            const activeSub = await UserSubscription.findOne({
+                userId: req.user.id,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            }).populate('planId', 'name');
+
+            if (activeSub) {
+                planName = activeSub.planId?.name || "Premium Care Plan";
+                userSubscriptionId = activeSub._id;
             }
         }
 
-        let baseFee = 0;         
-        let visitCharge = 0;     
-        let triageSurcharge = 0; 
-        let days = 1;            
+        // 6. Compute Special services if selected
+        const servicesTotal = specialServices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
+        let subtotal = finalBaseFee + servicesTotal;
 
-        if (bedId && startDate && endDate) {
-            const start = moment(startDate).startOf('day');
-            const end = moment(endDate).endOf('day');
-            
-            days = end.diff(start, 'days');
-            if (days <= 0) days = 1;
-
-            const bed = await Bed.findById(bedId);
-            if (bed) {
-                const bedPrice = bed.price || bed.pricePerDay || 0;
-                baseFee = bedPrice * days;
-            }
-        }
-
-        if (doctorId) {
-            const doctor = await Doctor.findById(doctorId);
-            if (doctor) {
-                visitCharge = doctor.fees || 0;
-
-                // 🚨 SUBSCRIPTION CHECK: Hospital Doctor consultation limit evaluation
-                const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
-                const hospDocBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', visitCharge);
-                visitCharge = hospDocBenefit.amount; // Sets visitCharge to 0 if benefit applied
-            }
-        }
-
-        if (triageLevel === 'Urgent') {
-            triageSurcharge = 300; 
-        } else if (triageLevel === 'Emergency') {
-            triageSurcharge = 500;
-        }
-
-        const serviceCharge = (specialServices?.length || 0) * 100; 
-
-        let subtotal = baseFee + visitCharge + serviceCharge + triageSurcharge;
-
+        // 7. Calculate dynamic coupon discount
         let discount = 0;
         if (couponCode) {
-            const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-            if (coupon) {
-                if (subtotal >= coupon.minOrderAmount) {
-                    discount = (subtotal * coupon.discountPercentage) / 100;
-                    if (discount > coupon.maxDiscount) {
-                        discount = coupon.maxDiscount;
-                    }
-                }
+            const coupon = await Coupon.findOne({ 
+                couponName: couponCode.toUpperCase(), 
+                isActive: true,
+                expiryDate: { $gte: new Date() }
+            });
+            if (coupon && subtotal >= coupon.minOrderAmount) {
+                discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
             }
         }
 
         res.json({
             success: true,
             data: {
-                baseFee,
-                visitCharge,
-                serviceCharge,
-                triageSurcharge,
-                days,
+                baseFee: finalBaseFee,
+                originalBaseFee, 
+                servicesTotal,
                 discount: Math.round(discount),
                 subtotal: Math.round(subtotal),
-                totalPayable: Math.round(subtotal - discount)
+                totalPayable: Math.round(subtotal - discount),
+                stayDuration,
+                patients,
+                address,
+                subscriptionDetails: {
+                    isSubscriptionApplied,
+                    userSubscriptionId,
+                    planName
+                }
             }
         });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+
+    } catch (error) {
+        console.error("getHospitalCheckoutSummary Exception:", error);
+        res.status(500).json({ success: false, message: "Internal checkout summary parsing error: " + error.message });
     }
 };
+
 
 
 // --- 3. FINAL RANGE BOOKING ---

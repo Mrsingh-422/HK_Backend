@@ -456,27 +456,22 @@ const getHospitalColleagues = async (req, res) => {
 const submitDischargeSummary = async (req, res) => {
     try {
         const body = req.body || {};
-        
-        // 🚀 FIX: Robust check to fetch appointmentId from both Form-Data Body AND Query parameters
         const appointmentId = body.appointmentId || req.query.appointmentId;
 
-        // Strict input parameter validation check with clean instructions
         if (!appointmentId) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Validation Error: 'appointmentId' is required in Multipart Body or URL Query Parameters (?appointmentId=...)." 
+                message: "Validation Error: 'appointmentId' is required." 
             });
         }
 
         const now = new Date();
-
-        // Find Patient Admission Document
         const appointmentObj = await Appointment.findById(appointmentId);
         if (!appointmentObj) {
-            return res.status(404).json({ success: false, message: "Patient Admission Record Not Found in database." });
+            return res.status(404).json({ success: false, message: "Patient Admission Record Not Found." });
         }
 
-        // 1. Close Active Doctor's shift
+        // Close Active Doctor's shift
         const activeShift = appointmentObj.treatmentHistory.find(h => 
             h.toDoctorId && h.toDoctorId.toString() === req.user.id.toString() && !h.endTime
         );
@@ -485,11 +480,10 @@ const submitDischargeSummary = async (req, res) => {
             activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
         }
 
-        // 2. Fetch uploaded multiple files paths from multer fields uploader
+        // Fetch uploaded reports
         const files = req.files || [];
         const reportPaths = files.map(f => `/uploads/doctor_reports/${f.filename}`);
 
-        // Safe array mapping to append newly uploaded reports with existing ones
         let updatedReports = (appointmentObj.clinicalSummary && appointmentObj.clinicalSummary.uploadedReports) 
             ? appointmentObj.clinicalSummary.uploadedReports 
             : [];
@@ -498,19 +492,24 @@ const submitDischargeSummary = async (req, res) => {
             updatedReports = [...updatedReports, ...reportPaths];
         }
 
+        // --- DYNAMIC DATA MAPPING ---
         const updateData = {
-            status: 'Discharge-Pending', // Ready for final hospital checkout billing
+            status: 'Discharge-Pending', 
             clinicalSummary: {
                 diagnosis: body.diagnosis || (appointmentObj.clinicalSummary?.diagnosis) || "",
                 investigation: body.investigation || (appointmentObj.clinicalSummary?.investigation) || "",
                 treatmentResult: body.treatmentResult || (appointmentObj.clinicalSummary?.treatmentResult) || "",
                 dischargeNote: body.dischargeNote || (appointmentObj.clinicalSummary?.dischargeNote) || "",
                 dischargedAt: now,
-                uploadedReports: updatedReports // Safe mapped medical files paths
+                uploadedReports: updatedReports,
+
+                // 🚨 SAVE THE NEW PREPARATION KEYS FROM FORM BODY:
+                dateOfSurgery: body.dateOfSurgery ? new Date(body.dateOfSurgery) : (appointmentObj.clinicalSummary?.dateOfSurgery || null),
+                conditionDuringAdmission: body.conditionDuringAdmission || (appointmentObj.clinicalSummary?.conditionDuringAdmission) || "",
+                conditionDuringDischarge: body.conditionDuringDischarge || (appointmentObj.clinicalSummary?.conditionDuringDischarge) || ""
             }
         };
 
-        // Push Discharged state to timeline history
         appointmentObj.treatmentHistory.push({
             fromDoctorId: req.user.id,
             action: 'Discharged',
@@ -518,7 +517,6 @@ const submitDischargeSummary = async (req, res) => {
             timestamp: now
         });
 
-        // 3. Safe DB atomic update using direct update
         const updatedAppt = await Appointment.findByIdAndUpdate(
             appointmentId,
             { 
@@ -536,7 +534,7 @@ const submitDischargeSummary = async (req, res) => {
 
     } catch (error) { 
         console.error("Discharge summary error:", error);
-        res.status(500).json({ success: false, message: "File processing or body parser error: " + error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -569,6 +567,14 @@ const verifyDischargeSheet = async (req, res) => {
                 department: `Department of ${member.doctorId?.speciality || 'Medicine'}`
             }));
 
+        // Helper to format payment method
+        const formatPaymentMethod = (method) => {
+            if (!method) return "Pending";
+            if (method.toUpperCase() === 'ONLINE' || method.toUpperCase() === 'UPI') return "UPI (Google Pay)";
+            if (method.toUpperCase() === 'CASH' || method.toUpperCase() === 'COD') return "Cash / Offline";
+            return method;
+        };
+
         const verificationData = {
             verifiedStatus: "AUTHENTIC_DOCUMENT",
             verifiedAt: new Date(),
@@ -587,11 +593,40 @@ const verifyDischargeSheet = async (req, res) => {
                 name: appt.userId?.name || "Verified Patient",
                 gender: appt.userId?.gender || "N/A",
                 age: appt.userId?.age || "N/A",
+                
+                // 1. Date of Admission
                 dateOfAdmission: appt.startDate ? moment(appt.startDate).format("YYYY-MM-DD") : "N/A",
+                
+                // 2. Department
+                department: appt.doctorId?.speciality 
+                    ? `Department of ${appt.doctorId.speciality}, Unit - 1` 
+                    : "Department of Medicine, Unit - 1",
+                
+                // 3. Date of Discharge
                 dateOfDischarge: appt.endDate ? moment(appt.endDate).format("YYYY-MM-DD") : "N/A",
+                
+                // 4. Date of Surgery (dynamic check)
+                dateOfSurgery: appt.clinicalSummary?.dateOfSurgery 
+                    ? moment(appt.clinicalSummary.dateOfSurgery).format("YYYY-MM-DD") 
+                    : "N/A",
+                
+                // 5. Insurance Status
+                insuranceStatus: appt.hasInsurance ? "Verified (Cashless)" : "N/A",
+                
+                // 6. Payment Status
+                paymentStatus: appt.paymentStatus || "Pending",
+                
+                // 7. Payment Type
+                paymentType: formatPaymentMethod(appt.paymentMethod),
+                
+                // 8. Condition during Admission
+                conditionDuringAdmission: appt.clinicalSummary?.conditionDuringAdmission || "Stable",
+                
+                // 9. Condition during Discharge
+                conditionDuringDischarge: appt.clinicalSummary?.conditionDuringDischarge || "Recovered & Stable",
+
                 chiefComplaints: appt.clinicalSummary?.chiefComplaint || appt.patients?.[0]?.reasonForVisit || "N/A",
-                diagnosis: appt.clinicalSummary?.diagnosis || "N/A",
-                conditionDuringDischarge: appt.clinicalSummary?.treatmentResult || "Recovered & Stable"
+                diagnosis: appt.clinicalSummary?.diagnosis || "N/A"
             },
             medications: prescription ? prescription.medicines.map((med, idx) => ({
                 sNo: String(idx + 1).padStart(2, '0'),
@@ -1010,9 +1045,8 @@ const getPatientDetails = async (req, res) => {
 // --- API: GET PRINTABLE DIGITAL DISCHARGE SUMMARY (Figma Print Sheet Aligned) ---
 const getPrintableDischargeSummary = async (req, res) => {
     try {
-        const { id } = req.params; // Appointment/Admission ID
+        const { id } = req.params;
 
-        // 1. Fetch Appointment with deep populated fields
         const appt = await Appointment.findById(id)
             .populate('userId', 'name phone email profilePic age gender country state city address')
             .populate('hospitalId', 'name address city state zipCode hospitalImage')
@@ -1026,19 +1060,24 @@ const getPrintableDischargeSummary = async (req, res) => {
             return res.status(404).json({ success: false, message: "Admission Record Not Found." });
         }
 
-        // 2. Fetch the corresponding Prescription medicines array
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
-        // 3. Construct Figma Sheet JSON Structure
         const dynamicHandoffDoctors = appt.bedsideCareTeam
-            .filter(member => member.status === 'Completed' || member.status === 'Accepted' || member.status === 'In-Progress')
+            .filter(member => ['Completed', 'Accepted', 'In-Progress'].includes(member.status))
             .map(member => ({
                 name: member.doctorId?.name || "Specialist",
                 department: `Department of ${member.doctorId?.speciality || 'Medicine'}`
             }));
 
+        // Helper to format payment method
+        const formatPaymentMethod = (method) => {
+            if (!method) return "Pending";
+            if (method.toUpperCase() === 'ONLINE' || method.toUpperCase() === 'UPI') return "UPI (Google Pay)";
+            if (method.toUpperCase() === 'CASH' || method.toUpperCase() === 'COD') return "Cash / Offline";
+            return method;
+        };
+
         const figmaDataSheet = {
-            // --- FIGMA SHEET HEADER ---
             header: {
                 hospitalName: appt.hospitalId?.name || "RADIUS HOSPITAL",
                 hospitalAddress: appt.hospitalId?.address || "Mohali, Punjab",
@@ -1048,40 +1087,62 @@ const getPrintableDischargeSummary = async (req, res) => {
                     title: `Professor & Head: Department of ${appt.doctorId?.speciality || 'Medicine'}`,
                     qualification: appt.doctorId?.qualification || "MD"
                 },
-                collaborativeDoctors: dynamicHandoffDoctors // Lists all involved bedside specialists
+                collaborativeDoctors: dynamicHandoffDoctors
             },
 
-            // --- FIGMA PATIENT DETAILS CARD ---
+            // --- ALL 9 KEYS MAPPED TO DYNAMIC DATABASE PROPERTIES ---
             patientDetails: {
                 appointmentId: appt.bookingId,
                 name: appt.userId?.name || "N/A",
-                address: appt.userId?.address || "Mohali, Punjab",
+                address: appt.userId?.address || "N/A",
                 gender: appt.userId?.gender || "Male",
                 age: appt.userId?.age || 30,
+                
+                // 1. Date of Admission (startDate)
                 dateOfAdmission: appt.startDate ? moment(appt.startDate).format("YYYY-MM-DD") : "N/A",
+                
+                // 2. Department (Dynamic Doctor Specialization)
+                department: appt.doctorId?.speciality 
+                    ? `Department of ${appt.doctorId.speciality}, Unit - 1` 
+                    : "Department of Medicine, Unit - 1",
+                
+                // 3. Date of Discharge (endDate)
                 dateOfDischarge: appt.endDate ? moment(appt.endDate).format("YYYY-MM-DD") : "N/A",
-                department: `Department of ${appt.doctorId?.speciality || 'Medicine'}, Unit - 1`,
-                paymentStatus: appt.paymentStatus || "Paid",
-                paymentType: appt.paymentMethod || "UPI (Google Pay)",
+                
+                // 4. Date of Surgery (dynamic key)
+                dateOfSurgery: appt.clinicalSummary?.dateOfSurgery 
+                    ? moment(appt.clinicalSummary.dateOfSurgery).format("YYYY-MM-DD") 
+                    : "N/A",
+                
+                // 5. Insurance Status (drawn from appointment hasInsurance key)
+                insuranceStatus: appt.hasInsurance ? "Verified (Cashless)" : "N/A",
+                
+                // 6. Payment Status (drawn from appointment paymentStatus key)
+                paymentStatus: appt.paymentStatus || "Pending",
+                
+                // 7. Payment Type (formatted logically)
+                paymentType: formatPaymentMethod(appt.paymentMethod),
+                
+                // 8. Condition during Admission
+                conditionDuringAdmission: appt.clinicalSummary?.conditionDuringAdmission || "Stable",
+                
+                // 9. Condition during Discharge
+                conditionDuringDischarge: appt.clinicalSummary?.conditionDuringDischarge || "Recovered & Stable",
+
                 chiefComplaints: appt.clinicalSummary?.chiefComplaint || appt.patients?.[0]?.reasonForVisit || "N/A",
-                diagnosis: appt.clinicalSummary?.diagnosis || "N/A",
-                conditionDuringAdmission: appt.clinicalSummary?.triagePriority || appt.triageLevel || "Stable",
-                conditionDuringDischarge: appt.clinicalSummary?.treatmentResult || "Recovered & Stable"
+                diagnosis: appt.clinicalSummary?.diagnosis || "N/A"
             },
 
-            // --- CLINICAL NOTES ---
-            clinicalNotes: appt.clinicalSummary?.admissionNote || "Patient was admitted under cardiac monitoring desk, treated with standard formulations and discharged clinically stable.",
+            clinicalNotes: appt.clinicalSummary?.admissionNote || "N/A",
 
-            // --- FIGMA MEDICINE TABLE ARRAY ---
             medications: prescription ? prescription.medicines.map((med, idx) => ({
                 sNo: String(idx + 1).padStart(2, '0'),
                 medicineName: med.name,
-                dose: med.dosage, // e.g. "1 - 0 - 1"
-                time: med.frequency, // e.g. "Morning - Evening"
-                duration: med.duration // e.g. "5 Days"
+                dose: med.dosage,
+                time: med.frequency,
+                duration: med.duration
             })) : [],
 
-            // --- FOLLOW UP INSTRUCTIONS ---
             followUp: {
                 adviseInvestigation: appt.clinicalSummary?.investigation || "ECG Normal, Blood counts stable",
                 adviceGiven: appt.clinicalSummary?.dischargeNote || "Avoid excess salt and drink warm water.",
