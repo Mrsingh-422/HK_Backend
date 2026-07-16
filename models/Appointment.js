@@ -59,9 +59,13 @@ const appointmentSchema = new mongoose.Schema({
         couponCode: { type: String },
         discountValue: { type: Number }
     },
-    hasInsurance: { type: Boolean, default: false },
-    insuranceDocument: { type: String, default: null }, // Path to uploaded PDF or image
-
+    insuranceDetails: {
+        hasInsurance: { type: Boolean, default: false },
+        insuranceNumber: { type: String, default: "" },
+        companyName: { type: String, default: "" },
+        insuranceType: { type: String, default: "" },
+        insuranceDocument: { type: String, default: null } // Snapshot path of PDF or image
+    },
 
     totalAmount: { type: Number }, // Final Payable
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
@@ -157,7 +161,7 @@ const appointmentSchema = new mongoose.Schema({
         razorpayPaymentId: { type: String, default: "" },
         razorpayOrderId: { type: String, default: "" },
         razorpaySignature: { type: String, default: "" },
-        method: { type: String, default: "" },        // upi, card, netbanking, wallet
+        method: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet'], default: "" },        // upi, card, netbanking, wallet
         amount: { type: Number, default: 0 },         // Amount in Rupees (converted from paise)
         currency: { type: String, default: "INR" },
         status: { type: String, default: "" },         // captured, failed

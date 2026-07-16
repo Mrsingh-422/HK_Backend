@@ -600,25 +600,51 @@ const finalHospitalBooking = async (req, res) => {
             endDate, 
             patients, 
             address,
-            bookingReason,      // Captures the reason for bed booking
-            hasInsurance,       // Captures insurance status ("true" / "false")
+            bookingReason,      // Reason for bed booking
+            hasInsurance,       // Insurance indicator ("true" / "false")
             paymentMethod,
             couponCode 
         } = req.body;
 
         const userId = req.user.id;
 
-        // 1. Process files uploaded by Multer
-        let insuranceDocPath = null;
+        // 1. Process and resolve Insurance Details & File Snapshots
+        let finalInsuranceData = {
+            hasInsurance: false,
+            insuranceNumber: "",
+            companyName: "",
+            insuranceType: "",
+            insuranceDocument: null
+        };
+
         const isInsuranceApplied = hasInsurance === 'true' || hasInsurance === true;
 
         if (isInsuranceApplied) {
+            // Fetch patient's user profile to look up saved insurance details
+            const userProfile = await User.findById(userId);
+            if (!userProfile) {
+                return res.status(404).json({ success: false, message: "User profile not found." });
+            }
+
+            finalInsuranceData.hasInsurance = true;
+
             if (req.file) {
-                insuranceDocPath = `/uploads/insurance/${req.file.filename}`;
+                // Case A: User uploaded a new file during bed checkout
+                finalInsuranceData.insuranceDocument = `/uploads/insurance/${req.file.filename}`;
+                finalInsuranceData.insuranceNumber = req.body.insuranceNumber || "";
+                finalInsuranceData.companyName = req.body.companyName || "";
+                finalInsuranceData.insuranceType = req.body.insuranceType || "";
+            } else if (userProfile.insuranceDetails && userProfile.insuranceDetails.hasInsurance && userProfile.insuranceDetails.insuranceDocument) {
+                // Case B: Auto-fetch and clone already saved policy data and file path from profile
+                finalInsuranceData.insuranceDocument = userProfile.insuranceDetails.insuranceDocument;
+                finalInsuranceData.insuranceNumber = userProfile.insuranceDetails.insuranceNumber || "";
+                finalInsuranceData.companyName = userProfile.insuranceDetails.companyName || "";
+                finalInsuranceData.insuranceType = userProfile.insuranceDetails.insuranceType || "";
             } else {
+                // Case C: No new file uploaded and no profile insurance details saved
                 return res.status(400).json({ 
                     success: false, 
-                    message: "Validation Error: Insurance document file is required when 'hasInsurance' is true." 
+                    message: "Validation Error: Please upload an insurance document file or complete your insurance profile settings to proceed with cashless checkout." 
                 });
             }
         }
@@ -660,7 +686,7 @@ const finalHospitalBooking = async (req, res) => {
             });
         }
 
-        // 4. Base Price Calculation (Beds pricing * Stay Duration)
+        // 4. Base Price Calculation
         const basePrice = bed.pricePerDay * stayDuration;
         let originalBasePrice = basePrice;
         let finalBasePrice = basePrice;
@@ -749,10 +775,9 @@ const finalHospitalBooking = async (req, res) => {
             endDate: end,
             stayDuration,
             
-            // Screenshot fields
+            // Screen fields &resolved insurance metadata
             bookingReason: bookingReason || "",
-            hasInsurance: isInsuranceApplied,
-            insuranceDocument: insuranceDocPath,
+            insuranceDetails: finalInsuranceData, // Dynamic profile cloning
 
             // Pricing structure
             pricingBreakdown: {
@@ -766,7 +791,7 @@ const finalHospitalBooking = async (req, res) => {
             
             paymentMethod: paymentMethod || 'Online',
             paymentStatus: paymentMethod === 'COD' || totalAmount === 0 ? 'Pending' : 'Pending',
-            status: paymentMethod === 'COD' || totalAmount === 0 ? 'Hospital-Pending' : 'Pending', // Online requires signature verification first
+            status: paymentMethod === 'COD' || totalAmount === 0 ? 'Hospital-Pending' : 'Pending',
 
             // Subscription timeline audit
             treatmentHistory: [{

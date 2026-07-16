@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto'); // Built-in Node module for random numbers
 const sendEmailOTP = require('../../utils/emailService'); // Email sending utility
-
+const { deleteFile } = require('../../utils/fileHandler');
 const HealthData = require('../../models/HealthData');
 const PillReminder = require('../../models/PillReminder');
 const HealthNews = require('../../models/HealthNews'); // New Model
@@ -514,6 +514,12 @@ const updateInsuranceDetails = async (req, res) => {
             insuranceType, startDate, endDate, masterInsuranceId 
         } = req.body;
 
+        // Fetch current user details to check for an existing file
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
         // Create update object
         let updateData = {
             "insuranceDetails.hasInsurance": hasInsurance === 'true' || hasInsurance === true,
@@ -525,12 +531,16 @@ const updateInsuranceDetails = async (req, res) => {
             "insuranceDetails.masterInsuranceId": (companyName === 'other' || !masterInsuranceId) ? null : masterInsuranceId
         };
 
-        // File handling (Multer)
+        // File handling (Multer) with old file cleanup
         if (req.file) {
+            // If the user already has a saved insurance document, delete it from the server disk first
+            if (user.insuranceDetails && user.insuranceDetails.insuranceDocument) {
+                deleteFile(user.insuranceDetails.insuranceDocument);
+            }
             updateData["insuranceDetails.insuranceDocument"] = `/uploads/insurance/${req.file.filename}`;
         }
 
-        const user = await User.findByIdAndUpdate(
+        const updatedUser = await User.findByIdAndUpdate(
             userId,
             { $set: updateData },
             { new: true, runValidators: true }
@@ -539,7 +549,7 @@ const updateInsuranceDetails = async (req, res) => {
         res.json({ 
             success: true, 
             message: "Insurance details updated successfully", 
-            data: user.insuranceDetails 
+            data: updatedUser.insuranceDetails 
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
