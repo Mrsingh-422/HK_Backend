@@ -1369,73 +1369,236 @@ async function mapPatients(userId, pids) {
 }
 
 // 4. INITIATE BOOKING (Direct Booking - Replacing bookLabTest)
+// --- 4. INITIATE BOOKING (Direct Booking - Supporting Patient-to-Test & Address Mapping) ---
 const bookLabTest = async (req, res) => {
     try {
-        const { 
-            labId, patients, items, collectionType, isRapid,
-            appointmentDate, appointmentTime, address, couponCode, paymentMethod 
-        } = req.body;
+        console.log("Incoming Direct Lab Booking Request:", req.body);
+        let body = { ...req.body };
 
-        // 🚨 CRITICAL WALK-IN VALIDATION FOR DIRECT BOOKINGS (NO-CART FLOW)
+        // Safe parsing for multipart/form-data payloads
+        if (typeof body.patientMappings === 'string') {
+            try { body.patientMappings = JSON.parse(body.patientMappings); } catch (e) { body.patientMappings = []; }
+        }
+        if (typeof body.address === 'string') {
+            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
+        }
+
+        const { 
+            labId, 
+            collectionType, 
+            isRapid,
+            appointmentDate, 
+            appointmentTime, 
+            address, 
+            couponCode, 
+            paymentMethod,
+            patientMappings, // 🚨 NEW: Multi-patient, Multi-address mapped array
+            patients,        // Older flat array fallback
+            items            // Older flat items fallback
+        } = body;
+
+        // 1. Validate mandatory fields
+        if (!labId || !appointmentDate || !appointmentTime || !collectionType) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Lab, Date, Time (appointmentTime), and collectionType are mandatory." 
+            });
+        }
+
+        // Validate Payment Method Enum
+        const allowedPaymentMethods = ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
+        if (paymentMethod && !allowedPaymentMethods.includes(paymentMethod)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Invalid paymentMethod. Allowed values are: ${allowedPaymentMethods.join(', ')}` 
+            });
+        }
+
+        // 2. CRITICAL RADIOLOGY HOME COLLECTION WALK-IN VALIDATIONS
         if (collectionType === 'Home Collection') {
-            if (items.tests && items.tests.length > 0) {
-                for (let t of items.tests) {
-                    const testData = await LabTest.findById(t.testId);
-                    if (testData && testData.mainCategory && testData.mainCategory.toLowerCase() === 'radiology') {
-                        return res.status(400).json({
-                            success: false,
-                            message: `Direct booking failed: '${testData.testName}' belongs to Radiology and cannot be collected at home.`
-                        });
-                    }
-                }
-            }
-            if (items.packages && items.packages.length > 0) {
-                for (let p of items.packages) {
-                    const pkgData = await LabPackage.findById(p.packageId).populate('tests');
-                    if (pkgData) {
-                        const hasRadiology = pkgData.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
-                        if (hasRadiology || (pkgData.mainCategory && pkgData.mainCategory.toLowerCase() === 'radiology')) {
-                            return res.status(400).json({
-                                success: false,
-                                message: `Direct booking failed: Package '${pkgData.packageName}' contains Radiology tests and cannot be collected at home.`
-                            });
+            if (patientMappings && Array.isArray(patientMappings)) {
+                for (let mapping of patientMappings) {
+                    for (let itm of mapping.items) {
+                        if (itm.productType === 'LabTest') {
+                            const testData = await LabTest.findById(itm.itemId);
+                            if (testData && testData.mainCategory && testData.mainCategory.toLowerCase() === 'radiology') {
+                                return res.status(400).json({
+                                    success: false,
+                                    message: `Direct booking failed: '${testData.testName}' belongs to Radiology and cannot be collected at home.`
+                                });
+                            }
+                        } else if (itm.productType === 'LabPackage') {
+                            const pkgData = await LabPackage.findById(itm.itemId).populate('tests');
+                            if (pkgData) {
+                                const hasRadiology = pkgData.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
+                                if (hasRadiology || (pkgData.mainCategory && pkgData.mainCategory.toLowerCase() === 'radiology')) {
+                                    return res.status(400).json({
+                                        success: false,
+                                        message: `Direct booking failed: Package '${pkgData.packageName}' contains Radiology tests and cannot be collected at home.`
+                                    });
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        const tempBookingId = `ORD-${Date.now().toString().slice(-6)}${crypto.randomInt(100, 999)}`;
-        const bill = await calculateBill(labId, items, patients.length, collectionType, couponCode, isRapid);
+        const userProfile = await User.findById(req.user.id);
+        if (!userProfile) {
+            return res.status(404).json({ success: false, message: "User account not found." });
+        }
 
+        let bill;
+        let resolvedPatients = [];
+        const globalUniqueTests = new Set();
+        const globalUniquePackages = new Set();
+
+        // =========================================================================
+        // CASE A: NEW FLOW (Patient-specific addresses & test assignments)
+        // =========================================================================
+        if (patientMappings && Array.isArray(patientMappings) && patientMappings.length > 0) {
+            bill = await calculateStructuredBill(
+                labId,
+                patientMappings,
+                collectionType,
+                couponCode,
+                isRapid,
+                req.user.id,
+                appointmentTime
+            );
+
+            for (let mapping of patientMappings) {
+                let patientInfo = {};
+                
+                if (mapping.patientId === 'Self') {
+                    patientInfo = {
+                        name: userProfile.name,
+                        age: userProfile.age || 25,
+                        gender: userProfile.gender || 'Male',
+                        relation: 'Self'
+                    };
+                } else {
+                    const member = userProfile.familyMember.id(mapping.patientId);
+                    if (member) {
+                        patientInfo = {
+                            name: member.memberName,
+                            age: member.age,
+                            gender: member.gender,
+                            relation: member.relation
+                        };
+                    } else {
+                        patientInfo = {
+                            name: "Unknown",
+                            age: 30,
+                            gender: "Other",
+                            relation: "Other"
+                        };
+                    }
+                }
+
+                const assignedItems = [];
+                for (let itm of mapping.items) {
+                    if (itm.productType === 'LabTest') {
+                        const test = await LabTest.findById(itm.itemId);
+                        if (test) {
+                            assignedItems.push({
+                                itemId: itm.itemId,
+                                productType: 'LabTest',
+                                name: test.testName,
+                                price: test.discountPrice || test.amount
+                            });
+                            globalUniqueTests.add(JSON.stringify({ testId: itm.itemId, price: test.discountPrice || test.amount, name: test.testName }));
+                        }
+                    } else if (itm.productType === 'LabPackage') {
+                        const pkg = await LabPackage.findById(itm.itemId);
+                        if (pkg) {
+                            assignedItems.push({
+                                itemId: itm.itemId,
+                                productType: 'LabPackage',
+                                name: pkg.packageName,
+                                price: pkg.offerPrice || pkg.mrp
+                            });
+                            globalUniquePackages.add(JSON.stringify({ packageId: itm.itemId, price: pkg.offerPrice || pkg.mrp, name: pkg.packageName }));
+                        }
+                    }
+                }
+
+                resolvedPatients.push({
+                    patientId: mapping.patientId,
+                    name: patientInfo.name,
+                    age: patientInfo.age,
+                    gender: patientInfo.gender,
+                    relation: patientInfo.relation,
+                    address: mapping.address,
+                    assignedItems: assignedItems
+                });
+            }
+        } 
+        // =========================================================================
+        // CASE B: OLD FLOW FALLBACK (Flat arrays)
+        // =========================================================================
+        else {
+            bill = await calculateBill(
+                labId, 
+                items, 
+                patients.length, 
+                collectionType, 
+                couponCode, 
+                isRapid,
+                req.user.id,
+                appointmentTime
+            );
+
+            resolvedPatients = await mapPatients(req.user.id, patients.map(p => p.patientId));
+            
+            (items.tests || []).forEach(t => {
+                globalUniqueTests.add(JSON.stringify({ testId: t.testId, price: t.price, name: t.name }));
+            });
+            (items.packages || []).forEach(p => {
+                globalUniquePackages.add(JSON.stringify({ packageId: p.packageId, price: p.price, name: p.name }));
+            });
+        }
+
+        const finalTestsArray = Array.from(globalUniqueTests).map(str => JSON.parse(str));
+        const finalPackagesArray = Array.from(globalUniquePackages).map(str => JSON.parse(str));
+
+        const tempBookingId = `ORD-${Date.now().toString().slice(-6)}${crypto.randomInt(100, 999)}`;
         let rzpOrder = null;
-        if (paymentMethod !== 'COD') {
+
+        if (paymentMethod !== 'COD' && bill.totalAmount > 0) {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
         }
+
+        const fallbackAddress = resolvedPatients[0]?.address || address;
 
         const booking = await LabBooking.create({
             bookingId: tempBookingId,
             userId: req.user.id,
             labId,
-            patients, 
+            patients: resolvedPatients,
             items: {
-                tests: items.tests || [],
-                packages: items.packages || []
+                tests: finalTestsArray,
+                packages: finalPackagesArray
             },
             collectionType,
-            address,
-            appointmentDate,
+            address: fallbackAddress,
+            appointmentDate: new Date(appointmentDate),
             appointmentTime,
             billSummary: bill,
-            paymentMethod,
-            status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending',
-            paymentStatus: 'Pending',
+            paymentMethod: paymentMethod || 'Online',
+            paymentStatus: paymentMethod === 'COD' || bill.totalAmount === 0 ? 'Pending' : 'Pending',
+            status: paymentMethod === 'COD' || bill.totalAmount === 0 ? 'Confirmed' : 'Pending',
             tracking: {
                 otp: Math.floor(1000 + Math.random() * 9000).toString()
             }
         });
 
-        if (paymentMethod === 'COD') {
+        if (paymentMethod === 'COD' || bill.totalAmount === 0) {
+            if (collectionType === 'Home Collection') {
+                await deductBenefitCount(req.user.id, 'freeLabDeliveriesCount');
+            }
+
             await notifyAdminsAndVendor(
                 labId,
                 'lab',
@@ -1453,10 +1616,14 @@ const bookLabTest = async (req, res) => {
             key_id: process.env.RAZORPAY_KEY_ID,
             amount: rzpOrder.amount,
             razorpayOrderId: rzpOrder.id,
-            appointmentId: booking._id
+            appointmentId: booking._id,
+            bookingId: tempBookingId
         });
 
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("Direct booking error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 5. UPLOAD PRESCRIPTION FLOW (Figma logic)
