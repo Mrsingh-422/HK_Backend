@@ -449,31 +449,70 @@ const addToPharmacyCart = async (req, res) => {
 // 2. UPDATE PHARMACY QUANTITY (Strict BOGO Match)
 const updatePharmacyQuantity = async (req, res) => {
     try {
-        // 🚨 UPDATED: Capture combo indicator from body to target correct cart row [1]
         const { medicineId, action, isComboApplied = false } = req.body; // action: 'inc', 'dec'
-        const cart = await Cart.findOne({ userId: req.user.id });
+        const userId = req.user.id;
+
+        // 1. Fetch cart directly using index-covered findOne
+        const cart = await Cart.findOne({ userId });
+        if (!cart) return res.status(404).json({ success: false, message: "Cart not found." });
         
-        // Find correct row by matching both medicine ID and BOGO state [1]
+        // Find targeted item in memory array safely
         const itemIndex = cart.pharmacyCart.items.findIndex(i => 
             i.medicineId.toString() === medicineId && 
             i.isComboApplied === (isComboApplied === true)
         );
 
         if (itemIndex > -1) {
-            if (action === 'inc') cart.pharmacyCart.items[itemIndex].quantity += 1;
-            else cart.pharmacyCart.items[itemIndex].quantity -= 1;
+            if (action === 'inc') {
+                cart.pharmacyCart.items[itemIndex].quantity += 1;
+            } else {
+                cart.pharmacyCart.items[itemIndex].quantity -= 1;
+            }
 
+            // Remove item dynamically if quantity becomes 0 or less
             if (cart.pharmacyCart.items[itemIndex].quantity <= 0) {
                 cart.pharmacyCart.items.splice(itemIndex, 1);
             }
+        } else {
+            return res.status(404).json({ success: false, message: "Item not found in cart." });
         }
 
-        if (cart.pharmacyCart.items.length === 0) cart.pharmacyCart.pharmacyId = null;
+        if (cart.pharmacyCart.items.length === 0) {
+            cart.pharmacyCart.pharmacyId = null;
+        }
 
+        // Save mutations securely
         await cart.save();
-        res.json({ success: true, data: cart });
+
+        // 🚨 OPTIMIZATION: Deep populate identically to 'getMyCart' in a single database round-trip
+        // This eliminates the need for the frontend to make a second fetch request!
+        const populatedCart = await Cart.findById(cart._id)
+            .populate('labCart.labId', 'name city address profileImage')
+            .populate('pharmacyCart.pharmacyId', 'name address rating city')
+            .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp prescription_required');
+
+        // Calculate checkout totals on-the-fly inside the same response
+        let labTotal = populatedCart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+        let medTotal = populatedCart.pharmacyCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+
+        let labItemCount = populatedCart.labCart.items.reduce((acc, i) => acc + i.quantity, 0);
+        let pharmacyItemCount = populatedCart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
+        let totalItems = labItemCount + pharmacyItemCount;
+
+        // Send fully populated structure back to the frontend instantly
+        res.json({ 
+            success: true, 
+            message: "Quantity updated and synchronized.",
+            data: { 
+                ...populatedCart._doc, 
+                labCartTotal: labTotal, 
+                pharmacyCartTotal: medTotal,
+                totalItems: totalItems 
+            } 
+        });
+
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
