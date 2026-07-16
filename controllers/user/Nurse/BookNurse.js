@@ -1163,9 +1163,112 @@ const getMedicalConditions = async (req, res) => {
     }
 };
 
+// 1. GET GLOBAL UNIQUE SERVICES LIST (Our Nursing Services section on Home Screen)
+// endpoint: GET /user/nurse/services/global
+const getGlobalServicesList = async (req, res) => {
+    try {
+        const services = await NurseService.find()
+            .populate({
+                path: 'nurseId',
+                select: 'name profileStatus isActive'
+            })
+            .lean();
+
+        // Step 1: Filter only those services whose associated Nurse is Approved & Active
+        const validServices = services.filter(service => 
+            service.nurseId && 
+            service.nurseId.profileStatus === 'Approved' && 
+            service.nurseId.isActive === true &&
+            (service.status === 'Approved' || !service.status)
+        );
+
+        // Step 2: Grouping to get unique titles & lowest starting price (No Photo Reference)
+        const uniqueMap = {};
+        validServices.forEach(s => {
+            const title = s.title;
+            const price = s.pricing?.oneDay?.final || 0;
+            
+            if (!uniqueMap[title]) {
+                uniqueMap[title] = {
+                    _id: s._id,
+                    title: title,
+                    description: s.description,
+                    startingPrice: price
+                };
+            } else {
+                if (price > 0 && (uniqueMap[title].startingPrice === 0 || price < uniqueMap[title].startingPrice)) {
+                    uniqueMap[title].startingPrice = price;
+                }
+            }
+        });
+
+        const data = Object.values(uniqueMap);
+
+        res.json({ success: true, count: data.length, data });
+
+    } catch (error) { 
+        console.error("getGlobalServicesList Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// 2. GET PROVIDERS FOR A SELECTED SERVICE (Lists Nurse bureaus offering that specific service)
+// endpoint: GET /user/nurse/services/providers?serviceTitle=Dressing
+const getProvidersForService = async (req, res) => {
+    try {
+        const { serviceTitle } = req.query; // e.g. "Dressing"
+
+        if (!serviceTitle) {
+            return res.status(400).json({ success: false, message: "serviceTitle query parameter is required." });
+        }
+
+        // Case-insensitive exact title match
+        const serviceProviders = await NurseService.find({
+            title: new RegExp(`^${serviceTitle.trim()}$`, 'i'),
+            status: 'Approved' // Assures service is approved by admin
+        })
+        .populate({
+            path: 'nurseId',
+            match: { profileStatus: 'Approved', isActive: true }, // Assures provider is active & approved
+            select: 'name profileImage rating city experienceYears location isOnline'
+        })
+        .lean();
+
+        // Filter and map valid active providers
+        const validProviders = serviceProviders
+            .filter(s => s.nurseId) // Removes inactive providers
+            .map(s => ({
+                serviceId: s._id, // 🌟 Used for booking checkout input
+                pricing: s.pricing,
+                nurseDetails: {
+                    _id: s.nurseId._id,
+                    name: s.nurseId.name,
+                    profileImage: s.nurseId.profileImage,
+                    rating: s.nurseId.rating || 0,
+                    city: s.nurseId.city,
+                    experienceYears: s.nurseId.experienceYears || 0,
+                    location: s.nurseId.location,
+                    isOnline: s.nurseId.isOnline ?? true
+                }
+            }));
+
+        res.json({ 
+            success: true, 
+            count: validProviders.length, 
+            data: validProviders 
+        });
+
+    } catch (error) { 
+        console.error("getProvidersForService Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+
 
 
 module.exports = { getNurses,getNurseDetails,searchNursesAndServices,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService, rateNurseBooking,
     getAppointmentStatus, 
     uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon,getNursePackagesList,
-    getNursePackageDetails,getMedicalConditions };
+    getNursePackageDetails,getMedicalConditions,
+getGlobalServicesList,getProvidersForService };

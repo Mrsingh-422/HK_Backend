@@ -6,7 +6,9 @@ const {
     getNurses, getNurseDetails,searchNursesAndServices,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
     uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking,getNursePackagesList,
-    getNursePackageDetails,getMedicalConditions
+    getNursePackageDetails,getMedicalConditions,
+    getGlobalServicesList,getProvidersForService
+
 } = require('../../../controllers/user/Nurse/BookNurse');
 
 // Base URL: /user/nurse
@@ -54,6 +56,12 @@ router.get('/packages/list', getNursePackagesList);
 // 2. Single Package Detail
 router.get('/packages/details/:packageId', getNursePackageDetails);
 router.get('/medical-conditions', getMedicalConditions);
+
+// 1. Get unique services list for home screen (Our Nursing Services)
+router.get('/services/global', getGlobalServicesList);
+
+// 2. Get providers offering a selected service
+router.get('/services/providers', getProvidersForService);
 
 
 

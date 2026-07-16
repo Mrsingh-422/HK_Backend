@@ -30,6 +30,8 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const fs = require('fs');
 const path = require('path');
 const { deleteFile } = require('../../../utils/fileHandler')
+const { processCancellationRefund } = require('../../../utils/policyHelper');
+
 
 // for rating and reviews
 const Doctor = require('../../../models/Doctor'); 
