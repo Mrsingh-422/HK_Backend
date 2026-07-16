@@ -127,6 +127,7 @@ const calculateBillHelper = async (labId, items, patientsCount, collectionType, 
     };
 };
 
+
 // --- HELPER: Pricing Logic (Production Level) ---
 // --- UPDATED HELPER: Pricing Logic with Slot Charges ---
 // --- UPDATED HELPER: Bill Calculation with Slot Premium ---
@@ -182,6 +183,84 @@ const calculateBill = async (labId, items, patientsCount, collectionType, coupon
     const totalAmount = (itemTotal - couponDiscount) + homeVisitCharge + rapidCharge + slotCharge;
     return { itemTotal, couponDiscount, couponId, homeVisitCharge, rapidDeliveryCharge: rapidCharge, slotCharge, totalAmount };
 };
+// --- NEW HELPER: Multi-Patient, Multi-Address Bill Calculation ---
+const calculateStructuredBill = async (labId, patientMappings, collectionType, couponCode, isRapid, userId, appointmentTime) => {
+    let itemTotal = 0;
+    const totalPatients = patientMappings.length;
+
+    // 1. Calculate sum of assigned items for each patient
+    for (let mapping of patientMappings) {
+        for (let item of mapping.items) {
+            if (item.productType === 'LabTest') {
+                const test = await LabTest.findById(item.itemId);
+                if (test) itemTotal += (test.discountPrice || test.amount);
+            } else if (item.productType === 'LabPackage') {
+                const pkg = await LabPackage.findById(item.itemId);
+                if (pkg) itemTotal += (pkg.offerPrice || pkg.mrp);
+            }
+        }
+    }
+
+    // 2. Calculate Home Visit Charge
+    let homeVisitCharge = 0;
+    const charges = await DeliveryCharge.findOne({ vendorId: labId });
+
+    if (collectionType === 'Home Collection') {
+        let standardFee = charges ? Number(charges.fixedPrice) : 40;
+        
+        // Subscription check for free home visits
+        const labDeliveryBenefit = await checkAndApplyBenefit(userId, 'freeLabDeliveriesCount', standardFee);
+        
+        if (labDeliveryBenefit.isApplied) {
+            homeVisitCharge = 0;
+        } else if (charges && charges.freeDeliveryThreshold && itemTotal >= charges.freeDeliveryThreshold) {
+            homeVisitCharge = 0;
+        } else {
+            homeVisitCharge = standardFee;
+        }
+    }
+    
+    // 3. Calculate Rapid Delivery Surcharge (Calculated per assigned patient)
+    let rapidCharge = 0;
+    if (isRapid) {
+        const baseRapidCharge = charges ? Number(charges.fastDeliveryExtra) : 100;
+        rapidCharge = baseRapidCharge * totalPatients;
+    }
+
+    // 4. Calculate Premium Slot Charge
+    let slotCharge = 0;
+    if (appointmentTime && appointmentTime !== 'Immediate') {
+        const availConfig = await Availability.findOne({ vendorId: labId });
+        if (availConfig && availConfig.premiumSlots) {
+            const premiumSlotMatch = availConfig.premiumSlots.find(ps => ps.time.trim() === appointmentTime.trim());
+            if (premiumSlotMatch) slotCharge = Number(premiumSlotMatch.extraFee) || 0;
+        }
+    }
+
+    // 5. Calculate Coupon Discounts
+    let couponDiscount = 0;
+    let couponId = null;
+    if (couponCode) {
+        const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+        if (coupon && itemTotal >= coupon.minOrderAmount) {
+            couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+            couponId = coupon._id;
+        }
+    }
+
+    const totalAmount = (itemTotal - couponDiscount) + homeVisitCharge + rapidCharge + slotCharge;
+
+    return { 
+        itemTotal, 
+        couponDiscount, 
+        couponId,
+        homeVisitCharge, 
+        rapidDeliveryCharge: rapidCharge, 
+        slotCharge, 
+        totalAmount: Math.round(totalAmount)
+    };
+};
+
 
 
  // 1. NEW: Get Delivery Charges for Lab in User Cart
@@ -1034,12 +1113,19 @@ const validateLabCoupon = async (req, res) => {
 
 // 3. FINAL CHECKOUT (Integrating Delivery, Coupons & Razorpay Payments)
 // Replacing checkoutLabBooking in controllers/user/Lab/BookLab.js
+// --- 3. FINAL CHECKOUT (Supporting Patient-to-Test & Patient-to-Address Mapping) ---
 const checkoutLabBooking = async (req, res) => {
     try {
         const { 
-            appointmentDate, appointmentTime, address, 
-            paymentMethod, couponCode, isRapid, 
-            selectedPatientIds, collectionType 
+            appointmentDate, 
+            appointmentTime, 
+            address, // Global default fallback address
+            paymentMethod, 
+            couponCode, 
+            isRapid, 
+            selectedPatientIds, // Standard flat flow fallback
+            patientMappings,    // 🚨 NEW: Multi-patient, Multi-address mapped array
+            collectionType 
         } = req.body;
 
         const cart = await Cart.findOne({ userId: req.user.id });
@@ -1047,7 +1133,7 @@ const checkoutLabBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cart is empty" });
         }
 
-        // 🚨 CRITICAL RULE: Block Radiology Home Collection Checkout
+        // Radiology Home Collection Safeguard
         if (collectionType === 'Home Collection') {
             if (cart.labCart.categoryType && cart.labCart.categoryType.toLowerCase() === 'radiology') {
                 return res.status(400).json({ 
@@ -1065,16 +1151,129 @@ const checkoutLabBooking = async (req, res) => {
             });
         }
 
-        const bill = await calculateBillHelper(
-            cart.labCart.labId, 
-            cart.labCart, 
-            selectedPatientIds.length, 
-            collectionType, 
-            couponCode, 
-            isRapid, 
-            req.user.id,
-            appointmentTime 
-        );
+        let bill;
+        let resolvedPatients = [];
+        const globalUniqueTests = new Set();
+        const globalUniquePackages = new Set();
+
+        const userProfile = await User.findById(req.user.id);
+        if (!userProfile) {
+            return res.status(404).json({ success: false, message: "User account not found." });
+        }
+
+        // =========================================================================
+        // CASE A: NEW FLOW (Patient-specific addresses & test assignments)
+        // =========================================================================
+        if (patientMappings && Array.isArray(patientMappings) && patientMappings.length > 0) {
+            bill = await calculateStructuredBill(
+                cart.labCart.labId,
+                patientMappings,
+                collectionType,
+                couponCode,
+                isRapid,
+                req.user.id,
+                appointmentTime
+            );
+
+            for (let mapping of patientMappings) {
+                let patientInfo = {};
+                
+                // Fetch profile bio details (name, age, gender) safely
+                if (mapping.patientId === 'Self') {
+                    patientInfo = {
+                        name: userProfile.name,
+                        age: userProfile.age || 25,
+                        gender: userProfile.gender || 'Male',
+                        relation: 'Self'
+                    };
+                } else {
+                    const member = userProfile.familyMember.id(mapping.patientId);
+                    if (member) {
+                        patientInfo = {
+                            name: member.memberName,
+                            age: member.age,
+                            gender: member.gender,
+                            relation: member.relation
+                        };
+                    } else {
+                        patientInfo = {
+                            name: "Unknown",
+                            age: 30,
+                            gender: "Other",
+                            relation: "Other"
+                        };
+                    }
+                }
+
+                // Resolve item metadata (name, price) assigned to this patient
+                const assignedItems = [];
+                for (let item of mapping.items) {
+                    if (item.productType === 'LabTest') {
+                        const test = await LabTest.findById(item.itemId);
+                        if (test) {
+                            assignedItems.push({
+                                itemId: item.itemId,
+                                productType: 'LabTest',
+                                name: test.testName,
+                                price: test.discountPrice || test.amount
+                            });
+                            globalUniqueTests.add(JSON.stringify({ testId: item.itemId, price: test.discountPrice || test.amount, name: test.testName }));
+                        }
+                    } else if (item.productType === 'LabPackage') {
+                        const pkg = await LabPackage.findById(item.itemId);
+                        if (pkg) {
+                            assignedItems.push({
+                                itemId: item.itemId,
+                                productType: 'LabPackage',
+                                name: pkg.packageName,
+                                price: pkg.offerPrice || pkg.mrp
+                            });
+                            globalUniquePackages.add(JSON.stringify({ packageId: item.itemId, price: pkg.offerPrice || pkg.mrp, name: pkg.packageName }));
+                        }
+                    }
+                }
+
+                resolvedPatients.push({
+                    patientId: mapping.patientId,
+                    name: patientInfo.name,
+                    age: patientInfo.age,
+                    gender: patientInfo.gender,
+                    relation: patientInfo.relation,
+                    address: mapping.address, // Patient-specific collection address
+                    assignedItems: assignedItems // Items assigned to this specific patient
+                });
+            }
+        } 
+        // =========================================================================
+        // CASE B: OLD FLOW FALLBACK (Flat patient & test array checklist)
+        // =========================================================================
+        else {
+            bill = await calculateBillHelper(
+                cart.labCart.labId, 
+                cart.labCart, 
+                selectedPatientIds.length, 
+                collectionType, 
+                couponCode, 
+                isRapid, 
+                req.user.id,
+                appointmentTime 
+            );
+
+            resolvedPatients = await mapPatients(req.user.id, selectedPatientIds);
+            
+            // Populate fallback flat items checklist
+            cart.labCart.items.forEach(i => {
+                if (i.productType === 'LabTest') {
+                    globalUniqueTests.add(JSON.stringify({ testId: i.itemId, price: i.price, name: i.name }));
+                } else {
+                    globalUniquePackages.add(JSON.stringify({ packageId: i.itemId, price: i.price, name: i.name }));
+                }
+            });
+        }
+
+        // Convert the unique sets back into arrays for schema validation compatibility
+        const finalTestsArray = Array.from(globalUniqueTests).map(str => JSON.parse(str));
+        const finalPackagesArray = Array.from(globalUniquePackages).map(str => JSON.parse(str));
 
         const tempBookingId = `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
@@ -1083,17 +1282,20 @@ const checkoutLabBooking = async (req, res) => {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
         }
 
+        // Establish first patient's address as the global fallback address
+        const fallbackAddress = resolvedPatients[0]?.address || address;
+
         const booking = await LabBooking.create({
             bookingId: tempBookingId,
             userId: req.user.id,
             labId: cart.labCart.labId,
-            patients: await mapPatients(req.user.id, selectedPatientIds),
+            patients: resolvedPatients, // Structured patient array with customized addresses & item payloads
             items: {
-                tests: cart.labCart.items.filter(i => i.productType === 'LabTest').map(i => ({ testId: i.itemId, price: i.price, name: i.name })),
-                packages: cart.labCart.items.filter(i => i.productType === 'LabPackage').map(i => ({ packageId: i.itemId, price: i.price, name: i.name }))
+                tests: finalTestsArray,
+                packages: finalPackagesArray
             },
             collectionType, 
-            address, 
+            address: fallbackAddress, 
             appointmentDate, 
             appointmentTime,
             billSummary: bill, 

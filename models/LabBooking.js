@@ -22,14 +22,44 @@ const labBookingSchema = new mongoose.Schema({
     // STEP 2: PATIENT & ITEM SELECTION (Figma Screen 11-15, 30-36)
     // ==========================================
     // User can select multiple family members or 'Self'
-    patients: [{
-        patientId: String, // ID from User.familyMember or 'Self'
+    // patients: [{
+    //     patientId: String, // ID from User.familyMember or 'Self'
+    //     name: String,
+    //     age: Number,
+    //     gender: String,
+    //     relation: String,
+    //     medicalReport: String // Optional: User uploads previous report (Screen 16)
+    // }],
+        patients: [{
+    patientId: { type: String, required: true }, // 'Self' or family member ID
+    name: { type: String, required: true },
+    age: { type: Number },
+    gender: { type: String },
+    relation: { type: String },
+    medicalReport: { type: String, default: null },
+
+    // 🚨 NEW: Dynamic, separate collection address for this patient (Figma Screen 3)
+    address: {
         name: String,
-        age: Number,
-        gender: String,
-        relation: String,
-        medicalReport: String // Optional: User uploads previous report (Screen 16)
-    }],
+        phone: String,
+        houseNo: String,
+        sector: String,
+        landmark: String,
+        city: String,
+        state: String,
+        pincode: String,
+        addressType: String
+    },
+
+    // 🚨 NEW: Specific items assigned to this patient (Figma Screen 2)
+    assignedItems: [{
+        itemId: { type: mongoose.Schema.Types.ObjectId },
+        productType: { type: String, enum: ['LabTest', 'LabPackage'] },
+        name: { type: String },
+        price: { type: Number }
+    }]
+}],
+
 
     // FLOW: If Direct Booking, items will be filled now.
     // If Prescription-Based, Lab will fill this after review (Screen 67).
