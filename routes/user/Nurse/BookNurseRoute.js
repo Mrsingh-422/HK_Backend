@@ -7,7 +7,7 @@ const {
     getAppointmentStatus, 
     uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking,getNursePackagesList,
     getNursePackageDetails,getMedicalConditions,
-    getGlobalServicesList,getProvidersForService
+    getGlobalServicesList,getProvidersForService, cancelNurseBooking
 
 } = require('../../../controllers/user/Nurse/BookNurse');
 
@@ -62,6 +62,9 @@ router.get('/services/global', getGlobalServicesList);
 
 // 2. Get providers offering a selected service
 router.get('/services/providers', getProvidersForService);
+
+
+router.patch('/cancel/:id',protect('user'),cancelNurseBooking);
 
 
 

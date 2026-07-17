@@ -11,6 +11,7 @@ const path = require('path');
 const mongoose = require('mongoose');
 const { sendPushNotification } = require('../../../utils/notification'); 
 const { deleteFile } = require('../../../utils/fileHandler');
+const NoShowConfig = require('../../../models/NoShowConfig');
 
 
 // 1. GET DASHBOARD STATS (Updated with Priority Count)
@@ -1376,7 +1377,51 @@ const getPhlebotomistActiveDetail = async (req, res) => {
     }
 };
 
- 
+ const labWalkInNoShow = async (req, res) => {
+    try {
+        const { orderId, comments } = req.body;
+        const labId = req.user.id;
+
+        const booking = await LabBooking.findOne({ 
+            _id: orderId, 
+            labId, 
+            collectionType: 'Visit Lab',
+            status: { $in: ['Confirmed', 'Pending'] } 
+        });
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Active walk-in booking record not found." });
+        }
+
+        const totalPaid = booking.billSummary?.totalAmount || 0;
+        let noShowFee = 0;
+
+        const config = await NoShowConfig.findOne({ vendorType: 'Lab', isActive: true });
+        if (config && config.chargeValue > 0) {
+            noShowFee = config.chargeType === 'Percentage'
+                ? Math.round((totalPaid * config.chargeValue) / 100)
+                : Math.min(config.chargeValue, totalPaid);
+        }
+
+        booking.status = 'No-Show';
+        if (!booking.billSummary) booking.billSummary = {};
+        booking.billSummary.noShowFeeApplied = noShowFee;
+        booking.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        booking.noShowComments = comments || "Patient did not arrive at physical lab desk.";
+
+        await booking.save();
+
+        res.json({ 
+            success: true, 
+            message: "Walk-In No-Show registered successfully. Refund initiated.", 
+            noShowFeeApplied: noShowFee,
+            data: booking
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -1408,7 +1453,8 @@ module.exports = {
     getAvailablePhlebotomists,              
     reassignDriverStaff   ,
     getBookingTrackingDetails,
-    getPhlebotomistActiveDetail
+    getPhlebotomistActiveDetail,
+    labWalkInNoShow
     
  
 };

@@ -120,7 +120,10 @@ appliedCoupon: {
         distanceCharge: { type: Number, default: 0 },
         rapidDeliveryCharge: { type: Number, default: 0 },
         
-        totalAmount: { type: Number, default: 0 }      // Final Payable
+        totalAmount: { type: Number, default: 0 },      // Final Payable
+
+        cancellationFeeApplied: { type: Number, default: 0 },
+        noShowFeeApplied: { type: Number, default: 0 }
     },
 
     // ==========================================

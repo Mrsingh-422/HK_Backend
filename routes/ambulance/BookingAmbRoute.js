@@ -44,4 +44,8 @@ router.patch('/change-password', protect(['ambulance', 'hospital-ambulance']), c
 router.get('/notifications', protect(['ambulance', 'hospital-ambulance']), controller.getDriverNotifications);
 router.patch('/notifications/mark-read', protect(['ambulance', 'hospital-ambulance']), controller.markAllNotificationsAsRead);
 
+// --- REPORT NO-SHOW (Screen 17) ---
+router.post('/orders/no-show', protect(['ambulance', 'hospital-ambulance']), controller.reportAmbulanceNoShow);
+
+
 module.exports = router;

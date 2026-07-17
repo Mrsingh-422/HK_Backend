@@ -8,6 +8,7 @@ const mongoose = require('mongoose');
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../utils/notification'); // 👈 FIX 3: Added missing notification helper import
 const Review = require('../../models/Review');
 const Hospital = require('../../models/Hospital');
+const NoShowConfig = require('../../models/NoShowConfig');
 
 
 const getMyActiveTrip = async (req, res) => {
@@ -748,9 +749,69 @@ const markAllNotificationsAsRead = async (req, res) => {
     }
 };
 
+const reportAmbulanceNoShow = async (req, res) => {
+    try {
+        const { bookingId, comments } = req.body;
+        const driverId = req.user.id; 
+
+        // Locate active arriving booking linked to this driver
+        const booking = await Booking.findOne({ 
+            _id: bookingId, 
+            ambulanceId: driverId, 
+            status: 'Arrived' 
+        });
+
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Booking must be in 'Arrived' state to report a No-Show." 
+            });
+        }
+
+        const totalPaid = booking.pricing?.total || 0;
+        let noShowFee = 0;
+
+        // Fetch dynamic admin no-show rules
+        const config = await NoShowConfig.findOne({ vendorType: 'Ambulance', isActive: true });
+        if (config && config.chargeValue > 0) {
+            noShowFee = config.chargeType === 'Percentage' 
+                ? Math.round((totalPaid * config.chargeValue) / 100)
+                : Math.min(config.chargeValue, totalPaid);
+        }
+
+        // Set status to Cancelled and apply dynamic no-show fee
+        booking.status = 'Cancelled';
+        booking.cancelledBy = 'Driver';
+        booking.cancellationReason = comments || "Ambulance Driver arrived on spot but customer was unreachable.";
+        booking.pricing.noShowFeeApplied = noShowFee;
+        booking.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
+
+        booking.trackingTimeline.push({
+            status: 'No-Show',
+            timestamp: new Date(),
+            note: `Ambulance driver reported spot No-Show. Penalty fee applied: ₹${noShowFee}.`
+        });
+
+        // Release ambulance availability status back to available
+        await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: true } });
+
+        await booking.save();
+
+        res.json({ 
+            success: true, 
+            message: "Ambulance Spot No-Show logged successfully. Refund initiated.", 
+            noShowFeeApplied: noShowFee,
+            data: booking
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 module.exports = {getMyActiveTrip,getDriverReferralCases,getSystemCms, getIncomingRequests, acceptBooking, updateTripStatus, uploadIncidentPhoto,
     finalizeTripHandoff,verifyPickupOtp, arrivedAtDropOff, verifyDropOffOtp, triggerAmbulanceSos,
     rejectBooking, reRouteAmbulance,getDriverDashboardStats,
-    getDriverTripHistory, changeDriverPassword, getDriverNotifications, markAllNotificationsAsRead
+    getDriverTripHistory, changeDriverPassword, getDriverNotifications, markAllNotificationsAsRead, reportAmbulanceNoShow
  };

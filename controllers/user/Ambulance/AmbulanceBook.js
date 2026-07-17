@@ -10,6 +10,7 @@ const { getDistance } = require('../../../utils/helpers');
 const { sendPushNotification,notifyAdminsAndVendor } = require('../../../utils/notification');
 const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { processCancellationRefund } = require('../../../utils/policyHelper');
 
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
@@ -951,17 +952,30 @@ const cancelAmbulanceBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Ambulance booking not found." });
         }
 
-        if (['Arrived', 'Picked-Up', 'En-Route', 'Delivered', 'Cancelled'].includes(booking.status)) {
-            return res.status(400).json({ success: false, message: "Cannot cancel ambulance booking in its current state." });
+        // Prevent cancelling already completed or cancelled trips
+        const protectedStates = ['Delivered', 'Cancelled', 'No-Show'];
+        if (protectedStates.includes(booking.status)) {
+            return res.status(400).json({ success: false, message: "Cannot cancel booking in its current state." });
         }
 
+        // 🚨 DYNAMIC POLICY EVALUATION (Checks if driver accepted/started transit)
+        const policyResult = await processCancellationRefund(booking, 'Ambulance');
+
         booking.status = 'Cancelled';
+        booking.cancelledBy = 'User';
+        booking.cancellationReason = reason || "Cancelled by User";
+        
+        // Save dynamic fee metrics directly to the document
+        booking.pricing.cancellationFeeApplied = policyResult.cancellationFee;
+        booking.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+
         booking.trackingTimeline.push({ 
             status: 'Cancelled', 
             timestamp: new Date(), 
-            note: reason || "Cancelled by User" 
+            note: reason ? `Cancelled by User. Reason: ${reason}` : "Cancelled by User." 
         });
 
+        // Release resources
         if (booking.ambulanceId) {
             await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
             
@@ -976,15 +990,24 @@ const cancelAmbulanceBooking = async (req, res) => {
 
         await booking.save();
 
-        // 🚨 SUBSCRIPTION REFUND: Check if ambulance charge was 0 and it was NOT a default free emergency case
-        if (booking.pricing?.ambulanceCharge === 0 && booking.serviceType !== 'Accident emergency') {
-            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+        // Subscription benefit refund check
+        if (booking.subscriptionDetails?.isSubscriptionApplied && booking.pricing?.ambulanceCharge === 0 && booking.serviceType !== 'Accident emergency') {
             await refundBenefitCount(booking.userId, 'freeAmbulanceTripsCount');
         }
 
-        res.json({ success: true, message: "Booking cancelled successfully" });
+        res.json({ 
+            success: true, 
+            message: policyResult.cancellationFee > 0 
+                ? `Booking cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
+                : "Booking cancelled successfully. No charges applied.",
+            data: {
+                cancellationFee: policyResult.cancellationFee,
+                refundAmount: policyResult.refundAmount,
+                booking
+            }
+        });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

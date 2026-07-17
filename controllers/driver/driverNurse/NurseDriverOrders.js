@@ -3,6 +3,7 @@ const Driver = require('../../../models/Driver');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const moment = require('moment');
+const NoShowConfig = require('../../../models/NoShowConfig');
 
 // ==========================================
 // 1. LOGIN & FORGOT PASSWORD FLOW
@@ -572,6 +573,47 @@ const getAboutContent = async (req, res) => {
     }
 };
 
+const reportNurseNoShow = async (req, res) => {
+    try {
+        const { bookingId, comments } = req.body;
+        const staffId = req.user.id;
+
+        const booking = await NurseBooking.findOne({ _id: bookingId, assignedStaffId: staffId, status: 'Arrived' });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking must be in 'Arrived' state to report No-Show." });
+        }
+
+        const totalPaid = booking.priceBreakdown?.totalPrice || 0;
+        let noShowFee = 0;
+
+        const config = await NoShowConfig.findOne({ vendorType: 'Nurse', isActive: true });
+        if (config && config.chargeValue > 0) {
+            noShowFee = config.chargeType === 'Percentage'
+                ? Math.round((totalPaid * config.chargeValue) / 100)
+                : Math.min(config.chargeValue, totalPaid);
+        }
+
+        booking.status = 'No-Show';
+        booking.priceBreakdown.noShowFeeApplied = noShowFee;
+        booking.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        booking.cancelReason = comments || "Nurse arrived on location but patient was unreachable.";
+
+        await booking.save();
+
+        // Release nurse staff status back to available
+        await Driver.findByIdAndUpdate(staffId, { status: 'Available' });
+
+        res.json({ 
+            success: true, 
+            message: "Home Nursing No-Show logged successfully. Driver released and refund initiated.", 
+            noShowFeeApplied: noShowFee,
+            data: booking
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 module.exports = {
@@ -594,5 +636,5 @@ module.exports = {
     getAdminContact,
     getDriverHistory,
     getTermsAndConditions,
-    getAboutContent
+    getAboutContent,reportNurseNoShow
 };

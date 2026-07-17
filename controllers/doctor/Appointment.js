@@ -5,6 +5,7 @@ const Medicine = require('../../models/Medicine');
 const moment = require('moment');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const NoShowConfig = require('../../models/NoShowConfig');
 
 
 // GET: Doctor Dashboard Stats
@@ -833,6 +834,49 @@ const searchMasterMedicinesForDoctor = async (req, res) => {
     }
 };
 
+const reportDoctorNoShow = async (req, res) => {
+    try {
+        const { appointmentId, comments } = req.body;
+        const doctorId = req.user.id;
+
+        const appointment = await Appointment.findOne({ 
+            _id: appointmentId, 
+            doctorId, 
+            bookingType: 'Appointment',
+            status: { $in: ['Confirmed', 'Pending'] } 
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Active scheduled booking record not found." });
+        }
+
+        const totalPaid = appointment.totalAmount || 0;
+        let noShowFee = 0;
+
+        const config = await NoShowConfig.findOne({ vendorType: 'Doctor', isActive: true });
+        if (config && config.chargeValue > 0) {
+            noShowFee = config.chargeType === 'Percentage'
+                ? Math.round((totalPaid * config.chargeValue) / 100)
+                : Math.min(config.chargeValue, totalPaid);
+        }
+
+        appointment.status = 'No-Show';
+        appointment.pricingBreakdown.noShowFeeApplied = noShowFee;
+        appointment.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        appointment.noShowComments = comments || "Patient did not show up for scheduled consultation.";
+
+        await appointment.save();
+
+        res.json({ 
+            success: true, 
+            message: "Consultation No-Show logged. Refund initiated.", 
+            noShowFeeApplied: noShowFee,
+            data: appointment
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 
@@ -843,6 +887,7 @@ module.exports = { getVendorDashboard,
     getPrescriptionDetails, updatePrescription, resendPrescription,getAppointmentClinicalDetails, createPrescription,
     getPatientHistory, getPatientHistoryDetails,
     getDoctorVideoConsults,
-    searchMasterMedicinesForDoctor
+    searchMasterMedicinesForDoctor,
+    reportDoctorNoShow
 
 };

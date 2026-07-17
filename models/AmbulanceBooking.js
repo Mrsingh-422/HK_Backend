@@ -77,7 +77,10 @@ const ambulanceBookingSchema = new mongoose.Schema({
         supportingStaffCharge: { type: Number, default: 0 },
         subtotal: { type: Number, default: 0 }, // Price before discount
         discount: { type: Number, default: 0 }, // Same as couponDetails.discountValue
-        total: { type: Number, default: 0 }    // Final payable amount
+        total: { type: Number, default: 0 },    // Final payable amount
+        
+        cancellationFeeApplied: { type: Number, default: 0 },
+        noShowFeeApplied: { type: Number, default: 0 }
     },
 
     // Screen 40: For Referral Bookings

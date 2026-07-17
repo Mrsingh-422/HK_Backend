@@ -4,6 +4,7 @@ const LabTest = require('../../../models/LabTest'); // 👈 Added Schema
 const LabPackage = require('../../../models/LabPackage'); // 👈 Added Schema
 const bcrypt = require('bcryptjs');
 const moment = require('moment');
+const NoShowConfig = require('../../../models/NoShowConfig');
 
 // Razorpay Utilities integration
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay');
@@ -382,30 +383,30 @@ const deliverSampleToLab = async (req, res) => {
 };
 
 // No Response / No Show Action (Figma Screen 21 "No Response" button)
-const reportNoResponse = async (req, res) => {
-    try {
-        const { orderId } = req.params;
-        const { noShowComments } = req.body; 
-        const driverId = req.user.id;
+// const reportNoResponse = async (req, res) => {
+//     try {
+//         const { orderId } = req.params;
+//         const { noShowComments } = req.body; 
+//         const driverId = req.user.id;
 
-        const order = await LabBooking.findById(orderId);
-        if (!order) return res.status(404).json({ message: "Order not found" });
+//         const order = await LabBooking.findById(orderId);
+//         if (!order) return res.status(404).json({ message: "Order not found" });
 
-        if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized" });
-        }
+//         if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
+//             return res.status(403).json({ message: "Unauthorized" });
+//         }
 
-        order.status = 'Cancelled';
-        order.noShowComments = noShowComments || "Patient not responding";
-        order.cancelReason = "No Show - Patient Unreachable";
-        await order.save();
+//         order.status = 'Cancelled';
+//         order.noShowComments = noShowComments || "Patient not responding";
+//         order.cancelReason = "No Show - Patient Unreachable";
+//         await order.save();
 
-        // Release Phlebotomist
-        await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
+//         // Release Phlebotomist
+//         await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
 
-        res.json({ success: true, message: "No Response reported. Booking cancelled.", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+//         res.json({ success: true, message: "No Response reported. Booking cancelled.", data: order });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
 
 
 // ==========================================
@@ -828,6 +829,52 @@ const rejectOrderWithReason = async (req, res) => {
     }
 };
 
+const reportNoResponse = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { noShowComments } = req.body; 
+        const driverId = req.user.id;
+
+        const order = await LabBooking.findById(orderId);
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const totalPaid = order.billSummary?.totalAmount || 0;
+        let noShowFee = 0;
+
+        const config = await NoShowConfig.findOne({ vendorType: 'Lab', isActive: true });
+        if (config && config.chargeValue > 0) {
+            noShowFee = config.chargeType === 'Percentage'
+                ? Math.round((totalPaid * config.chargeValue) / 100)
+                : Math.min(config.chargeValue, totalPaid);
+        }
+
+        order.status = 'No-Show';
+        order.noShowComments = noShowComments || "Patient not responding";
+        order.cancelReason = "No Show - Patient Unreachable";
+        
+        if (!order.billSummary) order.billSummary = {};
+        order.billSummary.noShowFeeApplied = noShowFee;
+        order.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
+
+        await order.save();
+
+        // Release Phlebotomist status back to available
+        await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
+
+        res.json({ 
+            success: true, 
+            message: "Home Collection No-Show logged successfully. Driver released.", 
+            noShowFeeApplied: noShowFee,
+            data: order 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
 
 module.exports = {
     forgotPassword,

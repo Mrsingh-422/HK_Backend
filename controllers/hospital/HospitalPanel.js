@@ -18,6 +18,8 @@ const Booking = require('../../models/AmbulanceBooking');
 const moment = require('moment');
 const path = require('path');
 const fs = require('fs');
+const NoShowConfig = require('../../models/NoShowConfig');
+
 const getShortName = (name) => {
     return name.split(' ').map(word => word[0]).join('').toUpperCase();
 };
@@ -1701,6 +1703,59 @@ const reassignDoctorFromPanel = async (req, res) => {
     }
 };
 
+const reportHospitalNoShow = async (req, res) => {
+    try {
+        const { appointmentId, comments } = req.body;
+        const hospitalId = req.user.id;
+
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            hospitalId,
+            bookingType: 'Admission',
+            status: 'Hospital-Pending' // Pending direct admission check-in
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission booking record not found." });
+        }
+
+        const totalPaid = appointment.totalAmount || 0;
+        let noShowFee = 0;
+
+        const config = await NoShowConfig.findOne({ vendorType: 'Hospital', isActive: true });
+        if (config && config.chargeValue > 0) {
+            noShowFee = config.chargeType === 'Percentage'
+                ? Math.round((totalPaid * config.chargeValue) / 100)
+                : Math.min(config.chargeValue, totalPaid);
+        }
+
+        appointment.status = 'No-Show';
+        appointment.pricingBreakdown.noShowFeeApplied = noShowFee;
+        appointment.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        appointment.noShowComments = comments || "Patient failed to check-in for scheduled bed admission.";
+
+        // Release the assigned bed resource instantly
+        if (appointment.bedId) {
+            await Bed.findByIdAndUpdate(appointment.bedId, { status: 'Available' });
+            await Ward.findOneAndUpdate(
+                { name: appointment.wardName, hospitalId },
+                { $inc: { availableBeds: 1 } }
+            );
+        }
+
+        await appointment.save();
+
+        res.json({ 
+            success: true, 
+            message: "Admission No-Show logged successfully. Bed released and refund initiated.", 
+            noShowFeeApplied: noShowFee,
+            data: appointment
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -1717,5 +1772,5 @@ module.exports = {
     updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings,
     updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,
-    emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,reassignAmbulanceOnBreakdown,reassignDoctorFromPanel
+    emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,reassignAmbulanceOnBreakdown,reassignDoctorFromPanel,reportHospitalNoShow
 };

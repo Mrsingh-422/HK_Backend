@@ -31,6 +31,7 @@ const ComboOffer = require('../../../models/PharmacyComboOffer'); // Import Comb
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { processCancellationRefund } = require('../../../utils/policyHelper');
 
 
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
@@ -1487,28 +1488,51 @@ const uploadPrescription = async (req, res) => {
 
 const cancelMedicineOrder = async (req, res) => {
     try {
-        const { reason } = req.body;
-        const order = await PharmacyBooking.findOne({ _id: req.params.id, userId: req.user.id });
+        const { orderId, reason } = req.body; // Can accept Mongo _id or custom orderId
+        const userId = req.user.id;
 
-        if (!order) return res.status(404).json({ message: "Order not found." });
+        const order = await PharmacyBooking.findOne({ 
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            userId 
+        });
 
-        if (['Out for Delivery', 'Delivered', 'Cancelled'].includes(order.status)) {
-            return res.status(400).json({ message: "Cannot cancel order in its current state." });
+        if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+
+        const terminalStates = ['OutForDelivery', 'ReachedLocation', 'Delivered', 'Cancelled', 'No-Show'];
+        if (terminalStates.includes(order.status) || terminalStates.includes(order.deliveryStatus)) {
+            return res.status(400).json({ success: false, message: "Cannot cancel order in its current state." });
         }
 
+        // 🚨 DYNAMIC POLICY EVALUATION (Checks if dynamic delivery agent is out for delivery)
+        const policyResult = await processCancellationRefund(order, 'Pharmacy');
+
         order.status = 'Cancelled';
-        order.cancelReason = reason;
+        order.deliveryStatus = 'CancelledByDriver';
+        order.cancelReason = reason || "Cancelled by User";
+        
+        order.billSummary.cancellationFeeApplied = policyResult.cancellationFee;
+        order.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+
         await order.save();
 
-        // 🚨 SUBSCRIPTION REFUND: Check if delivery charge was 0 due to subscription
-        if (order.billSummary?.deliveryCharge === 0 && (order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection')) {
-            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+        // Subscription benefit refund check
+        if (order.billSummary?.deliveryCharge === 0) {
             await refundBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
         }
 
-        res.json({ success: true, message: "Order cancelled" });
+        res.json({ 
+            success: true, 
+            message: policyResult.cancellationFee > 0
+                ? `Order cancelled. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
+                : "Order cancelled successfully. No charges applied.",
+            data: {
+                cancellationFee: policyResult.cancellationFee,
+                refundAmount: policyResult.refundAmount,
+                order
+            }
+        });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

@@ -1,6 +1,6 @@
 // controllers/admin/others/PolicyConfig.js
-const NoShowConfig = require('../../models/NoShowConfig');
-const CancellationConfig = require('../../models/CancellationConfig');
+const NoShowConfig = require('../../../models/NoShowConfig');
+const CancellationConfig = require('../../../models/CancellationConfig');
 
 // 1. Fetch all configurations for No-Show and Cancellations
 const getPolicyConfigs = async (req, res) => {

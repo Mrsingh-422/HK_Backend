@@ -19,6 +19,7 @@ const Review = require('../../../models/Review'); // For dynamic ratings calcula
 const Bed = require('../../../models/Bed'); // For hospital admissions
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { processCancellationRefund } = require('../../../utils/policyHelper');
 
 // 1. GET ALL SPECIALIZATIONS (For dropdown)
 const getSpecializations = async (req, res) => {
@@ -746,14 +747,11 @@ const userCancelAppointment = async (req, res) => {
         const { reason } = req.body;
         const appointment = await Appointment.findOne({ _id: req.params.id, userId: req.user.id });
 
-        if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+        if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
         
-        if (['In-Progress', 'Completed'].includes(appointment.status)) {
-            return res.status(400).json({ message: "Cannot cancel appointment in its current state" });
-        }
-
-        if (appointment.status.startsWith('Cancelled')) {
-            return res.status(400).json({ message: "This appointment is already cancelled." });
+        const terminalStates = ['In-Progress', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'];
+        if (terminalStates.includes(appointment.status)) {
+            return res.status(400).json({ success: false, message: "Cannot cancel appointment in its current state." });
         }
 
         const globalConfig = await DocRescheduleLimit.findOne();
@@ -765,16 +763,19 @@ const userCancelAppointment = async (req, res) => {
         if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
-                message: `Cancellation Blocked: Aapka reschedule limit (${maxLimit} times) pehle hi khatam ho chuka hai, isliye aap is appointment ko ab cancel nahi kar sakte.`
+                message: `Cancellation Blocked: Reschedule limit (${maxLimit}) has expired.`
             });
         }
 
         if (currentCancelCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
-                message: `Cancellation Blocked: Aap is appointment ko maximum ${maxLimit} baar hi cancel kar sakte hain.`
+                message: `Cancellation Blocked: Maximum cancellations (${maxLimit}) reached.`
             });
         }
+
+        // 🚨 DYNAMIC POLICY EVALUATION (Checks if doctor has started transit)
+        const policyResult = await processCancellationRefund(appointment, 'Doctor');
 
         appointment.status = 'Cancelled-By-User';
         appointment.cancellationCount = currentCancelCount + 1;
@@ -784,24 +785,30 @@ const userCancelAppointment = async (req, res) => {
             cancelledAt: new Date()
         };
         
+        appointment.pricingBreakdown.cancellationFeeApplied = policyResult.cancellationFee;
         appointment.paymentStatus = 'Refund-Initiated'; 
 
         await appointment.save();
 
-        // 🚨 SUBSCRIPTION REFUND: Check if booking baseFee was 0 due to subscription
-        if (appointment.pricingBreakdown?.baseFee === 0) {
-            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+        // Subscription benefit refund check
+        if (appointment.subscriptionDetails?.isSubscriptionApplied && appointment.pricingBreakdown?.baseFee === 0) {
             await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
         }
 
         res.json({ 
             success: true, 
-            message: "Appointment cancelled successfully. You can reschedule this appointment.", 
+            message: policyResult.cancellationFee > 0
+                ? `Appointment cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
+                : "Appointment cancelled successfully. No charges applied.",
             cancellationLeft: maxLimit - appointment.cancellationCount,
-            data: appointment 
+            data: {
+                cancellationFee: policyResult.cancellationFee,
+                refundAmount: policyResult.refundAmount,
+                appointment
+            }
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

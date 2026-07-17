@@ -20,6 +20,7 @@ const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/
 
 const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { processCancellationRefund } = require('../../../utils/policyHelper');
 
 
 // 1. LIST HOSPITALS (Screenshot 18, 19)
@@ -923,16 +924,14 @@ const cancelBedBooking = async (req, res) => {
         const { id } = req.params; 
         const { reason } = req.body;
 
-        const appt = await Appointment.findOne({ _id: id, userId: req.user.id });
+        const appt = await Appointment.findOne({ _id: id, userId: req.user.id, bookingType: 'Admission' });
         if (!appt) {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        if (appt.status === 'Completed' || appt.status.startsWith('Cancelled')) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "This booking is either already completed or already cancelled." 
-            });
+        const terminalStates = ['In-Progress', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Hospital', 'No-Show'];
+        if (terminalStates.includes(appt.status)) {
+            return res.status(400).json({ success: false, message: "Cannot cancel booking in its current state." });
         }
 
         const globalConfig = await BedRescheduleLimit.findOne();
@@ -944,16 +943,19 @@ const cancelBedBooking = async (req, res) => {
         if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
-                message: `Cancellation Blocked: Aapka reschedule limit (${maxLimit} times) pehle hi khatam ho chuka hai, isliye aap is booking ko ab cancel nahi kar sakte.`
+                message: `Cancellation Blocked: Reschedule limit (${maxLimit}) has expired.`
             });
         }
 
         if (currentCancelCount >= maxLimit) {
             return res.status(400).json({
                 success: false,
-                message: `Cancellation Blocked: Aap is booking ko maximum ${maxLimit} baar hi cancel kar sakte hain.`
+                message: `Cancellation Blocked: Maximum cancellations (${maxLimit}) reached.`
             });
         }
+
+        // 🚨 DYNAMIC POLICY EVALUATION
+        const policyResult = await processCancellationRefund(appt, 'Hospital');
 
         if (appt.bedId) {
             await Bed.findByIdAndUpdate(appt.bedId, { $set: { status: 'Available' } });
@@ -966,22 +968,29 @@ const cancelBedBooking = async (req, res) => {
         appt.status = 'Cancelled-By-User';
         appt.cancellationCount = currentCancelCount + 1;
         appt.cancelReason = reason || "Cancelled by User";
+        
+        appt.pricingBreakdown.cancellationFeeApplied = policyResult.cancellationFee;
+        appt.paymentStatus = 'Refund-Initiated';
 
         await appt.save();
 
-        // 🚨 SUBSCRIPTION REFUND: Check if doctor consultation fee was 0 due to subscription
-        if (appt.doctorId && appt.pricingBreakdown?.visitCharges === 0) {
-            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
-            await refundBenefitCount(appt.userId, 'freeDoctorAppointmentsCount');
+        // Subscription benefit refund check
+        if (appt.subscriptionDetails?.isSubscriptionApplied && appt.pricingBreakdown?.baseFee === 0) {
+            await refundBenefitCount(appt.userId, 'freeHospitalStaysCount');
         }
 
         res.json({
             success: true,
-            message: "Booking cancelled successfully. Note: No refund is issued. You have the option to reschedule this booking.",
+            message: policyResult.cancellationFee > 0
+                ? `Booking cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
+                : "Booking cancelled successfully. No charges applied.",
             cancellationLeft: maxLimit - appt.cancellationCount,
-            data: appt
+            data: {
+                cancellationFee: policyResult.cancellationFee,
+                refundAmount: policyResult.refundAmount,
+                booking: appt
+            }
         });
-
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

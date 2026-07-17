@@ -52,7 +52,10 @@ const appointmentSchema = new mongoose.Schema({
         visitCharges: { type: Number, default: 0 }, // Distance based
         extraCharges: { type: Number, default: 0 }, // Fast delivery/Emergency
         discountAmount: { type: Number, default: 0 },
-        subtotal: { type: Number }
+        subtotal: { type: Number },
+
+        cancellationFeeApplied: { type: Number, default: 0 },
+        noShowFeeApplied: { type: Number, default: 0 }
     },
     couponDetails: {
         couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },

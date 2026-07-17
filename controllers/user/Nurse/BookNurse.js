@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const { createRazorpayOrder, verifyRazorpaySignature , fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { processCancellationRefund } = require('../../../utils/policyHelper');
 
 
 
@@ -1264,6 +1265,53 @@ const getProvidersForService = async (req, res) => {
     }
 };
 
+const cancelNurseBooking = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        const booking = await NurseBooking.findOne({ _id: id, userId: req.user.id });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Nursing booking not found." });
+        }
+
+        const terminalStates = ['Completed', 'Cancelled', 'No-Show'];
+        if (terminalStates.includes(booking.status)) {
+            return res.status(400).json({ success: false, message: "Cannot cancel booking in its current state." });
+        }
+
+        // 🚨 DYNAMIC POLICY EVALUATION (Checks if assigned nurse has started the trip)
+        const policyResult = await processCancellationRefund(booking, 'Nurse');
+
+        booking.status = 'Cancelled';
+        booking.cancelReason = reason || "Cancelled by User";
+        
+        booking.priceBreakdown.cancellationFeeApplied = policyResult.cancellationFee;
+        booking.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+
+        await booking.save();
+
+        // Subscription benefit refund check
+        if (booking.subscriptionDetails?.isSubscriptionApplied && booking.priceBreakdown?.baseServicePrice === 0) {
+            await refundBenefitCount(booking.userId, 'freeNurseVisitsCount');
+        }
+
+        res.json({
+            success: true,
+            message: policyResult.cancellationFee > 0
+                ? `Booking cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
+                : "Booking cancelled successfully. No charges applied.",
+            data: {
+                cancellationFee: policyResult.cancellationFee,
+                refundAmount: policyResult.refundAmount,
+                booking
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -1271,4 +1319,4 @@ module.exports = { getNurses,getNurseDetails,searchNursesAndServices,searchNurse
     getAppointmentStatus, 
     uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon,getNursePackagesList,
     getNursePackageDetails,getMedicalConditions,
-getGlobalServicesList,getProvidersForService };
+getGlobalServicesList,getProvidersForService,cancelNurseBooking };

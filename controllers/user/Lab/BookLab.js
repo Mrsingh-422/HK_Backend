@@ -1719,26 +1719,43 @@ const cancelBooking = async (req, res) => {
         const { reason } = req.body;
         const booking = await LabBooking.findOne({ _id: req.params.id, userId: req.user.id });
 
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        const nonCancellable = ['Sample Collected', 'Testing', 'Report Generated', 'Completed'];
-        if (nonCancellable.includes(booking.status)) {
-            return res.status(400).json({ message: "Cannot cancel. Phlebotomist is already on the way or sample is in lab." });
+        const terminalStates = ['Testing', 'Report Generated', 'Completed', 'Cancelled', 'No-Show'];
+        if (terminalStates.includes(booking.status)) {
+            return res.status(400).json({ success: false, message: "Cannot cancel booking in its current state." });
         }
 
+        // 🚨 DYNAMIC POLICY EVALUATION (Checks if phlebotomist has started the trip)
+        const policyResult = await processCancellationRefund(booking, 'Lab');
+
         booking.status = 'Cancelled';
-        booking.cancelReason = reason;
+        booking.cancelReason = reason || "Cancelled by User";
+        
+        if (!booking.billSummary) booking.billSummary = {};
+        booking.billSummary.cancellationFeeApplied = policyResult.cancellationFee;
+        booking.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+
         await booking.save();
 
-        // 🚨 SUBSCRIPTION REFUND: Check if delivery charge was 0 due to subscription
-        if (booking.billSummary?.homeVisitCharge === 0 && booking.collectionType === 'Home Collection') {
-            const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+        // Subscription benefit refund check
+        if (booking.collectionType === 'Home Collection' && booking.billSummary?.homeVisitCharge === 0) {
             await refundBenefitCount(booking.userId, 'freeLabDeliveriesCount');
         }
 
-        res.json({ success: true, message: "Booking cancelled successfully" });
+        res.json({ 
+            success: true, 
+            message: policyResult.cancellationFee > 0
+                ? `Booking cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
+                : "Booking cancelled successfully. No charges applied.",
+            data: {
+                cancellationFee: policyResult.cancellationFee,
+                refundAmount: policyResult.refundAmount,
+                booking
+            }
+        });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

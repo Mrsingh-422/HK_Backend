@@ -1,6 +1,8 @@
 // utils/policyHelper.js
 const CancellationConfig = require('../models/CancellationConfig');
 const NoShowConfig = require('../models/NoShowConfig');
+const Wallet = require('../models/Wallet');
+
 
 /**
  * Checks if a driver or provider has started transit on a booking
@@ -73,4 +75,40 @@ const processCancellationRefund = async (booking, vendorType) => {
     };
 };
 
-module.exports = { hasDriverStarted, processCancellationRefund };
+/**
+ * Atomic helper to credit cancellation or no-show compensation to a vendor's wallet
+ * @param {String} vendorId - Doctor, Lab, Pharmacy, Nurse, Hospital, or Ambulance _id
+ * @param {String} vendorModel - 'Doctor' | 'Lab' | 'Pharmacy' | 'Nurse' | 'Hospital' | 'Ambulance'
+ * @param {Number} amount - The penalty fee collected from the patient as compensation
+ * @param {String} bookingId - The custom tracking order/booking ID
+ * @param {String} type - 'Cancellation Fee' | 'No-Show Fee'
+ */
+const creditVendorCompensation = async (vendorId, vendorModel, amount, bookingId, type) => {
+    try {
+        if (!amount || amount <= 0) return;
+
+        const transaction = {
+            type: 'Credit',
+            amount: amount,
+            remark: `${type} Compensation - Booking #${bookingId}`,
+            orderId: bookingId,
+            date: new Date()
+        };
+
+        // Use findOneAndUpdate with upsert to prevent document version conflicts
+        await Wallet.findOneAndUpdate(
+            { vendorId, vendorModel },
+            {
+                $inc: { balance: amount },
+                $push: { transactions: transaction }
+            },
+            { upsert: true, new: true, runValidators: false }
+        );
+        
+        console.log(`[Wallet Sync]: Credited ₹${amount} ${type} compensation to ${vendorModel}: ${vendorId}`);
+    } catch (error) {
+        console.error("Error crediting vendor compensation:", error);
+    }
+};
+
+module.exports = { hasDriverStarted, processCancellationRefund, creditVendorCompensation };

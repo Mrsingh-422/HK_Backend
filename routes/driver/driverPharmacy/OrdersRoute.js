@@ -22,7 +22,7 @@ const {
     reassignOrderDueToEmergency,
     getDriverHistory,
     getTermsAndConditions,
-    getAboutContent
+    getAboutContent, reportPharmacyNoShow
 } = require('../../../controllers/driver/driverPharmacy/Orders');
 
 // Base URL: /driver/pharmacy
@@ -62,5 +62,8 @@ router.post('/orders/reassign-emergency', protect('driver'), reassignOrderDueToE
 router.get('/orders/history', protect('driver'), getDriverHistory); // My History Screen
 router.get('/terms', protect('driver'), getTermsAndConditions); // Terms page
 router.get('/about', protect('driver'), getAboutContent); // About page
+
+
+router.post('/orders/no-show', protect('driver'), reportPharmacyNoShow);
 
 module.exports = router;

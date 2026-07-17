@@ -23,7 +23,7 @@ const {
     getAdminContact,
     getDriverHistory,
     getTermsAndConditions,
-    getAboutContent
+    getAboutContent,reportNurseNoShow
 
 } = require('../../../controllers/driver/driverNurse/NurseDriverOrders');
 
@@ -67,5 +67,7 @@ router.post('/orders/verify-complete-otp', protect('driver'), verifyCompleteOtp)
 router.get('/orders/history', protect('driver'), getDriverHistory); // My History Screen
 router.get('/terms', protect('driver'), getTermsAndConditions); // Terms page
 router.get('/about', protect('driver'), getAboutContent); // About page
+
+router.post('/orders/no-show', protect('driver'), reportNurseNoShow);
 
 module.exports = router;

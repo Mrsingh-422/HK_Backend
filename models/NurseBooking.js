@@ -31,7 +31,10 @@ const nurseBookingSchema = new mongoose.Schema({
         couponDiscount: { type: Number, default: 0 }, // 👈 Added this
         fasterServiceCharge: Number, // Express delivery
         taxAmount: Number,
-        totalPrice: Number           // Final grand total
+        totalPrice: Number,           // Final grand total
+
+        cancellationFeeApplied: { type: Number, default: 0 },
+        noShowFeeApplied: { type: Number, default: 0 }
     },
     couponCode: { type: String, uppercase: true },
     appliedCoupon: {

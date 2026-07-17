@@ -2,6 +2,10 @@ const PharmacyBooking = require('../../../models/PharmacyBooking');
 const Driver = require('../../../models/Driver');
 const bcrypt = require('bcryptjs');
 const moment = require('moment');
+const mongoose = require('mongoose');
+const MedicineInventory = require('../../../models/MedicineInventory');
+const NoShowConfig = require('../../../models/NoShowConfig');
+
 
 // ==========================================
 // 1. AUTHENTICATION & PASSWORD OPERATIONS
@@ -439,6 +443,57 @@ const getAboutContent = async (req, res) => {
 };
 
 
+const reportPharmacyNoShow = async (req, res) => {
+    try {
+        const { orderId, comments } = req.body;
+        const courierId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({ _id: orderId, driverId: courierId, status: 'Placed' });
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order must be in active transit (Placed) state to report No-Show." });
+        }
+
+        const totalPaid = order.billSummary?.totalAmount || 0;
+        let noShowFee = 0;
+
+        const config = await NoShowConfig.findOne({ vendorType: 'Pharmacy', isActive: true });
+        if (config && config.chargeValue > 0) {
+            noShowFee = config.chargeType === 'Percentage'
+                ? Math.round((totalPaid * config.chargeValue) / 100)
+                : Math.min(config.chargeValue, totalPaid);
+        }
+
+        order.status = 'No-Show';
+        order.deliveryStatus = 'UserUnreachable';
+        order.billSummary.noShowFeeApplied = noShowFee;
+        order.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        order.cancelReason = comments || "Customer unreachable at delivery destination.";
+
+        // Return the reserved medicines back to pharmacy inventory stock
+        for (const item of order.items) {
+            await MedicineInventory.findOneAndUpdate(
+                { pharmacyId: order.pharmacyId, medicineId: item.medicineId },
+                { $inc: { stock_quantity: item.quantity }, $set: { is_available: true } }
+            );
+        }
+
+        // Release driver back to Available
+        await Driver.findByIdAndUpdate(courierId, { status: 'Available' });
+
+        await order.save();
+
+        res.json({ 
+            success: true, 
+            message: "Medicine Delivery No-Show logged. Stock returned to inventory.", 
+            noShowFeeApplied: noShowFee,
+            data: order 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     forgotPassword,
     verifyForgotOtp,
@@ -458,5 +513,6 @@ module.exports = {
     reassignOrderDueToEmergency,
     getDriverHistory,
     getTermsAndConditions,
-    getAboutContent
+    getAboutContent,
+    reportPharmacyNoShow
 };

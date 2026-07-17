@@ -63,7 +63,10 @@ const pharmacyBookingSchema = new mongoose.Schema({
         slotCharge: { type: Number, default: 0 },
         couponDiscount: { type: Number, default: 0 },
         couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
-        totalAmount: { type: Number, required: true }
+        totalAmount: { type: Number, required: true },
+
+        cancellationFeeApplied: { type: Number, default: 0 },
+        noShowFeeApplied: { type: Number, default: 0 }
     }, 
 
     // --- PAYMENT & STATUS ---
