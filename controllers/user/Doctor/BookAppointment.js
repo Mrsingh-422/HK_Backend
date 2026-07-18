@@ -480,7 +480,7 @@ const bookAppointment = async (req, res) => {
 
         let body = { ...req.body };
 
-        // 🚨 SAFE MULTIPART PARSER: Auto-evaluates and parses dynamic strings to valid objects
+        // Safe JSON parsing for multipart/form-data payloads
         if (typeof body.patients === 'string') {
             try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
         }
@@ -505,11 +505,11 @@ const bookAppointment = async (req, res) => {
         const appointmentTime = timeSlot; 
         const pricingData = pricingBreakdown; 
 
-        // 1. Basic Validations
+        // 1. Mandatory Parameters Validation
         if (!doctorId || !appointmentDate || !appointmentTime) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Doctor, Date and Time (timeSlot) are mandatory." 
+                message: "Required fields (doctorId, appointmentDate, timeSlot) are missing." 
             });
         }
 
@@ -517,6 +517,17 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ 
                 success: false, 
                 message: "Pricing details or totalAmount missing." 
+            });
+        }
+
+        // Validate Payment Method Enum
+        const allowedPaymentMethods = ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
+        const activePaymentMethod = body.paymentMethod || "UPI";
+        
+        if (!allowedPaymentMethods.includes(activePaymentMethod)) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid paymentMethod. Allowed values are: ${allowedPaymentMethods.join(', ')}`
             });
         }
 
@@ -539,9 +550,10 @@ const bookAppointment = async (req, res) => {
             });
         }
 
+        // 3. Double Booking Validation Check
         const isBooked = await Appointment.findOne({ 
             doctorId, 
-            appointmentDate, 
+            appointmentDate: new Date(appointmentDate), 
             appointmentTime, 
             status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] } 
         });
@@ -550,7 +562,7 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "This slot is already booked." });
         }
 
-        // Subscription variables
+        // 4. Resolve Subscription Plan Benefits
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
         const rawDoctorFee = doctor.fees[typeMap[consultationType]] || 0;
 
@@ -579,11 +591,71 @@ const bookAppointment = async (req, res) => {
         }
 
         const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const finalPayable = Number(totalAmount);
 
-        // Create Razorpay Order (Safe integer parsing)
-        const rzpOrder = await createRazorpayOrder(Number(totalAmount), `receipt_${tempBookingId}`);
+        // =========================================================================
+        // CASE A: FREE BOOKING BYPASS (Subscription completely waived the amount to 0)
+        // =========================================================================
+        if (finalPayable === 0 || activePaymentMethod === 'COD') {
+            const appointment = await Appointment.create({
+                userId: req.user.id,
+                doctorId,
+                patients: patients,
+                address: consultationType === 'Home Visit' ? address : undefined,
+                appointmentDate: new Date(appointmentDate),
+                appointmentTime, 
+                consultationType,
+                paymentMethod: activePaymentMethod,
+                
+                pricingBreakdown: {
+                    baseFee: Number(pricingData.baseFee || 0),
+                    originalBaseFee: Number(originalBaseFee), 
+                    visitCharges: Number(pricingData.visitCharges || 0),
+                    extraCharges: Number(pricingData.extraCharges || 0),
+                    discountAmount: Number(pricingData.discountAmount || 0),
+                    subtotal: Number(pricingData.subtotal || 0)
+                },
+                
+                totalAmount: 0,
+                bookingId: tempBookingId,
+                status: 'Confirmed', // Free / COD is confirmed instantly on submit
+                paymentStatus: 'Pending',
+                transactionId: `FREE-${tempBookingId}`,
+                'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
 
-        // Save Appointment record
+                subscriptionDetails: {
+                    isSubscriptionApplied: isSubscriptionApplied,
+                    userSubscriptionId: userSubscriptionId,
+                    planName: planName
+                }
+            });
+
+            // Deduct the subscription count on database confirmation
+            if (isSubscriptionApplied) {
+                const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+                await deductBenefitCount(req.user.id, 'freeDoctorAppointmentsCount');
+            }
+
+            await notifyAdminsAndVendor(
+                doctorId,
+                'doctor',
+                "New Appointment Confirmed!",
+                `Appointment scheduled on ${moment(appointmentDate).format('YYYY-MM-DD')} at ${appointmentTime}.`,
+                { appointmentId: appointment._id.toString(), type: 'new_appointment' }
+            );
+
+            return res.status(201).json({
+                success: true,
+                message: "Appointment successfully confirmed without payments!",
+                data: appointment
+            });
+        }
+
+        // =========================================================================
+        // CASE B: PAID ONLINE BOOKING (Generate Razorpay Order Details)
+        // =========================================================================
+        const rzpOrder = await createRazorpayOrder(finalPayable, `receipt_${tempBookingId}`);
+
         const appointment = await Appointment.create({
             userId: req.user.id,
             doctorId,
@@ -592,6 +664,7 @@ const bookAppointment = async (req, res) => {
             appointmentDate: new Date(appointmentDate),
             appointmentTime, 
             consultationType,
+            paymentMethod: activePaymentMethod,
             
             pricingBreakdown: {
                 baseFee: Number(pricingData.baseFee || 0),
@@ -599,12 +672,12 @@ const bookAppointment = async (req, res) => {
                 visitCharges: Number(pricingData.visitCharges || 0),
                 extraCharges: Number(pricingData.extraCharges || 0),
                 discountAmount: Number(pricingData.discountAmount || 0),
-                subtotal: Number(pricingData.subtotal || totalAmount)
+                subtotal: Number(pricingData.subtotal || finalPayable)
             },
             
-            totalAmount: Number(totalAmount),
+            totalAmount: finalPayable,
             bookingId: tempBookingId,
-            status: 'Pending', 
+            status: 'Pending', // Online payments require verification to confirm
             paymentStatus: 'Pending',
             transactionId: rzpOrder.id, 
             'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),

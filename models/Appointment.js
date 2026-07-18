@@ -164,7 +164,7 @@ const appointmentSchema = new mongoose.Schema({
         razorpayPaymentId: { type: String, default: "" },
         razorpayOrderId: { type: String, default: "" },
         razorpaySignature: { type: String, default: "" },
-        method: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet'], default: "" },        // upi, card, netbanking, wallet
+        method: { type: String, enum: ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet'] },        // upi, card, netbanking, wallet
         amount: { type: Number, default: 0 },         // Amount in Rupees (converted from paise)
         currency: { type: String, default: "INR" },
         status: { type: String, default: "" },         // captured, failed
