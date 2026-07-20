@@ -8,7 +8,7 @@ const {
     verifyForgotOtp,
     resetPassword,
     changePassword,
-    updateProfile,
+    updateProfile,getLatestDriverProfileRequest,
     toggleDriverStatus,
     getLabDashboard,
     getDriverOrders,
@@ -48,6 +48,7 @@ router.post('/verify-forgot-otp', verifyForgotOtp);
 router.post('/reset-password', resetPassword);
 router.patch('/change-password', protect('driver'), changePassword);
 router.put('/update-profile', protect('driver'), driverDocUploads, updateProfile);
+router.get('/profile/update-status', protect('driver'), getLatestDriverProfileRequest);
 router.patch('/toggle-status', protect('driver'), toggleDriverStatus);
 router.get('/contact-admin', protect('driver'), getAdminContact);
 

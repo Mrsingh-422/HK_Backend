@@ -1,6 +1,7 @@
 const Doctor = require('../../models/Doctor');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest'); // For handling profile update requests
 const { deleteFile } = require('../../utils/fileHandler'); // Import the deleteFile utility
 
 // Helper: Generate Token (Lifetime for Dev, 30d for Prod)
@@ -238,43 +239,6 @@ const toggleDoctorOnlineStatus = async (req, res) => {
 };
 
 
-// --- 5. UPDATE PROFILE (Bio, Fees, Availability, etc.) ---
-// Endpoint: PUT /api/auth/doctor/update-profile
-// const updateDoctorProfile = async (req, res) => {
-//     try {
-//         const doctorId = req.user.id; // From Protect Middleware
-//         const updates = req.body;
-
-//         // Security Check: Kuch fields update karne se profileStatus wapas 'Pending' ho sakta hai (Optional Logic)
-//         // Agar aap chahte hain ki name ya qualification badalne par dobara verify ho:
-//         // if (updates.name || updates.qualification) { updates.profileStatus = 'Pending'; }
-
-//         // Handle Profile Image Update (If uploaded)
-//         if (req.files && req.files.profileImage) {
-//             updates.profileImage = req.files.profileImage[0].path;
-//         }
-
-//         // Nested objects (fees, availability) ko update karne ke liye $set use hota hai
-//         const updatedDoctor = await Doctor.findByIdAndUpdate(
-//             doctorId,
-//             { $set: updates },
-//             { new: true, runValidators: true }
-//         );
-
-//         if (!updatedDoctor) {
-//             return res.status(404).json({ success: false, message: 'Doctor not found' });
-//         }
-
-//         res.json({
-//             success: true,
-//             message: 'Profile updated successfully',
-//             data: updatedDoctor
-//         });
-
-//     } catch (error) {
-//         res.status(500).json({ success: false, message: error.message });
-//     }
-// };
 
 // --- 5. UPDATE PROFILE (Bio, Fees, Availability, etc.) ---
 
@@ -282,107 +246,71 @@ const toggleDoctorOnlineStatus = async (req, res) => {
 
 const updateDoctorProfile = async (req, res) => {
     try {
-        const doctorId = req.user.id; // From Protect Middleware
-        const updates = req.body;
+        const doctorId = req.user.id;
+        const updates = { ...req.body };
 
-        // 🚨 CRITICAL: Fetch current profile to handle existing image cleanups
         const existingDoc = await Doctor.findById(doctorId);
         if (!existingDoc) {
             return res.status(404).json({ success: false, message: 'Doctor not found' });
         }
  
-        // 1. Block authorized/sensitive fields from being updated
+        // 🚨 SECURITY LOCKS: Protect sensitive fields from direct modifications
         delete updates.email;
         delete updates.phone;
         delete updates.password;
         delete updates.role;
         delete updates.profileStatus;
         delete updates.rejectionReason;
- 
-        // 2. Block documents from being edited or overwritten
         delete updates.documents;
  
-        // 3. Safe JSON Parsing for multipart/form-data fields
-        if (updates.availability) {
-            try {
-                updates.availability = typeof updates.availability === 'string' 
-                    ? JSON.parse(updates.availability) 
-                    : updates.availability;
-            } catch (e) {
-                console.error("Error parsing availability:", e.message);
+        // Parse multipart JSON strings
+        const arrayFields = ['availability', 'languages', 'fees', 'consultationStatus', 'treatedConditions', 'competencies'];
+        arrayFields.forEach(field => {
+            if (updates[field]) {
+                try {
+                    updates[field] = typeof updates[field] === 'string' ? JSON.parse(updates[field]) : updates[field];
+                } catch (e) {
+                    console.error(`Error parsing ${field}:`, e.message);
+                }
             }
-        }
+        });
  
-        if (updates.languages) {
-            try {
-                updates.languages = typeof updates.languages === 'string' 
-                    ? JSON.parse(updates.languages) 
-                    : updates.languages;
-            } catch (e) {}
-        }
- 
-        if (updates.fees) {
-            try {
-                updates.fees = typeof updates.fees === 'string' 
-                    ? JSON.parse(updates.fees) 
-                    : updates.fees;
-            } catch (e) {}
-        }
- 
-        if (updates.consultationStatus) {
-            try {
-                updates.consultationStatus = typeof updates.consultationStatus === 'string' 
-                    ? JSON.parse(updates.consultationStatus) 
-                    : updates.consultationStatus;
-            } catch (e) {}
-        }
- 
-        if (updates.treatedConditions) {
-            try {
-                updates.treatedConditions = typeof updates.treatedConditions === 'string' 
-                    ? JSON.parse(updates.treatedConditions) 
-                    : updates.treatedConditions;
-            } catch (e) {}
-        }
- 
-        if (updates.competencies) {
-            try {
-                updates.competencies = typeof updates.competencies === 'string' 
-                    ? JSON.parse(updates.competencies) 
-                    : updates.competencies;
-            } catch (e) {}
-        }
- 
-        // 4. Handle Profile Image Cleanup & Update
+        // Process new files
         if (req.files && req.files.profileImage && req.files.profileImage[0]) {
-            if (existingDoc.profileImage) {
-                deleteFile(existingDoc.profileImage); // Cleanup old file from server
-            }
-            updates.profileImage = req.files.profileImage[0].path;
+            updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
+        }
+        if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
+            updates.signatureImage = `/uploads/doctors/${req.files.signatureImage[0].filename}`;
         }
 
-        // 5. Handle Signature Image Cleanup & Update (For Prescriptions)
-        if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
-            if (existingDoc.signatureImage) {
-                deleteFile(existingDoc.signatureImage); // Cleanup old file from server
+        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: doctorId, vendorModel: 'Doctor', status: 'Pending' });
+        if (existingPending) {
+            if (updates.profileImage && existingPending.updatedFields?.profileImage) {
+                deleteFile(existingPending.updatedFields.profileImage);
             }
-            updates.signatureImage = req.files.signatureImage[0].path;
+            if (updates.signatureImage && existingPending.updatedFields?.signatureImage) {
+                deleteFile(existingPending.updatedFields.signatureImage);
+            }
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
- 
-        // Nested objects (fees, availability, alternatePhone) are updated using $set safely
-        const updatedDoctor = await Doctor.findByIdAndUpdate(
-            doctorId,
-            { $set: updates },
-            { new: true, runValidators: true }
-        ).select('-password');
+
+        // Save staged update request
+        const request = await ProfileUpdateRequest.create({
+            vendorId: doctorId,
+            vendorModel: 'Doctor',
+            updatedFields: updates,
+            status: 'Pending'
+        });
  
         res.json({
             success: true,
-            message: 'Profile updated successfully',
-            data: updatedDoctor
+            message: 'Profile changes submitted to Admin for review. Your profile will update once approved.',
+            data: request
         });
  
     } catch (error) {
+        console.error("Profile update error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -430,4 +358,20 @@ const getDoctorById = async (req, res) => {
     }
 };
 
-module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor,toggleDoctorOnlineStatus, updateDoctorProfile ,getDoctorProfile, getDoctorById };
+const getLatestDoctorProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'Doctor'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor,toggleDoctorOnlineStatus, updateDoctorProfile ,getDoctorProfile, getDoctorById, getLatestDoctorProfileRequest };

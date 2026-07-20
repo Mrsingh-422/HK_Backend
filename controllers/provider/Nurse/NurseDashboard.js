@@ -5,6 +5,7 @@ const MasterConsumable = require('../../../models/MasterConsumable');
 const Driver = require('../../../models/Driver');
 const { deleteFile } = require('../../../utils/fileHandler'); // 👈 Correct relative import
 const moment = require('moment');
+const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
 
 // ==========================================
 // 1. PROFILE & DASHBOARD (Updated with Priority Count)
@@ -52,52 +53,59 @@ const getProviderDashboard = async (req, res) => {
 // ==========================================
 const updateProviderProfile = async (req, res) => {
     try {
-        const updateData = req.body;
+        const nurseId = req.user.id;
+        const updates = { ...req.body };
  
-        // 1. Block authorized/sensitive fields from being updated
-        delete updateData.email;
-        delete updateData.phone;
-        delete updateData.password;
-        delete updateData.role;
-        delete updateData.profileStatus;
-        delete updateData.rejectionReason;
+        // 🚨 SECURITY LOCKS
+        delete updates.email;
+        delete updates.phone;
+        delete updates.password;
+        delete updates.role;
+        delete updates.profileStatus;
+        delete updates.documents;
  
-        // 2. Block documents from being edited or overwritten
-        // This ensures previously uploaded files/data remain completely safe and untouched
-        delete updateData.documents;
- 
-        // 3. Since route middleware is "nurseDocUploads" (.fields configuration), look inside req.files
-        // Only allow profileImage update, completely ignoring any other document file uploads if sent.
         if (req.files && req.files.profileImage && req.files.profileImage[0]) {
-            const newImagePath = req.files.profileImage[0].path;
- 
-            // Retrieve old image path from currently logged-in nurse model (protect middleware stores it in req.user)
-            const oldImagePath = req.user.profileImage;
- 
-            // If an old image exists, remove it from server storage
-            if (oldImagePath) {
-                deleteFile(oldImagePath);
-            }
- 
-            // Bind the newly uploaded path to database updates payload
-            updateData.profileImage = newImagePath;
+            updates.profileImage = req.files.profileImage[0].path;
         }
  
-        // 4. Update the record inside MongoDB
-        const updated = await Nurse.findByIdAndUpdate(
-            req.user.id,
-            { $set: updateData },
-            { new: true }
-        );
+        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: nurseId, vendorModel: 'Nurse', status: 'Pending' });
+        if (existingPending) {
+            if (updates.profileImage && existingPending.updatedFields?.profileImage) {
+                deleteFile(existingPending.updatedFields.profileImage);
+            }
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
+        }
+
+        const request = await ProfileUpdateRequest.create({
+            vendorId: nurseId,
+            vendorModel: 'Nurse',
+            updatedFields: updates,
+            status: 'Pending'
+        });
  
         res.json({
             success: true,
-            message: "Profile Updated Successfully",
-            data: updated
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.",
+            data: request
         });
- 
     } catch (error) {
         res.status(500).json({ message: error.message });
+    }
+};
+// GET: Fetch latest profile update request status for logged-in Nurse Bureau
+const getLatestNurseProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'Nurse'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
  
@@ -480,7 +488,7 @@ const trackNurse = async (req, res) => {
 };
 
 module.exports = { 
-    getProviderDashboard, updateProviderProfile, manageNurseService, 
+    getProviderDashboard, updateProviderProfile,getLatestNurseProfileRequest, manageNurseService, 
     getMyServices, deleteService, getBookingRequests, 
     handleBookingAction, getAvailableStaff, assignStaffToBooking,reassignStaffToBooking, searchMasterConsumables, getStaffByStatus,
     getOrderHistory, trackNurse

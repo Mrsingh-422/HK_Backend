@@ -15,6 +15,7 @@ const Bed = require('../../../models/Bed');
 const Medicine = require('../../../models/Medicine'); // 👈 ADD THIS AT THE TOP OF IMPORTS
 const { sendPushNotification } = require('../../../utils/notification');
 const { deleteFile } = require('../../../utils/fileHandler'); // Import the deleteFile utility
+const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
 
 
 // --- 11. GET MY DOCTOR PROFILE DETAILS (GET API) ---
@@ -34,73 +35,12 @@ const getMyDoctorProfile = async (req, res) => {
     }
 };
 
-// --- 12. UPDATE MY DOCTOR PROFILE (PUT API - Secure and Multer Image supported) ---
-// const updateDoctorProfile = async (req, res) => {
-//     try {
-//         const doctorId = req.user.id;
-        
-//         // Allowed professional fields for self-update (Excludes role, email, phone, profileStatus)
-//         const { 
-//             name, country, state, city, address, 
-//             qualification, speciality, about, experienceYears, 
-//             languages, fees, consultationStatus 
-//         } = req.body;
-
-//         const updates = {};
-//         if (name) updates.name = name;
-//         if (country) updates.country = country;
-//         if (state) updates.state = state;
-//         if (city) updates.city = city;
-//         if (address) updates.address = address;
-//         if (qualification) updates.qualification = qualification;
-//         if (speciality) updates.speciality = speciality;
-//         if (about) updates.about = about;
-//         if (experienceYears) updates.experienceYears = Number(experienceYears);
-        
-//         // Handle languages array parsing
-//         if (languages) {
-//             updates.languages = Array.isArray(languages) ? languages : JSON.parse(languages);
-//         }
-        
-//         // Handle dynamic nested fees object safely
-//         if (fees) {
-//             updates.fees = typeof fees === 'string' ? JSON.parse(fees) : fees;
-//         }
-        
-//         // Handle dynamic nested consultation status safely
-//         if (consultationStatus) {
-//             updates.consultationStatus = typeof consultationStatus === 'string' ? JSON.parse(consultationStatus) : consultationStatus;
-//         }
-
-//         // Handle single profile image upload from multer fields
-//         if (req.files && req.files.profileImage) {
-//             updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
-//         }
-
-//         const updatedDoctor = await Doctor.findByIdAndUpdate(
-//             doctorId,
-//             { $set: updates },
-//             { new: true, runValidators: true }
-//         ).select('-password');
-
-//         res.json({ 
-//             success: true, 
-//             message: "Doctor profile updated successfully.", 
-//             data: updatedDoctor 
-//         });
-
-//     } catch (error) {
-//         console.error("Profile update error:", error);
-//         res.status(500).json({ success: false, message: error.message });
-//     }
-// };
-
-// --- 12. UPDATE MY DOCTOR PROFILE (PUT API - Secure and Multer Image supported) ---
+// --- 12. UPDATE MY DOCTOR PROFILE (Staged Update & Staging Cleanup) ---
 const updateDoctorProfile = async (req, res) => {
     try {
         const doctorId = req.user.id;
        
-        // Fetch current profile to handle existing image cleanups
+        // Fetch current profile to handle existing validation checks
         const existingDoc = await Doctor.findById(doctorId);
         if (!existingDoc) {
             return res.status(404).json({ success: false, message: 'Doctor not found' });
@@ -141,34 +81,45 @@ const updateDoctorProfile = async (req, res) => {
             updates.consultationStatus = typeof consultationStatus === 'string' ? JSON.parse(consultationStatus) : consultationStatus;
         }
  
-        // Handle Profile Image Cleanup & Update
+        // Process new file uploads
         if (req.files && req.files.profileImage && req.files.profileImage[0]) {
-            const { deleteFile } = require('../../../utils/fileHandler'); // Relative import verification
-            if (existingDoc.profileImage) {
-                deleteFile(existingDoc.profileImage); // Cleanup old file from server disk
-            }
             updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
         }
 
-        // 🚨 NEW: Handle Signature Image Cleanup & Update (For Prescriptions)
         if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
-            const { deleteFile } = require('../../../utils/fileHandler');
-            if (existingDoc.signatureImage) {
-                deleteFile(existingDoc.signatureImage); // Cleanup old file from server disk
-            }
             updates.signatureImage = `/uploads/doctors/${req.files.signatureImage[0].filename}`;
         }
- 
-        const updatedDoctor = await Doctor.findByIdAndUpdate(
-            doctorId,
-            { $set: updates },
-            { new: true, runValidators: true }
-        ).select('-password');
+
+        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING update request
+        const existingPending = await ProfileUpdateRequest.findOne({ 
+            vendorId: doctorId, 
+            vendorModel: 'Doctor', 
+            status: 'Pending' 
+        });
+
+        if (existingPending) {
+            if (updates.profileImage && existingPending.updatedFields?.profileImage) {
+                deleteFile(existingPending.updatedFields.profileImage);
+            }
+            if (updates.signatureImage && existingPending.updatedFields?.signatureImage) {
+                deleteFile(existingPending.updatedFields.signatureImage);
+            }
+            // Overwrite and remove old pending requests
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
+        }
+
+        // Save staged changes to the approval collection
+        const request = await ProfileUpdateRequest.create({
+            vendorId: doctorId,
+            vendorModel: 'Doctor',
+            updatedFields: updates,
+            status: 'Pending'
+        });
  
         res.json({
             success: true,
-            message: "Doctor profile updated successfully.",
-            data: updatedDoctor
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.",
+            data: request
         });
  
     } catch (error) {
@@ -176,6 +127,23 @@ const updateDoctorProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// --- 18. GET LATEST PROFILE REQUEST STATUS ---
+const getLatestDoctorProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'Doctor'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // Helper to calculate human readable duration display
 const calculateDurationDisplay = (start, end) => {
@@ -1383,7 +1351,7 @@ const doctorSelfAssignCase = async (req, res) => {
 
 module.exports = { 
     getMyDoctorProfile,
-    updateDoctorProfile,
+    updateDoctorProfile,getLatestDoctorProfileRequest,
     getDoctorHistory,
 
     getPendingAdmissions,

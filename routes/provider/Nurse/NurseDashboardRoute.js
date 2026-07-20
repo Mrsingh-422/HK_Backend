@@ -4,7 +4,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { nurseServiceUploads, nurseDocUploads,userProfileUpload } = require('../../../middleware/multer');
 const {
-    getProviderDashboard, updateProviderProfile, manageNurseService,
+    getProviderDashboard, updateProviderProfile,getLatestNurseProfileRequest, manageNurseService,
     getMyServices, deleteService, getBookingRequests,
     handleBookingAction, getAvailableStaff, assignStaffToBooking, reassignStaffToBooking, getStaffByStatus, searchMasterConsumables,
     getOrderHistory, trackNurse
@@ -15,6 +15,7 @@ const {
 // DASHBOARD & PROFILE
 router.get('/dashboard-stats', protect('nurse'), getProviderDashboard);
 router.put('/profile/update', protect('nurse'), nurseDocUploads, updateProviderProfile);
+router.get('/profile/update-status', protect('nurse'), getLatestNurseProfileRequest);
 
 // SERVICE MANAGEMENT
 router.post('/service/manage', protect('nurse'), nurseDocUploads, manageNurseService);

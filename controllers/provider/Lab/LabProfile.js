@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const { getLocationFilter } = require('../../../middleware/authMiddleware');
 const { sendPushNotification } = require('../../../utils/notification');
 const { deleteFile } = require('../../../utils/fileHandler'); // Import the deleteFile utility
+const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
 
 // 1. GET PROFILE (Figma: Settings / My Profile)
 // endpoint: GET /provider/labs/profile
@@ -93,13 +94,11 @@ const updateLabProfile = async (req, res) => {
             nablNumber 
         } = req.body;
  
-        // Fetch current profile to handle existing image cleanups
         const existingLab = await Lab.findById(labId);
         if (!existingLab) {
             return res.status(404).json({ success: false, message: "Lab not found." });
         }
 
-        // 1. Base Update Data (email, phone, password, and documents are completely excluded)
         let updateData = {
             name, about, address, country, state, city,
             isHomeCollectionAvailable: isHomeCollectionAvailable === 'true' || isHomeCollectionAvailable === true,
@@ -110,41 +109,48 @@ const updateLabProfile = async (req, res) => {
             alternatePhone
         };
  
-        // 2. Handle Accepted Insurances (Convert comma string to Array)
         if (acceptedInsurances) {
             updateData.acceptedInsurances = typeof acceptedInsurances === 'string'
                 ? JSON.parse(acceptedInsurances)
                 : acceptedInsurances;
         }
  
-        // 3. Handle Profile Image Cleanup & Update
         if (req.files && req.files.profileImage && req.files.profileImage[0]) {
-            if (existingLab.profileImage) {
-                deleteFile(existingLab.profileImage); // Remove old image from server
-            }
             updateData.profileImage = req.files.profileImage[0].path;
         }
 
-        // 🚨 4. FIXED SIGNATURE UPLOAD: Corrected variable referencing & database keys
         if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
-            const newSignaturePath = req.files.signatureImage[0].path; // 👈 Corrected (signatureImage used)
-            
-            if (existingLab.signatureImage) {
-                deleteFile(existingLab.signatureImage); // 👈 Corrected (deletes old signature, not profileImage)
-            }
-            updateData.signatureImage = newSignaturePath; // 👈 Corrected (saves to signatureImage key in DB)
+            updateData.signatureImage = req.files.signatureImage[0].path;
         }
 
-        // 5. NABL NUMBER INTEGRATION: Safe update using dot notation to prevent Mongoose nested object overwrites
         if (nablNumber !== undefined) {
             updateData['documents.nablNumber'] = nablNumber;
         }
+
+        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: labId, vendorModel: 'Lab', status: 'Pending' });
+        if (existingPending) {
+            if (updateData.profileImage && existingPending.updatedFields?.profileImage) {
+                deleteFile(existingPending.updatedFields.profileImage);
+            }
+            if (updateData.signatureImage && existingPending.updatedFields?.signatureImage) {
+                deleteFile(existingPending.updatedFields.signatureImage);
+            }
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
+        }
  
-        // 6. Update query execution
-        const finalUpdate = { $set: updateData };
-        const lab = await Lab.findByIdAndUpdate(labId, finalUpdate, { new: true });
+        const request = await ProfileUpdateRequest.create({
+            vendorId: labId,
+            vendorModel: 'Lab',
+            updatedFields: updateData,
+            status: 'Pending'
+        });
        
-        res.json({ success: true, message: "Lab profile updated successfully", data: lab });
+        res.json({ 
+            success: true, 
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            data: request 
+        });
     } catch (error) {
         console.error("Update Error:", error);
         res.status(500).json({ message: error.message });
@@ -165,4 +171,21 @@ const getMyAllServices = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { getLabProfile, updateLabProfile, getMyAllServices };
+// GET: Fetch latest profile update request status for logged-in Lab
+const getLatestLabProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'Lab'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+module.exports = { getLabProfile, updateLabProfile, getMyAllServices, getLatestLabProfileRequest };

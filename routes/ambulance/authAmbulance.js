@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
 const { ambulanceDocUploads } = require('../../middleware/multer');
 const { registerAmbulance, loginAmbulance, completeAmbulanceProfile, toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest,
-forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile
+forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile,getLatestAmbulanceProfileRequest
  } = require('../../controllers/ambulance/authAmbulance');
 
 // Base URL: /api/auth/ambulance
@@ -15,7 +15,7 @@ router.put('/complete-profile', protect(['ambulance', 'hospital-ambulance']), am
 router.patch('/status/toggle',protect(['ambulance', 'hospital-ambulance']), toggleDriverAvailability); // 👈 ADD THIS ROUTE
 router.get('/profile', protect(['ambulance', 'hospital-ambulance']), getMyAmbulanceProfile);
 router.patch('/profile/update', protect(['ambulance', 'hospital-ambulance']), updateAmbulanceProfile); // Figma: Edit profile
-
+router.get('/profile/update-status', protect(['ambulance', 'hospital-ambulance']), getLatestAmbulanceProfileRequest);
 
 // --- FORGOT PASSWORD RECOVERY FLOW (Figma Popups) ---
 router.post('/forgot-password', forgotPasswordAmbulance); // Screen A

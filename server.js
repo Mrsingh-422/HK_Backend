@@ -153,6 +153,7 @@ app.use('/api/homepage/list', require('./routes/admin/user/home/ListRoute')); //
 app.use('/api/admin/fire', require('./routes/admin/others/manageFireStationAndHeadquaterRoute')); // Fire Management Route
 app.use('/api/admin/police', require('./routes/admin/others/PoliceHQ')); // Dashboard Management Route
 app.use('/api/admin/policy-config', require('./routes/admin/others/PolicyConfigRoute')); // Policy Config Management Route
+app.use('/api/admin/profile-update', require('./routes/admin/others/ProfileUpdateApprovalRoute')); // Profile Update Approval Management Route
 // --- Admin pharmacy Routes ---
 app.use('/admin/pharmacy', require('./routes/admin/Pharmacy/PharmacyAdminRoute')); // Pharmacy Management Route
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route

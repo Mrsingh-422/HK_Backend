@@ -1,6 +1,8 @@
 const Ambulance = require('../../models/Ambulance');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest'); // For handling profile update requests
+const { deleteFile } = require('../../utils/fileHandler');
 
 // Helper: Generate Token (Dev: 100 years, Prod: 30 days)
 const generateToken = (id, role) => {
@@ -334,16 +336,45 @@ const updateAmbulanceProfile = async (req, res) => {
         const driverId = req.user.id;
         const { name, phone, email, address } = req.body;
 
-        const updatedDriver = await Ambulance.findByIdAndUpdate(
-            driverId,
-            { $set: { name, phone, email: email.toLowerCase(), address } },
-            { new: true }
-        ).select('-password');
+        // 🚨 SECURITY LOCKS
+        const updates = { name, phone, email: email?.toLowerCase(), address };
 
-        res.json({ success: true, message: "Profile details updated successfully", data: updatedDriver });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+        await ProfileUpdateRequest.findOneAndDelete({ vendorId: driverId, vendorModel: 'Ambulance', status: 'Pending' });
+
+        const request = await ProfileUpdateRequest.create({
+            vendorId: driverId,
+            vendorModel: 'Ambulance',
+            updatedFields: updates,
+            status: 'Pending'
+        });
+
+        res.json({ 
+            success: true, 
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            data: request 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// GET: Fetch latest profile update request status for logged-in Ambulance provider
+const getLatestAmbulanceProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'Ambulance'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 
 
-module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest, forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile };
+
+module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest, forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile,getLatestAmbulanceProfileRequest };

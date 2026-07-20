@@ -5,7 +5,8 @@ const { hospitalUploads } = require('../../middleware/multer.js');
 const { 
     registerHospital, 
     loginHospital, toggleHospitalOnlineStatus,
-    updateHospitalProfile,getMyHospitalProfile
+    updateHospitalProfile,getMyHospitalProfile,
+    getLatestHospitalProfileRequest
 } = require('../../controllers/hospital/authHospital.js');
 
 // Base route: /api/auth/hospital
@@ -23,5 +24,7 @@ router.put('/profile/update',
     updateHospitalProfile,
 );
 router.get('/profile', protect('hospital'), getMyHospitalProfile);
+
+router.get('/profile/update-status', protect('hospital'), getLatestHospitalProfileRequest);
 
 module.exports = router;

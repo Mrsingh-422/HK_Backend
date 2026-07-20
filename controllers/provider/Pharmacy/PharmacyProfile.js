@@ -2,6 +2,8 @@ const Pharmacy = require('../../../models/Pharmacy');
 const Medicine = require('../../../models/Medicine'); // Assumed model name
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
+const { deleteFile } = require('../../../utils/fileHandler');
 
 // 1. GET PHARMACY PROFILE
 // endpoint: GET /provider/pharmacy/profile
@@ -22,95 +24,62 @@ const getPharmacyProfile = async (req, res) => {
 // endpoint: PUT /provider/pharmacy/profile/update
 
 const updatePharmacyProfile = async (req, res) => {
-
     try {
-
         const pharmacyId = req.user.id;
-
         const { 
-
             name, about, address, 
-
             isHomeDeliveryAvailable, isRapidServiceAvailable, 
-
             isInsuranceAccepted, acceptedInsurances, is24x7,
-
-            // Location details
-
             country, state, city, lat, lng,
-
-            // Alternate phone destructured from body
-
             alternatePhone
-
         } = req.body;
  
-        // 1. Base Update Data (email, phone, password, and documents are completely excluded)
-
         let updateData = {
-
             name, about, address, country, state, city,
-
             isHomeDeliveryAvailable: isHomeDeliveryAvailable === 'true',
-
             isRapidServiceAvailable: isRapidServiceAvailable === 'true',
-
             isInsuranceAccepted: isInsuranceAccepted === 'true',
-
             is24x7: is24x7 === 'true',
-
             location: { lat, lng },
-
-            alternatePhone // Added to database update payload
-
+            alternatePhone
         };
  
-        // 2. Handle Accepted Insurances
-
         if (acceptedInsurances) {
-
             updateData.acceptedInsurances = typeof acceptedInsurances === 'string' 
-
                 ? JSON.parse(acceptedInsurances) 
-
                 : acceptedInsurances;
-
         }
  
-        // 3. Only handle profileImage (if provided in files). 
-
-        // Document uploads are excluded to protect existing uploads from being modified.
-
         if (req.files && req.files.profileImage) {
-
             updateData.profileImage = req.files.profileImage[0].path;
+        }
 
+        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: pharmacyId, vendorModel: 'Pharmacy', status: 'Pending' });
+        if (existingPending) {
+            if (updateData.profileImage && existingPending.updatedFields?.profileImage) {
+                deleteFile(existingPending.updatedFields.profileImage);
+            }
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
  
-        // 4. Update query (Only updates basic profile details and profileImage)
-
-        const finalUpdate = { $set: updateData };
- 
-        const pharmacy = await Pharmacy.findByIdAndUpdate(pharmacyId, finalUpdate, { new: true });
+        const request = await ProfileUpdateRequest.create({
+            vendorId: pharmacyId,
+            vendorModel: 'Pharmacy',
+            updatedFields: updateData,
+            status: 'Pending'
+        });
 
         res.json({ 
-
             success: true, 
-
-            message: "Pharmacy profile updated successfully", 
-
-            data: pharmacy 
-
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            data: request 
         });
 
     } catch (error) { 
-
         console.error("Pharmacy Update Error:", error);
-
         res.status(500).json({ message: error.message }); 
-
     }
-
 };
  
 // 3. GET PHARMACY SERVICES (Medicines List)
@@ -129,8 +98,26 @@ const getMyMedicines = async (req, res) => {
     }
 };
 
+// GET: Fetch latest profile update request status for logged-in Pharmacy
+const getLatestPharmacyProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'Pharmacy'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     getPharmacyProfile, 
     updatePharmacyProfile, 
-    getMyMedicines 
+    getMyMedicines,
+    getLatestPharmacyProfileRequest
 };

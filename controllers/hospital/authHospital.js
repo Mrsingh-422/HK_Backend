@@ -2,6 +2,8 @@ const Hospital = require('../../models/Hospital');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Ward = require('../../models/Ward');
+const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest'); // For handling profile update requests
+const { deleteFile } = require('../../utils/fileHandler');
 
 const generateToken = (id, role) => {
     // Agar development hai toh 100 saal (maano expire hi nahi hoga)
@@ -250,41 +252,39 @@ const toggleHospitalOnlineStatus = async (req, res) => {
 const updateHospitalProfile = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const updates = req.body;
+        const updates = { ...req.body };
  
-        // 1. Block authorized/sensitive fields from being updated
+        // 🚨 SECURITY LOCKS
         delete updates.email;
         delete updates.phone;
         delete updates.password;
         delete updates.role;
-        delete updates.profileStatus; // Users cannot self-approve or change status
+        delete updates.profileStatus;
         delete updates.rejectionReason;
- 
-        // 2. Block documents from being edited or overwritten
-        // This ensures previously uploaded files remain completely safe and untouched
         delete updates.hospitalImage;
         delete updates.licenseDocument;
         delete updates.otherDocuments;
  
-        // Note: Any uploaded files via req.files for documents are ignored to protect the existing data.
-        // alternatePhone (along with other standard profile fields) will be successfully updated.
- 
-        // 3. Database Update
-        const updatedHospital = await Hospital.findByIdAndUpdate(
-            hospitalId,
-            { $set: updates },
-            { new: true }
-        );
+        // Clean up previous unapproved pending request if exists
+        await ProfileUpdateRequest.findOneAndDelete({ vendorId: hospitalId, vendorModel: 'Hospital', status: 'Pending' });
+
+        const request = await ProfileUpdateRequest.create({
+            vendorId: hospitalId,
+            vendorModel: 'Hospital',
+            updatedFields: updates,
+            status: 'Pending'
+        });
  
         res.json({
             success: true,
-            message: "Profile Updated",
-            data: updatedHospital
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.",
+            data: request
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
+
  
 const getMyHospitalProfile = async (req, res) => {
     try {
@@ -310,4 +310,20 @@ const getMyHospitalProfile = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-module.exports = { registerHospital, loginHospital,toggleHospitalOnlineStatus, updateHospitalProfile, getMyHospitalProfile };
+// GET: Fetch latest profile update request status for logged-in Hospital
+const getLatestHospitalProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'Hospital'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { registerHospital, loginHospital,toggleHospitalOnlineStatus, updateHospitalProfile, getMyHospitalProfile, getLatestHospitalProfileRequest };

@@ -5,6 +5,9 @@ const LabPackage = require('../../../models/LabPackage'); // 👈 Added Schema
 const bcrypt = require('bcryptjs');
 const moment = require('moment');
 const NoShowConfig = require('../../../models/NoShowConfig');
+const mongoose = require('mongoose');
+const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
+const { deleteFile } = require('../../../utils/fileHandler');
 
 // Razorpay Utilities integration
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay');
@@ -136,37 +139,58 @@ const changePassword = async (req, res) => {
 // };
 const updateProfile = async (req, res) => {
     try {
- 
+        const driverId = req.user.id;
         const { name, address, alternateNumber } = req.body;
        
-        const updateData = {
-            name,
-            address,
-            alternateNumber
-        };
+        const updates = { name, address, alternateNumber };
  
-       
         if (req.files && req.files.profilePic) {
-            updateData.profilePic = req.files.profilePic[0].path;
+            updates.profilePic = req.files.profilePic[0].path;
+        } else if (req.file) {
+            updates.profilePic = req.file.path;
+        }
+
+        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: driverId, vendorModel: 'Driver', status: 'Pending' });
+        if (existingPending) {
+            if (updates.profilePic && existingPending.updatedFields?.profilePic) {
+                deleteFile(existingPending.updatedFields.profilePic);
+            }
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
  
-       
-        const driver = await Driver.findByIdAndUpdate(
-            req.user.id,
-            updateData,
-            { new: true, runValidators: true }
-        );
+        const request = await ProfileUpdateRequest.create({
+            vendorId: driverId,
+            vendorModel: 'Driver',
+            updatedFields: updates,
+            status: 'Pending'
+        });
  
-        if (!driver) {
-            return res.status(404).json({ success: false, message: "Driver profile not found" });
-        }
- 
-        res.json({ success: true, message: "Profile updated successfully", data: driver });
+        res.json({ 
+            success: true, 
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            data: request 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
  
+const getLatestDriverProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'Driver'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // Switch Duty Availability Status (Figma Screen 4, 5)
 const toggleDriverStatus = async (req, res) => {
@@ -881,7 +905,7 @@ module.exports = {
     verifyForgotOtp,
     resetPassword,
     changePassword,
-    updateProfile,
+    updateProfile,getLatestDriverProfileRequest,
     toggleDriverStatus,
     getLabDashboard,
     getDriverOrders,

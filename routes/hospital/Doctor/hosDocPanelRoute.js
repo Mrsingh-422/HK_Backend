@@ -3,7 +3,7 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { doctorDocUploads,doctorReportUploads,dietPlanUploads,hospitalPrescriptionUploads } = require('../../../middleware/multer');
 const { 
     getMyDoctorProfile,
-        updateDoctorProfile,
+        updateDoctorProfile,getLatestDoctorProfileRequest,
         getDoctorHistory, 
         getPendingAdmissions,
     takeChargeOfAdmission ,rejectTransfer,
@@ -27,6 +27,7 @@ const {
 
 router.get('/profile', protect('hospital-doctor'), getMyDoctorProfile);
 router.put('/profile/update', protect('hospital-doctor'), doctorDocUploads, updateDoctorProfile);
+router.get('/profile/update-status', protect('hospital-doctor'), getLatestDoctorProfileRequest);
 
 
 
