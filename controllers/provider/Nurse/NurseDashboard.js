@@ -47,44 +47,6 @@ const getProviderDashboard = async (req, res) => {
 };
 
 
-// const updateProviderProfile = async (req, res) => {
-//     try {
-//         const updateData = req.body;
-
-//         // Since route middleware is "nurseDocUploads" (.fields configuration), look inside req.files
-//         if (req.files && req.files.profileImage && req.files.profileImage[0]) {
-//             const newImagePath = req.files.profileImage[0].path;
-
-//             // Retrieve old image path from currently logged-in nurse model (protect middleware stores it in req.user)
-//             const oldImagePath = req.user.profileImage;
-
-//             // If an old image exists, remove it from server storage
-//             if (oldImagePath) {
-//                 deleteFile(oldImagePath);
-//             }
-
-//             // Bind the newly uploaded path to database updates payload
-//             updateData.profileImage = newImagePath;
-//         }
-
-//         // Update the record inside MongoDB
-//         const updated = await Nurse.findByIdAndUpdate(
-//             req.user.id, 
-//             { $set: updateData }, 
-//             { new: true }
-//         );
-
-//         res.json({ 
-//             success: true, 
-//             message: "Profile Updated Successfully", 
-//             data: updated 
-//         });
-
-//     } catch (error) { 
-//         res.status(500).json({ message: error.message }); 
-//     }
-// };
-
 // ==========================================
 // 2. SERVICE MANAGEMENT (Figma: Add/Edit Service)
 // ==========================================

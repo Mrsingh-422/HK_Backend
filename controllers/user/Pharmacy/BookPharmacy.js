@@ -241,7 +241,6 @@ const getMedicineSuggestions = async (req, res) => {
             return res.json({ success: true, data: [] });
         }
 
-        // Search logic: Name ya Salt mein match dhoondega
         const searchRegex = new RegExp(query, 'i');
 
         const suggestions = await Medicine.find({
@@ -250,19 +249,40 @@ const getMedicineSuggestions = async (req, res) => {
                 { salt_composition: searchRegex }
             ]
         })
-        .select('name salt_composition mrp best_price image_url discont_percent') // Sirf zaroori fields
-        .limit(10) // Performance ke liye sirf 10 results
+        .select('name salt_composition mrp best_price image_url discont_percent')
+        .limit(10)
         .lean();
 
-        // Response formatting for Flutter
-        const formattedData = suggestions.map(med => ({
-            id: med._id,
-            name: med.name,
-            salt: med.salt_composition,
-            price: med.best_price || med.mrp,
-            image: med.image_url && med.image_url.length > 0 ? med.image_url[0] : null,
-            discount: med.discont_percent,
-            displayType: med.name.toLowerCase().includes(query.toLowerCase()) ? "Name Match" : "Salt Match"
+        // 🚨 Parallel dynamic lookup inside the loop to fetch lowest live vendor prices [cite: 1.1.2]
+        const formattedData = await Promise.all(suggestions.map(async (med) => {
+            const bestOffer = await MedicineInventory.findOne({ 
+                medicineId: med._id, 
+                is_available: true,
+                stock_quantity: { $gt: 0 }
+            }).sort({ vendor_price: 1 }).select('vendor_price').lean();
+
+            const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
+            const mrpNum = Number(med.mrp || 0);
+
+            // Overwrite price: use lowest live vendor price if in stock, otherwise fallback safely [cite: 1.1.2]
+            const finalPrice = lowestPrice !== null ? lowestPrice : Number(med.best_price || med.mrp || 0);
+
+            // Overwrite discount percent dynamically [cite: 1.1.2]
+            let finalDiscount = med.discont_percent;
+            if (lowestPrice !== null && mrpNum > 0) {
+                finalDiscount = `${Math.round(((mrpNum - lowestPrice) / mrpNum) * 100)}%`;
+            }
+
+            return {
+                id: med._id,
+                name: med.name,
+                salt: med.salt_composition,
+                price: finalPrice.toString(), // converted to string for strict backward compatibility
+                image: med.image_url && med.image_url.length > 0 ? med.image_url[0] : null,
+                discount: finalDiscount,
+                displayType: med.name.toLowerCase().includes(query.toLowerCase()) ? "Name Match" : "Salt Match",
+                isAvailable: lowestPrice !== null // Added extra safety indicator key
+            };
         }));
 
         res.json({
@@ -276,26 +296,76 @@ const getMedicineSuggestions = async (req, res) => {
     }
 };
 
+
 // --- API 2: GET FULL MEDICINE DETAILS (Click karne par) ---
 // GET /user/pharmacy/full-details/:id
 const getMedicineFullDetails = async (req, res) => {
     try {
-        const { id } = req.params;
+        const { medicineId } = req.params;
+        const medicine = await Medicine.findById(medicineId).lean();
+        if (!medicine) return res.status(404).json({ message: "Not found" });
 
-        // Saare fields fetch karein
-        const medicine = await Medicine.findById(id).lean();
+        // Fetch lowest active vendor price for this medicine [cite: 1.1.2]
+        const bestOffer = await MedicineInventory.findOne({ medicineId: medicine._id, is_available: true, stock_quantity: { $gt: 0 } })
+            .sort({ vendor_price: 1 });
 
-        if (!medicine) {
-            return res.status(404).json({ success: false, message: "Medicine details not found" });
+        const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
+        const mrpNum = Number(medicine.mrp || 0);
+
+        // Overwrite dynamic properties safely [cite: 1.1.2]
+        if (lowestPrice !== null) {
+            medicine.best_price = lowestPrice.toString();
+            if (mrpNum > 0) {
+                medicine.discont_percent = `${Math.round(((mrpNum - lowestPrice) / mrpNum) * 100)}%`;
+            }
         }
+
+        // Fetch substitutes and popular items in parallel
+        const substitutes = await Medicine.find({ 
+            salt_composition: medicine.salt_composition, 
+            _id: { $ne: medicineId } 
+        }).limit(3).lean();
+
+        const frequentlyBought = await Medicine.find({ 
+            category: medicine.category, 
+            _id: { $ne: medicineId } 
+        }).limit(4).lean();
+
+        // Synergize pricing overrides for related items too
+        const [enrichedSubs, enrichedFreq] = await Promise.all([
+            Promise.all(substitutes.map(async (item) => {
+                const subOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
+                const subLowest = subOffer ? subOffer.vendor_price : null;
+                if (subLowest !== null) {
+                    item.best_price = subLowest.toString();
+                    const itemMrp = Number(item.mrp || 0);
+                    if (itemMrp > 0) item.discont_percent = `${Math.round(((itemMrp - subLowest) / itemMrp) * 100)}%`;
+                }
+                return item;
+            })),
+            Promise.all(frequentlyBought.map(async (item) => {
+                const freqOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
+                const freqLowest = freqOffer ? freqOffer.vendor_price : null;
+                if (freqLowest !== null) {
+                    item.best_price = freqLowest.toString();
+                    const itemMrp = Number(item.mrp || 0);
+                    if (itemMrp > 0) item.discont_percent = `${Math.round(((itemMrp - freqLowest) / itemMrp) * 100)}%`;
+                }
+                return item;
+            }))
+        ]);
 
         res.json({
             success: true,
-            data: medicine
+            data: {
+                details: medicine, 
+                frequentlyBought: enrichedFreq,
+                substitutes: enrichedSubs,
+                isAvailable: lowestPrice !== null
+            }
         });
-
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
     }
 };
 
@@ -768,22 +838,69 @@ const getStandardMedicineCatalog = async (req, res) => {
             {
                 $addFields: {
                     vendorCount: { $size: "$sellers" },
-                    // Calculate minPrice strictly from in-stock sellers
-                    minPrice: {
+                    // Calculate the lowest active vendor price strictly [cite: 1.1.2]
+                    lowestVendorPrice: {
                         $cond: {
                             if: { $gt: [{ $size: "$activeSellers" }, 0] },
                             then: { $min: "$activeSellers.vendor_price" },
                             else: null 
                         }
                     },
-                    // 🚨 NEW: isAvailable key checking if at-least one seller has stock
                     isAvailable: { $gt: [{ $size: "$activeSellers" }, 0] }
+                }
+            },
+            {
+                $addFields: {
+                    // 🚨 OVERWRITE best_price with lowest active vendor price [cite: 1.1.2]
+                    best_price: {
+                        $cond: {
+                            if: { $ne: ["$lowestVendorPrice", null] },
+                            then: { $toString: "$lowestVendorPrice" }, // Convert to string to match Medicine Schema type
+                            else: "$best_price" // fallback to master best_price if no active vendor
+                        }
+                    },
+                    // 🚨 OVERWRITE discont_percent dynamically based on live minimum vendor price [cite: 1.1.2]
+                    discont_percent: {
+                        $cond: {
+                            if: {
+                                $and: [
+                                    { $ne: ["$lowestVendorPrice", null] },
+                                    { $gt: [{ $toDouble: { $ifNull: ["$mrp", "0"] } }, 0] }
+                                ]
+                            },
+                            then: {
+                                $concat: [
+                                    {
+                                        $toString: {
+                                            $round: [
+                                                {
+                                                    $multiply: [
+                                                        {
+                                                            $divide: [
+                                                                { $subtract: [{ $toDouble: "$mrp" }, "$lowestVendorPrice"] },
+                                                                { $toDouble: "$mrp" }
+                                                            ]
+                                                        },
+                                                        100
+                                                    ]
+                                                },
+                                                0
+                                            ]
+                                        }
+                                    },
+                                    "%"
+                                ]
+                            },
+                            else: "$discont_percent" // fallback to master discount
+                        }
+                    }
                 }
             },
             { 
                 $project: {
                     sellers: 0,
-                    activeSellers: 0
+                    activeSellers: 0,
+                    lowestVendorPrice: 0 // Keep clean project payload
                 }
             },
             { 
@@ -1591,7 +1708,8 @@ const getLatestAddedMedicines = async (req, res) => {
                 $group: {
                     _id: "$medicineId",
                     latestInventoryId: { $first: "$_id" },
-                    latestVendorPrice: { $first: "$vendor_price" },
+                    // 🚨 OVERWRITE: Changed from $first to $min to fetch the absolute lowest vendor price [cite: 1.1.2]
+                    latestVendorPrice: { $min: "$vendor_price" }, 
                     pharmacyId: { $first: "$pharmacyId" },
                     latestCreatedAt: { $first: "$createdAt" }
                 }
@@ -1624,7 +1742,8 @@ const getLatestAddedMedicines = async (req, res) => {
                     name: "$details.name",
                     image: { $arrayElemAt: ["$details.image_url", 0] },
                     mrp: "$details.mrp",
-                    bestPrice: "$latestVendorPrice",
+                    bestPrice: "$latestVendorPrice", // 👈 This is now strictly the lowest live price [cite: 1.1.2]
+                    // 🚨 DYNAMIC DISCOUNT: Automatically calculated using the lowest live price [cite: 1.1.2]
                     discount: {
                         $cond: {
                             if: { 
@@ -1653,7 +1772,8 @@ const getLatestAddedMedicines = async (req, res) => {
                         }
                     },
                     salt: "$details.salt_composition",
-                    addedAt: "$latestCreatedAt"
+                    addedAt: "$latestCreatedAt",
+                    isAvailable: { $literal: true } // Since matched strictly from active stocks
                 }
             }
         ]);

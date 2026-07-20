@@ -160,14 +160,39 @@ const getMyNonPrescriptionInventory = async (req, res) => {
 const updateInventoryItem = async (req, res) => {
     try {
         const { vendor_price, stock_quantity } = req.body;
-        const updated = await MedicineInventory.findByIdAndUpdate(
-            req.params.id,
-            { vendor_price, stock_quantity },
+        const pharmacyId = req.user.id; // Logged-in pharmacy id for security
+
+        const updateData = {};
+        
+        if (vendor_price !== undefined) {
+            updateData.vendor_price = Number(vendor_price);
+        }
+        
+        if (stock_quantity !== undefined) {
+            const qty = Number(stock_quantity);
+            updateData.stock_quantity = qty;
+            
+            // 🚨 STRICT CHECK: Automatically sets true if > 0, false if <= 0
+            updateData.is_available = qty > 0; 
+        }
+
+        // Secure update: Pharmacy can only update its own inventory records
+        const updated = await MedicineInventory.findOneAndUpdate(
+            { _id: req.params.id, pharmacyId },
+            updateData,
             { new: true }
         );
+
+        if (!updated) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Medicine not found in your inventory or unauthorized" 
+            });
+        }
+
         res.status(200).json({ success: true, data: updated });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

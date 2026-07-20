@@ -37,23 +37,38 @@ const searchMedicinesUser = async (req, res) => {
 
         const medicines = await Medicine.find(filter).skip(skip).limit(limit).lean();
 
-        // Har medicine ke liye sabse sasta offer nikalein
+        // Overwrite static values inside loop with real-time minimum stock prices [cite: 1.1.2]
         const dataWithOffers = await Promise.all(medicines.map(async (med) => {
-            const bestOffer = await MedicineInventory.findOne({ medicineId: med._id, is_available: true })
-                .sort({ vendor_price: 1 }) // Sabse sasta pehle
+            const bestOffer = await MedicineInventory.findOne({ medicineId: med._id, is_available: true, stock_quantity: { $gt: 0 } })
+                .sort({ vendor_price: 1 }) // sasta vendor pehle [cite: 1.1.2]
                 .populate('pharmacyId', 'name rating');
             
+            const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
+            const mrpNum = Number(med.mrp || 0);
+
+            // Dynamic fields overwrites [cite: 1.1.2]
+            if (lowestPrice !== null) {
+                med.best_price = lowestPrice.toString();
+                if (mrpNum > 0) {
+                    med.discont_percent = `${Math.round(((mrpNum - lowestPrice) / mrpNum) * 100)}%`;
+                }
+            }
+
             return {
                 ...med,
-                best_vendor_price: bestOffer ? bestOffer.vendor_price : null,
+                best_vendor_price: lowestPrice,
                 vendor_id: bestOffer ? bestOffer.pharmacyId._id : null,
-                pharmacy_name: bestOffer ? bestOffer.pharmacyId.name : null
+                pharmacy_name: bestOffer ? bestOffer.pharmacyId.name : null,
+                isAvailable: lowestPrice !== null
             };
         }));
 
         res.json({ success: true, data: dataWithOffers });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 // --- 2. MEDICINE DETAILS (Figma Screen: Detailed View) ---
 const getMedicineFullDetails = async (req, res) => {
