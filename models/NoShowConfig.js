@@ -3,7 +3,11 @@ const mongoose = require('mongoose');
 const noShowConfigSchema = new mongoose.Schema({
     vendorType: {
         type: String,
-        enum: ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Doctor', 'Ambulance'],
+        enum: ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Doctor',
+        'Ambulance-Accident', // 👈 Accident Emergency
+        'Ambulance-Medical',  // 👈 Standard Medical Ambulance / Quick Response
+        'Ambulance-Referral'  // 👈 Referral Ambulance
+        ],
         required: true,
         unique: true
     },

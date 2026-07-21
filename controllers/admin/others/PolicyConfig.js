@@ -78,8 +78,17 @@ const getCodConfigs = async (req, res) => {
         const configs = await CodConfig.find();
         
         // Return active list of states. If any vendor configuration is missing, default to true
-        const allVendors = ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Doctor', 'Ambulance'];
-        const formattedData = allVendors.map(vendor => {
+        const allVendors = [
+            'Lab', 
+            'Pharmacy', 
+            'Nurse', 
+            'Hospital', 
+            'Doctor', 
+            'Ambulance-Accident', 
+            'Ambulance-Medical', 
+            'Ambulance-Referral'
+        ];
+            const formattedData = allVendors.map(vendor => {
             const dbMatch = configs.find(c => c.vendorType === vendor);
             return {
                 vendorType: vendor,

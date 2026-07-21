@@ -768,11 +768,21 @@ const reportAmbulanceNoShow = async (req, res) => {
             });
         }
 
+        // --- DYNAMIC SUB-TYPE MAPPING ---
+        const serviceTypeToVendorMap = {
+            'Accident emergency': 'Ambulance-Accident',
+            'Medical Ambulance': 'Ambulance-Medical',
+            'Quick Response': 'Ambulance-Medical',
+            'Referral Ambulance': 'Ambulance-Referral'
+        };
+
+        const targetVendorType = serviceTypeToVendorMap[booking.serviceType] || 'Ambulance-Medical';
+
         const totalPaid = booking.pricing?.total || 0;
         let noShowFee = 0;
 
-        // Fetch dynamic admin no-show rules
-        const config = await NoShowConfig.findOne({ vendorType: 'Ambulance', isActive: true });
+        // Fetch the specific dynamic admin no-show rules for this ambulance subtype
+        const config = await NoShowConfig.findOne({ vendorType: targetVendorType, isActive: true });
         if (config && config.chargeValue > 0) {
             noShowFee = config.chargeType === 'Percentage' 
                 ? Math.round((totalPaid * config.chargeValue) / 100)
@@ -789,7 +799,7 @@ const reportAmbulanceNoShow = async (req, res) => {
         booking.trackingTimeline.push({
             status: 'No-Show',
             timestamp: new Date(),
-            note: `Ambulance driver reported spot No-Show. Penalty fee applied: ₹${noShowFee}.`
+            note: `Ambulance driver reported spot No-Show on ${booking.serviceType}. Penalty fee applied: ₹${noShowFee}.`
         });
 
         // Release ambulance availability status back to available
@@ -799,7 +809,7 @@ const reportAmbulanceNoShow = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Ambulance Spot No-Show logged successfully. Refund initiated.", 
+            message: `Ambulance Spot No-Show logged successfully for ${booking.serviceType}.`, 
             noShowFeeApplied: noShowFee,
             data: booking
         });

@@ -513,21 +513,22 @@ const searchStandardPackages = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 // GET STANDARD PACKAGES FOR FEMALE
-// Endpoint: GET /user/labs/standard-packages/female?page=1
+// Endpoint: GET /user/labs/standard-packages/female?page=1&mainCategory=Pathology
 const getFemaleStandardPackages = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = 20;
         const skip = (page - 1) * limit;
-        const { search } = req.query; // Optional Search
+        const { search, mainCategory } = req.query; // 👈 Extracted mainCategory from query
 
-        // FILTER LOGIC: Gender should be 'Female' OR 'Both'
+        // FILTER LOGIC: Gender should be 'Female'
         let matchQuery = { 
             isActive: true, 
             gender: { $in: ['Female'] } 
         };
 
         if (search) matchQuery.packageName = new RegExp(search, 'i');
+        if (mainCategory) matchQuery.mainCategory = mainCategory; // 👈 Added mainCategory Filter [2]
 
         const aggregate = MasterLabPackage.aggregate([
             { $match: matchQuery },
@@ -546,7 +547,7 @@ const getFemaleStandardPackages = async (req, res) => {
                     minPrice: { $min: "$vendorList.offerPrice" }
                 }
             },
-            { $sort: { gender: 1, vendorCount: -1 } }, // 'Female' specific ones can come first
+            { $sort: { gender: 1, vendorCount: -1 } }, 
             {
                 $facet: {
                     metadata: [{ $count: "total" }],
@@ -569,18 +570,23 @@ const getFemaleStandardPackages = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-// GET /user/labs/standard-tests/female
+
+//  Endpoint: GET /user/labs/standard-tests/female?page=1&mainCategory=Pathology
 const getFemaleStandardTests = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = 20;
         const skip = (page - 1) * limit;
+        const { search, mainCategory } = req.query; // 👈 Extracted mainCategory and optional search [2]
 
-        // FILTER: Female ya Both tests dikhao
+        // FILTER: Female tests
         let matchQuery = { 
             isActive: true, 
             gender: { $in: ['Female'] } 
         };
+
+        if (search) matchQuery.testName = new RegExp(search, 'i'); // Optional search support
+        if (mainCategory) matchQuery.mainCategory = mainCategory; // 👈 Added mainCategory Filter [2]
 
         const aggregate = MasterLabTest.aggregate([
             { $match: matchQuery },
@@ -609,12 +615,18 @@ const getFemaleStandardTests = async (req, res) => {
         ]);
 
         const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0; // Total calculation aligned with standard pagination [2]
+
         res.json({
             success: true,
-            total: result[0].metadata[0]?.total || 0,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
             data: result[0].data
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 
