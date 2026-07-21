@@ -17,6 +17,7 @@ const { createRazorpayOrder, verifyRazorpaySignature , fetchAndMapRazorpayPaymen
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
+const { isCodEnabled } = require('../../../utils/policyHelper');
 
 
 
@@ -485,7 +486,7 @@ const validateCoupon = async (req, res) => {
     }
 };
 
-// 4. CHECKOUT (The Revamped Pricing Engine)
+// 4. CHECKOUT (Updated with COD and Subscription Checks)
 const checkoutNurseBooking = async (req, res) => {
     try {
         const { 
@@ -502,6 +503,9 @@ const checkoutNurseBooking = async (req, res) => {
 
         if (!item) return res.status(404).json({ message: "Service/Package not found" });
         const pCount = Number(patientCount) || 1;
+
+        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
+        const isCodAllowed = await isCodEnabled('Nurse');
 
         let basePrice = 0;
         let slotSurcharge = 0;
@@ -532,17 +536,17 @@ const checkoutNurseBooking = async (req, res) => {
             if (pSlot) slotSurcharge = pSlot.extraFee;
         }
 
-        let originalBasePrice = basePrice; // 👈 Save the original calculated pricing
+        let originalBasePrice = basePrice; 
         let isSubscriptionApplied = false;
         let planName = "";
         let userSubscriptionId = null;
 
-        // 🚨 SUBSCRIPTION CHECK: Free Nurse visits limit verify karein
+        // SUBSCRIPTION CHECK
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const nurseVisitBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseVisitsCount', basePrice);
         
         if (nurseVisitBenefit.isApplied) {
-            basePrice = 0; // Value is waived
+            basePrice = 0; 
             isSubscriptionApplied = true;
 
             const UserSubscription = require('../../../models/UserSubscription');
@@ -609,7 +613,7 @@ const checkoutNurseBooking = async (req, res) => {
             success: true,
             breakdown: {
                 baseServicePrice: Math.round(basePrice * pCount),
-                originalBasePrice: Math.round(originalBasePrice * pCount), // 👈 Original Price in JSON response
+                originalBasePrice: Math.round(originalBasePrice * pCount), 
                 slotSurcharge: Math.round(slotSurcharge * pCount),
                 consumableTotal: Math.round(consumableTotal * pCount),
                 couponDiscount: couponDiscount, 
@@ -620,8 +624,9 @@ const checkoutNurseBooking = async (req, res) => {
                 pCount,
                 appliedCoupon: couponInfo
             },
+            isCodAvailable: isCodAllowed, // 👈 Dynamic indicator added
             subscriptionDetails: {
-                isSubscriptionApplied, // 👈 True if subscription used for this booking
+                isSubscriptionApplied, 
                 userSubscriptionId,
                 planName
             }
@@ -631,6 +636,7 @@ const checkoutNurseBooking = async (req, res) => {
 
 
 // 5. PLACE BOOKING (Replacing placeNurseBooking with Razorpay payload creation)
+// 5. PLACE BOOKING (Updated with COD and Subscription Check)
 const placeNurseBooking = async (req, res) => {
     try {
         const { 
@@ -639,6 +645,19 @@ const placeNurseBooking = async (req, res) => {
             appliedCoupon, paymentMethod, isFasterService 
         } = req.body;
         
+        const activePaymentMethod = paymentMethod || 'COD';
+
+        // 🚨 STRICTOR COD VALIDATION
+        if (activePaymentMethod === 'COD') {
+            const isCodAllowed = await isCodEnabled('Nurse');
+            if (!isCodAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cash on Delivery is currently disabled for nursing visits. Please pay online to complete your booking."
+                });
+            }
+        }
+
         const nurse = await Nurse.findById(nurseId);
         if (!nurse) return res.status(404).json({ message: "Nurse provider not found." });
 
@@ -653,7 +672,7 @@ const placeNurseBooking = async (req, res) => {
         const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
         let rzpOrder = null;
-        if (paymentMethod !== 'COD') {
+        if (activePaymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(priceBreakdown.totalPrice, `receipt_${bId}`);
         }
 
@@ -692,7 +711,7 @@ const placeNurseBooking = async (req, res) => {
             },
             priceBreakdown: {
                 baseServicePrice: Number(priceBreakdown.baseServicePrice || 0),
-                originalBasePrice: Number(priceBreakdown.originalBasePrice || 0), // 👈 Saves actual nurse price in DB
+                originalBasePrice: Number(priceBreakdown.originalBasePrice || 0), 
                 slotSurcharge: Number(priceBreakdown.slotSurcharge || 0),
                 consumableTotal: Number(priceBreakdown.consumableTotal || 0),
                 couponDiscount: Number(priceBreakdown.couponDiscount || 0),
@@ -710,11 +729,10 @@ const placeNurseBooking = async (req, res) => {
             address,
             assessmentLocation,
             selectedConsumables,
-            paymentMethod: paymentMethod || 'COD',
+            paymentMethod: activePaymentMethod,
             paymentStatus: 'Pending',
-            status: paymentMethod === 'COD' ? 'Confirmed' : 'Pending',
+            status: activePaymentMethod === 'COD' ? 'Confirmed' : 'Pending',
             
-            // 🚨 INTEGRATION SAVE: Save structural subscription details
             subscriptionDetails: {
                 isSubscriptionApplied,
                 userSubscriptionId,
@@ -722,7 +740,7 @@ const placeNurseBooking = async (req, res) => {
             }
         });
 
-        if (paymentMethod === 'COD') {
+        if (activePaymentMethod === 'COD') {
             if (appliedCoupon && appliedCoupon.couponId) {
                 const coupon = await Coupon.findById(appliedCoupon.couponId);
                 if (coupon) {

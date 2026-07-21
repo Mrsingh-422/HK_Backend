@@ -20,6 +20,7 @@ const Bed = require('../../../models/Bed'); // For hospital admissions
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
+const { isCodEnabled } = require('../../../utils/policyHelper'); // Ensure this is imported at the top
 
 // 1. GET ALL SPECIALIZATIONS (For dropdown)
 const getSpecializations = async (req, res) => {
@@ -338,11 +339,12 @@ const validateCoupon = async (req, res) => {
 // };
 
 // for condtional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
+// --- GET CHECKOUT SUMMARY (Updated with COD Check) ---
 const getCheckoutSummary = async (req, res) => {
     try {
         let body = { ...req.body };
 
-        // 🚨 SAFE MULTIPART PARSER: Parse stringified fields from frontend if necessary
+        // 🚨 SAFE MULTIPART PARSER
         if (typeof body.patients === 'string') {
             try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
         }
@@ -362,13 +364,15 @@ const getCheckoutSummary = async (req, res) => {
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
 
-        // 🚨 FAMILY MEMBERS VERIFICATION LOGIC (With safe navigation guards)
+        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
+        const isCodAllowed = await isCodEnabled('Doctor');
+
+        // FAMILY MEMBERS VERIFICATION LOGIC
         const user = await User.findById(req.user.id).select('familyMember');
         if (!user) return res.status(404).json({ message: "User account not found" });
 
         if (patients && Array.isArray(patients)) {
             for (const patient of patients) {
-                // Safeguard against missing/different keys (patientName vs name)
                 const pName = patient.patientName || patient.name || "Self";
                 const isSelf = patient.relation === 'Self' || pName.toLowerCase() === 'self';
                 
@@ -380,7 +384,7 @@ const getCheckoutSummary = async (req, res) => {
                     if (!isRegisteredMember) {
                         return res.status(400).json({
                             success: false,
-                            message: `Access Blocked: Patient '${pName}' is not registered under your family profile. Please add them first to apply your elder care subscription benefits.`
+                            message: `Access Blocked: Patient '${pName}' is not registered under your family profile.`
                         });
                     }
                 }
@@ -395,7 +399,7 @@ const getCheckoutSummary = async (req, res) => {
         let planName = "";
         let userSubscriptionId = null;
 
-        // SUBSCRIPTION CHECK: Free Doctor Consultations check karein
+        // SUBSCRIPTION CHECK
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
         
@@ -460,6 +464,7 @@ const getCheckoutSummary = async (req, res) => {
                 totalPayable: subtotal - discount,
                 patients,
                 address: consultationType === 'Home Visit' ? address : null,
+                isCodAvailable: isCodAllowed, // 👈 Dynamic indicator added
                 subscriptionDetails: {
                     isSubscriptionApplied, 
                     userSubscriptionId,
@@ -474,13 +479,14 @@ const getCheckoutSummary = async (req, res) => {
 
 // --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY ORDER CREATION) ---
 // Mapped only for Independent Doctors (Role check added) [1]
+// --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY & COD LOCKS) ---
 const bookAppointment = async (req, res) => {
     try {
         console.log("Incoming Appointment Booking Request:", req.body);
 
         let body = { ...req.body };
 
-        // Safe JSON parsing for multipart/form-data payloads
+        // 🚨 SAFE MULTIPART PARSER
         if (typeof body.patients === 'string') {
             try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
         }
@@ -505,7 +511,7 @@ const bookAppointment = async (req, res) => {
         const appointmentTime = timeSlot; 
         const pricingData = pricingBreakdown; 
 
-        // 1. Mandatory Parameters Validation
+        // 1. Basic Validations
         if (!doctorId || !appointmentDate || !appointmentTime) {
             return res.status(400).json({ 
                 success: false, 
@@ -531,6 +537,17 @@ const bookAppointment = async (req, res) => {
             });
         }
 
+        // 🚨 STRICTOR COD VALIDATION
+        if (activePaymentMethod === 'COD') {
+            const isCodAllowed = await isCodEnabled('Doctor');
+            if (!isCodAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cash on Delivery is currently disabled for doctor appointments. Please pay online to complete your booking."
+                });
+            }
+        }
+
         // 2. Strict Independent Doctor Role Validation
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) {
@@ -550,7 +567,6 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 3. Double Booking Validation Check
         const isBooked = await Appointment.findOne({ 
             doctorId, 
             appointmentDate: new Date(appointmentDate), 
@@ -562,7 +578,7 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "This slot is already booked." });
         }
 
-        // 4. Resolve Subscription Plan Benefits
+        // Subscription variables
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
         const rawDoctorFee = doctor.fees[typeMap[consultationType]] || 0;
 
@@ -594,7 +610,7 @@ const bookAppointment = async (req, res) => {
         const finalPayable = Number(totalAmount);
 
         // =========================================================================
-        // CASE A: FREE BOOKING BYPASS (Subscription completely waived the amount to 0)
+        // CASE A: FREE BOOKING & COD BYPASS
         // =========================================================================
         if (finalPayable === 0 || activePaymentMethod === 'COD') {
             const appointment = await Appointment.create({
@@ -616,9 +632,9 @@ const bookAppointment = async (req, res) => {
                     subtotal: Number(pricingData.subtotal || 0)
                 },
                 
-                totalAmount: 0,
+                totalAmount: finalPayable,
                 bookingId: tempBookingId,
-                status: 'Confirmed', // Free / COD is confirmed instantly on submit
+                status: 'Confirmed', // Confirmed instantly on submit
                 paymentStatus: 'Pending',
                 transactionId: `FREE-${tempBookingId}`,
                 'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
@@ -630,7 +646,6 @@ const bookAppointment = async (req, res) => {
                 }
             });
 
-            // Deduct the subscription count on database confirmation
             if (isSubscriptionApplied) {
                 const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
                 await deductBenefitCount(req.user.id, 'freeDoctorAppointmentsCount');
@@ -646,13 +661,13 @@ const bookAppointment = async (req, res) => {
 
             return res.status(201).json({
                 success: true,
-                message: "Appointment successfully confirmed without payments!",
+                message: "Appointment successfully confirmed!",
                 data: appointment
             });
         }
 
         // =========================================================================
-        // CASE B: PAID ONLINE BOOKING (Generate Razorpay Order Details)
+        // CASE B: PAID ONLINE BOOKING
         // =========================================================================
         const rzpOrder = await createRazorpayOrder(finalPayable, `receipt_${tempBookingId}`);
 
@@ -677,7 +692,7 @@ const bookAppointment = async (req, res) => {
             
             totalAmount: finalPayable,
             bookingId: tempBookingId,
-            status: 'Pending', // Online payments require verification to confirm
+            status: 'Pending', 
             paymentStatus: 'Pending',
             transactionId: rzpOrder.id, 
             'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
@@ -704,6 +719,7 @@ const bookAppointment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 // --- NEW METHOD: VERIFY PAYMENT AND CONFIRM APPOINTMENT ---
 // endpoint: POST /user/doctors/verify-payment

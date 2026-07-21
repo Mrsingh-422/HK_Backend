@@ -11,6 +11,7 @@ const { sendPushNotification,notifyAdminsAndVendor } = require('../../../utils/n
 const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
+const { isCodEnabled } = require('../../../utils/policyHelper');
 
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
@@ -367,17 +368,22 @@ const getFinalFare = async (params, userId) => {
     };
 };
 
-// --- 1. CHECKOUT API (Same Keys) ---
+// --- 1. CHECKOUT API (Updated with COD Check) ---
 const calculateAmbulanceFare = async (req, res) => {
     try {
-        const fare = await getFinalFare(req.body); // req.body contains all booking keys
-        res.json({ success: true, data: fare });
+        const isCodAllowed = await isCodEnabled('Ambulance');
+        const fare = await getFinalFare(req.body, req.user.id); // req.body contains all booking keys
+        
+        res.json({ 
+            success: true, 
+            isCodAvailable: isCodAllowed, // 👈 Dynamic indicator added
+            data: fare 
+        });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // --- 2. BOOKING API (Same Keys + Future Razorpay Support) ---
-// --- UNIVERSAL CONFIRM BOOKING (Updated for Request-First Flow) ---
-
+// --- UNIVERSAL CONFIRM BOOKING (Updated with COD and Subscription Check) ---
 const confirmAmbulanceBooking = async (req, res) => {
     try {
         let body = { ...req.body };
@@ -411,6 +417,19 @@ const confirmAmbulanceBooking = async (req, res) => {
             policeRequired,    // Accidental check Alert
             fireRequired       // Accidental check Alert
         } = body;
+
+        const activePaymentMethod = body.paymentMethod || "Online";
+
+        // 🚨 STRICTOR COD VALIDATION
+        if (activePaymentMethod === 'COD') {
+            const isCodAllowed = await isCodEnabled('Ambulance');
+            if (!isCodAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cash on Delivery is currently disabled for Ambulance bookings. Please pay online to place your request."
+                });
+            }
+        }
 
         // 2. Strict Availability Check: Block if Ambulance is offline
         const targetAmbulance = await Ambulance.findById(ambulanceId);
@@ -497,7 +516,7 @@ const confirmAmbulanceBooking = async (req, res) => {
         let rzpOrder = null;
 
         // 8. Razorpay integration for Online Payments
-        if (!fare.isFree) {
+        if (!fare.isFree && activePaymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
         }
 
@@ -536,7 +555,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             },
             pricing: {
                 ambulanceCharge: fare.ambulanceCharge,
-                originalAmbulanceCharge: fare.originalAmbulanceCharge, // 🚨 SAVED: Actual ambulance base fee before subscription
+                originalAmbulanceCharge: fare.originalAmbulanceCharge, 
                 supportingStaffCharge: fare.supportingStaffCharge,
                 subtotal: fare.subtotal,
                 discount: fare.discount,
@@ -544,16 +563,16 @@ const confirmAmbulanceBooking = async (req, res) => {
             },
             isFreeCase: fare.isFree,
             paymentStatus: fare.isFree ? 'Paid' : 'Pending',
+            paymentMethod: activePaymentMethod,
             transactionId: rzpOrder ? rzpOrder.id : (paymentId || null),
-            status: 'Searching', 
+            status: activePaymentMethod === 'COD' || fare.isFree ? 'Confirmed' : 'Searching', 
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{ 
-                status: 'Searching', 
+                status: activePaymentMethod === 'COD' || fare.isFree ? 'Confirmed' : 'Searching', 
                 timestamp: new Date(),
-                note: `Booking request sent, searching for driver.` 
+                note: activePaymentMethod === 'COD' ? `Booking request verified under COD.` : `Booking request sent, searching for driver.` 
             }],
 
-            // 🚨 SAVED: Store strict audit tracking details
             subscriptionDetails: {
                 isSubscriptionApplied: fare.isSubscriptionApplied,
                 userSubscriptionId: fare.userSubscriptionId,
@@ -574,23 +593,21 @@ const confirmAmbulanceBooking = async (req, res) => {
         }
 
         // Deduct Subscription benefits for Free/Subscription trips
-        if (fare.isFree) {
-            // SUBSCRIPTION DEDUCTION LOCK: Only deduct subscription trip points if ride is NOT Universally Free SOS
-            if (serviceType !== 'Accident emergency') {
-                const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+        if (fare.isFree || activePaymentMethod === 'COD' || fare.total === 0) {
+            // SUBSCRIPTION DEDUCTION LOCK
+            if (serviceType !== 'Accident emergency' && fare.isSubscriptionApplied) {
                 await deductBenefitCount(req.user.id, 'freeAmbulanceTripsCount');
             }
 
-            // Trigger Notification for Free Case Bookings (So nearby drivers are notified instantly)
             await notifyAdminsAndVendor(
                 ambulanceId, 
                 'ambulance', 
-                "New Booking Request (Free Case)!", 
-                `An ambulance booking #${tempBookingId} has been placed. Action required.`,
+                "New Booking Request Verified!", 
+                `Ambulance booking #${tempBookingId} has been successfully placed.`,
                 { bookingId: booking._id.toString(), type: 'new_booking' }
             );
 
-            return res.status(201).json({ success: true, message: "Booking Request Sent Successfully (Free/Subscription Case)", booking });
+            return res.status(201).json({ success: true, message: "Booking Request Sent Successfully", booking });
         }
 
         // For Online Paid cases, return Razorpay Order configurations
@@ -933,11 +950,6 @@ const createReferralBooking = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-
-
-
-
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1035,12 +1047,6 @@ const getMyAmbulanceBookings = async (req, res) => {
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-
-
-
-
-
-
 
 
 

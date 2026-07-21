@@ -21,6 +21,7 @@ const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/
 const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
+const { isCodEnabled } = require('../../../utils/policyHelper');
 
 
 // 1. LIST HOSPITALS (Screenshot 18, 19)
@@ -375,98 +376,13 @@ const getAvailableBedsForRange = async (req, res) => {
     }
 };
 
-// --- 2. UPDATED CHECKOUT (Based on stay duration) ---
-// const getHospitalCheckoutSummary = async (req, res) => {
-//     try {
-//         const { 
-//             hospitalId, 
-//             doctorId, 
-//             bedId, 
-//             consultationType, 
-//             couponCode, 
-//             specialServices, 
-//             startDate, 
-//             endDate,
-//             triageLevel 
-//         } = req.body;
-
-//         let baseFee = 0;         
-//         let visitCharge = 0;     
-//         let triageSurcharge = 0; 
-//         let days = 1;            
-
-//         if (bedId && startDate && endDate) {
-//             const start = moment(startDate).startOf('day');
-//             const end = moment(endDate).endOf('day');
-            
-//             days = end.diff(start, 'days');
-//             if (days <= 0) days = 1;
-
-//             const bed = await Bed.findById(bedId);
-//             if (bed) {
-//                 const bedPrice = bed.price || bed.pricePerDay || 0;
-//                 baseFee = bedPrice * days;
-//             }
-//         }
-
-//         if (doctorId) {
-//             const doctor = await Doctor.findById(doctorId);
-//             if (doctor) {
-//                 visitCharge = doctor.fees || 0;
-
-//                 // 🚨 SUBSCRIPTION CHECK: Hospital me assigned doctor consultation check karein
-//                 const hospDocBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', visitCharge);
-//                 visitCharge = hospDocBenefit.amount; // Sets visitCharge to 0 if benefit active
-//             }
-//         }
-
-//         if (triageLevel === 'Urgent') {
-//             triageSurcharge = 300; 
-//         } else if (triageLevel === 'Emergency') {
-//             triageSurcharge = 500;
-//         }
-
-//         const serviceCharge = (specialServices?.length || 0) * 100; 
-
-//         let subtotal = baseFee + visitCharge + serviceCharge + triageSurcharge;
-
-//         let discount = 0;
-//         if (couponCode) {
-//             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-//             if (coupon) {
-//                 if (subtotal >= coupon.minOrderAmount) {
-//                     discount = (subtotal * coupon.discountPercentage) / 100;
-//                     if (discount > coupon.maxDiscount) {
-//                         discount = coupon.maxDiscount;
-//                     }
-//                 }
-//             }
-//         }
-
-//         res.json({
-//             success: true,
-//             data: {
-//                 baseFee,
-//                 visitCharge,
-//                 serviceCharge,
-//                 triageSurcharge,
-//                 days,
-//                 discount: Math.round(discount),
-//                 subtotal: Math.round(subtotal),
-//                 totalPayable: Math.round(subtotal - discount)
-//             }
-//         });
-//     } catch (error) { 
-//         res.status(500).json({ message: error.message }); 
-//     }
-// };
-
 // for conditional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
+// --- 2. UPDATED CHECKOUT (Updated with COD Check) ---
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
         let body = { ...req.body };
 
-        // 1. SAFE MULTIPART PARSER: Parse stringified fields from frontend if necessary
+        // 1. SAFE MULTIPART PARSER
         if (typeof body.patients === 'string') {
             try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
         }
@@ -496,6 +412,9 @@ const getHospitalCheckoutSummary = async (req, res) => {
             });
         }
 
+        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
+        const isCodAllowed = await isCodEnabled('Hospital');
+
         // 3. Fetch Bed and prevent null reference crashes
         const bed = await Bed.findById(bedId);
         if (!bed) {
@@ -523,12 +442,12 @@ const getHospitalCheckoutSummary = async (req, res) => {
         let planName = "";
         let userSubscriptionId = null;
 
-        // 5. Subscription benefit check (Checks if patient consultation/bed stay has active benefits)
+        // 5. Subscription benefit check
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const admissionBenefit = await checkAndApplyBenefit(req.user.id, 'freeHospitalStaysCount', baseFee);
         
         if (admissionBenefit.isApplied) {
-            finalBaseFee = 0; // Price waived to 0
+            finalBasePrice = 0; // Price waived to 0
             isSubscriptionApplied = true;
 
             const UserSubscription = require('../../../models/UserSubscription');
@@ -573,6 +492,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
                 stayDuration,
                 patients,
                 address,
+                isCodAvailable: isCodAllowed, // 👈 Dynamic indicator added
                 subscriptionDetails: {
                     isSubscriptionApplied,
                     userSubscriptionId,
@@ -591,7 +511,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
 
 // --- 3. FINAL RANGE BOOKING ---
 // 3. FINAL RANGE BOOKING (Complete dynamic flow with strict overlap check & secure coupon array updates)
-// Replacing finalHospitalBooking inside controllers/user/Hospital/BookHospital.js
+// --- 3. FINAL RANGE BOOKING (Stricter Overlap & COD Checks) ---
 const finalHospitalBooking = async (req, res) => {
     try {
         const { 
@@ -601,15 +521,26 @@ const finalHospitalBooking = async (req, res) => {
             endDate, 
             patients, 
             address,
-            bookingReason,      // Reason for bed booking
-            hasInsurance,       // Insurance indicator ("true" / "false")
+            bookingReason,      
+            hasInsurance,       
             paymentMethod,
             couponCode 
         } = req.body;
 
         const userId = req.user.id;
 
-        // 1. Process and resolve Insurance Details & File Snapshots
+        // 🚨 STRICTOR COD VALIDATION
+        if (paymentMethod === 'COD') {
+            const isCodAllowed = await isCodEnabled('Hospital');
+            if (!isCodAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cash on Delivery is currently disabled for Hospital Admissions. Please pay online to complete your booking."
+                });
+            }
+        }
+
+        // 1. Process and resolve Insurance Details
         let finalInsuranceData = {
             hasInsurance: false,
             insuranceNumber: "",
@@ -621,7 +552,6 @@ const finalHospitalBooking = async (req, res) => {
         const isInsuranceApplied = hasInsurance === 'true' || hasInsurance === true;
 
         if (isInsuranceApplied) {
-            // Fetch patient's user profile to look up saved insurance details
             const userProfile = await User.findById(userId);
             if (!userProfile) {
                 return res.status(404).json({ success: false, message: "User profile not found." });
@@ -630,19 +560,16 @@ const finalHospitalBooking = async (req, res) => {
             finalInsuranceData.hasInsurance = true;
 
             if (req.file) {
-                // Case A: User uploaded a new file during bed checkout
                 finalInsuranceData.insuranceDocument = `/uploads/insurance/${req.file.filename}`;
                 finalInsuranceData.insuranceNumber = req.body.insuranceNumber || "";
                 finalInsuranceData.companyName = req.body.companyName || "";
                 finalInsuranceData.insuranceType = req.body.insuranceType || "";
             } else if (userProfile.insuranceDetails && userProfile.insuranceDetails.hasInsurance && userProfile.insuranceDetails.insuranceDocument) {
-                // Case B: Auto-fetch and clone already saved policy data and file path from profile
                 finalInsuranceData.insuranceDocument = userProfile.insuranceDetails.insuranceDocument;
                 finalInsuranceData.insuranceNumber = userProfile.insuranceDetails.insuranceNumber || "";
                 finalInsuranceData.companyName = userProfile.insuranceDetails.companyName || "";
                 finalInsuranceData.insuranceType = userProfile.insuranceDetails.insuranceType || "";
             } else {
-                // Case C: No new file uploaded and no profile insurance details saved
                 return res.status(400).json({ 
                     success: false, 
                     message: "Validation Error: Please upload an insurance document file or complete your insurance profile settings to proceed with cashless checkout." 
@@ -650,7 +577,7 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        // 2. Fetch Target Bed and Ward details
+        // 2. Fetch Target Bed
         const bed = await Bed.findById(bedId);
         if (!bed) {
             return res.status(404).json({ success: false, message: "Selected Bed not found in the system." });
@@ -778,7 +705,7 @@ const finalHospitalBooking = async (req, res) => {
             
             // Screen fields &resolved insurance metadata
             bookingReason: bookingReason || "",
-            insuranceDetails: finalInsuranceData, // Dynamic profile cloning
+            insuranceDetails: finalInsuranceData,
 
             // Pricing structure
             pricingBreakdown: {

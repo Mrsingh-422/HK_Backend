@@ -46,6 +46,7 @@ const { sendPushNotification,notifyAdminsAndVendor } = require('../../../utils/n
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { isCodEnabled } = require('../../../utils/policyHelper');
 
 
 
@@ -1114,23 +1115,33 @@ const validateLabCoupon = async (req, res) => {
 // 3. FINAL CHECKOUT (Integrating Delivery, Coupons & Razorpay Payments)
 // Replacing checkoutLabBooking in controllers/user/Lab/BookLab.js
 // --- 3. FINAL CHECKOUT (Supporting Patient-to-Test & Patient-to-Address Mapping) ---
+// --- 3. FINAL CHECKOUT (Updated with COD and Mapped Cart checks) ---
 const checkoutLabBooking = async (req, res) => {
     try {
         const { 
             appointmentDate, 
             appointmentTime, 
-            address, // Global default fallback address
+            address, 
             paymentMethod, 
             couponCode, 
             isRapid, 
-            selectedPatientIds, // Standard flat flow fallback
-            patientMappings,    // 🚨 NEW: Multi-patient, Multi-address mapped array
+            selectedPatientIds, 
+            patientMappings,    
             collectionType 
         } = req.body;
 
         const cart = await Cart.findOne({ userId: req.user.id });
         if (!cart || cart.labCart.items.length === 0) {
             return res.status(400).json({ success: false, message: "Cart is empty" });
+        }
+
+        // 🚨 STRICTOR COD VALIDATION
+        const isCodAllowed = await isCodEnabled('Lab');
+        if (paymentMethod === 'COD' && !isCodAllowed) {
+            return res.status(400).json({
+                success: false,
+                message: "Cash on Delivery is currently disabled for diagnostic services. Please pay online to complete your checkout."
+            });
         }
 
         // Radiology Home Collection Safeguard
@@ -1178,7 +1189,6 @@ const checkoutLabBooking = async (req, res) => {
             for (let mapping of patientMappings) {
                 let patientInfo = {};
                 
-                // Fetch profile bio details (name, age, gender) safely
                 if (mapping.patientId === 'Self') {
                     patientInfo = {
                         name: userProfile.name,
@@ -1205,7 +1215,6 @@ const checkoutLabBooking = async (req, res) => {
                     }
                 }
 
-                // Resolve item metadata (name, price) assigned to this patient
                 const assignedItems = [];
                 for (let item of mapping.items) {
                     if (item.productType === 'LabTest') {
@@ -1239,13 +1248,13 @@ const checkoutLabBooking = async (req, res) => {
                     age: patientInfo.age,
                     gender: patientInfo.gender,
                     relation: patientInfo.relation,
-                    address: mapping.address, // Patient-specific collection address
-                    assignedItems: assignedItems // Items assigned to this specific patient
+                    address: mapping.address,
+                    assignedItems: assignedItems
                 });
             }
         } 
         // =========================================================================
-        // CASE B: OLD FLOW FALLBACK (Flat patient & test array checklist)
+        // CASE B: OLD FLOW FALLBACK
         // =========================================================================
         else {
             bill = await calculateBillHelper(
@@ -1261,7 +1270,6 @@ const checkoutLabBooking = async (req, res) => {
 
             resolvedPatients = await mapPatients(req.user.id, selectedPatientIds);
             
-            // Populate fallback flat items checklist
             cart.labCart.items.forEach(i => {
                 if (i.productType === 'LabTest') {
                     globalUniqueTests.add(JSON.stringify({ testId: i.itemId, price: i.price, name: i.name }));
@@ -1271,7 +1279,6 @@ const checkoutLabBooking = async (req, res) => {
             });
         }
 
-        // Convert the unique sets back into arrays for schema validation compatibility
         const finalTestsArray = Array.from(globalUniqueTests).map(str => JSON.parse(str));
         const finalPackagesArray = Array.from(globalUniquePackages).map(str => JSON.parse(str));
 
@@ -1282,14 +1289,13 @@ const checkoutLabBooking = async (req, res) => {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
         }
 
-        // Establish first patient's address as the global fallback address
         const fallbackAddress = resolvedPatients[0]?.address || address;
 
         const booking = await LabBooking.create({
             bookingId: tempBookingId,
             userId: req.user.id,
             labId: cart.labCart.labId,
-            patients: resolvedPatients, // Structured patient array with customized addresses & item payloads
+            patients: resolvedPatients,
             items: {
                 tests: finalTestsArray,
                 packages: finalPackagesArray
@@ -1333,7 +1339,8 @@ const checkoutLabBooking = async (req, res) => {
             amount: rzpOrder.amount, 
             razorpayOrderId: rzpOrder.id,
             bookingId: tempBookingId,
-            appointmentId: booking._id 
+            appointmentId: booking._id,
+            isCodAvailable: isCodAllowed // 👈 Dynamic indicator added
         });
 
     } catch (error) { 
@@ -1370,6 +1377,7 @@ async function mapPatients(userId, pids) {
 
 // 4. INITIATE BOOKING (Direct Booking - Replacing bookLabTest)
 // --- 4. INITIATE BOOKING (Direct Booking - Supporting Patient-to-Test & Address Mapping) ---
+// --- 4. INITIATE BOOKING (Direct Booking - Supporting COD checks) ---
 const bookLabTest = async (req, res) => {
     try {
         console.log("Incoming Direct Lab Booking Request:", req.body);
@@ -1392,9 +1400,9 @@ const bookLabTest = async (req, res) => {
             address, 
             couponCode, 
             paymentMethod,
-            patientMappings, // 🚨 NEW: Multi-patient, Multi-address mapped array
-            patients,        // Older flat array fallback
-            items            // Older flat items fallback
+            patientMappings, 
+            patients,        
+            items            
         } = body;
 
         // 1. Validate mandatory fields
@@ -1412,6 +1420,17 @@ const bookLabTest = async (req, res) => {
                 success: false, 
                 message: `Invalid paymentMethod. Allowed values are: ${allowedPaymentMethods.join(', ')}` 
             });
+        }
+
+        // 🚨 STRICTOR COD VALIDATION
+        if (paymentMethod === 'COD') {
+            const isCodAllowed = await isCodEnabled('Lab');
+            if (!isCodAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cash on Delivery is currently disabled for diagnostic services. Please pay online to place your booking."
+                });
+            }
         }
 
         // 2. CRITICAL RADIOLOGY HOME COLLECTION WALK-IN VALIDATIONS
@@ -1536,7 +1555,7 @@ const bookLabTest = async (req, res) => {
             }
         } 
         // =========================================================================
-        // CASE B: OLD FLOW FALLBACK (Flat arrays)
+        // CASE B: OLD FLOW FALLBACK
         // =========================================================================
         else {
             bill = await calculateBill(
@@ -1625,6 +1644,7 @@ const bookLabTest = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 // 5. UPLOAD PRESCRIPTION FLOW (Figma logic)
 const uploadPrescriptionFlow = async (req, res) => {

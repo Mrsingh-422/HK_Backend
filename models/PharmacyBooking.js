@@ -70,7 +70,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
     }, 
 
     // --- PAYMENT & STATUS ---
-    paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet'], default: 'COD' },
+    paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'COD' },
     paymentStatus: { 
         type: String, 
         enum: ['Pending', 'Paid', 'Failed', 'Refunded'], 

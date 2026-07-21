@@ -2,6 +2,7 @@
 const CancellationConfig = require('../models/CancellationConfig');
 const NoShowConfig = require('../models/NoShowConfig');
 const Wallet = require('../models/Wallet');
+const CodConfig = require('../models/CodConfig');
 
 
 /**
@@ -111,4 +112,25 @@ const creditVendorCompensation = async (vendorId, vendorModel, amount, bookingId
     }
 };
 
-module.exports = { hasDriverStarted, processCancellationRefund, creditVendorCompensation };
+
+
+
+
+/**
+ * Checks if Cash on Delivery (COD) is enabled for a specific service type
+ * @param {String} vendorType - 'Lab' | 'Pharmacy' | 'Nurse' | 'Hospital' | 'Doctor' | 'Ambulance'
+ * @returns {Boolean} - True if COD is enabled, false if disabled
+ */
+const isCodEnabled = async (vendorType) => {
+    try {
+        const config = await CodConfig.findOne({ vendorType });
+        // Fallback to true if the admin has not configured this model state yet
+        return config ? config.isCodAvailable : true;
+    } catch (error) {
+        console.error(`Error checking COD availability for ${vendorType}:`, error);
+        return true; // Fallback safe state
+    }
+};
+
+
+module.exports = { hasDriverStarted, processCancellationRefund, creditVendorCompensation, isCodEnabled };

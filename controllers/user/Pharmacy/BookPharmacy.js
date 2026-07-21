@@ -32,6 +32,7 @@ const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
+const { isCodEnabled } = require('../../../utils/policyHelper');
 
 
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
@@ -1251,8 +1252,8 @@ const validateCoupon = async (req, res) => {
         res.json({ success: true, discount: finalDiscount });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-// BookPharmacy.js mein checkoutMedicineOrder update karein
 // POST /user/pharmacy/checkout
+// --- CHECKOUT MEDICINE ORDER (Updated with COD Check) ---
 const checkoutMedicineOrder = async (req, res) => {
     try {
         const { couponCode, isRapid, collectionType, appointmentTime, address } = req.body;
@@ -1265,6 +1266,9 @@ const checkoutMedicineOrder = async (req, res) => {
         }
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
+
+        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
+        const isCodAllowed = await isCodEnabled('Pharmacy');
 
         // B. Real-time Stock Validation
         const validatedItems = [];
@@ -1297,7 +1301,7 @@ const checkoutMedicineOrder = async (req, res) => {
 
         // E. Billing Calculation
         const bill = await calculatePharmacyBillHelper(
-            pharmacyId, validatedItems, 1, collectionType, couponCode, isRapid, appointmentTime
+            pharmacyId, validatedItems, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
         );
 
         // F. Response with all metadata for payment screen
@@ -1317,7 +1321,8 @@ const checkoutMedicineOrder = async (req, res) => {
                 })),
                 orderRestrictions: {
                     canPlaceOrder: true,
-                    needsPrescription: rxMandatory
+                    needsPrescription: rxMandatory,
+                    isCodAvailable: isCodAllowed // 👈 Dynamic indicator added
                 }
             }
         });
@@ -1329,7 +1334,7 @@ const checkoutMedicineOrder = async (req, res) => {
 };
 
 // ==========================================
-// 1. PLACE ORDER (With Strict Backend Prescription Restrictions)
+// 1. PLACE ORDER (With COD and Prescription Checks)
 // ==========================================
 const placeOrder = async (req, res) => {
     try {
@@ -1340,6 +1345,18 @@ const placeOrder = async (req, res) => {
         } = req.body;
 
         const userId = req.user.id;
+        const activePaymentMethod = paymentMethod || 'COD';
+
+        // 🚨 STRICTOR COD VALIDATION
+        if (activePaymentMethod === 'COD') {
+            const isCodAllowed = await isCodEnabled('Pharmacy');
+            if (!isCodAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cash on Delivery is currently disabled for medicine orders. Please pay online to complete your checkout."
+                });
+            }
+        }
         
         const cart = await Cart.findOne({ userId })
             .populate('pharmacyCart.items.medicineId')
@@ -1419,7 +1436,7 @@ const placeOrder = async (req, res) => {
         const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
 
-        if (paymentMethod !== 'COD') {
+        if (activePaymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
         } else {
             for (const item of cart.pharmacyCart.items) {
@@ -1443,17 +1460,17 @@ const placeOrder = async (req, res) => {
             appointmentDate,
             appointmentTime,
             billSummary: bill,
-            paymentMethod: paymentMethod || 'COD',
+            paymentMethod: activePaymentMethod,
             orderType: isPrescriptionOrder ? 'Prescription' : 'General',
             prescriptionImages: rxImages,
-            status: paymentMethod === 'COD' 
+            status: activePaymentMethod === 'COD' 
                 ? (isPrescriptionOrder ? 'Under Review' : 'Placed') 
                 : 'Pending',
             paymentStatus: 'Pending',
             deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString()
         });
 
-        if (paymentMethod === 'COD') {
+        if (activePaymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
             if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
