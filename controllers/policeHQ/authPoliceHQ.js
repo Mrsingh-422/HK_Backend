@@ -2,6 +2,7 @@ const PoliceHQ = require('../../models/PoliceHQ');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
+const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 
 const generateToken = (id, role) => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
@@ -44,17 +45,62 @@ const loginPoliceHQ = async (req, res) => {
 const updatePoliceHQProfile = async (req, res) => {
     try {
         const id = req.user.id;
-        const updates = req.body;
+        const updates = { ...req.body };
+
         const current = await PoliceHQ.findById(id);
+        if (!current) {
+            return res.status(404).json({ success: false, message: "Police HQ profile not found." });
+        }
+
+        // 🚨 SECURITY LOCKS: Protect sensitive fields from direct modifications
+        delete updates.password;
+        delete updates.email;
+        delete updates.role;
+        delete updates.token;
 
         if (req.files && req.files.profileImage) {
-            if (current.profileImage) deleteFile(current.profileImage);
             updates.profileImage = req.files.profileImage[0].path;
         }
 
-        const updated = await PoliceHQ.findByIdAndUpdate(id, updates, { new: true });
-        res.json({ success: true, message: "Profile Updated", data: updated });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: id, vendorModel: 'PoliceHQ', status: 'Pending' });
+        if (existingPending) {
+            if (updates.profileImage && existingPending.updatedFields?.profileImage) {
+                deleteFile(existingPending.updatedFields.profileImage);
+            }
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
+        }
+
+        const request = await ProfileUpdateRequest.create({
+            vendorId: id,
+            vendorModel: 'PoliceHQ',
+            updatedFields: updates,
+            status: 'Pending'
+        });
+
+        res.json({ 
+            success: true, 
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            data: request 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+// 3. Append this function to fetch status tracking:
+const getLatestPoliceHQProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'PoliceHQ'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 
@@ -144,4 +190,5 @@ const resetPasswordAfterVerification = async (req, res) => {
 };
 module.exports = { registerPoliceHQ, loginPoliceHQ, updatePoliceHQProfile ,forgotPasswordRequest,
     verifyOtpRequest,
-    resetPasswordAfterVerification};
+    resetPasswordAfterVerification,
+    getLatestPoliceHQProfileRequest};

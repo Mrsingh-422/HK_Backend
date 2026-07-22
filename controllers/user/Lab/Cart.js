@@ -196,7 +196,7 @@ const getMyCart = async (req, res) => {
                     pharmacyCart: { items: [] },
                     labCartTotal: 0,
                     pharmacyCartTotal: 0,
-                    totalItems: 0 // Default zero count
+                    totalItems: 0 
                 } 
             });
         }
@@ -208,16 +208,39 @@ const getMyCart = async (req, res) => {
         // 2. Total Items Count calculate karein (Sum of all quantities)
         let labItemCount = cart.labCart.items.reduce((acc, i) => acc + i.quantity, 0);
         let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
-        
         let totalItems = labItemCount + pharmacyItemCount;
 
+        // 🚨 3. DYNAMIC PREPARATION GUIDE INJECTOR [1]
+        // Loop through all lab cart items to fetch their clinical precautions on-the-fly [1]
+        const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
+            let precaution = "No special preparation required."; // Default fallback instruction [1]
+
+            if (item.productType === 'LabTest') {
+                const test = await LabTest.findById(item.itemId).select('precaution');
+                if (test && test.precaution) precaution = test.precaution;
+            } else if (item.productType === 'LabPackage') {
+                const pkg = await LabPackage.findById(item.itemId).select('precaution');
+                if (pkg && pkg.precaution) precaution = pkg.precaution;
+            }
+
+            return {
+                ...item.toObject(), // Convert mongoose document to raw Javascript object
+                preparationGuide: precaution // 👈 Dynamic key injected for frontend UI rendering [1]
+            };
+        }));
+
+        // 4. Construct response ensuring NO OTHER KEY is modified [1]
         res.json({ 
             success: true, 
             data: { 
                 ...cart._doc, 
+                labCart: {
+                    ...cart.labCart.toObject(),
+                    items: mappedLabItems // 👈 Replaced with dynamic mapped array [1]
+                },
                 labCartTotal: labTotal, 
                 pharmacyCartTotal: medTotal,
-                totalItems: totalItems // <-- Yeh rahi aapki nayi key
+                totalItems: totalItems 
             } 
         });
     } catch (error) { 

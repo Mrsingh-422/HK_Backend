@@ -10,6 +10,8 @@ const Pharmacy = require('../../../models/Pharmacy');
 const Lab = require('../../../models/Lab');
 const Ambulance = require('../../../models/Ambulance');
 const Driver = require('../../../models/Driver');
+const PoliceHQ = require('../../../models/PoliceHQ');
+const FireHQ = require('../../../models/FireHQ');
 
 const modelMap = {
     'Hospital': Hospital,
@@ -18,7 +20,9 @@ const modelMap = {
     'Pharmacy': Pharmacy,
     'Lab': Lab,
     'Ambulance': Ambulance,
-    'Driver': Driver
+    'Driver': Driver,
+    'PoliceHQ': PoliceHQ,
+    'FireHQ': FireHQ 
 };
 
 // 1. GET: List Profile Update Requests (With Pagination & Filters)

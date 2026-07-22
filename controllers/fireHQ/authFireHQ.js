@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
 const FireStation = require('../../models/FireStation');
 const FireStaff = require('../../models/FireStaff');
+const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 
 // Updated Token Generator
 const generateToken = (id, role) => {
@@ -46,31 +47,43 @@ const loginHQ = async (req, res) => {
 const updateHQProfile = async (req, res) => {
     try {
         const hqId = req.user.id;
-        const updates = { ...req.body }; // req.body ki copy lo
+        const updates = { ...req.body }; 
+
         const currentHQ = await FireHQ.findById(hqId);
         if (!currentHQ) return res.status(404).json({ message: "HQ not found" });
+
+        // 🚨 SECURITY LOCKS: Protect sensitive fields from direct modifications
+        delete updates.password;
+        delete updates.email;
+        delete updates.officialEmail;
+        delete updates.role;
+        delete updates.token;
  
-        // FIX: Multer .fields() use karne par data req.files mein aata hai
         if (req.files && req.files['profileImage']) {
-            const file = req.files['profileImage'][0]; // Pehli image uthao
-            // Purani image delete karein agar exist karti hai
-            if (currentHQ.profileImage) {
-                deleteFile(currentHQ.profileImage); 
-            }
-            // Nayi image ka path save karein
+            const file = req.files['profileImage'][0]; 
             updates.profileImage = file.path;
         }
+
+        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: hqId, vendorModel: 'FireHQ', status: 'Pending' });
+        if (existingPending) {
+            if (updates.profileImage && existingPending.updatedFields?.profileImage) {
+                deleteFile(existingPending.updatedFields.profileImage);
+            }
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
+        }
  
-        // Profile update karein
-        const updatedHQ = await FireHQ.findByIdAndUpdate(hqId, updates, { 
-            new: true,
-            runValidators: true 
+        const request = await ProfileUpdateRequest.create({
+            vendorId: hqId,
+            vendorModel: 'FireHQ',
+            updatedFields: updates,
+            status: 'Pending'
         });
  
         res.json({ 
             success: true, 
-            message: "HQ Profile Updated Successfully", 
-            data: updatedHQ 
+            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            data: request 
         });
  
     } catch (error) { 
@@ -78,6 +91,22 @@ const updateHQProfile = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+// 4. Append this function to fetch status tracking:
+const getLatestFireHQProfileRequest = async (req, res) => {
+    try {
+        const latestRequest = await ProfileUpdateRequest.findOne({
+            vendorId: req.user.id,
+            vendorModel: 'FireHQ'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        res.json({ success: true, data: latestRequest || null });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 const changePassword = async (req, res) => {
     try {
@@ -267,114 +296,6 @@ const getProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
- 
-// 5. UPDATE PROFILE (Unified for HQ, Station, and Staff)
 
-const updateProfile = async (req, res) => {
-
-    try {
-
-        const userId = req.user.id;
-
-        const role = req.user.role; // Token se role nikalna
-
-        let Model;
- 
-        // 1. Role ke basis par Model select karein
-
-        switch (role) {
-
-            case 'Fire-HQ':
-
-                Model = FireHQ;
-
-                break;
-
-            case 'Fire-Station':
-
-                Model = FireStation;
-
-                break;
-
-            case 'Fire-Staff':
-
-                Model = FireStaff;
-
-                break;
-
-            default:
-
-                return res.status(400).json({ success: false, message: "Invalid role in token" });
-
-        }
- 
-        const updates = req.body;
- 
-        // 2. Security: In fields ko update karne se rokna (inhe alag APIs se handle karein)
-
-        delete updates.password;
-
-        delete updates.email;
-
-        delete updates.officialEmail;
-
-        delete updates.role;
-
-        delete updates.token;
- 
-        // 3. Current user ka data fetch karein (Image check karne ke liye)
-
-        const currentUser = await Model.findById(userId);
-
-        if (!currentUser) {
-
-            return res.status(404).json({ success: false, message: "User not found" });
-
-        }
- 
-        // 4. File Upload Logic (Agar nayi image aayi hai toh purani delete karein)
-
-        if (req.file) {
-
-            if (currentUser.profileImage) {
-
-                deleteFile(currentUser.profileImage); // Purani file delete karna
-
-            }
-
-            updates.profileImage = req.file.path; // Nayi file ka path save karna
-
-        }
- 
-        // 5. Database update karein
-
-        const updatedUser = await Model.findByIdAndUpdate(
-
-            userId,
-
-            { $set: updates },
-
-            { new: true, runValidators: true }
-
-        );
- 
-        res.status(200).json({
-
-            success: true,
-
-            message: "Profile updated successfully",
-
-            data: updatedUser
-
-        });
- 
-    } catch (error) {
-
-        res.status(500).json({ success: false, message: error.message });
-
-    }
-
-};
- 
 // Forgot & Reset same rahenge (Bas token gen update ho gaya hai)
-module.exports = { registerHQ, loginHQ, updateHQProfile, changePassword , loginFireAll, getProfile, updateProfile };
+module.exports = { registerHQ, loginHQ, updateHQProfile,getLatestFireHQProfileRequest, changePassword , loginFireAll, getProfile };

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
-const { registerPoliceHQ, loginPoliceHQ, updatePoliceHQProfile,
+const { registerPoliceHQ, loginPoliceHQ, updatePoliceHQProfile, getLatestPoliceHQProfileRequest,
     forgotPasswordRequest, verifyOtpRequest, resetPasswordAfterVerification
  } = require('../../controllers/policeHQ/authPoliceHQ');
 
@@ -10,6 +10,8 @@ const { registerPoliceHQ, loginPoliceHQ, updatePoliceHQProfile,
 router.post('/register', protect('admin'), registerPoliceHQ);
 router.post('/login', loginPoliceHQ);
 router.put('/update', protect('Police-HQ'), updatePoliceHQProfile);
+router.get('/profile/update-status', protect('Police-HQ'), getLatestPoliceHQProfileRequest);
+
 
 router.post('/forgot-password', forgotPasswordRequest); // Screen 18 - Send OTP API
 router.post('/verify-otp', verifyOtpRequest); // Screen 19 - Verify OTP API
