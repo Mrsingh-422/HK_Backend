@@ -9,9 +9,6 @@ const {
     updateStation,
     deleteStation,
     getFilteredCases,
-    getHQProfile,
-    updateHQProfile,
-    changePasswordHQ,
     getNotifications,
     deleteNotification,
  
@@ -60,11 +57,6 @@ router.delete('/stations/:id', deleteStation); // Screen 8
 // Usage: /cases?status=Fresh&subType=New or /cases?status=Under Investigation
 router.get('/cases', getFilteredCases); // Screens 13, 14, 18, 19
 // router.post('/cases/assign', assignCase); // Screen 20
- 
-/** PROFILE MANAGEMENT **/
-router.get('/profile', getHQProfile); // Screen 10
-router.put('/profile', policeHQUploads, updateHQProfile); // Screen 12
-router.put('/change-password', changePasswordHQ); // Screen 15
  
 /** NOTIFICATIONS **/
 router.get('/notifications', getNotifications); // Screen 21

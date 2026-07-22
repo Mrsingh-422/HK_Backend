@@ -67,12 +67,14 @@ const labBookingSchema = new mongoose.Schema({
         tests: [{
             testId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabTest' },
             price: Number,
-            name: String
+            name: String,
+            precaution: { type: String, default: "" }
         }],
         packages: [{
             packageId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabPackage' },
             price: Number,
-            name: String
+            name: String,
+            precaution: { type: String, default: "" } 
         }]
     },
 

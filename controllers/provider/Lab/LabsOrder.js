@@ -762,7 +762,7 @@ const startLabPrescriptionReview = async (req, res) => {
 const submitLabReviewBill = async (req, res) => {
     try {
         const { requestId } = req.params;
-        // 🚨 STRICT SYNC: Capturing tests and packages separately as defined in your schema
+        // 🚨 STRICT SYNC: Capturing tests and packages carrying precautions separately [cite: custom_context]
         const { tests, packages, homeVisitCharge } = req.body; 
         const labId = req.user.id;
 
@@ -780,7 +780,7 @@ const submitLabReviewBill = async (req, res) => {
         const verifiedTests = [];
         const verifiedPackages = [];
 
-        // Map tests array safely [1]
+        // Map tests array safely with precautions [cite: custom_context]
         if (tests && tests.length > 0) {
             for (let t of tests) {
                 const subtotal = Number(t.pricePerUnit || 0);
@@ -789,12 +789,13 @@ const submitLabReviewBill = async (req, res) => {
                     testId: t.testId && mongoose.isValidObjectId(t.testId) ? t.testId : null,
                     name: t.name,
                     mrp: Number(t.mrp || 0),
-                    pricePerUnit: subtotal
+                    pricePerUnit: subtotal,
+                    precaution: t.precaution || "" // 👈 Dynamic precaution saved [cite: custom_context]
                 });
             }
         }
 
-        // Map packages array safely [1]
+        // Map packages array safely with precautions [cite: custom_context]
         if (packages && packages.length > 0) {
             for (let p of packages) {
                 const subtotal = Number(p.pricePerUnit || 0);
@@ -803,7 +804,8 @@ const submitLabReviewBill = async (req, res) => {
                     packageId: p.packageId && mongoose.isValidObjectId(p.packageId) ? p.packageId : null,
                     name: p.name,
                     mrp: Number(p.mrp || 0),
-                    pricePerUnit: subtotal
+                    pricePerUnit: subtotal,
+                    precaution: p.precaution || "" // 👈 Dynamic precaution saved [cite: custom_context]
                 });
             }
         }
@@ -812,7 +814,7 @@ const submitLabReviewBill = async (req, res) => {
         const subtotalSum = itemTotal * patientCount;
         const totalAmount = subtotalSum + Number(homeVisitCharge || 0);
 
-        // 🚨 SAVED: Strictly matching your database schema keys
+        // Saved matching your updated database schema keys
         request.verifiedBill = {
             tests: verifiedTests,
             packages: verifiedPackages,

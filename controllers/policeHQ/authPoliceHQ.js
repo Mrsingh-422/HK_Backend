@@ -4,6 +4,37 @@ const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 
+
+// 🚨 HELPER FUNCTION: Extract and standardize uploaded image paths (Added here)
+const getImagePath = (req) => {
+    let filePath = null;
+
+    if (req.file) {
+        filePath = req.file.path;
+    } else if (req.files) {
+        if (req.files.profileImage && req.files.profileImage[0]) {
+            filePath = req.files.profileImage[0].path;
+        } else if (Array.isArray(req.files)) {
+            const found = req.files.find(f => f.fieldname === 'profileImage');
+            if (found) filePath = found.path;
+        }
+    }
+
+    if (!filePath) return null;
+
+    // Convert Windows backslashes (\) to forward slashes (/)
+    filePath = filePath.replace(/\\/g, '/');
+
+    // Strip 'public/' from the static path
+    if (filePath.startsWith('public/')) {
+        filePath = filePath.replace('public/', '/');
+    } else if (!filePath.startsWith('/')) {
+        filePath = '/' + filePath;
+    }
+
+    return filePath;
+};
+
 const generateToken = (id, role) => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
@@ -41,7 +72,7 @@ const loginPoliceHQ = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. UPDATE HQ PROFILE
+// 4. UPDATE PROFILE (With Staging Flow & Image Cleanup)
 const updatePoliceHQProfile = async (req, res) => {
     try {
         const id = req.user.id;
@@ -52,18 +83,26 @@ const updatePoliceHQProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: "Police HQ profile not found." });
         }
 
-        // 🚨 SECURITY LOCKS: Protect sensitive fields from direct modifications
+        // SECURITY LOCKS: Protect sensitive fields
         delete updates.password;
         delete updates.email;
+        delete updates.phone;
         delete updates.role;
         delete updates.token;
 
-        if (req.files && req.files.profileImage) {
-            updates.profileImage = req.files.profileImage[0].path;
+        // Resolve static web path (stripping 'public/') using helper
+        const newImage = getImagePath(req);
+        if (newImage) {
+            updates.profileImage = newImage;
         }
 
-        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
-        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: id, vendorModel: 'PoliceHQ', status: 'Pending' });
+        // DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ 
+            vendorId: id, 
+            vendorModel: 'PoliceHQ', 
+            status: 'Pending' 
+        });
+
         if (existingPending) {
             if (updates.profileImage && existingPending.updatedFields?.profileImage) {
                 deleteFile(existingPending.updatedFields.profileImage);
@@ -71,6 +110,7 @@ const updatePoliceHQProfile = async (req, res) => {
             await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
 
+        // Save staged update request
         const request = await ProfileUpdateRequest.create({
             vendorId: id,
             vendorModel: 'PoliceHQ',
@@ -84,9 +124,11 @@ const updatePoliceHQProfile = async (req, res) => {
             data: request 
         });
     } catch (error) { 
+        console.error("Police HQ Update Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 // 3. Append this function to fetch status tracking:
 const getLatestPoliceHQProfileRequest = async (req, res) => {
     try {
@@ -188,7 +230,50 @@ const resetPasswordAfterVerification = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// GET: Fetch currently logged-in Police HQ profile details
+const getHQProfile = async (req, res) => {
+    try {
+        const hq = await PoliceHQ.findById(req.user.id).select('-password');
+        if (!hq) {
+            return res.status(404).json({ success: false, message: "Police HQ profile not found." });
+        }
+        res.json({ success: true, data: hq });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// PUT: Change logged-in Police HQ account password
+const changePasswordHQ = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: "Both oldPassword and newPassword are required." });
+        }
+
+        const hq = await PoliceHQ.findById(req.user.id).select('+password');
+        if (!hq) {
+            return res.status(404).json({ success: false, message: "Police HQ account not found." });
+        }
+
+        const isMatch = await bcrypt.compare(oldPassword, hq.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Current password is wrong" });
+        }
+
+        hq.password = await bcrypt.hash(newPassword, 10);
+        await hq.save();
+
+        res.json({ success: true, message: "Password updated successfully" });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
 module.exports = { registerPoliceHQ, loginPoliceHQ, updatePoliceHQProfile ,forgotPasswordRequest,
     verifyOtpRequest,
     resetPasswordAfterVerification,
-    getLatestPoliceHQProfileRequest};
+    getLatestPoliceHQProfileRequest,
+    getHQProfile,
+    changePasswordHQ };

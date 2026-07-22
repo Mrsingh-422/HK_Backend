@@ -21,6 +21,9 @@ const labPrescriptionRequestSchema = new mongoose.Schema({
 
 
     collectionType: { type: String, enum: ['Home Collection', 'Visit Lab'], required: true },
+    appointmentDate: { type: Date }, 
+    appointmentTime: { type: String },
+
     
     address: {
         name: String,
@@ -47,18 +50,21 @@ const labPrescriptionRequestSchema = new mongoose.Schema({
             testId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabTest' },
             name: { type: String },
             mrp: { type: Number, default: 0 },
-            pricePerUnit: { type: Number, default: 0 }
+            pricePerUnit: { type: Number, default: 0 },
+            precaution: { type: String, default: "" } // 👈 Added for custom lab-tech precaution edits [cite: custom_context]
         }],
         packages: [{
             packageId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabPackage' },
             name: { type: String },
             mrp: { type: Number, default: 0 },
-            pricePerUnit: { type: Number, default: 0 }
+            pricePerUnit: { type: Number, default: 0 },
+            precaution: { type: String, default: "" } // 👈 Added for custom lab-tech precaution edits [cite: custom_context]
         }],
         itemTotal: { type: Number, default: 0 },
         homeVisitCharge: { type: Number, default: 0 },
         totalAmount: { type: Number, default: 0 }
     }
+
 }, { timestamps: true });
 
 module.exports = mongoose.model('LabPrescriptionRequest', labPrescriptionRequestSchema);

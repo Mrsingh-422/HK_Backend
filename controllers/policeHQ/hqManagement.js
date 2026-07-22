@@ -142,42 +142,7 @@ const getFilteredCases = async (req, res) => {
 //     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 // };
  
-// --- 4. PROFILE & SETTINGS (Screens 10, 12, 15) ---
- 
-const getHQProfile = async (req, res) => {
-    try {
-        const hq = await PoliceHQ.findById(req.user.id);
-        res.json({ success: true, data: hq });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
-};
- 
-const updateHQProfile = async (req, res) => {
-    try {
-        const updates = { ...req.body };
-        
-        if (req.files && req.files.profileImage) {
-            updates.profileImage = `/uploads/police_hq/${req.files.profileImage[0].filename}`;
-        }
- 
-        const hq = await PoliceHQ.findByIdAndUpdate(req.user.id, updates, { new: true });
-        res.json({ success: true, message: "Profile Updated", data: hq });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
-};
- 
-const changePasswordHQ = async (req, res) => {
-    try {
-        const { oldPassword, newPassword } = req.body;
-        const hq = await PoliceHQ.findById(req.user.id).select('+password');
- 
-        const isMatch = await bcrypt.compare(oldPassword, hq.password);
-        if (!isMatch) return res.status(400).json({ success: false, message: "Current password is wrong" });
- 
-        hq.password = await bcrypt.hash(newPassword, 10);
-        await hq.save();
- 
-        res.json({ success: true, message: "Password updated successfully" });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
-};
+
  
 // --- 5. NOTIFICATIONS (Screens 21, 22) ---
 // Note: This logic depends on having a Notification model.
@@ -1007,9 +972,6 @@ module.exports = {
     updateStation,
     deleteStation,
     getFilteredCases,
-    getHQProfile,
-    updateHQProfile,
-    changePasswordHQ,
     getNotifications,
     deleteNotification,
     createCase,
