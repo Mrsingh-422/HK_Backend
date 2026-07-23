@@ -1202,18 +1202,28 @@ const checkoutLabBooking = async (req, res) => {
                 let patientInfo = {};
                 
                 if (mapping.patientId === 'Self') {
+                     // Dynamic age calculation for Self using User main profile dob [cite: 2.1]
+                    let selfAge = 25;
+                    if (userProfile.dob) {
+                        selfAge = moment().diff(moment(userProfile.dob), 'years') || 25;
+                    }
                     patientInfo = {
                         name: userProfile.name,
-                        age: userProfile.age || 25,
+                        age: selfAge,
                         gender: userProfile.gender || 'Male',
                         relation: 'Self'
                     };
                 } else {
                     const member = userProfile.familyMember.id(mapping.patientId);
                     if (member) {
+                        // Dynamic age calculation for family member using dob string [cite: 2.1]
+                        let memberAge = 25;
+                        if (member.dob) {
+                            memberAge = moment().diff(moment(member.dob, 'DD-MM-YYYY'), 'years') || 25;
+                        }
                         patientInfo = {
                             name: member.memberName,
-                            age: member.age,
+                            age: memberAge,
                             gender: member.gender,
                             relation: member.relation
                         };

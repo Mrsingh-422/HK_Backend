@@ -111,14 +111,49 @@ morgan.token('location', (req) => {
 
 // 5. Final Custom Format (Sirf isi ek app.use(morgan...) ko pure file me rakhein)
 app.use(morgan('[:local-date] [IP: :real-ip] [User: :user-name] :method :url :status:location - :response-time ms'));
-/////////////////////////// for console log format ---- end ---- ////////////////////////////
 
+// =============================================================================
+// 🔴 CENTRALIZED GLOBAL ERROR HANDLING & CONSOLE LOGGER MIDDLEWARE
+// =============================================================================
+app.use((err, req, res, next) => {
+    const localDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const clientIp = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const userName = (req.user && req.user.name) || (req.doctor && req.doctor.name) || 'Guest';
+
+    console.error(`\n🚨 [API EXCEPTION TRIGGERED] =============================================`);
+    console.error(`⏰ Timestamp     : [${localDate}]`);
+    console.error(`🔌 Client IP     : [${clientIp}]`);
+    console.error(`👤 Authenticated : [${userName}]`);
+    console.error(`🛣️  Route Details : ${req.method} ${req.originalUrl}`);
+    console.error(`📦 Request Body  :`, JSON.stringify(req.body, null, 2));
+    console.error(`💬 Error Message : ${err.message}`);
+    
+    if (err.stack) {
+        console.error(`\n📂 Full Stack Trace:\n${err.stack}`);
+    }
+    console.error(`=========================================================================\n`);
+
+    const statusCode = err.status || 500;
+    
+    res.status(statusCode).json({
+        success: false,
+        message: err.message || "Internal Server Error",
+        error_stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+});
+// =============================================================================
+// 🔴 CENTRALIZED GLOBAL ERROR HANDLING & CONSOLE LOGGER MIDDLEWARE
+// =============================================================================
+
+
+
+/////////////////////////// for console log format ---- end ---- ////////////////////////////
 
 
 // Middleware
 app.use(cors({ origin: '*' })); // Allow all origins
 app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // Form डेटा के लिए (Optional)
+app.use(express.urlencoded({ extended: true })); // Form Data (Optional)
 
 // Static folder for uploads
 app.use('/uploads', express.static('public/uploads'));
