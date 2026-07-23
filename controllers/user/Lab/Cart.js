@@ -1,6 +1,7 @@
 const Cart = require('../../../models/Cart');
 const LabTest = require('../../../models/LabTest');
 const LabPackage = require('../../../models/LabPackage');
+const moment = require('moment');
 
 
 const VendorKMLimit = require('../../../models/VendorKMLimit');
@@ -55,20 +56,61 @@ const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid
 ////////////////////////////// LAB CART ///////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+// ==========================================
+// 🚨 NEW PRIVATE HELPER: Recalculate Lab Cart Category dynamically on mutations [1]
+// ==========================================
+const recalculateLabCartCategory = async (cart) => {
+    if (!cart || !cart.labCart || cart.labCart.items.length === 0) {
+        cart.labCart.categoryType = null;
+        cart.labCart.labId = null;
+        return;
+    }
+
+    let hasRadiology = false;
+
+    // Scan all remaining items inside the cart [1]
+    for (let item of cart.labCart.items) {
+        if (item.productType === 'LabTest') {
+            const test = await LabTest.findById(item.itemId);
+            if (test && test.mainCategory && test.mainCategory.toLowerCase() === 'radiology') {
+                hasRadiology = true;
+                break;
+            }
+        } else if (item.productType === 'LabPackage') {
+            const pkg = await LabPackage.findById(item.itemId).populate({
+                path: 'tests',
+                model: 'MasterLabTest',
+                select: 'mainCategory'
+            });
+            if (pkg) {
+                const packageHasRadiology = pkg.tests && pkg.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
+                if (packageHasRadiology || (pkg.mainCategory && pkg.mainCategory.toLowerCase() === 'radiology')) {
+                    hasRadiology = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Set final cart category dynamically [1]
+    cart.labCart.categoryType = hasRadiology ? 'Radiology' : 'General';
+};
+
 // 1. ADD TO LAB CART
 // endpoint: /user/cart/lab/add
 const addToLabCart = async (req, res) => {
     try {
-        const { labId, itemId, productType, forceReplace } = req.body; 
+        // 🚨 UPDATED: Capturing 'confirmRadiologyBypass' from request body [1]
+        const { labId, itemId, productType, forceReplace, confirmRadiologyBypass = false } = req.body; 
         const userId = req.user.id;
 
+        // Fetch Item Data and Determine Category
         let itemData, newItemCategory;
         if (productType === 'LabTest') {
             itemData = await LabTest.findById(itemId);
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Test not found" });
             newItemCategory = itemData.mainCategory; 
         } else {
-            // 🚨 FIX: Populate nested tests from MasterLabTest to check their categories [cite: 1.1.2]
             itemData = await LabPackage.findById(itemId).populate({
                 path: 'tests',
                 model: 'MasterLabTest',
@@ -76,8 +118,6 @@ const addToLabCart = async (req, res) => {
             });
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Package not found" });
             
-            // 🚨 SAFE CHECK: Agar package ke andar ek bhi test Radiology category ka hai, 
-            // toh is package ko strictly 'Radiology' treat kiya jayega
             const hasRadiology = itemData.tests && itemData.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
             newItemCategory = hasRadiology ? 'Radiology' : 'General';
         }
@@ -93,24 +133,10 @@ const addToLabCart = async (req, res) => {
         const isDifferentLab = hasItems && existingLabId && existingLabId.toString() !== labId;
         const isDifferentType = hasItems && existingProductType && existingProductType !== productType;
 
-        let isDifferentCategory = false;
-        if (hasItems && existingCategory) {
-            const containsRadiology = existingCategory.toLowerCase() === 'radiology';
-            const incomingIsRadiology = newItemCategory && newItemCategory.toLowerCase() === 'radiology';
-
-            if (incomingIsRadiology && !containsRadiology) {
-                isDifferentCategory = true; 
-            } else if (!incomingIsRadiology && containsRadiology) {
-                isDifferentCategory = true; 
-            }
-        }
-
-        if ((isDifferentLab || isDifferentCategory || isDifferentType) && !forceReplace) {
+        if ((isDifferentLab || isDifferentType) && !forceReplace) {
             let message = "";
             if (isDifferentLab) {
                 message = "Your cart has items from another lab. Replace them?";
-            } else if (isDifferentCategory) {
-                message = "Radiology scans cannot be ordered with other test categories in the same slot. Replace cart?";
             } else if (isDifferentType) {
                 const existingLabel = existingProductType === 'LabTest' ? 'Tests' : 'Packages';
                 const incomingLabel = productType === 'LabTest' ? 'Test' : 'Package';
@@ -124,13 +150,26 @@ const addToLabCart = async (req, res) => {
             });
         }
 
+        // 🚨 2. PRE-ADD RADIOLOGY WARNING POPUP TRIGGER [1]
+        // If the incoming test is Radiology and user hasn't confirmed the bypass, throw warning [1]
+        const isIncomingRadiology = newItemCategory && newItemCategory.toLowerCase() === 'radiology';
+        
+        if (isIncomingRadiology && !confirmRadiologyBypass && !forceReplace) {
+            return res.status(400).json({
+                success: false,
+                canReplace: false,
+                confirmRadiologyBypass: true, // 👈 Frontend checks this key to pop up the warning [1]
+                message: "Warning: This is a Radiology scan. If you add this item to your cart, the 'Home Collection' option will be disabled for this entire order. Do you want to proceed?"
+            });
+        }
+
         if (forceReplace) { 
             cart.labCart.items = []; 
         }
 
         cart.labCart.labId = labId;
-        cart.labCart.categoryType = (newItemCategory && newItemCategory.toLowerCase() === 'radiology') ? 'Radiology' : 'General';
 
+        // Add or Update Item in memory array
         const itemIndex = cart.labCart.items.findIndex(i => i.itemId.toString() === itemId);
         if (itemIndex > -1) {
             cart.labCart.items[itemIndex].quantity += 1;
@@ -144,8 +183,11 @@ const addToLabCart = async (req, res) => {
             });
         }
 
+        // 🚨 Dynamic category recalculator check [1]
+        await recalculateLabCartCategory(cart);
+
         await cart.save();
-        res.json({ success: true, message: "Cart Updated", data: cart });
+        res.json({ success: true, message: "Cart Updated successfully!", data: cart });
 
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
@@ -156,7 +198,7 @@ const addToLabCart = async (req, res) => {
 // 2. UPDATE QUANTITY (Inc/Dec)
 const updateCartQuantity = async (req, res) => {
     try {
-        const { itemId, action } = req.body; // action: 'inc' or 'dec'
+        const { itemId, action } = req.body;
         const cart = await Cart.findOne({ userId: req.user.id });
         
         const itemIndex = cart.labCart.items.findIndex(i => i.itemId.toString() === itemId);
@@ -164,7 +206,6 @@ const updateCartQuantity = async (req, res) => {
             if (action === 'inc') cart.labCart.items[itemIndex].quantity += 1;
             else cart.labCart.items[itemIndex].quantity -= 1;
 
-            // Remove item if quantity becomes 0
             if (cart.labCart.items[itemIndex].quantity <= 0) {
                 cart.labCart.items.splice(itemIndex, 1);
             }
@@ -174,6 +215,9 @@ const updateCartQuantity = async (req, res) => {
             cart.labCart.categoryType = null;
             cart.labCart.labId = null;
         }
+
+        // 🚨 ADD ONLY THIS ONE LINE (Aapka purana baki saara logic same hai) [cite: custom_context]
+        await recalculateLabCartCategory(cart); 
 
         await cart.save();
         res.json({ success: true, data: cart });
@@ -269,16 +313,18 @@ const removeItem = async (req, res) => {
         
         cart.labCart.items = cart.labCart.items.filter(i => i.itemId.toString() !== itemId);
         
-        // Reset category if cart becomes empty
         if (cart.labCart.items.length === 0) {
             cart.labCart.categoryType = null;
             cart.labCart.labId = null;
         }
 
+        // 🚨 ADD ONLY THIS ONE LINE (Aapka purana baki saara logic same hai) [cite: custom_context]
+        await recalculateLabCartCategory(cart); 
+
         await cart.save();
         res.json({ success: true, message: "Item removed", data: cart });
     } catch (error) { res.status(500).json({ message: error.message }); }
-}; 
+};
 
 
 // only for lab user cart
