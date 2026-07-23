@@ -16,7 +16,10 @@ const labPrescriptionRequestSchema = new mongoose.Schema({
     }],
      // 🚨 ADDED: To store user's selected or manually added tests
      requestedTests: [{
-        name: { type: String, required: true }
+        name: { type: String, required: true },
+        price: { type: Number, default: 0 }, // 👈 Added: Price from master list
+        masterId: { type: mongoose.Schema.Types.ObjectId, default: null }, // 👈 Added: Reference ID
+        productType: { type: String, enum: ['LabTest', 'LabPackage', 'Manual'], default: 'Manual' } // 👈 Added: Type indicator
     }],
 
 

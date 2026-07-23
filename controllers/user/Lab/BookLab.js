@@ -2801,10 +2801,16 @@ const createLabPrescriptionRequest = async (req, res) => {
 
         const verifiedPatients = await mapPatients(userId, parsedPatients || ['Self']);
 
-        // Directly store requested test names as strings (whether scanned or manually typed)
-        const formattedRequestedTests = (parsedTests || []).map(testName => ({
-            name: typeof testName === 'string' ? testName : (testName.name || "General Diagnostic Test")
-        }));
+        // 🚨 FIXED: Map requested tests array carrying master prices, productTypes, and master IDs [1]
+        const formattedRequestedTests = (parsedTests || []).map(test => {
+            const masterId = test.masterId || test.id;
+            return {
+                name: test.name || "General Diagnostic Test",
+                price: Number(test.price || 0), // 👈 Saved price fetched from master list [1]
+                masterId: masterId && mongoose.isValidObjectId(masterId) ? masterId : null,
+                productType: test.productType || 'Manual' // "LabTest", "LabPackage", or "Manual" if custom-typed
+            };
+        });
 
         const tempReqId = `REQ-LAB-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
@@ -2816,9 +2822,9 @@ const createLabPrescriptionRequest = async (req, res) => {
             patients: verifiedPatients,
             collectionType,
             address: typeof address === 'string' ? JSON.parse(address) : address,
-            requestedTests: formattedRequestedTests,
-            appointmentDate: appointmentDate ? new Date(appointmentDate) : undefined, // 👈 Saved dynamic date [cite: custom_context]
-            appointmentTime: appointmentTime || null,                               // 👈 Saved dynamic time [cite: custom_context]
+            requestedTests: formattedRequestedTests, // 👈 Saved formatted object array [1]
+            appointmentDate: appointmentDate ? new Date(appointmentDate) : undefined, 
+            appointmentTime: appointmentTime || null,                               
             status: 'Pending Review'
         });
 
@@ -2833,10 +2839,11 @@ const createLabPrescriptionRequest = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Prescription request placed successfully!",
+            message: "Prescription request placed successfully with test price configs!",
             data: newRequest
         });
     } catch (error) {
+        console.error("createLabPrescriptionRequest Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -3008,10 +3015,10 @@ const verifyLabPrescriptionPayment = async (req, res) => {
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 🚨 LOOP-HOLE FIXED: Create permanent Prescription record first for User App View [cite: custom_context]
+        // Create permanent Prescription record first for User App View [cite: custom_context]
         const presc = await Prescription.create({
             userId: request.userId,
-            prescriptionImages: [request.prescriptionImage], // Save original uploaded image
+            prescriptionImages: [request.prescriptionImage], // Save original uploaded image [cite: custom_context]
             isManualUpload: true
         });
 
@@ -3021,30 +3028,37 @@ const verifyLabPrescriptionPayment = async (req, res) => {
             userId: req.user.id,
             labId: request.labId,
             patients: request.patients,
-            prescriptionId: presc._id, // 👈 Successfully linked! [cite: custom_context]
+            prescriptionId: presc._id, // 👈 Linked successfully with Prescription history! [cite: custom_context]
             bookingType: 'Prescription-Based',
             items: {
+                // 🚨 FIXED: Separately maps tests and packages carrying precautions to prevent undefined mapping crash [cite: custom_context]
                 tests: (request.verifiedBill.tests || []).map(t => ({ 
                     testId: t.testId || null, 
                     price: t.pricePerUnit, 
                     name: t.name,
-                    precaution: t.precaution || "" 
+                    precaution: t.precaution || "" // Mapped dynamically [cite: custom_context]
                 })),
                 packages: (request.verifiedBill.packages || []).map(p => ({ 
                     packageId: p.packageId || null, 
                     price: p.pricePerUnit, 
                     name: p.name,
-                    precaution: p.precaution || "" 
+                    precaution: p.precaution || "" // Mapped dynamically [cite: custom_context]
                 }))
             },
             collectionType: request.collectionType,
             address: request.address,
+            // Dynamic slots mapped from the prescription request details [cite: custom_context]
             appointmentDate: request.appointmentDate, 
             appointmentTime: request.appointmentTime,
-            billSummary: request.verifiedBill,
+            billSummary: {
+                itemTotal: request.verifiedBill.itemTotal || 0,
+                homeVisitCharge: request.verifiedBill.homeVisitCharge || 0,
+                totalAmount: request.verifiedBill.totalAmount || 0
+            },
             paymentMethod: 'Online',
             paymentStatus: 'Done',
             status: 'Confirmed',
+            bookingType: 'Prescription-Based',
             paymentDetails: rzpDetails
         });
 
@@ -3066,6 +3080,7 @@ const verifyLabPrescriptionPayment = async (req, res) => {
             data: finalBooking
         });
     } catch (error) {
+        console.error("verifyLabPrescriptionPayment Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
