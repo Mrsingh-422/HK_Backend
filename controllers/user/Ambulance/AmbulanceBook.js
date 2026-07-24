@@ -401,22 +401,33 @@ const confirmAmbulanceBooking = async (req, res) => {
         }
 
         const { 
-            ambulanceId, 
-            hospitalId,        // Destination Hospital
-            pickupHospitalId,  // For Referral (Pickup Hospital)
-            serviceType, 
-            triageLevel, 
-            patientDetails,    // JSON string or Object
-            staffType,         // "Doctor" or "Nurse" or "Doctor,Nurse"
-            paymentId,         // Razorpay ID
-            scheduledDate,     // YYYY-MM-DD
-            appointmentTime,   // e.g., "10:30 AM"
-            reason,            // General reason
-            incidentDescription, 
-            referralReason,
-            policeRequired,    // Accidental check Alert
-            fireRequired       // Accidental check Alert
+            ambulanceId, hospitalId, pickupHospitalId, serviceType, 
+            triageLevel, patientDetails, staffType, paymentId,
+            scheduledDate, appointmentTime,
+            // --- New Figma Aligned Keys ---
+            reason,              // General Reason input
+            referralReason,      // Referral Reason fallback
+            incidentDescription, // Accidental Description fallback
+            policeRequired,      // Accidental Police Toggle
+            fireRequired         // Accidental Fire Toggle
         } = body;
+
+        if (!ambulanceId) {
+            return res.status(400).json({ success: false, message: "Target Ambulance ID is required." });
+        }
+
+        const targetAmbulance = await Ambulance.findById(ambulanceId);
+        if (!targetAmbulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        // 2. CRITICAL CHECK: Block booking if Ambulance is offline
+        if (targetAmbulance.isOnline === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking Blocked: Ambulance is currently offline and not accepting requests."
+            });
+        }
 
         const activePaymentMethod = body.paymentMethod || "Online";
 
@@ -429,18 +440,6 @@ const confirmAmbulanceBooking = async (req, res) => {
                     message: "Cash on Delivery is currently disabled for Ambulance bookings. Please pay online to place your request."
                 });
             }
-        }
-
-        // 2. Strict Availability Check: Block if Ambulance is offline
-        const targetAmbulance = await Ambulance.findById(ambulanceId);
-        if (!targetAmbulance) {
-            return res.status(404).json({ success: false, message: "Ambulance not found." });
-        }
-        if (targetAmbulance.isOnline === false) {
-            return res.status(400).json({
-                success: false,
-                message: "Booking Blocked: Ambulance is currently offline and not accepting requests."
-            });
         }
 
         // 3. Secure Fare Calculation using getFinalFare helper (Handles subscription & staff pricing)
@@ -458,14 +457,13 @@ const confirmAmbulanceBooking = async (req, res) => {
         let parsedDetails = {};
         if (typeof patientDetails === 'string') {
             try { parsedDetails = JSON.parse(patientDetails || '{}'); } catch (e) { parsedDetails = {}; }
-        } else { 
-            parsedDetails = patientDetails || {}; 
-        }
+        } else { parsedDetails = patientDetails || {}; }
 
         // 6. Handle Images from Multer Uploads
         let referralCardPath = req.files?.referralCard ? `/uploads/ambulances/${req.files.referralCard[0].filename}` : null;
         let incidentPhotoPath = req.files?.incidentPhoto ? `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
 
+        // Combine all possible reason strings safely
         const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
         // 7. Robust Pickup Location Parser (Supports nested, flat, or stringified inputs)
@@ -535,6 +533,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             supportStaffSelected: supportStaffSelected,
             pickupLocation: finalPickupLocation,
             
+            // 👇 Saving the explicit additional support flags (Figma Modal)
             additionalSupport: {
                 policeRequired: policeRequired === 'true' || policeRequired === true,
                 fireRequired: fireRequired === 'true' || fireRequired === true
@@ -564,7 +563,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             isFreeCase: fare.isFree,
             paymentStatus: fare.isFree ? 'Paid' : 'Pending',
             paymentMethod: activePaymentMethod,
-            transactionId: rzpOrder ? rzpOrder.id : (paymentId || null),
+            transactionId: rzpOrder ? rzpOrder.id : null,
             status: activePaymentMethod === 'COD' || fare.isFree ? 'Confirmed' : 'Searching', 
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{ 
