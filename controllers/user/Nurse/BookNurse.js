@@ -10,6 +10,7 @@ const Coupon = require('../../../models/Coupon');
 const Review = require('../../../models/Review');
 
 // const { generateNurseSlots } = require('../../../utils/timeSlotHelper');
+const mongoose = require('mongoose');
 const moment = require('moment');
 const crypto = require('crypto');
 
@@ -402,19 +403,25 @@ const getNurseAvailability = async (req, res) => {
 // 1. GET COUPONS FOR A SPECIFIC NURSE
 const getAvailableCoupons = async (req, res) => {
     try {
-        const { nurseId } = req.params;
+        const nurseId = req.params.id; // Corrected param key fromreq.params.id
 
-        const coupons = await Coupon.find({
+        // Root level checks: Strictly filter only 'Nurse' and 'All' coupon types
+        let query = {
             isActive: true,
             expiryDate: { $gte: new Date() },
-            $or: [
-                // 1. Admin ke global coupons (jo Nurse bureau ya sab ke liye hain)
-                { isAdminCreated: true, vendorType: { $in: ['Nurse', 'All'] } },
-                // 2. Is specific Nurse Bureau ke apne coupons
-                { vendorId: nurseId }
-            ]
-        }).select('couponName discountPercentage maxDiscount minOrderAmount expiryDate description');
+            vendorType: { $in: ['Nurse', 'All'] } 
+        };
 
+        if (nurseId && mongoose.Types.ObjectId.isValid(nurseId)) {
+            query.$or = [
+                { isAdminCreated: true },
+                { vendorId: nurseId }
+            ];
+        } else {
+            query.isAdminCreated = true;
+        }
+
+        const coupons = await Coupon.find(query).select('couponName discountPercentage maxDiscount minOrderAmount expiryDate description');
         res.json({ success: true, count: coupons.length, data: coupons });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -426,44 +433,42 @@ const validateCoupon = async (req, res) => {
         const { couponCode, nurseId, totalAmount } = req.body;
         const userId = req.user.id;
 
-        if (!couponCode || !nurseId) {
-            return res.status(400).json({ success: false, message: "Coupon code and Nurse ID are required" });
+        if (!couponCode) {
+            return res.status(400).json({ success: false, message: "Coupon code is required" });
         }
 
-        const coupon = await Coupon.findOne({
+        let query = {
             couponName: couponCode.toUpperCase(),
             isActive: true,
             expiryDate: { $gte: new Date() },
-            $or: [
-                { isAdminCreated: true, vendorType: { $in: ['Nurse', 'All'] } },
+            vendorType: { $in: ['Nurse', 'All'] } // Root level strictly matching Nurse Bureau
+        };
+
+        if (nurseId && mongoose.Types.ObjectId.isValid(nurseId)) {
+            query.$or = [
+                { isAdminCreated: true },
                 { vendorId: nurseId }
-            ]
-        });
+            ];
+        } else {
+            query.isAdminCreated = true;
+        }
 
+        const coupon = await Coupon.findOne(query);
         if (!coupon) {
-            return res.status(404).json({ success: false, message: "Invalid or Expired Coupon Code" });
+            return res.status(404).json({ success: false, message: "Invalid or Expired Coupon Code for Nursing Service" });
         }
 
-        // Check 1: Minimum Order Amount
         if (totalAmount < coupon.minOrderAmount) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Minimum order amount for this coupon is ₹${coupon.minOrderAmount}` 
-            });
+            return res.status(400).json({ success: false, message: `Minimum order amount for this coupon is ₹${coupon.minOrderAmount}` });
         }
 
-        // Check 2: Max Usage per User
         const userUsage = coupon.usedBy.find(u => u.userId.toString() === userId.toString());
         const usageCount = userUsage ? userUsage.usageCount : 0;
 
         if (usageCount >= coupon.maxUsagePerUser) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "You have already reached the maximum usage limit for this coupon" 
-            });
+            return res.status(400).json({ success: false, message: "You have already reached the maximum usage limit for this coupon" });
         }
 
-        // Calculate Discount
         let discountAmount = (totalAmount * coupon.discountPercentage) / 100;
         if (discountAmount > coupon.maxDiscount) {
             discountAmount = coupon.maxDiscount;
@@ -480,7 +485,6 @@ const validateCoupon = async (req, res) => {
                 finalPayable: Math.round(totalAmount - discountAmount)
             }
         });
-
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -503,15 +507,12 @@ const checkoutNurseBooking = async (req, res) => {
 
         if (!item) return res.status(404).json({ message: "Service/Package not found" });
         const pCount = Number(patientCount) || 1;
-
-        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
         const isCodAllowed = await isCodEnabled('Nurse');
 
         let basePrice = 0;
         let slotSurcharge = 0;
         let units = 1;
 
-        // Triple pricing evaluation
         if (selectedType === 'For Multiple Days') {
             units = moment(endDate).diff(moment(startDate), 'days') + 1;
             basePrice = item.pricing.multipleDays.final * units;
@@ -541,7 +542,6 @@ const checkoutNurseBooking = async (req, res) => {
         let planName = "";
         let userSubscriptionId = null;
 
-        // SUBSCRIPTION CHECK
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const nurseVisitBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseVisitsCount', basePrice);
         
@@ -563,10 +563,8 @@ const checkoutNurseBooking = async (req, res) => {
         }
 
         const consumableTotal = (selectedConsumables || []).reduce((acc, curr) => acc + (Number(curr.price) || 0), 0);
-        
         let couponDiscount = 0;
         let couponInfo = null;
-
         const subTotalForCoupon = (basePrice + slotSurcharge + consumableTotal) * pCount;
 
         if (couponCode) {
@@ -574,8 +572,9 @@ const checkoutNurseBooking = async (req, res) => {
                 couponName: couponCode.toUpperCase(),
                 isActive: true,
                 expiryDate: { $gte: new Date() },
+                vendorType: { $in: ['Nurse', 'All'] }, // Root level check
                 $or: [
-                    { isAdminCreated: true, vendorType: { $in: ['Nurse', 'All'] } }, 
+                    { isAdminCreated: true }, 
                     { vendorId: nurseId } 
                 ]
             });
@@ -597,14 +596,12 @@ const checkoutNurseBooking = async (req, res) => {
         }
 
         let fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
-
         if (isFasterService) {
             const nurseDelivBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseDeliveriesCount', fasterCharge);
             fasterCharge = nurseDelivBenefit.amount; 
         }
 
         const totalAfterDiscount = (subTotalForCoupon - couponDiscount) + fasterCharge;
-
         let tax = 0;
         if (delivery?.taxPercentage) tax = (totalAfterDiscount * delivery.taxPercentage) / 100;
         if (delivery?.taxInRupees) tax += delivery.taxInRupees;
@@ -624,12 +621,8 @@ const checkoutNurseBooking = async (req, res) => {
                 pCount,
                 appliedCoupon: couponInfo
             },
-            isCodAvailable: isCodAllowed, // 👈 Dynamic indicator added
-            subscriptionDetails: {
-                isSubscriptionApplied, 
-                userSubscriptionId,
-                planName
-            }
+            isCodAvailable: isCodAllowed, 
+            subscriptionDetails: { isSubscriptionApplied, userSubscriptionId, planName }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
@@ -647,7 +640,6 @@ const placeNurseBooking = async (req, res) => {
         
         const activePaymentMethod = paymentMethod || 'COD';
 
-        // 🚨 STRICTOR COD VALIDATION
         if (activePaymentMethod === 'COD') {
             const isCodAllowed = await isCodEnabled('Nurse');
             if (!isCodAllowed) {
@@ -676,14 +668,12 @@ const placeNurseBooking = async (req, res) => {
             rzpOrder = await createRazorpayOrder(priceBreakdown.totalPrice, `receipt_${bId}`);
         }
 
-        // Double check evaluation status for final DB saving
         let isSubscriptionApplied = false;
         let planName = "";
         let userSubscriptionId = null;
 
         if (priceBreakdown.baseServicePrice === 0) {
             isSubscriptionApplied = true;
-
             const UserSubscription = require('../../../models/UserSubscription');
             const activeSub = await UserSubscription.findOne({
                 userId: req.user.id,
@@ -732,17 +722,12 @@ const placeNurseBooking = async (req, res) => {
             paymentMethod: activePaymentMethod,
             paymentStatus: 'Pending',
             status: activePaymentMethod === 'COD' ? 'Confirmed' : 'Pending',
-            
-            subscriptionDetails: {
-                isSubscriptionApplied,
-                userSubscriptionId,
-                planName
-            }
+            subscriptionDetails: { isSubscriptionApplied, userSubscriptionId, planName }
         });
 
         if (activePaymentMethod === 'COD') {
             if (appliedCoupon && appliedCoupon.couponId) {
-                const coupon = await Coupon.findById(appliedCoupon.couponId);
+                const coupon = await Coupon.findOne({ _id: appliedCoupon.couponId, vendorType: { $in: ['Nurse', 'All'] } }); // Root level check
                 if (coupon) {
                     const userIndex = coupon.usedBy.findIndex(u => u.userId.toString() === req.user.id.toString());
                     if (userIndex > -1) {
@@ -779,7 +764,6 @@ const placeNurseBooking = async (req, res) => {
             appointmentId: booking._id,
             bookingId: bId
         });
-
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
