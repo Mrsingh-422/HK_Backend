@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity,
+const { updateSelectedPatients,addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity,
     compareCartOnMap,
     addToPharmacyCart,
     updatePharmacyQuantity,checkBetterOptions,
@@ -18,6 +18,7 @@ updateMedicineDuration,
 router.get('/', protect('user'), getMyCart);
 router.post('/lab/add', protect('user'), addToLabCart);
 router.post('/lab/clear', protect('user'), clearLabCart);
+router.post('/lab/select-patients', protect('user'), updateSelectedPatients);
 router.delete('/item/:itemId', protect('user'), removeItem);// lab cart item removal by itemId (could be test or package)
 router.put('/quantity', protect('user'), updateCartQuantity);
 

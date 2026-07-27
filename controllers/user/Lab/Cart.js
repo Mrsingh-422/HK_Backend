@@ -96,6 +96,7 @@ const recalculateLabCartCategory = async (cart) => {
     cart.labCart.categoryType = hasRadiology ? 'Radiology' : 'General';
 };
 
+
 // 1. ADD TO LAB CART
 // endpoint: /user/cart/lab/add
 const addToLabCart = async (req, res) => {
@@ -223,6 +224,36 @@ const updateCartQuantity = async (req, res) => {
         res.json({ success: true, data: cart });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+// endpoint: POST /user/cart/lab/select-patients
+// ==========================================
+const updateSelectedPatients = async (req, res) => {
+    try {
+        const { selectedPatients } = req.body; // 👈 Directly accepting full patient details array [cite: 2.1]
+        const userId = req.user.id;
+
+        if (!selectedPatients || !Array.isArray(selectedPatients)) {
+            return res.status(400).json({ success: false, message: "selectedPatients array is required." });
+        }
+
+        let cart = await Cart.findOne({ userId });
+        if (!cart) cart = new Cart({ userId, labCart: { items: [], selectedPatients: [] } });
+
+        // 🚨 DIRECT SAVING: No User database lookup or dynamic age calculation needed [cite: 2.1]
+        // Jo raw details frontend se aayengi, wahi cart me save ho jayengi
+        cart.labCart.selectedPatients = selectedPatients;
+        await cart.save();
+
+        res.json({ 
+            success: true, 
+            message: "Selected patients details successfully synchronized in cart.", 
+            data: cart 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // 3. GET COMBINED CART (Lab + Pharmacy)
 const getMyCart = async (req, res) => {
@@ -760,7 +791,7 @@ const getAvailableCoupons = async (req, res) => {
 };
 
 
-module.exports = { addToLabCart,updateCartQuantity, getMyCart, clearLabCart, removeItem,
+module.exports = { updateSelectedPatients,addToLabCart,updateCartQuantity, getMyCart, clearLabCart, removeItem,
     compareCartOnMap,
     addToPharmacyCart, updatePharmacyQuantity , checkBetterOptions,
     clearPharmacyCart, removePharmacyItem,

@@ -7,6 +7,14 @@ const cartSchema = new mongoose.Schema({
     labCart: {
         labId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lab' },
         categoryType: { type: String, default: null },
+        // 🚨 NEW: Selected Patients tracker to persist selections across app restarts/back navigation
+        selectedPatients: [{
+            patientId: { type: String, required: true }, // 'Self' or family member ID
+            name: { type: String },
+            age: { type: Number },
+            gender: { type: String },
+            relation: { type: String }
+        }],
         items: [{
             productType: { 
                 type: String, 
