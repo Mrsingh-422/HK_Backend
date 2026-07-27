@@ -254,22 +254,40 @@ const getMyCart = async (req, res) => {
         let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
         let totalItems = labItemCount + pharmacyItemCount;
 
-        // 🚨 3. DYNAMIC PREPARATION GUIDE INJECTOR [1]
-        // Loop through all lab cart items to fetch their clinical precautions on-the-fly [1]
+        // 🚨 3. DYNAMIC PREPARATION GUIDE & MAIN CATEGORY INJECTOR [1]
+        // Loop through all lab cart items to fetch their precaution & mainCategory on-the-fly [1]
         const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
-            let precaution = "No special preparation required."; // Default fallback instruction [1]
+            let precaution = "No special preparation required."; // Default fallback [1]
+            let itemCategory = "Pathology"; // Default fallback category
 
             if (item.productType === 'LabTest') {
-                const test = await LabTest.findById(item.itemId).select('precaution');
-                if (test && test.precaution) precaution = test.precaution;
+                const test = await LabTest.findById(item.itemId).select('precaution mainCategory');
+                if (test) {
+                    if (test.precaution) precaution = test.precaution;
+                    if (test.mainCategory) itemCategory = test.mainCategory; // 👈 Directly assigned
+                }
             } else if (item.productType === 'LabPackage') {
-                const pkg = await LabPackage.findById(item.itemId).select('precaution');
-                if (pkg && pkg.precaution) precaution = pkg.precaution;
+                // Fetch package and populate its tests to inspect their categories [cite: 2.1]
+                const pkg = await LabPackage.findById(item.itemId)
+                    .select('precaution')
+                    .populate({
+                        path: 'tests',
+                        model: 'MasterLabTest',
+                        select: 'mainCategory'
+                    });
+                if (pkg) {
+                    if (pkg.precaution) precaution = pkg.precaution;
+                    
+                    // Determine category dynamically based on its tests [cite: 2.1]
+                    const hasRadiology = pkg.tests && pkg.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
+                    itemCategory = hasRadiology ? 'Radiology' : 'General';
+                }
             }
 
             return {
                 ...item.toObject(), // Convert mongoose document to raw Javascript object
-                preparationGuide: precaution // 👈 Dynamic key injected for frontend UI rendering [1]
+                preparationGuide: precaution, // Dynamic preparation instruction [1]
+                mainCategory: itemCategory // 👈 Dynamic mainCategory key injected
             };
         }));
 
@@ -280,7 +298,7 @@ const getMyCart = async (req, res) => {
                 ...cart._doc, 
                 labCart: {
                     ...cart.labCart.toObject(),
-                    items: mappedLabItems // 👈 Replaced with dynamic mapped array [1]
+                    items: mappedLabItems // Replaced with updated dynamic array [1]
                 },
                 labCartTotal: labTotal, 
                 pharmacyCartTotal: medTotal,
