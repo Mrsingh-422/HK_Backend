@@ -304,7 +304,11 @@ const getStandardCatalogTests = async (req, res) => {
 
         let matchQuery = { isActive: true };
         if (mainCategory) matchQuery.mainCategory = mainCategory;
-        if (search) matchQuery.testName = new RegExp(search, 'i');
+        
+        // 🚨 CHANGE 1: Minimum check changed to 1 character for instant search
+        if (search && search.trim().length >= 1) {
+            matchQuery.testName = new RegExp(search.trim(), 'i');
+        }
 
         const aggregate = MasterLabTest.aggregate([
             { $match: matchQuery },
@@ -320,10 +324,24 @@ const getStandardCatalogTests = async (req, res) => {
             {
                 $addFields: {
                     vendorCount: { $size: "$vendorList" },
-                    minPrice: { $min: "$vendorList.discountPrice" }
+                    minPrice: { $min: "$vendorList.discountPrice" },
+                    
+                    // 🚨 CHANGE 2: Dynamic Category Weight Assignment for strict sorting order
+                    // 1: Pathology, 2: Radiology, 3: Microbiology, 4: Others
+                    categoryWeight: {
+                        $switch: {
+                            branches: [
+                                { case: { $eq: ["$mainCategory", "Pathology"] }, then: 1 },
+                                { case: { $eq: ["$mainCategory", "Radiology"] }, then: 2 },
+                                { case: { $eq: ["$mainCategory", "Microbiology"] }, then: 3 }
+                            ],
+                            default: 4
+                        }
+                    }
                 }
             },
-            { $sort: { vendorCount: -1, testName: 1 } },
+            // Sort by Category Weight first, then by Popularity (vendorCount), and then alphabetically by Name
+            { $sort: { categoryWeight: 1, vendorCount: -1, testName: 1 } },
             {
                 $facet: {
                     metadata: [{ $count: "total" }],
@@ -342,7 +360,9 @@ const getStandardCatalogTests = async (req, res) => {
             totalPages: Math.ceil(total / limit),
             data: result[0].data
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 // 1. SEARCH STANDARD TESTS (POST - Master Catalog)
 const searchStandardTests = async (req, res) => {
