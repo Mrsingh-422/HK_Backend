@@ -101,7 +101,7 @@ const recalculateLabCartCategory = async (cart) => {
 // endpoint: /user/cart/lab/add
 const addToLabCart = async (req, res) => {
     try {
-        // 🚨 UPDATED: Capturing 'confirmRadiologyBypass' from request body [1]
+        // Capturing 'confirmRadiologyBypass' from request body
         const { labId, itemId, productType, forceReplace, confirmRadiologyBypass = false } = req.body; 
         const userId = req.user.id;
 
@@ -112,6 +112,7 @@ const addToLabCart = async (req, res) => {
             if (!itemData) return res.status(404).json({ success: false, message: "Lab Test not found" });
             newItemCategory = itemData.mainCategory; 
         } else {
+            // Fetches package and populates its tests to inspect their categories dynamically [cite: 2.1]
             itemData = await LabPackage.findById(itemId).populate({
                 path: 'tests',
                 model: 'MasterLabTest',
@@ -127,39 +128,29 @@ const addToLabCart = async (req, res) => {
         if (!cart) cart = new Cart({ userId, labCart: { items: [] } });
 
         const hasItems = cart.labCart.items.length > 0;
-        const existingCategory = cart.labCart.categoryType; 
         const existingLabId = cart.labCart.labId;
-        const existingProductType = hasItems ? cart.labCart.items[0].productType : null;
 
+        // 🚨 STRICT LOCKS REMOVED: Now any category test/package can be mixed freely in the same cart! [cite: 1.1.2]
+        // Only different Lab Mismatch validation remains active.
         const isDifferentLab = hasItems && existingLabId && existingLabId.toString() !== labId;
-        const isDifferentType = hasItems && existingProductType && existingProductType !== productType;
 
-        if ((isDifferentLab || isDifferentType) && !forceReplace) {
-            let message = "";
-            if (isDifferentLab) {
-                message = "Your cart has items from another lab. Replace them?";
-            } else if (isDifferentType) {
-                const existingLabel = existingProductType === 'LabTest' ? 'Tests' : 'Packages';
-                const incomingLabel = productType === 'LabTest' ? 'Test' : 'Package';
-                message = `Your cart already contains Lab ${existingLabel}. You cannot add a ${incomingLabel} to this order. Replace cart?`;
-            }
-
+        if (isDifferentLab && !forceReplace) {
             return res.status(400).json({ 
                 success: false, 
                 canReplace: true, 
-                message: message
+                message: "Your cart has items from another lab. Replace them?"
             });
         }
 
-        // 🚨 2. PRE-ADD RADIOLOGY WARNING POPUP TRIGGER [1]
-        // If the incoming test is Radiology and user hasn't confirmed the bypass, throw warning [1]
+        // 🚨 PRE-ADD RADIOLOGY WARNING POPUP TRIGGER [cite: 1.1.2]
+        // If the incoming item (test or package) belongs to Radiology, warn the user before proceeding
         const isIncomingRadiology = newItemCategory && newItemCategory.toLowerCase() === 'radiology';
         
         if (isIncomingRadiology && !confirmRadiologyBypass && !forceReplace) {
             return res.status(400).json({
                 success: false,
                 canReplace: false,
-                confirmRadiologyBypass: true, // 👈 Frontend checks this key to pop up the warning [1]
+                confirmRadiologyBypass: true, // Frontend triggers dynamic warning dialog [cite: 1.1.2]
                 message: "Warning: This is a Radiology scan. If you add this item to your cart, the 'Home Collection' option will be disabled for this entire order. Do you want to proceed?"
             });
         }
@@ -184,7 +175,8 @@ const addToLabCart = async (req, res) => {
             });
         }
 
-        // 🚨 Dynamic category recalculator check [1]
+        // 🚨 Dynamic category recalculator check [cite: 1.1.2]
+        // This will automatically set cart categoryType to 'Radiology' if any mixed item is Radiology
         await recalculateLabCartCategory(cart);
 
         await cart.save();
