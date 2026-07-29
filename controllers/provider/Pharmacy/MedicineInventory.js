@@ -62,23 +62,31 @@ const getMasterMedicineById = async (req, res) => {
 
 const addToInventory = async (req, res) => {
     try {
-        const { medicineId, vendor_price, stock_quantity, expiry_date } = req.body;
+        const { medicineId, vendor_price, stock_quantity, expiry_date, batch_number } = req.body;
         const pharmacyId = req.user.id;
 
+        // Validation for batch number
+        if (!batch_number || batch_number.trim() === "") {
+            return res.status(400).json({ success: false, message: "Batch number is required to register medicine inventory." });
+        }
+
+        const qty = Number(stock_quantity || 0);
+
+        // Find and update item uniquely matching pharmacy, medicine and specific batch
         const inventoryItem = await MedicineInventory.findOneAndUpdate(
-            { pharmacyId, medicineId },
+            { pharmacyId, medicineId, batch_number: batch_number.trim() },
             { 
                 vendor_price, 
-                stock_quantity, 
+                stock_quantity: qty, 
                 expiry_date, 
-                is_available: stock_quantity > 0 
+                is_available: qty > 0 
             },
             { upsert: true, new: true }
         );
 
-        res.status(201).json({ success: true, message: "Medicine added to your store!", data: inventoryItem });
+        res.status(201).json({ success: true, message: "Medicine batch added to your store!", data: inventoryItem });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -100,7 +108,6 @@ const getMyNonPrescriptionInventory = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
 
-        // Using aggregate to strictly filter on database layer for performance [3]
         const list = await MedicineInventory.aggregate([
             {
                 $match: {
@@ -109,7 +116,7 @@ const getMyNonPrescriptionInventory = async (req, res) => {
             },
             {
                 $lookup: {
-                    from: "medicines", // Target medicines collection [3]
+                    from: "medicines", 
                     localField: "medicineId",
                     foreignField: "_id",
                     as: "medicineDetails"
@@ -119,13 +126,11 @@ const getMyNonPrescriptionInventory = async (req, res) => {
                 $unwind: "$medicineDetails"
             },
             {
-                // Strict regex filter matching "No" or "no" or "false" [3]
                 $match: {
                     "medicineDetails.prescription_required": { $regex: /^(no|false)$/i }
                 }
             },
             {
-                // Re-structuring keys to mirror populate structure for frontend compatibility [3]
                 $project: {
                     _id: 1,
                     pharmacyId: 1,
@@ -133,6 +138,7 @@ const getMyNonPrescriptionInventory = async (req, res) => {
                     stock_quantity: 1,
                     expiry_date: 1,
                     is_available: 1,
+                    batch_number: 1, // 🚨 FIXED: Added to prevent data loss in OTC list responses [3]
                     createdAt: 1,
                     updatedAt: 1,
                     medicineId: {

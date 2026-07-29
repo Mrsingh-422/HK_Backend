@@ -131,6 +131,41 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     };
 };
 
+const deductPharmacyStockFEFO = async (pharmacyId, medicineId, quantityToDeduct) => {
+    let remainingToDeduct = Number(quantityToDeduct);
+
+    // Fetch all active batches sorted by earliest expiry date first [cite: 1.1.2]
+    const activeBatches = await MedicineInventory.find({
+        pharmacyId,
+        medicineId,
+        is_available: true,
+        stock_quantity: { $gt: 0 }
+    }).sort({ expiry_date: 1 }); // FEFO Sort
+
+    for (const batch of activeBatches) {
+        if (remainingToDeduct <= 0) break;
+
+        const currentStock = batch.stock_quantity;
+
+        if (currentStock >= remainingToDeduct) {
+            // This batch has sufficient stock to cover the remaining deduction [1]
+            batch.stock_quantity -= remainingToDeduct;
+            remainingToDeduct = 0;
+        } else {
+            // Consume entire batch stock, then transition to next batch
+            remainingToDeduct -= currentStock;
+            batch.stock_quantity = 0;
+        }
+
+        if (batch.stock_quantity === 0) {
+            batch.is_available = false;
+        }
+        await batch.save();
+    }
+
+    // Returns true if stock was successfully deducted, false if there was a cumulative shortage
+    return remainingToDeduct === 0;
+};
 
 // Helper for mapping patients (Aapke code se uthaya gaya)
 async function mapPatients(userId, pids) {
@@ -963,12 +998,14 @@ const getMedicineVendors = async (req, res) => {
         .lean();
 
         const availableInPharmacies = [];
+        const pharmacyMap = new Map(); // 👈 Track unique pharmacies & consolidate duplicate batches
         let minPriceFound = null;
 
         for (let item of inventoryRecords) {
             if (!item.pharmacyId) continue;
 
             const pharmacy = item.pharmacyId;
+            const pharmacyIdStr = pharmacy._id.toString();
             let distance = null;
 
             if (pharmacy.location && typeof pharmacy.location.lat !== 'undefined') {
@@ -985,41 +1022,55 @@ const getMedicineVendors = async (req, res) => {
                     minPriceFound = item.vendor_price;
                 }
 
-                // 🚨 SYNC: Check if there is an active BOGO offer for this medicine at this pharmacy [1]
-                const activePromo = await PharmacyComboOffer.findOne({
-                    pharmacyId: pharmacy._id,
-                    medicineId: medObjectId,
-                    isActive: true,
-                    startDate: { $lte: today },
-                    expiryDate: { $gte: today }
-                }).lean();
-
-                availableInPharmacies.push({
-                    pharmacyId: pharmacy._id,
-                    name: pharmacy.name,
-                    image: pharmacy.profileImage,
-                    rating: pharmacy.rating,
-                    totalReviews: pharmacy.totalReviews,
-                    address: `${pharmacy.city}, ${pharmacy.state}`,
-                    distance: distance.toFixed(1),
-                    price: item.vendor_price,
-                    mrp: masterMedicine.mrp,
-                    discount: masterMedicine.mrp > item.vendor_price ? 
-                        Math.round(((masterMedicine.mrp - item.vendor_price) / masterMedicine.mrp) * 100) : 0,
-                    stock: item.stock_quantity,
-                    isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
-                    isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
-                    inventoryId: item._id,
+                // 🚨 FIXED: If pharmacy already added, keep only the cheapest batch option
+                if (pharmacyMap.has(pharmacyIdStr)) {
+                    const existingIndex = pharmacyMap.get(pharmacyIdStr);
+                    const existingItem = availableInPharmacies[existingIndex];
                     
-                    // 🚨 Added live combo offer metadata to provide identical badges on alternative route [1]
-                    comboOffer: activePromo ? {
-                        offerId: activePromo._id,
-                        campaignDisplayName: activePromo.campaignDisplayName,
-                        buyQty: activePromo.buyQty,
-                        getFreeQty: activePromo.getFreeQty,
-                        images: activePromo.images || []
-                    } : null
-                });
+                    if (item.vendor_price < existingItem.price) {
+                        existingItem.price = item.vendor_price;
+                        existingItem.inventoryId = item._id;
+                        existingItem.stock = item.stock_quantity;
+                        existingItem.discount = masterMedicine.mrp > item.vendor_price ? 
+                            Math.round(((masterMedicine.mrp - item.vendor_price) / masterMedicine.mrp) * 100) : 0;
+                    }
+                } else {
+                    // Record unique index to avoid duplication
+                    pharmacyMap.set(pharmacyIdStr, availableInPharmacies.length);
+
+                    const activePromo = await PharmacyComboOffer.findOne({
+                        pharmacyId: pharmacy._id,
+                        medicineId: medObjectId,
+                        isActive: true,
+                        startDate: { $lte: today },
+                        expiryDate: { $gte: today }
+                    }).lean();
+
+                    availableInPharmacies.push({
+                        pharmacyId: pharmacy._id,
+                        name: pharmacy.name,
+                        image: pharmacy.profileImage,
+                        rating: pharmacy.rating,
+                        totalReviews: pharmacy.totalReviews,
+                        address: `${pharmacy.city}, ${pharmacy.state}`,
+                        distance: distance.toFixed(1),
+                        price: item.vendor_price,
+                        mrp: masterMedicine.mrp,
+                        discount: masterMedicine.mrp > item.vendor_price ? 
+                            Math.round(((masterMedicine.mrp - item.vendor_price) / masterMedicine.mrp) * 100) : 0,
+                        stock: item.stock_quantity,
+                        isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
+                        isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
+                        inventoryId: item._id,
+                        comboOffer: activePromo ? {
+                            offerId: activePromo._id,
+                            campaignDisplayName: activePromo.campaignDisplayName,
+                            buyQty: activePromo.buyQty,
+                            getFreeQty: activePromo.getFreeQty,
+                            images: activePromo.images || []
+                        } : null
+                    });
+                }
             }
         }
 
@@ -1259,52 +1310,48 @@ const checkoutMedicineOrder = async (req, res) => {
         const { couponCode, isRapid, collectionType, appointmentTime, address } = req.body;
         const userId = req.user.id;
 
-        // A. Cart Fetch & Population
         const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
         if (!cart || !cart.pharmacyCart.items.length) {
             return res.status(400).json({ success: false, message: "Basket is empty. Please add medicines." });
         }
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
-
-        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
         const isCodAllowed = await isCodEnabled('Pharmacy');
 
-        // B. Real-time Stock Validation
+        // B. Cumulative Stock Validation across all batches [cite: 1.1.2]
         const validatedItems = [];
         for (const item of cart.pharmacyCart.items) {
-            const inventory = await MedicineInventory.findOne({ 
+            const activeInventories = await MedicineInventory.find({ 
                 pharmacyId, 
                 medicineId: item.medicineId._id,
                 is_available: true 
             });
 
-            if (!inventory || inventory.stock_quantity < item.quantity) {
+            // Calculate total in-stock units across all batches of this medicine
+            const totalAvailableStock = activeInventories.reduce((sum, inv) => sum + (inv.stock_quantity || 0), 0);
+
+            if (totalAvailableStock < item.quantity) {
                 return res.status(400).json({ 
                     success: false, 
                     errorType: "OUT_OF_STOCK",
-                    message: `Item '${item.name}' is currently unavailable or out of stock.` 
+                    message: `Item '${item.name}' has insufficient stock. Total available: ${totalAvailableStock} units.` 
                 });
             }
             validatedItems.push(item);
         }
 
-        // C. Prescription Mandatory Check
         const rxMandatory = validatedItems.some(item => 
             item.medicineId?.prescription_required?.toUpperCase() === "YES"
         );
 
-        // D. Address Validation (If Home Delivery)
         if (collectionType === 'Home Delivery' && (!address || !address.houseNo)) {
             return res.status(400).json({ success: false, message: "Please provide a valid delivery address." });
         }
 
-        // E. Billing Calculation
         const bill = await calculatePharmacyBillHelper(
             pharmacyId, validatedItems, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
         );
 
-        // F. Response with all metadata for payment screen
         res.json({
             success: true,
             message: "Checkout validated successfully",
@@ -1322,7 +1369,7 @@ const checkoutMedicineOrder = async (req, res) => {
                 orderRestrictions: {
                     canPlaceOrder: true,
                     needsPrescription: rxMandatory,
-                    isCodAvailable: isCodAllowed // 👈 Dynamic indicator added
+                    isCodAvailable: isCodAllowed
                 }
             }
         });
@@ -1347,7 +1394,6 @@ const placeOrder = async (req, res) => {
         const userId = req.user.id;
         const activePaymentMethod = paymentMethod || 'COD';
 
-        // 🚨 STRICTOR COD VALIDATION
         if (activePaymentMethod === 'COD') {
             const isCodAllowed = await isCodEnabled('Pharmacy');
             if (!isCodAllowed) {
@@ -1368,7 +1414,6 @@ const placeOrder = async (req, res) => {
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
 
-        // 🚨 CRITICAL CHECK: Block booking if Pharmacy is offline
         const targetPharmacy = await Pharmacy.findById(pharmacyId);
         if (!targetPharmacy || targetPharmacy.isOnline === false) {
             return res.status(400).json({
@@ -1439,12 +1484,11 @@ const placeOrder = async (req, res) => {
         if (activePaymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
         } else {
+            // COD: Atomic Stock Deduction across batches based on FEFO [cite: 1.1.2]
             for (const item of cart.pharmacyCart.items) {
-                const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId._id });
-                if (inventory) {
-                    inventory.stock_quantity = Math.max(0, inventory.stock_quantity - item.quantity);
-                    if (inventory.stock_quantity === 0) inventory.is_available = false;
-                    await inventory.save();
+                const isDeducted = await deductPharmacyStockFEFO(pharmacyId, item.medicineId._id, item.quantity);
+                if (!isDeducted) {
+                    return res.status(400).json({ success: false, message: `Stock mismatch for ${item.name}. Please refresh cart.` });
                 }
             }
         }
@@ -1473,7 +1517,8 @@ const placeOrder = async (req, res) => {
         if (activePaymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-            if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
+            // 🚨 FIXED: Only deduct subscription deliveries count if delivery charge was waived to 0
+            if ((collectionType === 'Home Delivery' || collectionType === 'Home Collection') && bill.deliveryCharge === 0) {
                 await deductBenefitCount(req.user.id, 'freePharmacyDeliveriesCount');
             }
 
@@ -1549,12 +1594,8 @@ const verifyPharmacyPayment = async (req, res) => {
                 }
             }
 
-            const inventory = await MedicineInventory.findOne({ pharmacyId: order.pharmacyId, medicineId: item.medicineId });
-            if (inventory) {
-                inventory.stock_quantity = Math.max(0, inventory.stock_quantity - item.quantity);
-                if (inventory.stock_quantity === 0) inventory.is_available = false;
-                await inventory.save();
-            }
+            // 🚨 UPDATED: Stock Deduction across batches based on FEFO [cite: 1.1.2]
+            await deductPharmacyStockFEFO(order.pharmacyId, item.medicineId, item.quantity);
         }
 
         order.status = order.orderType === 'Prescription' ? 'Under Review' : 'Placed';
@@ -1565,7 +1606,6 @@ const verifyPharmacyPayment = async (req, res) => {
 
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-        // 🚨 LOGICAL RESOLVE: Only deduct subscription deliveries count if delivery charge was waived to 0
         if ((order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection') && order.billSummary?.deliveryCharge === 0) {
             const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
             await deductBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
@@ -1622,7 +1662,7 @@ const uploadPrescription = async (req, res) => {
 
 const cancelMedicineOrder = async (req, res) => {
     try {
-        const { orderId, reason } = req.body; // Can accept Mongo _id or custom orderId
+        const { orderId, reason } = req.body; 
         const userId = req.user.id;
 
         const order = await PharmacyBooking.findOne({ 
@@ -1637,8 +1677,33 @@ const cancelMedicineOrder = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cannot cancel order in its current state." });
         }
 
-        // 🚨 DYNAMIC POLICY EVALUATION (Checks if dynamic delivery agent is out for delivery)
+        // DYNAMIC POLICY EVALUATION
         const policyResult = await processCancellationRefund(order, 'Pharmacy');
+
+        // 🚨 STOCK RESTORATION: Return canceled items back to Pharmacy Inventory [cite: 1.1.2]
+        for (const item of order.items) {
+            if (!item.medicineId) continue;
+
+            // Find the first active batch or fallback to any batch to restore stock [cite: 1.1.2]
+            let inventory = await MedicineInventory.findOne({ 
+                pharmacyId: order.pharmacyId, 
+                medicineId: item.medicineId,
+                is_available: true
+            });
+
+            if (!inventory) {
+                inventory = await MedicineInventory.findOne({ 
+                    pharmacyId: order.pharmacyId, 
+                    medicineId: item.medicineId
+                });
+            }
+
+            if (inventory) {
+                inventory.stock_quantity += item.quantity; // Put stocks back [cite: 1.1.2]
+                inventory.is_available = true; // Ensure marked active [cite: 1.1.2]
+                await inventory.save();
+            }
+        }
 
         order.status = 'Cancelled';
         order.deliveryStatus = 'CancelledByDriver';
@@ -1650,15 +1715,15 @@ const cancelMedicineOrder = async (req, res) => {
         await order.save();
 
         // Subscription benefit refund check
-        if (order.billSummary?.deliveryCharge === 0) {
+        if (order.billSummary?.deliveryCharge === 0 && (order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection')) {
             await refundBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
         }
 
         res.json({ 
             success: true, 
             message: policyResult.cancellationFee > 0
-                ? `Order cancelled. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
-                : "Order cancelled successfully. No charges applied.",
+                ? `Order cancelled. A cancellation fee of ₹${policyResult.cancellationFee} was applied and stock restored.`
+                : "Order cancelled successfully and stock restored.",
             data: {
                 cancellationFee: policyResult.cancellationFee,
                 refundAmount: policyResult.refundAmount,
@@ -1819,7 +1884,6 @@ const getNonPrescriptionMedicines = async (req, res) => {
             prescription_required: { $regex: /^(no|false)$/i }
         };
 
-        // If category query parameter is provided, add bread_crumb regex filter
         if (category) {
             const breadcrumbRegex = subCategory 
                 ? new RegExp(`^${category}\\s*>\\s*${subCategory}`, 'i')
@@ -1830,7 +1894,7 @@ const getNonPrescriptionMedicines = async (req, res) => {
         const pipeline = [
             { $match: filter },
             {
-                // Dynamic inventory check for lowest seller price
+                // Dynamic inventory check for lowest seller price [cite: 1.1.2]
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -1865,7 +1929,7 @@ const getNonPrescriptionMedicines = async (req, res) => {
             },
             {
                 $addFields: {
-                    // Dynamic discount calculation
+                    // Dynamic discount calculation based on minimum price [cite: 1.1.2]
                     discountPercentage: {
                         $cond: {
                             if: { $gt: ["$numMRP", 0] },
@@ -1885,9 +1949,28 @@ const getNonPrescriptionMedicines = async (req, res) => {
                     }
                 }
             },
+            {
+                // 🚨 OVERWRITE best_price and discont_percent with live values to clear static admin data [cite: 1.1.2]
+                $addFields: {
+                    best_price: { $toString: "$minimumPrice" },
+                    discont_percent: {
+                        $cond: {
+                            if: { $gt: ["$discountPercentage", 0] },
+                            then: { $concat: [{ $toString: "$discountPercentage" }, "%"] },
+                            else: "$discont_percent" // fallback if discount is 0
+                        }
+                    }
+                }
+            },
             { 
                 $project: { 
-                    inventory: 0, numMRP: 0, numDocBestPrice: 0, numInventoryPrice: 0, isInventoryAvailable: 0 
+                    inventory: 0, 
+                    numMRP: 0, 
+                    numDocBestPrice: 0, 
+                    numInventoryPrice: 0, 
+                    isInventoryAvailable: 0,
+                    minimumPrice: 0,
+                    discountPercentage: 0
                 } 
             },
             { $skip: skip },
@@ -1920,11 +2003,13 @@ const getHighestDiscountMedicines = async (req, res) => {
 
         const pipeline = [
             {
+                // Match only those medicines that have valid MRP values
                 $match: {
                     mrp: { $exists: true, $ne: null, $ne: "" }
                 }
             },
             {
+                // Fetch dynamic lowest vendor price from inventory [cite: 1.1.2]
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -1947,26 +2032,32 @@ const getHighestDiscountMedicines = async (req, res) => {
             },
             {
                 $addFields: {
+                    // Mapped helper: 1 if vendor has priced stock, 0 if not listed [cite: 1.1.2]
+                    hasVendorPrice: {
+                        $cond: ["$isInventoryAvailable", 1, 0]
+                    },
                     minimumPrice: {
                         $cond: [
                             "$isInventoryAvailable",
                             "$numInventoryPrice",
-                            "$numDocBestPrice"
+                            null // Set null for unstocked items to avoid master price leak [cite: 1.1.2]
                         ]
                     },
-                    isAvailable: "$isInventoryAvailable" // 👈 Dynamic Available Check mapped
-                }
-            },
-            {
-                $addFields: {
+                    isAvailable: "$isInventoryAvailable",
+                    // Dynamic discount percentage based strictly on vendor price
                     discountPercentage: {
                         $cond: {
-                            if: { $gt: ["$numMRP", 0] },
+                            if: {
+                                $and: [
+                                    "$isInventoryAvailable",
+                                    { $gt: ["$numMRP", 0] }
+                                ]
+                            },
                             then: {
                                 $round: [
                                     {
                                         $multiply: [
-                                            { $divide: [{ $subtract: ["$numMRP", "$minimumPrice"] }, "$numMRP"] },
+                                            { $divide: [{ $subtract: ["$numMRP", "$numInventoryPrice"] }, "$numMRP"] },
                                             100
                                         ]
                                     },
@@ -1979,22 +2070,50 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             {
-                $match: {
-                    discountPercentage: { $gt: 0 }
+                // 🚨 OVERWRITE best_price and discont_percent with live values [cite: 1.1.2]
+                $addFields: {
+                    best_price: {
+                        $cond: {
+                            if: "$isInventoryAvailable",
+                            then: { $toString: "$numInventoryPrice" },
+                            else: null // Strictly hides master best_price if unstocked by vendors [cite: 1.1.2]
+                        }
+                    },
+                    discont_percent: {
+                        $cond: {
+                            if: {
+                                $and: [
+                                    "$isInventoryAvailable",
+                                    { $gt: ["$discountPercentage", 0] }
+                                ]
+                            },
+                            then: { $concat: [{ $toString: "$discountPercentage" }, "%"] },
+                            else: "0%" // Safely hides master discont_percent
+                        }
+                    }
                 }
             },
             {
+                // 🚨 SORT LOGIC: Deploys hasVendorPrice DESC, then discountPercentage DESC, then alphabetical [cite: 1.1.2]
+                // This forces unstocked items (no vendor price) to the very bottom of the page [cite: 1.1.2]
                 $sort: {
+                    hasVendorPrice: -1,
                     discountPercentage: -1,
                     name: 1
                 }
             },
             { 
                 $project: { 
-                    inventory: 0, numMRP: 0, numDocBestPrice: 0, numInventoryPrice: 0, isInventoryAvailable: 0 
+                    inventory: 0, 
+                    numMRP: 0, 
+                    numDocBestPrice: 0, 
+                    numInventoryPrice: 0, 
+                    isInventoryAvailable: 0,
+                    hasVendorPrice: 0 // Only project out the temporary sorting field to keep response identical
                 } 
             },
             {
+                // Dynamic Facet stage: Calculates total count & paginated records in parallel
                 $facet: {
                     metadata: [{ $count: "total" }],
                     data: [{ $skip: skip }, { $limit: limit }]
@@ -2288,15 +2407,11 @@ const payAndConfirmOrder = async (req, res) => {
             });
         }
 
+        // 🚨 FIXED: COD Stock Deduction across batches based on FEFO [cite: 1.1.2]
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
-                const inventory = await MedicineInventory.findOne({ pharmacyId: request.pharmacyId, medicineId: billItem.medicineId });
-                if (inventory) {
-                    inventory.stock_quantity = Math.max(0, inventory.stock_quantity - (billItem.quantity || 1));
-                    if (inventory.stock_quantity === 0) inventory.is_available = false;
-                    await inventory.save();
-                }
+                await deductPharmacyStockFEFO(request.pharmacyId, billItem.medicineId, billItem.quantity || 1);
             }
         }
 
@@ -2368,7 +2483,7 @@ const payAndConfirmOrder = async (req, res) => {
         request.status = 'Paid';
         await request.save();
 
-        // 🚨 Trigger Notification for COD Prescription Inquiry Payments
+        // Trigger Notification for COD Prescription Inquiry Payments
         await notifyAdminsAndVendor(
             request.pharmacyId,
             'pharmacy',
@@ -2379,7 +2494,7 @@ const payAndConfirmOrder = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Prescription order confirmed successfully!",
+            message: "Prescription order confirmed with COD successfully!",
             data: finalOrder
         });
 
@@ -2407,15 +2522,11 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
+        // 🚨 FIXED: Stock Deduction across batches based on FEFO [cite: 1.1.2]
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
-                const inventory = await MedicineInventory.findOne({ pharmacyId: request.pharmacyId, medicineId: billItem.medicineId });
-                if (inventory) {
-                    inventory.stock_quantity = Math.max(0, inventory.stock_quantity - (billItem.quantity || 1));
-                    if (inventory.stock_quantity === 0) inventory.is_available = false;
-                    await inventory.save();
-                }
+                await deductPharmacyStockFEFO(request.pharmacyId, billItem.medicineId, billItem.quantity || 1);
             }
         }
 

@@ -1,0 +1,31 @@
+testName,testCode,mainCategory,category,sampleType,pretestPreparation,standardMRP,parameters,faqs,detailedDescription
+Hemoglobin,HGB101,Hematology,Blood Count,Blood,No fasting required,120,Hemoglobin,Why test?:Check anemia || Fasting?:No,Overview:Measures hemoglobin level || Usage:Anemia screening
+Packed Cell Volume,PCV102,Hematology,Blood Count,Blood,No fasting required,150,Hematocrit,Why test?:Check blood volume || Anemia?:Yes,Overview:Measures red cell volume || Usage:Blood disorders
+Platelet Count,PLT103,Hematology,Blood Count,Blood,No fasting required,180,Platelet Count,Why test?:Bleeding disorders || Preparation?:None,Overview:Measures platelet level || Usage:Bleeding risk
+Absolute Eosinophil Count,AEC104,Hematology,Cell Count,Blood,No fasting required,220,Eosinophils,Why test?:Allergy check || Parasites?:Yes,Overview:Eosinophil measurement || Usage:Allergy diagnosis
+Reticulocyte Count,RET105,Hematology,Blood Count,Blood,No fasting required,350,Reticulocytes,Why test?:Bone marrow activity || Anemia?:Yes,Overview:Young RBC count || Usage:Anemia evaluation
+Peripheral Blood Smear,PBS106,Hematology,Blood Smear,Blood,No fasting required,300,RBC Morphology || WBC Morphology,Why PBS?:Blood cell abnormalities || Manual?:Yes,Overview:Microscopic blood examination || Usage:Blood disorder diagnosis
+Blood Group ABO & Rh,BGR107,Hematology,Blood Grouping,Blood,No preparation,250,ABO || Rh Factor,Why test?:Blood group || Pregnancy?:Required,Overview:Blood typing || Usage:Transfusion
+Bleeding Time,BT108,Hematology,Coagulation,Blood,No preparation,180,Bleeding Time,Why test?:Bleeding disorder || Fasting?:No,Overview:Bleeding assessment || Usage:Platelet function
+Clotting Time,CT109,Hematology,Coagulation,Blood,No preparation,180,Clotting Time,Why test?:Blood clotting || Preparation?:None,Overview:Clot formation time || Usage:Coagulation screening
+Prothrombin Time,PT110,Coagulation,Coagulation Profile,Blood,No preparation,350,PT || INR,Why PT?:Blood thinning || INR?:Included,Overview:Clotting assessment || Usage:Warfarin monitoring
+Activated Partial Thromboplastin Time,APTT111,Coagulation,Coagulation Profile,Blood,No preparation,450,APTT,Why APTT?:Clotting disorder || Surgery?:Pre-op,Overview:Intrinsic pathway test || Usage:Coagulation disorders
+Sodium,NA112,Biochemistry,Electrolytes,Blood,No fasting required,220,Sodium,Why sodium?:Electrolyte balance || Dehydration?:Yes,Overview:Electrolyte measurement || Usage:Fluid balance
+Potassium,K113,Biochemistry,Electrolytes,Blood,No fasting required,220,Potassium,Why potassium?:Heart & muscles || High levels?:Dangerous,Overview:Electrolyte test || Usage:Kidney and heart health
+Chloride,CL114,Biochemistry,Electrolytes,Blood,No fasting required,220,Chloride,Why chloride?:Acid-base balance || Preparation?:None,Overview:Electrolyte analysis || Usage:Fluid balance
+Magnesium,MG115,Biochemistry,Minerals,Blood,No preparation,350,Magnesium,Why magnesium?:Muscle function || Deficiency?:Possible,Overview:Mineral analysis || Usage:Nerve function
+Phosphate,PH116,Biochemistry,Minerals,Blood,No preparation,300,Phosphate,Why phosphate?:Bone health || Kidney?:Related,Overview:Mineral measurement || Usage:Bone disorders
+Albumin,ALB117,Biochemistry,Proteins,Blood,No fasting required,250,Albumin,Why albumin?:Liver & kidney || Swelling?:Related,Overview:Protein measurement || Usage:Nutrition assessment
+Total Protein,TP118,Biochemistry,Proteins,Blood,No fasting required,250,Total Protein,Why protein?:Nutrition || Liver?:Related,Overview:Protein estimation || Usage:Nutritional status
+Bilirubin Direct,DBIL119,Biochemistry,Liver Markers,Blood,No fasting required,250,Direct Bilirubin,Why bilirubin?:Jaundice || Liver?:Yes,Overview:Liver marker || Usage:Jaundice diagnosis
+Gamma GT,GGT120,Biochemistry,Liver Enzymes,Blood,No alcohol before test,450,GGT,Why GGT?:Liver disease || Alcohol?:Avoid,Overview:Liver enzyme || Usage:Alcoholic liver disease
+Blood Culture,BC121,Microbiology,Culture,Blood,Before antibiotics,1200,Bacterial Growth,Why culture?:Detect bacteria || Antibiotics?:Before dose,Overview:Blood culture || Usage:Sepsis diagnosis
+Urine Culture,UC122,Microbiology,Culture,Urine,Midstream urine sample,800,Bacterial Growth,Why urine culture?:UTI || Morning sample?:Preferred,Overview:Urine culture || Usage:UTI diagnosis
+Stool Culture,SC123,Microbiology,Culture,Stool,Fresh sample required,900,Bacterial Growth,Why stool culture?:Diarrhea || Fresh sample?:Yes,Overview:Stool culture || Usage:Intestinal infection
+Sputum Culture,SPC124,Microbiology,Culture,Sputum,Morning sample preferred,950,Bacterial Growth,Why sputum culture?:Lung infection || Morning?:Yes,Overview:Sputum analysis || Usage:Respiratory infection
+AFB Smear,AFB125,Microbiology,Tuberculosis,Sputum,Morning sputum sample,500,Acid Fast Bacilli,Why AFB?:TB diagnosis || Samples?:Multiple,Overview:TB screening || Usage:Tuberculosis detection
+VDRL Test,VDR126,Serology,STD,Blood,No preparation,450,VDRL Antibody,Why VDRL?:Syphilis screening || Fasting?:No,Overview:STD screening || Usage:Syphilis detection
+Rheumatoid Factor,RF127,Immunology,Autoimmune,Blood,No preparation,600,RF Antibody,Why RF?:Arthritis || Joint pain?:Yes,Overview:Autoimmune marker || Usage:Rheumatoid arthritis
+ANA Profile,ANA128,Immunology,Autoimmune,Blood,No preparation,1800,ANA Antibodies,Why ANA?:Autoimmune disease || Lupus?:Yes,Overview:Autoimmune screening || Usage:Lupus diagnosis
+CEA,CEA129,Cancer Markers,Tumor Marker,Blood,No preparation,1200,CEA,Why CEA?:Cancer monitoring || Smoking?:May affect,Overview:Tumor marker || Usage:Colon cancer follow-up
+CA-125,CA125130,Cancer Markers,Tumor Marker,Blood,No preparation,1500,CA-125,Why CA125?:Ovarian cancer || Monitoring?:Yes,Overview:Cancer marker || Usage:Ovarian cancer evaluation

@@ -14,6 +14,11 @@ const medicineInventorySchema = new mongoose.Schema({
         required: true,
         index: true 
     },
+    batch_number: {
+        type: String,
+        required: true, // Recommended true for standard pharmacy auditing
+        trim: true
+    },
     vendor_price: {
         type: Number, // Pharmacy apna selling price yahan set karegi
         required: true
