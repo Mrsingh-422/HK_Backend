@@ -177,7 +177,16 @@ const appointmentSchema = new mongoose.Schema({
             type: String
         },
         paidAt: { type: Date, default: null }
-    }
+    },
+    cancellationDetails: {
+        cancelledBy: { type: mongoose.Schema.Types.ObjectId, refPath: 'role' },
+        reason: { type: String, default: "" },
+        cancelledAt: { type: Date, default: null },
+        isPermanent: { type: Boolean, default: false },       // 👈 TRUE = Refund, FALSE = Reschedule-Ready
+        refundAmountCalculated: { type: Number, default: 0 }, // 👈 Stores net payout return
+        penaltyApplied: { type: Number, default: 0 }          // 👈 Stores dynamic cancellation fee applied
+    },
+
 
 
 }, { timestamps: true });

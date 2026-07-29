@@ -833,7 +833,7 @@ const getUserAppointments = async (req, res) => {
 // 6. CANCEL APPOINTMENT
 const userCancelAppointment = async (req, res) => {
     try {
-        const { reason } = req.body;
+        const { reason, isPermanent = false } = req.body; // isPermanent: true (Refund) | false (Reschedule-Ready)
         const appointment = await Appointment.findOne({ _id: req.params.id, userId: req.user.id });
 
         if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
@@ -863,36 +863,58 @@ const userCancelAppointment = async (req, res) => {
             });
         }
 
-        // 🚨 DYNAMIC POLICY EVALUATION (Checks if doctor has started transit)
-        const policyResult = await processCancellationRefund(appointment, 'Doctor');
+        let penalty = 0;
+        let refund = 0;
 
-        appointment.status = 'Cancelled-By-User';
+        // =========================================================================
+        // CASE A: PERMANENT CANCELLATION (Calculates dynamic fee & locks refund)
+        // =========================================================================
+        if (isPermanent === true || isPermanent === "true") {
+            const policyResult = await processCancellationRefund(appointment, 'Doctor');
+            penalty = policyResult.cancellationFee;
+            refund = policyResult.refundAmount;
+            
+            appointment.paymentStatus = 'Refund-Initiated';
+            appointment.status = 'Cancelled-By-User';
+
+            // Subscription benefit refund check (only if cancellation fee is 0)
+            if (appointment.subscriptionDetails?.isSubscriptionApplied && appointment.pricingBreakdown?.baseFee === 0) {
+                if (penalty === 0) {
+                    await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
+                }
+            }
+        } 
+        // =========================================================================
+        // CASE B: NORMAL CANCELLATION (Bypasses refund, slot is freed up for reschedule)
+        // =========================================================================
+        else {
+            appointment.paymentStatus = 'Paid'; // Keep payment valid
+            appointment.status = 'Cancelled-By-User'; // Marked so the user can click Reschedule
+        }
+
         appointment.cancellationCount = currentCancelCount + 1;
         appointment.cancellationDetails = {
             cancelledBy: req.user.id,
             reason: reason || "Cancelled by user",
-            cancelledAt: new Date()
+            cancelledAt: new Date(),
+            isPermanent: isPermanent === true || isPermanent === "true",
+            refundAmountCalculated: refund,
+            penaltyApplied: penalty
         };
         
-        appointment.pricingBreakdown.cancellationFeeApplied = policyResult.cancellationFee;
-        appointment.paymentStatus = 'Refund-Initiated'; 
+        appointment.pricingBreakdown.cancellationFeeApplied = penalty;
 
         await appointment.save();
 
-        // Subscription benefit refund check
-        if (appointment.subscriptionDetails?.isSubscriptionApplied && appointment.pricingBreakdown?.baseFee === 0) {
-            await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
-        }
-
         res.json({ 
             success: true, 
-            message: policyResult.cancellationFee > 0
-                ? `Appointment cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
-                : "Appointment cancelled successfully. No charges applied.",
+            message: isPermanent 
+                ? `Appointment cancelled permanently. Refund of ₹${refund} initiated (Penalty: ₹${penalty}).`
+                : "Appointment cancelled successfully. You can reschedule this appointment anytime.",
             cancellationLeft: maxLimit - appointment.cancellationCount,
             data: {
-                cancellationFee: policyResult.cancellationFee,
-                refundAmount: policyResult.refundAmount,
+                cancellationFee: penalty,
+                refundAmount: refund,
                 appointment
             }
         });

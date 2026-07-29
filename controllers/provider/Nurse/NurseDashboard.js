@@ -5,6 +5,7 @@ const MasterConsumable = require('../../../models/MasterConsumable');
 const Driver = require('../../../models/Driver');
 const { deleteFile } = require('../../../utils/fileHandler'); // 👈 Correct relative import
 const moment = require('moment');
+const mongoose = require('mongoose');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
 
 // ==========================================
@@ -198,52 +199,47 @@ const deleteService = async (req, res) => {
 const getBookingRequests = async (req, res) => {
     try {
         const { status, isPriority } = req.query; // e.g. status=Pending
+        
+        // 🌟 Pagination Parameters (Strictly 20 limit as requested)
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20; 
+        const skip = (page - 1) * limit;
+
         let query = { nurseId: req.user.id };
         
         if (status) query.status = status;
 
-        // 🚀 Priority / Faster Service filter logic
+        // Priority / Faster Service filter logic
         if (isPriority === 'true') {
             query['priceBreakdown.fasterServiceCharge'] = { $gt: 0 };
         } else if (isPriority === 'false') {
-            // Normal bookings where express delivery is either 0 or not applied
             query['priceBreakdown.fasterServiceCharge'] = { $eq: 0 };
         }
 
-        // Standard logic unchanged, only added populate chain for driver/staff details
-        const bookings = await NurseBooking.find(query)
-            .populate('assignedStaffId', 'name phone profilePic status location') // 👈 Populated driver details
-            .sort({ createdAt: -1 });
+        // Get total count matching query for frontend pagination UI
+        const total = await NurseBooking.countDocuments(query);
 
-        res.json({ success: true, count: bookings.length, data: bookings });
+        // Fetch bookings with fully populated user, staff, and consumable details
+        const bookings = await NurseBooking.find(query)
+            .populate('userId', 'name phone email profilePic') // 🌟 order creator/user details populated
+            .populate('assignedStaffId', 'name phone profilePic status location') // staff details populated
+            .populate('selectedConsumables.consumableId', 'itemName price unitType') // 🌟 consumables details populated
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        res.json({ 
+            success: true, 
+            count: bookings.length, 
+            totalItems: total,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: bookings 
+        });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
     }
 };
-// const getBookingRequests = async (req, res) => {
-//     try {
-//         const { status, isPriority } = req.query;
-        
-//         // Segregation Query: Only fetch standard bookings, exclude prescription ones
-//         let query = { 
-//             nurseId: req.user.id,
-//             bookingType: { $ne: 'Prescription' } // 👈 Filter out prescription orders
-//         };
-        
-//         if (status) query.status = status;
-
-//         if (isPriority === 'true') {
-//             query['priceBreakdown.fasterServiceCharge'] = { $gt: 0 };
-//         } else if (isPriority === 'false') {
-//             query['priceBreakdown.fasterServiceCharge'] = { $eq: 0 };
-//         }
-
-//         const bookings = await NurseBooking.find(query).sort({ createdAt: -1 });
-//         res.json({ success: true, count: bookings.length, data: bookings });
-//     } catch (error) { 
-//         res.status(500).json({ message: error.message }); 
-//     }
-// };
 
 const handleBookingAction = async (req, res) => {
     try {
@@ -337,6 +333,46 @@ const getStaffByStatus = async (req, res) => {
         res.json({ success: true, data: staff });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
+    }
+};
+// 🌟 NEW CONTROLLER: GET STAFF MEMBER'S CURRENT ACTIVE JOB
+// endpoint: GET /provider/nurse/dash/staff/active-job/:staffId
+const getStaffActiveJob = async (req, res) => {
+    try {
+        const { staffId } = req.params;
+        const nurseId = req.user.id; // Bureau provider ID for security ownership
+
+        if (!mongoose.Types.ObjectId.isValid(staffId)) {
+            return res.status(400).json({ success: false, message: "Invalid staff ID provided." });
+        }
+
+        // Find current ongoing active booking for this specific staff nurse
+        const activeBooking = await NurseBooking.findOne({
+            nurseId,
+            assignedStaffId: staffId,
+            status: { $in: ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started'] } // Active tracking states
+        })
+        .populate('userId', 'name phone email profilePic') // Populates patient details
+        .populate('selectedConsumables.consumableId', 'itemName price unitType') // Populates consumables details
+        .lean();
+
+        // Agar staff ko abhi koi active booking assigned nahi hai
+        if (!activeBooking) {
+            return res.json({ 
+                success: true, 
+                message: "This staff member is currently not working on any active job.",
+                data: null 
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Current active job retrieved successfully.",
+            data: activeBooking
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -490,6 +526,6 @@ const trackNurse = async (req, res) => {
 module.exports = { 
     getProviderDashboard, updateProviderProfile,getLatestNurseProfileRequest, manageNurseService, 
     getMyServices, deleteService, getBookingRequests, 
-    handleBookingAction, getAvailableStaff, assignStaffToBooking,reassignStaffToBooking, searchMasterConsumables, getStaffByStatus,
+    handleBookingAction, getAvailableStaff, assignStaffToBooking,reassignStaffToBooking, searchMasterConsumables, getStaffByStatus,getStaffActiveJob,
     getOrderHistory, trackNurse
 };

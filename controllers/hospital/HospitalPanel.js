@@ -19,6 +19,7 @@ const moment = require('moment');
 const path = require('path');
 const fs = require('fs');
 const NoShowConfig = require('../../models/NoShowConfig');
+const Prescription = require('../../models/Prescription');
 
 const getShortName = (name) => {
     return name.split(' ').map(word => word[0]).join('').toUpperCase();
@@ -1211,7 +1212,7 @@ const uploadHospitalTermsPdf = async (req, res) => {
 const getHospitalHistory = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { page = 1, limit = 10, search, caseType } = req.query; // 👈 Mapped caseType filter
+        const { page = 1, limit = 10, search, caseType } = req.query; 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         let query = { 
@@ -1219,25 +1220,24 @@ const getHospitalHistory = async (req, res) => {
             status: 'Completed' // Strictly fetch only completed (discharged) cases
         };
 
-        // 1. 🚀 DYNAMIC CASE TYPE BIFURCATION FILTER
+        // 1. Dynamic Case Type Filter
         if (caseType === 'emergency') {
-            // Patients brought strictly by ambulance
             query.ambulanceId = { $ne: null, $exists: true };
         } else if (caseType === 'admission') {
-            // Direct bed-bookings by user (Ambulance is null or missing)
             query.$or = [
                 { ambulanceId: null },
                 { ambulanceId: { $exists: false } }
             ];
         }
 
-        // 2. Advanced Search handler (Booking ID indexing & Name populates)
+        // 2. Advanced Keyword Search (Booking ID or Patient Name)
         if (search) {
             const isBookingId = search.toUpperCase().startsWith('HKH-') || search.toUpperCase().startsWith('HK-');
             
             if (isBookingId) {
                 query.bookingId = { $regex: search, $options: 'i' };
             } else {
+                const User = require('../../models/User'); // Resolved dynamically
                 const matchedUsers = await User.find({
                     name: { $regex: search, $options: 'i' }
                 }).select('_id');
@@ -1248,6 +1248,7 @@ const getHospitalHistory = async (req, res) => {
 
         const totalRecords = await Appointment.countDocuments(query);
 
+        // Fetch primary appointment records using .lean() for fast read/writes
         const history = await Appointment.find(query)
             .populate('userId', 'name phone email profilePic age gender')
             .populate('doctorId', 'name speciality qualification profileImage')
@@ -1258,18 +1259,37 @@ const getHospitalHistory = async (req, res) => {
             })
             .sort({ updatedAt: -1 }) // Newest discharged first
             .skip(skip)
-            .limit(parseInt(limit));
+            .limit(parseInt(limit))
+            .lean();
+
+        // 3. 🚀 DYNAMIC DISCHARGE CARD & CLINICAL REPORT MERGING
+        // Loop through each completed case and attach its associated digital discharge card PDF (prescription)
+        const enrichedHistory = await Promise.all(history.map(async (appt) => {
+            const prescriptionObj = await Prescription.findOne({ appointmentId: appt._id })
+                .select('pdfUrl medicines diagnosis')
+                .lean();
+
+            return {
+                ...appt,
+                // Clones the compiled PDF path acting as the physical discharge card
+                dischargeCardUrl: prescriptionObj ? prescriptionObj.pdfUrl : null,
+                
+                // Returns clinical reports uploaded by the doctor during discharge (from schema)
+                uploadedReports: appt.clinicalSummary?.uploadedReports || []
+            };
+        }));
 
         res.json({
             success: true,
             totalRecords,
             totalPages: Math.ceil(totalRecords / parseInt(limit)),
             currentPage: parseInt(page),
-            count: history.length,
-            data: history
+            count: enrichedHistory.length,
+            data: enrichedHistory // Returns full history with dynamic discharge card urls
         });
 
     } catch (error) {
+        console.error("getHospitalHistory Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

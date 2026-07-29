@@ -213,20 +213,56 @@ const confirmAppointment = async (req, res) => {
 
 const doctorCancelAppointment = async (req, res) => {
     try {
-        const { reason } = req.body;
+        const { reason, isPermanent = false } = req.body; // isPermanent: true (Auto-Refund) | false (Free Reschedule)
         const appointment = await Appointment.findOne({ _id: req.params.id, doctorId: req.user.id, bookingType: 'Appointment' });
+        
         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
 
-        appointment.status = 'Cancelled-By-Doctor';
-        appointment.paymentStatus = 'Refunded'; 
-        appointment.cancellationDetails = {
-            cancelledBy: req.user.id,
-            reason: reason || "Doctor unavailable",
-            cancelledAt: new Date()
-        };
+        const totalPaid = appointment.totalAmount || 0;
+
+        if (isPermanent === true || isPermanent === "true") {
+            appointment.status = 'Cancelled-By-Doctor';
+            appointment.paymentStatus = 'Refund-Initiated'; // Full refund, no penalty applied to doctor cancellations
+            
+            appointment.cancellationDetails = {
+                cancelledBy: req.user.id,
+                reason: reason || "Doctor unavailable",
+                cancelledAt: new Date(),
+                isPermanent: true,
+                refundAmountCalculated: totalPaid,
+                penaltyApplied: 0
+            };
+
+            // Subscription benefit refund check
+            if (appointment.subscriptionDetails?.isSubscriptionApplied && appointment.pricingBreakdown?.baseFee === 0) {
+                await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
+            }
+        } else {
+            // Normal Cancel: Patient gets a free reschedule option
+            appointment.status = 'Cancelled-By-Doctor';
+            appointment.paymentStatus = 'Paid'; // Keep payment active
+            
+            appointment.cancellationDetails = {
+                cancelledBy: req.user.id,
+                reason: reason || "Doctor rescheduled shift",
+                cancelledAt: new Date(),
+                isPermanent: false,
+                refundAmountCalculated: 0,
+                penaltyApplied: 0
+            };
+        }
+
         await appointment.save();
-        res.json({ success: true, message: "Appointment cancelled. Refund initiated.", data: appointment });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            message: isPermanent 
+                ? "Appointment cancelled permanently. Full refund initiated for the patient."
+                : "Appointment cancelled. The patient has been authorized to reschedule for free.", 
+            data: appointment 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 const startVisit = async (req, res) => {
@@ -287,36 +323,62 @@ const updateConsultationFees = async (req, res) => {
 // endpoint: PATCH /doctor/appointments/reschedule/:id
 const rescheduleAppointment = async (req, res) => {
     try {
-        const { newDate, newTime, reason } = req.body; // 👈 Mapped 'reason' from request body
-        
-        const appointment = await Appointment.findOneAndUpdate(
-            { 
-                _id: req.params.id, 
-                doctorId: req.user.id, 
-                bookingType: 'Appointment',
-                status: { $in: ['Pending', 'Confirmed'] } // Sirf inhi ko reschedule kar sakte hain
-            },
-            { 
-                appointmentDate: new Date(newDate), 
-                appointmentTime: newTime,
-                status: 'Rescheduled',
-                rescheduleReason: reason || "Rescheduled by Doctor" // 👈 Saves the reason directly in database
-            },
-            { new: true }
-        );
+        const { appointmentId, newDate, newTimeSlot } = req.body;
 
-        if (!appointment) {
+        if (!appointmentId || !newDate || !newTimeSlot) {
+            return res.status(400).json({ success: false, message: "Appointment, Date, and TimeSlot are mandatory." });
+        }
+
+        // 🚨 STRICTOR QUERY: Block rescheduling if the appointment was cancelled permanently with a refund
+        const appt = await Appointment.findOne({ 
+            _id: appointmentId, 
+            userId: req.user.id,
+            "cancellationDetails.isPermanent": { $ne: true } // 👈 Block if isPermanent is true
+        });
+
+        if (!appt) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Appointment not found or cannot be rescheduled" 
+                message: "Reschedule Blocked: Appointment record not found, or it has been permanently cancelled and refunded." 
             });
         }
 
-        res.json({ 
-            success: true, 
-            message: "Appointment rescheduled successfully", 
-            data: appointment 
+        const globalConfig = await DocRescheduleLimit.findOne();
+        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
+
+        const currentRescheduleCount = appt.rescheduleCount || 0;
+
+        if (currentRescheduleCount >= maxLimit) {
+            return res.status(400).json({
+                success: false,
+                message: `Reschedule failed: Aapki maximum reschedule limit (${maxLimit} times) poori ho chuki hai.`
+            });
+        }
+
+        const isBooked = await Appointment.findOne({
+            _id: { $ne: appointmentId },
+            doctorId: appt.doctorId,
+            appointmentDate: new Date(newDate),
+            appointmentTime: newTimeSlot,
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] }
         });
+
+        if (isBooked) {
+            return res.status(400).json({ success: false, message: "Naya selected slot pehle se hi kisi aur patient ke liye booked hai." });
+        }
+
+        // Reset details and reinstate appointment status
+        appt.appointmentDate = new Date(newDate);
+        appt.appointmentTime = newTimeSlot;
+        appt.rescheduleCount = currentRescheduleCount + 1;
+        appt.status = 'Confirmed'; 
+
+        // Clear temporary cancellation details on reschedule success
+        appt.cancellationDetails = undefined;
+
+        await appt.save();
+        res.json({ success: true, message: "Appointment rescheduled successfully", data: appt });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
