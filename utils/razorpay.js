@@ -72,9 +72,27 @@ const fetchAndMapRazorpayPayment = async (paymentId, signature) => {
     }
 };
 
+const refundRazorpayPayment = async (paymentId, amountInRupees, bookingId) => {
+    try {
+        const refund = await razorpayInstance.payments.refund(paymentId, {
+            amount: Math.round(amountInRupees * 100), // Convert Rupees to paise
+            speed: "normal", // 'normal' | 'instant'
+            notes: {
+                bookingId: bookingId,
+                reason: "Automated booking cancellation/no-show refund."
+            }
+        });
+        return refund;
+    } catch (error) {
+        console.error("Razorpay Payout Refund Failure:", error);
+        throw error;
+    }
+};
+
 module.exports = {
     createRazorpayOrder,
     verifyRazorpaySignature,
     fetchAndMapRazorpayPayment, // 👈 Export Added
-    razorpayInstance
+    razorpayInstance,
+    refundRazorpayPayment
 };
