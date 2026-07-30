@@ -374,7 +374,31 @@ const getLatestAmbulanceProfileRequest = async (req, res) => {
     }
 };
 
+const changeDriverPassword = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+        const { oldPassword, newPassword } = req.body;
+
+        const driver = await Ambulance.findById(driverId).select('+password');
+        if (!driver) return res.status(404).json({ success: false, message: "Driver not found" });
+
+        // Verify Old Password
+        const isMatch = await bcrypt.compare(oldPassword, driver.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Old password does not match." });
+        }
+
+        // Hash and Save New Password
+        driver.password = await bcrypt.hash(newPassword, 10);
+        await driver.save();
+
+        res.json({ success: true, message: "Password updated successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 
-module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest, forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile,getLatestAmbulanceProfileRequest };
+
+module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest, forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile,getLatestAmbulanceProfileRequest, changeDriverPassword };

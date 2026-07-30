@@ -8,7 +8,7 @@ const {
     uploadDocuments, 
     loginDoctor ,toggleDoctorOnlineStatus,
     updateDoctorProfile,getDoctorProfile, getDoctorById,
-    getLatestDoctorProfileRequest
+    getLatestDoctorProfileRequest, changeDoctorPassword
 } = require('../../controllers/doctor/authDoctor');
 
 // Base route: /api/auth/doctor
@@ -44,6 +44,9 @@ router.get('/profile/update-status', protect('doctor'), getLatestDoctorProfileRe
 
 // 7. Get Doctor by ID (Public/Admin/Patient view)
 router.get('/profile/:id', protect('doctor'), getDoctorById);
+
+// 9. Change Password
+router.patch('/change-password', protect('doctor'), changeDoctorPassword);
 
 
 module.exports = router;

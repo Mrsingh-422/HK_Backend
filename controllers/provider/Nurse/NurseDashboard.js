@@ -94,6 +94,34 @@ const updateProviderProfile = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// PATCH: Change Nurse Bureau Password
+// Endpoint: PATCH /provider/nurse/dash/profile/change-password
+const changeNursePassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: "Old password and new password are required." });
+        }
+
+        const nurse = await Nurse.findById(req.user.id).select('+password');
+        if (!nurse) return res.status(404).json({ success: false, message: "Nurse Bureau not found." });
+
+        const isMatch = await bcrypt.compare(String(oldPassword), nurse.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Old password does not match." });
+        }
+
+        nurse.password = await bcrypt.hash(String(newPassword), 10);
+        await nurse.save();
+
+        res.json({ success: true, message: "Nurse Bureau password updated successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // GET: Fetch latest profile update request status for logged-in Nurse Bureau
 const getLatestNurseProfileRequest = async (req, res) => {
     try {
@@ -524,7 +552,7 @@ const trackNurse = async (req, res) => {
 };
 
 module.exports = { 
-    getProviderDashboard, updateProviderProfile,getLatestNurseProfileRequest, manageNurseService, 
+    getProviderDashboard, updateProviderProfile,changeNursePassword,getLatestNurseProfileRequest, manageNurseService, 
     getMyServices, deleteService, getBookingRequests, 
     handleBookingAction, getAvailableStaff, assignStaffToBooking,reassignStaffToBooking, searchMasterConsumables, getStaffByStatus,getStaffActiveJob,
     getOrderHistory, trackNurse

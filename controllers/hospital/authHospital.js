@@ -326,4 +326,31 @@ const getLatestHospitalProfileRequest = async (req, res) => {
     }
 };
 
-module.exports = { registerHospital, loginHospital,toggleHospitalOnlineStatus, updateHospitalProfile, getMyHospitalProfile, getLatestHospitalProfileRequest };
+// PATCH: Change Hospital Password
+// Endpoint: PATCH /api/auth/hospital/change-password
+const changeHospitalPassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: "Old password and new password are required." });
+        }
+
+        const hospital = await Hospital.findById(req.user.id).select('+password');
+        if (!hospital) return res.status(404).json({ success: false, message: "Hospital not found." });
+
+        const isMatch = await bcrypt.compare(String(oldPassword), hospital.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Old password does not match." });
+        }
+
+        hospital.password = await bcrypt.hash(String(newPassword), 10);
+        await hospital.save();
+
+        res.json({ success: true, message: "Hospital password updated successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { registerHospital, loginHospital,toggleHospitalOnlineStatus, updateHospitalProfile, getMyHospitalProfile, getLatestHospitalProfileRequest, changeHospitalPassword };

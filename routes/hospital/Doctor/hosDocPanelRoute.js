@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { doctorDocUploads,doctorReportUploads,dietPlanUploads,hospitalPrescriptionUploads } = require('../../../middleware/multer');
 const { 
-    getMyDoctorProfile,
+    getMyDoctorProfile,changeHospitalDoctorPassword,
         updateDoctorProfile,getLatestDoctorProfileRequest,
         getDoctorHistory, 
         getPendingAdmissions,
@@ -26,6 +26,7 @@ const {
 // Base: /hospital-doctor/panel
 
 router.get('/profile', protect('hospital-doctor'), getMyDoctorProfile);
+router.patch('/profile/change-password', protect('hospital-doctor'), changeHospitalDoctorPassword);
 router.put('/profile/update', protect('hospital-doctor'), doctorDocUploads, updateDoctorProfile);
 router.get('/profile/update-status', protect('hospital-doctor'), getLatestDoctorProfileRequest);
 

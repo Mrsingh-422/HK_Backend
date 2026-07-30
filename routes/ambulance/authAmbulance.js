@@ -3,7 +3,8 @@ const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
 const { ambulanceDocUploads } = require('../../middleware/multer');
 const { registerAmbulance, loginAmbulance, completeAmbulanceProfile, toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest,
-forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile,getLatestAmbulanceProfileRequest
+forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile,getLatestAmbulanceProfileRequest,
+changeDriverPassword
  } = require('../../controllers/ambulance/authAmbulance');
 
 // Base URL: /api/auth/ambulance
@@ -25,6 +26,9 @@ router.patch('/reset-password-otp', resetPasswordWithOtp); // Screen C
 
 //testing only
 router.put('/reset-password',protect(['ambulance', 'hospital-ambulance']),resetPasswordTest);
+
+// --- CHANGE PASSWORD ---
+router.patch('/change-password', protect(['ambulance', 'hospital-ambulance']), changeDriverPassword);
 
 
 module.exports = router;

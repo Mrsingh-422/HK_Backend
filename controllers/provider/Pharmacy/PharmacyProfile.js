@@ -114,10 +114,40 @@ const getLatestPharmacyProfileRequest = async (req, res) => {
     }
 };
 
+// PATCH: Change Pharmacy Bureau Password
+// Endpoint: PATCH /provider/pharmacy/profile/change-password
+const changePharmacyPassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: "Old password and new password are required." });
+        }
+
+        const pharmacy = await Pharmacy.findById(req.user.id).select('+password');
+        if (!pharmacy) return res.status(404).json({ success: false, message: "Pharmacy Bureau not found." });
+
+        const isMatch = await bcrypt.compare(String(oldPassword), pharmacy.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Old password does not match." });
+        }
+
+        pharmacy.password = await bcrypt.hash(String(newPassword), 10);
+        await pharmacy.save();
+
+        res.json({ success: true, message: "Pharmacy Bureau password updated successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 module.exports = { 
     getPharmacyProfile, 
     updatePharmacyProfile, 
+    changePharmacyPassword,
+
     getMyMedicines,
     getLatestPharmacyProfileRequest
 };

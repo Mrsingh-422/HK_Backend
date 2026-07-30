@@ -16,6 +16,7 @@ const Medicine = require('../../../models/Medicine'); // 👈 ADD THIS AT THE TO
 const { sendPushNotification } = require('../../../utils/notification');
 const { deleteFile } = require('../../../utils/fileHandler'); // Import the deleteFile utility
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
+const bcrypt = require('bcryptjs');
 
 
 // --- 11. GET MY DOCTOR PROFILE DETAILS (GET API) ---
@@ -32,6 +33,33 @@ const getMyDoctorProfile = async (req, res) => {
         res.json({ success: true, data: doctor });
     } catch (error) {
         res.status(500).json({ message: error.message });
+    }
+};
+
+// PATCH: Change Hospital Doctor Password
+// Endpoint: PATCH /hospital-doctor/panel/profile/change-password
+const changeHospitalDoctorPassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: "Old password and new password are required." });
+        }
+
+        const doctor = await Doctor.findById(req.user.id).select('+password');
+        if (!doctor) return res.status(404).json({ success: false, message: "Doctor not found." });
+
+        const isMatch = await bcrypt.compare(String(oldPassword), doctor.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Old password does not match." });
+        }
+
+        doctor.password = await bcrypt.hash(String(newPassword), 10);
+        await doctor.save();
+
+        res.json({ success: true, message: "Hospital doctor password updated successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -216,27 +244,7 @@ const getDocDashboard = async (req, res) => {
 
 
 
-// --- 3. GET PATIENT DETAILS ---
-// const getPatientDetails = async (req, res) => {
-//     try {
-//         const patient = await Appointment.findById(req.params.id)
-//             .populate('userId', 'name profilePic phone age gender bloodGroup')
-//             .populate('bedId', 'bedNumber pricePerDay')
-//             .populate({
-//                 path: 'treatmentHistory.fromDoctorId',
-//                 select: 'name speciality profileImage'
-//             })
-//             .populate({
-//                 path: 'treatmentHistory.toDoctorId',
-//                 select: 'name speciality profileImage'
-//             });
 
-//         if (!patient) return res.status(404).json({ message: "Patient not found" });
-//         res.json({ success: true, data: patient });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
-
-// --- 4. CREATE PRESCRIPTION (Fixed Array Safe Map Logic) ---
 // --- 4. CREATE PRESCRIPTION (Updated with Safe Multipart and Diet Plan PDF support) ---
 // --- 4. CREATE PRESCRIPTION (Updated with Screenshot Fields & Dual PDF Support) ---
 const processPrescription = async (req, res) => {
@@ -1350,7 +1358,7 @@ const doctorSelfAssignCase = async (req, res) => {
 };
 
 module.exports = { 
-    getMyDoctorProfile,
+    getMyDoctorProfile,changeHospitalDoctorPassword,
     updateDoctorProfile,getLatestDoctorProfileRequest,
     getDoctorHistory,
 

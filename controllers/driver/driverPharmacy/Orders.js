@@ -68,20 +68,7 @@ const changePassword = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Update Profile Details (Figma Screen 21)
-// const updateProfile = async (req, res) => {
-//     try {
-//         const { name, phone, email, address } = req.body;
-//         const updateData = { name, phone, username: email, address };
 
-//         if (req.files && req.files.profilePic) {
-//             updateData.profilePic = req.files.profilePic[0].path;
-//         }
-
-//         const driver = await Driver.findByIdAndUpdate(req.user.id, updateData, { new: true });
-//         res.json({ success: true, message: "Profile updated successfully", data: driver });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
 const updateProfile = async (req, res) => {
     try {
         // Extract only the fields allowed for update.

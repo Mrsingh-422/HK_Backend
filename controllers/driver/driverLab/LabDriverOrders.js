@@ -61,7 +61,6 @@ const recalculateBookingPrice = async (bookingId) => {
     return booking;
 };
 
-
 // ==========================================
 // 1. AUTHENTICATION & PASSWORD OPERATIONS
 // ==========================================
@@ -123,20 +122,6 @@ const changePassword = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Update Profile Details
-// const updateProfile = async (req, res) => {
-//     try {
-//         const { name, phone, email, address } = req.body;
-//         const updateData = { name, phone, username: email, address };
-
-//         if (req.files && req.files.profilePic) {
-//             updateData.profilePic = req.files.profilePic[0].path;
-//         }
-
-//         const driver = await Driver.findByIdAndUpdate(req.user.id, updateData, { new: true });
-//         res.json({ success: true, message: "Profile updated successfully", data: driver });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
 const updateProfile = async (req, res) => {
     try {
         const driverId = req.user.id;
@@ -405,33 +390,6 @@ const deliverSampleToLab = async (req, res) => {
         res.json({ success: true, message: "Sample delivered to lab successfully. You are now Available!", data: order });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-
-// No Response / No Show Action (Figma Screen 21 "No Response" button)
-// const reportNoResponse = async (req, res) => {
-//     try {
-//         const { orderId } = req.params;
-//         const { noShowComments } = req.body; 
-//         const driverId = req.user.id;
-
-//         const order = await LabBooking.findById(orderId);
-//         if (!order) return res.status(404).json({ message: "Order not found" });
-
-//         if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
-//             return res.status(403).json({ message: "Unauthorized" });
-//         }
-
-//         order.status = 'Cancelled';
-//         order.noShowComments = noShowComments || "Patient not responding";
-//         order.cancelReason = "No Show - Patient Unreachable";
-//         await order.save();
-
-//         // Release Phlebotomist
-//         await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
-
-//         res.json({ success: true, message: "No Response reported. Booking cancelled.", data: order });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
-
 
 // ==========================================
 // 3. DYNAMIC BOOKING & PATIENT ADDITIONS (Figma 14, 15, 16, 17, 24)
@@ -928,7 +886,6 @@ module.exports = {
     verifyDoorstepPayment,
     collectCashPayment,
 
-    
     // Missing listings exports shamil
     getAvailableTests,
     getAvailablePackages,

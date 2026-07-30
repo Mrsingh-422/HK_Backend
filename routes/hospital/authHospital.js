@@ -6,7 +6,7 @@ const {
     registerHospital, 
     loginHospital, toggleHospitalOnlineStatus,
     updateHospitalProfile,getMyHospitalProfile,
-    getLatestHospitalProfileRequest
+    getLatestHospitalProfileRequest,changeHospitalPassword
 } = require('../../controllers/hospital/authHospital.js');
 
 // Base route: /api/auth/hospital
@@ -26,5 +26,7 @@ router.put('/profile/update',
 router.get('/profile', protect('hospital'), getMyHospitalProfile);
 
 router.get('/profile/update-status', protect('hospital'), getLatestHospitalProfileRequest);
+
+router.patch('/change-password', protect('hospital'), changeHospitalPassword);
 
 module.exports = router;

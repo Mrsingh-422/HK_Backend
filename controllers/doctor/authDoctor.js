@@ -373,5 +373,33 @@ const getLatestDoctorProfileRequest = async (req, res) => {
     }
 };
 
+// PATCH: Change Doctor Password
+// Endpoint: PATCH /api/auth/doctor/change-password
+const changeDoctorPassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: "Old password and new password are required." });
+        }
 
-module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor,toggleDoctorOnlineStatus, updateDoctorProfile ,getDoctorProfile, getDoctorById, getLatestDoctorProfileRequest };
+        // Explicitly select password since it is hidden by default in Mongoose schema
+        const doctor = await Doctor.findById(req.user.id).select('+password');
+        if (!doctor) return res.status(404).json({ success: false, message: "Doctor not found." });
+
+        const isMatch = await bcrypt.compare(String(oldPassword), doctor.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Old password does not match." });
+        }
+
+        doctor.password = await bcrypt.hash(String(newPassword), 10);
+        await doctor.save();
+
+        res.json({ success: true, message: "Password updated successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor,toggleDoctorOnlineStatus, updateDoctorProfile ,getDoctorProfile, getDoctorById, getLatestDoctorProfileRequest,changeDoctorPassword };
