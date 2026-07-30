@@ -124,23 +124,34 @@ const changePharmacyPassword = async (req, res) => {
             return res.status(400).json({ success: false, message: "Old password and new password are required." });
         }
 
+        // Find the pharmacy and select password safely
         const pharmacy = await Pharmacy.findById(req.user.id).select('+password');
-        if (!pharmacy) return res.status(404).json({ success: false, message: "Pharmacy Bureau not found." });
+        if (!pharmacy) {
+            return res.status(404).json({ success: false, message: "Pharmacy Bureau not found." });
+        }
 
+        // Verify old password
         const isMatch = await bcrypt.compare(String(oldPassword), pharmacy.password);
         if (!isMatch) {
             return res.status(400).json({ success: false, message: "Old password does not match." });
         }
 
-        pharmacy.password = await bcrypt.hash(String(newPassword), 10);
-        await pharmacy.save();
+        // Hash the new password
+        const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+
+        // 🚀 CRASH-PROOF FIX: Use findByIdAndUpdate to bypass validation of other fields
+        await Pharmacy.findByIdAndUpdate(
+            req.user.id,
+            { $set: { password: hashedPassword } },
+            { runValidators: false } // Prevents document validation crashes on incomplete profiles
+        );
 
         res.json({ success: true, message: "Pharmacy Bureau password updated successfully." });
     } catch (error) {
+        console.error("Change Password Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 
 module.exports = { 

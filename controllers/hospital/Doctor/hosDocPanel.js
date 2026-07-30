@@ -456,16 +456,23 @@ const submitDischargeSummary = async (req, res) => {
             activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
         }
 
-        // Fetch uploaded reports
-        const files = req.files || [];
-        const reportPaths = files.map(f => `/uploads/doctor_reports/${f.filename}`);
-
+        // Extract uploaded additional reports from multer files
         let updatedReports = (appointmentObj.clinicalSummary && appointmentObj.clinicalSummary.uploadedReports) 
             ? appointmentObj.clinicalSummary.uploadedReports 
             : [];
             
-        if (reportPaths.length > 0) {
+        if (req.files && req.files.clinicalReports) {
+            const reportPaths = req.files.clinicalReports.map(f => `/uploads/doctor_reports/${f.filename}`);
             updatedReports = [...updatedReports, ...reportPaths];
+        }
+
+        // Extract final generated Discharge PDF path from multer files
+        let dischargePdfPath = (appointmentObj.clinicalSummary && appointmentObj.clinicalSummary.dischargeSummaryPdf)
+            ? appointmentObj.clinicalSummary.dischargeSummaryPdf
+            : null;
+
+        if (req.files && req.files.dischargePdf && req.files.dischargePdf[0]) {
+            dischargePdfPath = `/uploads/hospital_discharges/${req.files.dischargePdf[0].filename}`;
         }
 
         // --- DYNAMIC DATA MAPPING ---
@@ -479,10 +486,13 @@ const submitDischargeSummary = async (req, res) => {
                 dischargedAt: now,
                 uploadedReports: updatedReports,
 
-                // 🚨 SAVE THE NEW PREPARATION KEYS FROM FORM BODY:
+                // Save dynamic preparation keys
                 dateOfSurgery: body.dateOfSurgery ? new Date(body.dateOfSurgery) : (appointmentObj.clinicalSummary?.dateOfSurgery || null),
                 conditionDuringAdmission: body.conditionDuringAdmission || (appointmentObj.clinicalSummary?.conditionDuringAdmission) || "",
-                conditionDuringDischarge: body.conditionDuringDischarge || (appointmentObj.clinicalSummary?.conditionDuringDischarge) || ""
+                conditionDuringDischarge: body.conditionDuringDischarge || (appointmentObj.clinicalSummary?.conditionDuringDischarge) || "",
+
+                // 🚨 SAVE THE FINAL COMPILED PDF LINK:
+                dischargeSummaryPdf: dischargePdfPath
             }
         };
 
@@ -504,7 +514,7 @@ const submitDischargeSummary = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Discharge summary & medical reports submitted successfully.", 
+            message: "Discharge summary, clinical files, and final PDF summary recorded successfully.", 
             data: updatedAppt 
         });
 

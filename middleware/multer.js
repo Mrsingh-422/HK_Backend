@@ -866,6 +866,32 @@ const hospitalPrescriptionUploads = multer({
 ]);
 
 
+// ==========================================
+// 45. HOSPITAL DOCTOR DUAL DISCHARGE SUMMARY UPLOADER
+// ==========================================
+const hospitalDischargeDir = 'public/uploads/hospital_discharges';
+ensureDir(hospitalDischargeDir);
+
+const hospitalDischargeFieldsUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            const dir = file.fieldname === 'dischargePdf' 
+                ? 'public/uploads/hospital_discharges' 
+                : 'public/uploads/doctor_reports';
+            cb(null, dir);
+        },
+        filename: (req, file, cb) => {
+            const prefix = file.fieldname === 'dischargePdf' ? 'discharge' : 'report';
+            cb(null, `${prefix}-${Date.now()}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter, // PDF and Images allowed
+    limits: { fileSize: 15 * 1024 * 1024 } // 15MB file size limit
+}).fields([
+    { name: 'dischargePdf', maxCount: 1 },       // The main compiled discharge card PDF
+    { name: 'clinicalReports', maxCount: 10 }    // Additional clinical report files
+]);
+
 
 
 
@@ -916,6 +942,6 @@ module.exports = {
 
     nursingPrescriptionUploads,
     labReportUpload,
-    docPrescriptionUpload,hospitalPrescriptionUploads
+    docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload
 
 };  

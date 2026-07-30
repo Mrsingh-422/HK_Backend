@@ -16,6 +16,6 @@ router.get('/services/all', protect('lab'), getMyAllServices);
 
 router.get('/update-status', protect('lab'), getLatestLabProfileRequest);
 
-router.put('/change-password', protect('lab'), changeLabPassword);
+router.patch('/change-password', protect('lab'), changeLabPassword);
 
 module.exports = router;

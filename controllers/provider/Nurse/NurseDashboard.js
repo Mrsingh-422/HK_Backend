@@ -6,6 +6,7 @@ const Driver = require('../../../models/Driver');
 const { deleteFile } = require('../../../utils/fileHandler'); // 👈 Correct relative import
 const moment = require('moment');
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
 
 // ==========================================
