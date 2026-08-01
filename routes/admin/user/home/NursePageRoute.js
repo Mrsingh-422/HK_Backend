@@ -9,7 +9,8 @@ const {
     updateNursingSteps, getNursingSteps,
     updateNursingServices, getNursingServices,
     updateExperiencedNurses, getExperiencedNurses,
-    updateOnlyTheBestCare, getOnlyTheBestCare
+    updateOnlyTheBestCare, getOnlyTheBestCare,
+    updateSeamlessCare, getSeamlessCare // 👈 Imported new controllers
 } = require('../../../../controllers/admin/user/Home/NursePage'); // Apna controller import karein (eg. NursePageController)
 
 // Base URL assumed: /api/nursepage
@@ -49,5 +50,11 @@ router.post('/experienced-nurses', protect('admin'), checkRoleAccess(1), content
 // ===========================
 router.get('/best-care', getOnlyTheBestCare);
 router.post('/best-care', protect('admin'), checkRoleAccess(1), contentUploads, updateOnlyTheBestCare);
+
+// ===========================
+// 7. SEAMLESS CARE SECTION (NEW)
+// ===========================
+router.get('/seamless-care', getSeamlessCare); // 👈 Added GET endpoint
+router.post('/seamless-care', protect('admin'), checkRoleAccess(1), contentUploads, updateSeamlessCare); // 👈 Added POST endpoint
 
 module.exports = router;

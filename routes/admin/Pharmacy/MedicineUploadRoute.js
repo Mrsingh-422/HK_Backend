@@ -17,7 +17,10 @@ const {
 
     getPendingMedicineRequests, 
     approveMedicineRequest,     
-    rejectMedicineRequest 
+    rejectMedicineRequest ,
+
+    getAdminMedicineRequests,
+        handleMedicineRequestAction
 } = require('../../../controllers/admin/Pharmacy/MedicineUpload');
 
 // base URL: /admin/pharmacy/medicine
@@ -49,5 +52,10 @@ router.delete('/delete/:id', protect('admin'), checkRoleAccess(28), deleteMedici
 router.get('/requests/pending', protect('admin'), checkRoleAccess(28), getPendingMedicineRequests);
 router.put('/requests/approve/:requestId', protect('admin'), checkRoleAccess(28), approveMedicineRequest);
 router.put('/requests/reject/:requestId', protect('admin'), checkRoleAccess(28), rejectMedicineRequest);
+
+
+// --- Admin Panel Medicine Requests for mrp increase ---
+router.get('/increase/requests', protect('admin'), checkRoleAccess(28), getAdminMedicineRequests);
+router.post('/increase/requests/:requestId', protect('admin'), checkRoleAccess(28), handleMedicineRequestAction);
 
 module.exports = router;

@@ -2,6 +2,7 @@ const Medicine = require('../../../models/Medicine');
 const MasterRequest = require('../../../models/MasterRequest');
 const fs = require('fs');
 const csv = require('csv-parser'); // xlsx ki jagah csv-parser use karenge for large files
+const mongoose = require('mongoose');
 
 // --- 1. UPLOAD CSV / EXCEL (Optimized for 150MB+ Files & 8 Lakh Data) ---
 
@@ -323,6 +324,126 @@ const rejectMedicineRequest = async (req, res) => {
     }
 };
 
+
+////////////////////////////////////////////////////////////////////////////////
+///////////////////////// medicine requests mrp increase ///////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+
+// 1. GET ALL MEDICINE REQUESTS FOR ADMIN (With Status Filter & Pagination)
+// Endpoint: GET /admin/pharmacy/requests?status=Pending&page=1
+const getAdminMedicineRequests = async (req, res) => {
+    try {
+        const { status, page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * limit;
+
+        // Filter strictly for Pharmacy vendor requests of type Medicine
+        let query = { 
+            vendorType: 'Pharmacy', 
+            requestType: 'Medicine' 
+        };
+
+        if (status) {
+            query.status = status; // 'Pending', 'Approved', 'Rejected'
+        }
+
+        const requests = await MasterRequest.find(query)
+            .populate('vendorId', 'name email phone city state address') // Populates Pharmacy Store details
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        const total = await MasterRequest.countDocuments(query);
+
+        res.json({
+            success: true,
+            total,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / limit),
+            data: requests
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. HANDLE REQUEST ACTION (Approve or Reject Request)
+// Endpoint: POST /admin/pharmacy/requests/action/:requestId
+const handleMedicineRequestAction = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { action, adminComment } = req.body; // action: 'Approved' or 'Rejected'
+
+        if (!['Approved', 'Rejected'].includes(action)) {
+            return res.status(400).json({ success: false, message: "Invalid action. Must be 'Approved' or 'Rejected'." });
+        }
+
+        const request = await MasterRequest.findById(requestId);
+        if (!request || request.status !== 'Pending') {
+            return res.status(404).json({ success: false, message: "Pending request not found or already processed." });
+        }
+
+        request.status = action;
+        request.adminComment = adminComment || "";
+
+        // 🚨 BUSINESS LOGIC: If Admin Approves, update or create the Medicine dynamically
+        if (action === 'Approved') {
+            const requestData = request.data;
+
+            if (requestData.medicineId) {
+                // CASE A: It is an MRP Increase Request ticket [cite: 1.1.2]
+                const updatedMedicine = await Medicine.findByIdAndUpdate(
+                    requestData.medicineId,
+                    { 
+                        mrp: requestData.proposedMrp.toString(),
+                        // Auto update best_price to represent standard reference margin if needed
+                        best_price: (Number(requestData.proposedMrp) * 0.9).toString() 
+                    },
+                    { new: true }
+                );
+                
+                if (!updatedMedicine) {
+                    return res.status(404).json({ success: false, message: "Target master medicine to update MRP not found." });
+                }
+                console.log(`[ADMIN] Master MRP successfully increased to ₹${requestData.proposedMrp} for ${requestData.medicineName}`);
+            } else {
+                // CASE B: It is a Request to Add a completely New Medicine to Master DB
+                // Generate a temporary unique system Id for Medicine
+                const tempSystemId = `MED-SYS-${Date.now().toString().slice(-6)}`;
+                
+                await Medicine.create({
+                    Id: tempSystemId,
+                    name: requestData.name,
+                    manufacturers: requestData.manufacturers,
+                    salt_composition: requestData.salt_composition,
+                    packaging: requestData.packaging,
+                    mrp: requestData.mrp?.toString(),
+                    best_price: requestData.best_price?.toString() || requestData.mrp?.toString(),
+                    description: requestData.description,
+                    prescription_required: requestData.prescription_required || "No",
+                    image_url: requestData.image_url || []
+                });
+                console.log(`[ADMIN] Successfully created new master medicine document: ${requestData.name}`);
+            }
+        }
+
+        await request.save();
+
+        res.json({
+            success: true,
+            message: `Request has been successfully marked as ${action}!`,
+            data: request
+        });
+
+    } catch (error) {
+        console.error("Admin Request Handle Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
+
 module.exports = {
     uploadMedicinesCSV,
     getMedicinesList,
@@ -334,5 +455,8 @@ module.exports = {
 
     getPendingMedicineRequests, 
     approveMedicineRequest,     
-    rejectMedicineRequest 
+    rejectMedicineRequest,
+    
+    getAdminMedicineRequests,
+    handleMedicineRequestAction
 };

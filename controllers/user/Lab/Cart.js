@@ -277,20 +277,39 @@ const getMyCart = async (req, res) => {
         let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
         let totalItems = labItemCount + pharmacyItemCount;
 
-        // 🚨 3. DYNAMIC PREPARATION GUIDE & MAIN CATEGORY INJECTOR [1]
-        // Loop through all lab cart items to fetch their precaution & mainCategory on-the-fly [1]
+        // 🚨 3. DYNAMIC BATCH MRP OVERWRITE FOR PHARMACY CART ITEMS [cite: 1.1.2]
+        // Loop through pharmacy cart items to fetch and overwrite with the earliest expiring batch MRP [cite: 1.1.2]
+        const mappedPharmacyItems = await Promise.all(cart.pharmacyCart.items.map(async (item) => {
+            const itemObj = item.toObject();
+            if (itemObj.medicineId && cart.pharmacyCart.pharmacyId) {
+                // Fetch the earliest expiring batch for this medicine [cite: 1.1.2]
+                const activeBatch = await MedicineInventory.findOne({
+                    pharmacyId: cart.pharmacyCart.pharmacyId,
+                    medicineId: itemObj.medicineId._id,
+                    is_available: true,
+                    stock_quantity: { $gt: 0 }
+                }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
+
+                if (activeBatch && activeBatch.mrp !== undefined) {
+                    // Overwrite the populated master mrp with the legally correct batch MRP [cite: 1.1.2]
+                    itemObj.medicineId.mrp = activeBatch.mrp.toString();
+                }
+            }
+            return itemObj;
+        }));
+
+        // 4. DYNAMIC PREPARATION GUIDE & MAIN CATEGORY INJECTOR FOR LAB ITEMS [1]
         const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
-            let precaution = "No special preparation required."; // Default fallback [1]
-            let itemCategory = "Pathology"; // Default fallback category
+            let precaution = "No special preparation required."; 
+            let itemCategory = "Pathology"; 
 
             if (item.productType === 'LabTest') {
                 const test = await LabTest.findById(item.itemId).select('precaution mainCategory');
                 if (test) {
                     if (test.precaution) precaution = test.precaution;
-                    if (test.mainCategory) itemCategory = test.mainCategory; // 👈 Directly assigned
+                    if (test.mainCategory) itemCategory = test.mainCategory; 
                 }
             } else if (item.productType === 'LabPackage') {
-                // Fetch package and populate its tests to inspect their categories [cite: 2.1]
                 const pkg = await LabPackage.findById(item.itemId)
                     .select('precaution')
                     .populate({
@@ -300,28 +319,30 @@ const getMyCart = async (req, res) => {
                     });
                 if (pkg) {
                     if (pkg.precaution) precaution = pkg.precaution;
-                    
-                    // Determine category dynamically based on its tests [cite: 2.1]
                     const hasRadiology = pkg.tests && pkg.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
                     itemCategory = hasRadiology ? 'Radiology' : 'General';
                 }
             }
 
             return {
-                ...item.toObject(), // Convert mongoose document to raw Javascript object
-                preparationGuide: precaution, // Dynamic preparation instruction [1]
-                mainCategory: itemCategory // 👈 Dynamic mainCategory key injected
+                ...item.toObject(), 
+                preparationGuide: precaution, 
+                mainCategory: itemCategory 
             };
         }));
 
-        // 4. Construct response ensuring NO OTHER KEY is modified [1]
+        // 5. Construct response ensuring NO OTHER KEY is modified [1]
         res.json({ 
             success: true, 
             data: { 
                 ...cart._doc, 
                 labCart: {
                     ...cart.labCart.toObject(),
-                    items: mappedLabItems // Replaced with updated dynamic array [1]
+                    items: mappedLabItems 
+                },
+                pharmacyCart: {
+                    ...cart.pharmacyCart.toObject(),
+                    items: mappedPharmacyItems // Replaced with updated dynamic batch MRP items [cite: 1.1.2]
                 },
                 labCartTotal: labTotal, 
                 pharmacyCartTotal: medTotal,
@@ -492,26 +513,32 @@ const compareCartOnMap = async (req, res) => {
 // endpoint: /user/cart/pharmacy/add
 const addToPharmacyCart = async (req, res) => {
     try {
-        // 🚨 UPDATED: Destructured BOGO indicators from request body [1]
         const { 
             pharmacyId, 
             medicineId, 
             quantity = 1, 
             duration = "Full Course", 
             forceReplace,
-            isComboApplied = false, // 👈 Capture combo status [1]
-            comboOfferId = null     // 👈 Capture campaign ID [1]
+            isComboApplied = false, 
+            comboOfferId = null     
         } = req.body;
         
         const userId = req.user.id;
 
-        const inventory = await MedicineInventory.findOne({ pharmacyId, medicineId, is_available: true });
+        // 🚨 UPDATED: Find the earliest expiring in-stock batch of this medicine [cite: 1.1.2]
+        const inventory = await MedicineInventory.findOne({ 
+            pharmacyId, 
+            medicineId, 
+            is_available: true,
+            stock_quantity: { $gt: 0 }
+        }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
+
         if (!inventory) return res.status(404).json({ success: false, message: "Out of stock in this pharmacy" });
 
         let cart = await Cart.findOne({ userId });
         if (!cart) cart = new Cart({ userId, pharmacyCart: { items: [] } });
 
-        // "Replace Cart" logic for Pharmacy mismatch
+        // "Replace Cart" logic
         if (cart.pharmacyCart.items.length > 0 && cart.pharmacyCart.pharmacyId?.toString() !== pharmacyId && !forceReplace) {
             return res.status(400).json({ 
                 success: false, 
@@ -526,8 +553,7 @@ const addToPharmacyCart = async (req, res) => {
         
         cart.pharmacyCart.pharmacyId = pharmacyId;
 
-        // 🚨 FIXED: findIndex now strictly checks BOTH medicineId AND isComboApplied status
-        // This stops normal & BOGO items of the same medicine from clashing/merging [1]
+        // Checks both medicineId and isComboApplied
         const itemIndex = cart.pharmacyCart.items.findIndex(i => 
             i.medicineId.toString() === medicineId && 
             i.isComboApplied === (isComboApplied === true)
@@ -538,11 +564,10 @@ const addToPharmacyCart = async (req, res) => {
             cart.pharmacyCart.items[itemIndex].duration = duration;
         } else {
             const medData = await Medicine.findById(medicineId);
-            // 🚨 UPDATED: Save BOGO indicators directly inside cart items subdocument [1]
             cart.pharmacyCart.items.push({
                 medicineId,
                 name: medData.name,
-                price: inventory.vendor_price,
+                price: inventory.vendor_price, // Saved lowest available price
                 quantity: Number(quantity),
                 duration: duration,
                 isComboApplied: isComboApplied === true,
@@ -562,7 +587,7 @@ const updatePharmacyQuantity = async (req, res) => {
         const { medicineId, action, isComboApplied = false } = req.body; // action: 'inc', 'dec'
         const userId = req.user.id;
 
-        // 1. Fetch cart directly using index-covered findOne
+        // Fetch cart directly using index-covered findOne
         const cart = await Cart.findOne({ userId });
         if (!cart) return res.status(404).json({ success: false, message: "Cart not found." });
         
@@ -594,8 +619,7 @@ const updatePharmacyQuantity = async (req, res) => {
         // Save mutations securely
         await cart.save();
 
-        // 🚨 OPTIMIZATION: Deep populate identically to 'getMyCart' in a single database round-trip
-        // This eliminates the need for the frontend to make a second fetch request!
+        // Deep populate identically to 'getMyCart' in a single database round-trip
         const populatedCart = await Cart.findById(cart._id)
             .populate('labCart.labId', 'name city address profileImage')
             .populate('pharmacyCart.pharmacyId', 'name address rating city')

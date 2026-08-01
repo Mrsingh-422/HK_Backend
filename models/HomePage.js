@@ -26,7 +26,10 @@ const frontendContentSchema = new mongoose.Schema({
             'hospitalHero', 'hospitalFacility', 'mainHowItWorks',
 
             // --- Nurse Page Sections (NEW) ---
-            'nurseHero', 'nursePrescription', 'nursingSteps', 'nursingServices', 'experiencedNurses', 'onlyTheBestCare'
+            'nurseHero', 'nursePrescription', 'nursingSteps', 'nursingServices', 'experiencedNurses', 'onlyTheBestCare',
+            
+            // --- Nurse Page Section 7 (NEW) ---
+            'seamlessCare' // 👈 Added 'seamlessCare' in enum
         ] 
     },
     

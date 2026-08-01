@@ -192,11 +192,40 @@ const getOnlyTheBestCare = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// ==========================================
+// 7. SEAMLESS CARE SECTION (NEW)
+// ==========================================
+const updateSeamlessCare = async (req, res) => {
+    try {
+        const { sectionTag, mainTitle, highlightText, description, mainDescription, buttonText, existingImages } = req.body;
+        
+        let updateData = { sectionTag, mainTitle, highlightText, description, mainDescription, buttonText };
+
+        // Old aur New images ko merge karenge standard dynamic image engine se
+        updateData.carouselImages = processImages(existingImages, req.files);
+
+        const content = await FrontendContent.findOneAndUpdate(
+            { section: 'seamlessCare' },
+            { $set: updateData },
+            { new: true, upsert: true }
+        );
+        res.status(200).json({ success: true, message: 'Seamless Care updated', data: content });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+const getSeamlessCare = async (req, res) => {
+    try {
+        const content = await FrontendContent.findOne({ section: 'seamlessCare' });
+        res.status(200).json({ success: true, data: content });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
 module.exports = {
     updateNurseHero, getNurseHero,
     updateNursePrescription, getNursePrescription,
     updateNursingSteps, getNursingSteps,
     updateNursingServices, getNursingServices,
     updateExperiencedNurses, getExperiencedNurses,
-    updateOnlyTheBestCare, getOnlyTheBestCare
+    updateOnlyTheBestCare, getOnlyTheBestCare,
+    updateSeamlessCare, getSeamlessCare // 👈 Exported new functions
 };

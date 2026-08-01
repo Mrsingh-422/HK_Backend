@@ -1209,6 +1209,8 @@ const uploadHospitalTermsPdf = async (req, res) => {
     }
 };
 
+// --- API: GET COMPLETED CASES HISTORY (Updated) ---
+// Endpoint: GET /hospital/panel/history
 const getHospitalHistory = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -1217,10 +1219,9 @@ const getHospitalHistory = async (req, res) => {
 
         let query = { 
             hospitalId: hospitalId, 
-            status: 'Completed' // Strictly fetch only completed (discharged) cases
+            status: 'Completed' 
         };
 
-        // 1. Dynamic Case Type Filter
         if (caseType === 'emergency') {
             query.ambulanceId = { $ne: null, $exists: true };
         } else if (caseType === 'admission') {
@@ -1230,14 +1231,13 @@ const getHospitalHistory = async (req, res) => {
             ];
         }
 
-        // 2. Advanced Keyword Search (Booking ID or Patient Name)
         if (search) {
             const isBookingId = search.toUpperCase().startsWith('HKH-') || search.toUpperCase().startsWith('HK-');
             
             if (isBookingId) {
                 query.bookingId = { $regex: search, $options: 'i' };
             } else {
-                const User = require('../../models/User'); // Resolved dynamically
+                const User = require('../../models/User'); 
                 const matchedUsers = await User.find({
                     name: { $regex: search, $options: 'i' }
                 }).select('_id');
@@ -1248,7 +1248,6 @@ const getHospitalHistory = async (req, res) => {
 
         const totalRecords = await Appointment.countDocuments(query);
 
-        // Fetch primary appointment records using .lean() for fast read/writes
         const history = await Appointment.find(query)
             .populate('userId', 'name phone email profilePic age gender')
             .populate('doctorId', 'name speciality qualification profileImage')
@@ -1257,26 +1256,25 @@ const getHospitalHistory = async (req, res) => {
                 select: 'bedNumber pricePerDay',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .sort({ updatedAt: -1 }) // Newest discharged first
+            .populate({
+                path: 'bedsideCareTeam.doctorId',
+                select: 'name speciality qualification profileImage'
+            })
+            .populate({
+                path: 'treatmentHistory.fromDoctorId',
+                select: 'name speciality qualification profileImage'
+            })
+            .populate({
+                path: 'treatmentHistory.toDoctorId',
+                select: 'name speciality qualification profileImage'
+            })
+            .sort({ updatedAt: -1 }) 
             .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
+            .limit(parseInt(limit));
 
-        // 3. 🚀 DYNAMIC DISCHARGE CARD & CLINICAL REPORT MERGING
-        // Loop through each completed case and attach its associated digital discharge card PDF (prescription)
+        // Asynchronously process files and timeline details for each history record
         const enrichedHistory = await Promise.all(history.map(async (appt) => {
-            const prescriptionObj = await Prescription.findOne({ appointmentId: appt._id })
-                .select('pdfUrl medicines diagnosis')
-                .lean();
-
-            return {
-                ...appt,
-                // Clones the compiled PDF path acting as the physical discharge card
-                dischargeCardUrl: prescriptionObj ? prescriptionObj.pdfUrl : null,
-                
-                // Returns clinical reports uploaded by the doctor during discharge (from schema)
-                uploadedReports: appt.clinicalSummary?.uploadedReports || []
-            };
+            return await enrichAppointmentClinicalDetails(appt);
         }));
 
         res.json({
@@ -1285,7 +1283,7 @@ const getHospitalHistory = async (req, res) => {
             totalPages: Math.ceil(totalRecords / parseInt(limit)),
             currentPage: parseInt(page),
             count: enrichedHistory.length,
-            data: enrichedHistory // Returns full history with dynamic discharge card urls
+            data: enrichedHistory 
         });
 
     } catch (error) {
@@ -1504,29 +1502,109 @@ const getHospitalCaseDetails = async (req, res) => {
     }
 };
 
-// --- API: GET ALL CLINICALLY COMPLETED CASES AWAITING BILLING (Updated with strict caseType filters) ---
+// Helper function to enrich appointment with clinical details, prescriptions, and treatment team timeline
+const enrichAppointmentClinicalDetails = async (appt) => {
+    // Safe conversion of Mongoose document to plain JavaScript object
+    const apptObj = appt.toObject ? appt.toObject() : { ...appt };
+
+    // 1. Fetch prescription details for Diet Plan & Discharge PDF Card
+    const prescriptionObj = await Prescription.findOne({ appointmentId: apptObj._id })
+        .select('pdfUrl dietPlanPdf medicines diagnosis')
+        .lean();
+
+    // 2. Consolidate all clinical PDF/Image documents into a unified object
+    const clinicalFiles = {
+        dietPlanPdf: prescriptionObj?.dietPlanPdf || null,
+        dischargeSummaryPdf: apptObj.clinicalSummary?.dischargeSummaryPdf || null,
+        clinicalReports: apptObj.clinicalSummary?.uploadedReports || [],
+        dischargeCardUrl: prescriptionObj?.pdfUrl || null // Keeps legacy dischargeCardUrl intact
+    };
+
+    // 3. Compile full Treatment Team Timeline (Primary Doctor + Specialists + Handover shifts)
+    const treatmentTeamTimeline = [];
+
+    // A. Fetch Primary Doctor Details & active Shift timings
+    if (apptObj.doctorId) {
+        const primaryShift = apptObj.treatmentHistory?.find(h => 
+            h.toDoctorId && h.toDoctorId._id?.toString() === apptObj.doctorId._id?.toString() && h.startTime
+        );
+
+        treatmentTeamTimeline.push({
+            doctorId: apptObj.doctorId._id,
+            name: apptObj.doctorId.name,
+            speciality: apptObj.doctorId.speciality,
+            qualification: apptObj.doctorId.qualification || "MD",
+            profileImage: apptObj.doctorId.profileImage,
+            role: "Primary Physician",
+            joinedAt: primaryShift ? primaryShift.startTime : apptObj.startDate,
+            dischargedAt: primaryShift?.endTime || apptObj.endDate || null,
+            duration: primaryShift?.durationDisplay || ""
+        });
+    }
+
+    // B. Fetch Bedside Care Team (Co-Doctors) details & shift timings
+    if (apptObj.bedsideCareTeam && apptObj.bedsideCareTeam.length > 0) {
+        apptObj.bedsideCareTeam.forEach(member => {
+            if (member.doctorId) {
+                treatmentTeamTimeline.push({
+                    doctorId: member.doctorId._id,
+                    name: member.doctorId.name,
+                    speciality: member.doctorId.speciality,
+                    qualification: member.doctorId.qualification || "MD",
+                    profileImage: member.doctorId.profileImage,
+                    role: "Bedside Specialist",
+                    joinedAt: member.startTime || member.requestedAt,
+                    dischargedAt: member.endTime || member.respondedAt || null,
+                    duration: member.durationDisplay || ""
+                });
+            }
+        });
+    }
+
+    // C. Fetch Handover / Transfer details from timeline log
+    if (apptObj.treatmentHistory && apptObj.treatmentHistory.length > 0) {
+        apptObj.treatmentHistory.forEach(historyLog => {
+            if (historyLog.action === 'Transfer-Initiated' && historyLog.fromDoctorId) {
+                treatmentTeamTimeline.push({
+                    doctorId: historyLog.fromDoctorId._id,
+                    name: historyLog.fromDoctorId.name,
+                    speciality: historyLog.fromDoctorId.speciality,
+                    qualification: historyLog.fromDoctorId.qualification || "MD",
+                    profileImage: historyLog.fromDoctorId.profileImage,
+                    role: "Handover Colleague (Sender)",
+                    joinedAt: historyLog.timestamp,
+                    dischargedAt: historyLog.timestamp,
+                    duration: ""
+                });
+            }
+        });
+    }
+
+    return {
+        ...apptObj,
+        clinicalFiles,
+        treatmentTeamTimeline
+    };
+};
+
+// --- API: GET ALL CLINICALLY COMPLETED CASES AWAITING BILLING (Updated) ---
 // Endpoint: GET /hospital/panel/discharges/pending
 const getHospitalPendingDischarges = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { page = 1, limit = 10, caseType } = req.query; // 👈 Mapped caseType filter
+        const { page = 1, limit = 10, caseType } = req.query; 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const query = {
             hospitalId,
-            status: 'Discharge-Pending', // Main Doctor has clinically released the patient
-            
-            // STRICT MEDICAL LOCK
-            // Excludes any bookings where any co-doctor/specialist in bedsideCareTeam is still active ('Pending' or 'In-Progress')
-            "bedsideCareTeam.status": { $nin: ['Pending', 'In-Progress'] } // 👈 Double-Guarded with Pending as well
+            status: 'Discharge-Pending', 
+            "bedsideCareTeam.status": { $nin: ['Pending', 'In-Progress'] } 
         };
 
-        // 1. 🚀 DYNAMIC CASE TYPE BIFURCATION FILTER FOR BILLING DESK
+        // Case type filters
         if (caseType === 'emergency') {
-            // Patients brought strictly by ambulance
             query.ambulanceId = { $ne: null, $exists: true };
         } else if (caseType === 'admission') {
-            // Direct bed-bookings by user (Ambulance is null or missing)
             query.$or = [
                 { ambulanceId: null },
                 { ambulanceId: { $exists: false } }
@@ -1535,30 +1613,43 @@ const getHospitalPendingDischarges = async (req, res) => {
 
         const totalRecords = await Appointment.countDocuments(query);
 
+        // Fetch pending discharges with populated care team details
         const list = await Appointment.find(query)
             .populate('userId', 'name phone email profilePic age gender')
-            .populate('doctorId', 'name speciality profileImage')
+            .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber pricePerDay',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            // Populates bedside team doctor info dynamically for verification at counter
             .populate({
                 path: 'bedsideCareTeam.doctorId',
-                select: 'name speciality profileImage'
+                select: 'name speciality qualification profileImage'
             })
-            .sort({ updatedAt: -1 }) // Newest clinically cleared first
+            .populate({
+                path: 'treatmentHistory.fromDoctorId',
+                select: 'name speciality qualification profileImage'
+            })
+            .populate({
+                path: 'treatmentHistory.toDoctorId',
+                select: 'name speciality qualification profileImage'
+            })
+            .sort({ updatedAt: -1 }) 
             .skip(skip)
             .limit(parseInt(limit));
+
+        // Asynchronously process files and timeline details for each pending discharge
+        const enrichedList = await Promise.all(list.map(async (appt) => {
+            return await enrichAppointmentClinicalDetails(appt);
+        }));
 
         res.json({
             success: true,
             totalRecords,
             totalPages: Math.ceil(totalRecords / parseInt(limit)),
             currentPage: parseInt(page),
-            count: list.length,
-            data: list
+            count: enrichedList.length,
+            data: enrichedList
         });
 
     } catch (error) {
@@ -1566,6 +1657,8 @@ const getHospitalPendingDischarges = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
 
 
 // --- API: REASSIGNS HOSPITAL AMBULANCE DUE TO BREAKDOWN (Strictly preserves original pricing) ---

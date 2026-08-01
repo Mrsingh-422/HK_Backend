@@ -19,6 +19,10 @@ const medicineInventorySchema = new mongoose.Schema({
         required: true, // Recommended true for standard pharmacy auditing
         trim: true
     },
+    mrp: {
+        type: Number,
+        required: true
+    },
     vendor_price: {
         type: Number, // Pharmacy apna selling price yahan set karegi
         required: true
@@ -37,6 +41,6 @@ const medicineInventorySchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Ensure ek pharmacy ek medicine ko ek hi baar list kare
-medicineInventorySchema.index({ pharmacyId: 1, medicineId: 1 }, { unique: true });
+medicineInventorySchema.index({ pharmacyId: 1, medicineId: 1, batch_number: 1 }, { unique: true });
 
 module.exports = mongoose.model('MedicineInventory', medicineInventorySchema);

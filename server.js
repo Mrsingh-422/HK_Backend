@@ -158,6 +158,25 @@ app.use(express.urlencoded({ extended: true })); // Form Data (Optional)
 // Static folder for uploads
 app.use('/uploads', express.static('public/uploads'));
 
+app.use((err, req, res, next) => {
+    const multer = require('multer');
+    if (err instanceof multer.MulterError) {
+        // 🚨 This will print the exact incorrect field name sent by the frontend in your terminal!
+        console.error("\x1b[31m[MULTER ERROR DETAILS]\x1b[0m");
+        console.error(`Incorrect Field Name Sent: "${err.field}"`);
+        console.error(`Error Message: ${err.message}`);
+        
+        return res.status(400).json({ 
+            success: false, 
+            errorType: "MULTER_FIELD_MISMATCH",
+            message: `Multer Error: The field name "${err.field}" is unexpected. Please check frontend key names.`,
+            badField: err.field
+        });
+    }
+    next(err);
+});
+
+
 ////////////////// Admin Routes /////////////////////////
 app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
 app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));

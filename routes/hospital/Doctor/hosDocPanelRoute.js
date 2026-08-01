@@ -60,7 +60,7 @@ router.post('/prescription/add', protect('hospital-doctor'), hospitalPrescriptio
 router.post(
     '/case/discharge-summary', 
     protect('hospital-doctor'), 
-    hospitalDischargeFieldsUpload, // 👈 Handles both 'dischargePdf' and 'clinicalReports' arrays simultaneously
+    hospitalDischargeFieldsUpload, // Handles both 'dischargePdf' and 'clinicalReports' arrays simultaneously
     submitDischargeSummary
 );
 
@@ -75,6 +75,7 @@ router.patch('/status/duty-toggle', protect('hospital-doctor'), updateDutyStatus
 router.get('/medicines', protect('hospital-doctor'), getMedicineList);
 router.put('/case/clinical-summary/:id', protect('hospital-doctor'), updateClinicalSummary);
 router.get('/specializations', protect('hospital-doctor'), getSpecializations);
+// 🚨 Duplicate 'discharge-summary' line has been successfully removed from here
 
 // ==========================================
 // 6. BEDSIDE CARE SPECIALISTS CO-DOCTORS
@@ -84,9 +85,5 @@ router.post('/case/bedside-respond', protect('hospital-doctor'), respondToBedsid
 router.post('/case/bedside-start', protect('hospital-doctor'), startSpecialistCare); 
 router.post('/case/bedside-feedback', protect('hospital-doctor'), submitSpecialistFeedback);  
 router.post('/case/bedside-complete', protect('hospital-doctor'), completeSpecialistCare); 
-
-
-
-
 
 module.exports = router;

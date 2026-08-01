@@ -62,12 +62,36 @@ const getMasterMedicineById = async (req, res) => {
 
 const addToInventory = async (req, res) => {
     try {
-        const { medicineId, vendor_price, stock_quantity, expiry_date, batch_number } = req.body;
+        const { medicineId, mrp, vendor_price, stock_quantity, expiry_date, batch_number } = req.body;
         const pharmacyId = req.user.id;
 
-        // Validation for batch number
+        // 1. Validation for batch number
         if (!batch_number || batch_number.trim() === "") {
             return res.status(400).json({ success: false, message: "Batch number is required to register medicine inventory." });
+        }
+
+        // 2. Validation for batch-specific MRP
+        if (!mrp || Number(mrp) <= 0) {
+            return res.status(400).json({ success: false, message: "A valid batch-specific MRP is required." });
+        }
+
+        // =========================================================================
+        // 🚨 NEW SECURITY SHIELD: Anti-Fraud Price Inflation Guard
+        // Checks if the vendor's entered MRP exceeds the master approved database baseline [cite: 1.1.2]
+        // =========================================================================
+        const masterMed = await Medicine.findById(medicineId);
+        if (!masterMed) {
+            return res.status(404).json({ success: false, message: "Medicine not found in master database list." });
+        }
+
+        const approvedMasterMrp = Number(masterMed.mrp || 0);
+
+        // 👉 STRICT RULE: If master MRP is set, the vendor cannot fake inflation to show false discounts
+        if (approvedMasterMrp > 0 && Number(mrp) > approvedMasterMrp) {
+            return res.status(400).json({
+                success: false,
+                message: `Compliance Blocked: The entered batch MRP (₹${mrp}) exceeds the approved master catalog MRP limit of ₹${approvedMasterMrp}. If the brand has officially increased the printed price, please submit an 'MRP Increase Request' to the Admin for approval.`
+            });
         }
 
         const qty = Number(stock_quantity || 0);
@@ -76,6 +100,7 @@ const addToInventory = async (req, res) => {
         const inventoryItem = await MedicineInventory.findOneAndUpdate(
             { pharmacyId, medicineId, batch_number: batch_number.trim() },
             { 
+                mrp: Number(mrp), // Save batch-specific MRP safely
                 vendor_price, 
                 stock_quantity: qty, 
                 expiry_date, 
@@ -97,9 +122,26 @@ const getMyInventory = async (req, res) => {
             .populate('medicineId', 'name manufacturers image_url salt_composition mrp')
             .sort({ updatedAt: -1 });
 
-        res.status(200).json({ success: true, data: list });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
+        // Formatting response to keep old structures intact while adding master reference MRP [cite: 1.1.2]
+        const formattedList = list.map(item => {
+            const obj = item.toObject();
+            
+            if (obj.medicineId && obj.mrp !== undefined) {
+                // 1. Capture the original Admin-defined master MRP before overwriting [cite: 1.1.2]
+                const originalMasterMrp = obj.medicineId.mrp ? obj.medicineId.mrp.toString() : "0";
+                
+                // 2. Keep the populated 'mrp' synced with batch MRP for old frontend compatibility [cite: 1.1.2]
+                obj.medicineId.mrp = obj.mrp.toString(); 
+                
+                // 🚨 NEW KEY: Append the original Admin master catalog MRP inside the populated object [cite: 1.1.2]
+                obj.medicineId.masterMrp = originalMasterMrp; 
+            }
+            return obj;
+        });
+
+        res.status(200).json({ success: true, data: formattedList });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -138,7 +180,8 @@ const getMyNonPrescriptionInventory = async (req, res) => {
                     stock_quantity: 1,
                     expiry_date: 1,
                     is_available: 1,
-                    batch_number: 1, // 🚨 FIXED: Added to prevent data loss in OTC list responses [3]
+                    batch_number: 1,
+                    mrp: 1, // Project inventory-level batch mrp
                     createdAt: 1,
                     updatedAt: 1,
                     medicineId: {
@@ -147,7 +190,8 @@ const getMyNonPrescriptionInventory = async (req, res) => {
                         manufacturers: "$medicineDetails.manufacturers",
                         image_url: "$medicineDetails.image_url",
                         salt_composition: "$medicineDetails.salt_composition",
-                        mrp: "$medicineDetails.mrp",
+                        // 🚨 OVERWRITE populated master mrp with inventory batch mrp dynamically [cite: 1.1.2]
+                        mrp: { $toString: "$mrp" }, 
                         prescription_required: "$medicineDetails.prescription_required"
                     }
                 }
@@ -265,6 +309,48 @@ const requestNewMedicineAdd = async (req, res) => {
     }
 };
 
+// Request Admin to increase master reference MRP of a medicine
+// Endpoint: POST /provider/pharmacy/inventory/request-mrp-increase
+const requestMrpIncrease = async (req, res) => {
+    try {
+        const pharmacyId = req.user.id;
+        const { medicineId, proposedMrp, reason } = req.body;
+
+        if (!medicineId || !proposedMrp || Number(proposedMrp) <= 0) {
+            return res.status(400).json({ success: false, message: "Medicine ID and proposed MRP value are required." });
+        }
+
+        const targetMedicine = await Medicine.findById(medicineId);
+        if (!targetMedicine) {
+            return res.status(404).json({ success: false, message: "Medicine not found in master database." });
+        }
+
+        const requestData = {
+            medicineId,
+            medicineName: targetMedicine.name,
+            currentMasterMrp: Number(targetMedicine.mrp || 0),
+            proposedMrp: Number(proposedMrp),
+            reason: reason || "New batch arrived with higher printed MRP price."
+        };
+
+        // Create Master Request Document
+        const newRequest = await MasterRequest.create({
+            vendorId: pharmacyId,
+            vendorType: 'Pharmacy',
+            requestType: 'Medicine',
+            data: requestData
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "MRP increase request submitted to Admin successfully!",
+            data: newRequest
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = { 
     searchMasterMedicines, 
@@ -274,5 +360,6 @@ module.exports = {
     getMyNonPrescriptionInventory,
     updateInventoryItem ,
     deleteInventoryItem,
-    requestNewMedicineAdd
+    requestNewMedicineAdd,
+    requestMrpIncrease
 };

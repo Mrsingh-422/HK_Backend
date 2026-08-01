@@ -44,8 +44,18 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     for (const item of items) {
         const pricePerUnit = Number(item.price || item.pricePerUnit || 0);
         const orderedQty = Number(item.quantity || 1);
+        const medicineId = item.medicineId._id || item.medicineId;
 
-        rawItemTotalWithoutPromo += (pricePerUnit * orderedQty);
+        // 🚨 UPDATED: Fetch the earliest expiring batch MRP to calculate correct raw item totals [cite: 1.1.2]
+        const activeBatch = await MedicineInventory.findOne({
+            pharmacyId,
+            medicineId,
+            is_available: true,
+            stock_quantity: { $gt: 0 }
+        }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
+
+        const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId?.mrp ? Number(item.medicineId.mrp) : 0);
+        rawItemTotalWithoutPromo += (batchMrp * orderedQty);
 
         if (item.isComboApplied === true && item.comboOfferId) {
             const activePromo = await PharmacyComboOffer.findOne({
@@ -85,10 +95,8 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
 
     if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
         let standardFee = charges ? Number(charges.fixedPrice) : 40;
-
-        // 🚨 SUBSCRIPTION INTEGRATION (FREE PHARMACY DELIVERY) ---
         const pharmDeliveryBenefit = await checkAndApplyBenefit(userId, 'freePharmacyDeliveriesCount', standardFee);
-        deliveryCharge = pharmDeliveryBenefit.amount; // Sets deliveryCharge to 0 if benefit is applied
+        deliveryCharge = pharmDeliveryBenefit.amount; 
     }
     
     if (isRapid && (!appointmentTime || appointmentTime === 'Immediate')) {
@@ -341,19 +349,18 @@ const getMedicineFullDetails = async (req, res) => {
         const medicine = await Medicine.findById(medicineId).lean();
         if (!medicine) return res.status(404).json({ message: "Not found" });
 
-        // Fetch lowest active vendor price for this medicine [cite: 1.1.2]
+        // Fetch lowest active vendor price and batch-specific MRP [cite: 1.1.2]
         const bestOffer = await MedicineInventory.findOne({ medicineId: medicine._id, is_available: true, stock_quantity: { $gt: 0 } })
             .sort({ vendor_price: 1 });
 
         const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
-        const mrpNum = Number(medicine.mrp || 0);
+        const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0); // 👈 Fetch batch MRP [cite: 1.1.2]
 
         // Overwrite dynamic properties safely [cite: 1.1.2]
         if (lowestPrice !== null) {
+            medicine.mrp = batchMrp.toString(); // Overwrite master MRP with batch MRP [cite: 1.1.2]
             medicine.best_price = lowestPrice.toString();
-            if (mrpNum > 0) {
-                medicine.discont_percent = `${Math.round(((mrpNum - lowestPrice) / mrpNum) * 100)}%`;
-            }
+            medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
         }
 
         // Fetch substitutes and popular items in parallel
@@ -372,9 +379,10 @@ const getMedicineFullDetails = async (req, res) => {
             Promise.all(substitutes.map(async (item) => {
                 const subOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
                 const subLowest = subOffer ? subOffer.vendor_price : null;
+                const itemMrp = subOffer ? Number(subOffer.mrp || 0) : Number(item.mrp || 0);
                 if (subLowest !== null) {
+                    item.mrp = itemMrp.toString();
                     item.best_price = subLowest.toString();
-                    const itemMrp = Number(item.mrp || 0);
                     if (itemMrp > 0) item.discont_percent = `${Math.round(((itemMrp - subLowest) / itemMrp) * 100)}%`;
                 }
                 return item;
@@ -382,9 +390,10 @@ const getMedicineFullDetails = async (req, res) => {
             Promise.all(frequentlyBought.map(async (item) => {
                 const freqOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
                 const freqLowest = freqOffer ? freqOffer.vendor_price : null;
+                const itemMrp = freqOffer ? Number(freqOffer.mrp || 0) : Number(item.mrp || 0);
                 if (freqLowest !== null) {
+                    item.mrp = itemMrp.toString();
                     item.best_price = freqLowest.toString();
-                    const itemMrp = Number(item.mrp || 0);
                     if (itemMrp > 0) item.discont_percent = `${Math.round(((itemMrp - freqLowest) / itemMrp) * 100)}%`;
                 }
                 return item;
@@ -475,7 +484,7 @@ const getMedicineCategoryDetails = async (req, res) => {
         const pipeline = [
             { $match: { bread_crumb: breadcrumbRegex } },
             {
-                // 1. Inventory check (Lowest Vendor Price)
+                // 1. Inventory check (Lowest Vendor Price) [cite: 1.1.2]
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -490,17 +499,15 @@ const getMedicineCategoryDetails = async (req, res) => {
             },
             {
                 $addFields: {
-                    // Pre-calculate numeric values for fallback and calculation
                     numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
                     numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
                     numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
+                    numInventoryMRP: { $toDouble: { $arrayElemAt: ["$inventory.mrp", 0] } }, // 👈 Added: Fetch batch MRP [cite: 1.1.2]
                     isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
                 }
             },
             {
                 $addFields: {
-                    // --- MINIMUM PRICE FALLBACK ---
-                    // Agar inventory mein sasta vendor hai toh wo, warna medicine ka 'best_price'
                     minimumPrice: {
                         $cond: [
                             "$isInventoryAvailable",
@@ -508,21 +515,26 @@ const getMedicineCategoryDetails = async (req, res) => {
                             "$numDocBestPrice"
                         ]
                     },
+                    minimumMRP: { // 👈 Added: Dynamic MRP based on batch [cite: 1.1.2]
+                        $cond: [
+                            "$isInventoryAvailable",
+                            "$numInventoryMRP",
+                            "$numMRP"
+                        ]
+                    },
                     isAvailable: "$isInventoryAvailable"
                 }
             },
             {
                 $addFields: {
-                    // --- DISCOUNT PERCENTAGE FALLBACK ---
-                    // Logic: ((MRP - SelectedPrice) / MRP) * 100
                     discountPercentage: {
                         $cond: {
-                            if: { $gt: ["$numMRP", 0] },
+                            if: { $gt: ["$minimumMRP", 0] },
                             then: {
                                 $round: [
                                     {
                                         $multiply: [
-                                            { $divide: [{ $subtract: ["$numMRP", "$minimumPrice"] }, "$numMRP"] },
+                                            { $divide: [{ $subtract: ["$minimumMRP", "$minimumPrice"] }, "$minimumMRP"] },
                                             100
                                         ]
                                     },
@@ -534,9 +546,37 @@ const getMedicineCategoryDetails = async (req, res) => {
                     }
                 }
             },
+            {
+                // 🚨 OVERWRITE best_price, mrp, and discont_percent to remove static master data leaks [cite: 1.1.2]
+                $addFields: {
+                    mrp: { $toString: "$minimumMRP" }, // Overwrite MRP with batch MRP! [cite: 1.1.2]
+                    best_price: {
+                        $cond: {
+                            if: "$isInventoryAvailable",
+                            then: { $toString: "$minimumPrice" },
+                            else: "$best_price"
+                        }
+                    },
+                    discont_percent: {
+                        $cond: {
+                            if: { $gt: ["$discountPercentage", 0] },
+                            then: { $concat: [{ $toString: "$discountPercentage" }, "%"] },
+                            else: "$discont_percent"
+                        }
+                    }
+                }
+            },
             { 
                 $project: { 
-                    inventory: 0, numMRP: 0, numDocBestPrice: 0, numInventoryPrice: 0, isInventoryAvailable: 0 
+                    inventory: 0, 
+                    numMRP: 0, 
+                    numDocBestPrice: 0, 
+                    numInventoryPrice: 0, 
+                    numInventoryMRP: 0,
+                    isInventoryAvailable: 0,
+                    minimumPrice: 0,
+                    minimumMRP: 0,
+                    discountPercentage: 0
                 } 
             },
             {
@@ -561,6 +601,7 @@ const getMedicineCategoryDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 // Default Location: Delhi (Coordinates)
@@ -847,6 +888,7 @@ const getStandardMedicineCatalog = async (req, res) => {
 
         pipeline.push(
             {
+                // Step 1: Standard sellers lookup (For count matching)
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -855,34 +897,41 @@ const getStandardMedicineCatalog = async (req, res) => {
                 }
             },
             {
-                $addFields: {
-                    // Filter only those sellers who actually have active stock [1]
-                    activeSellers: {
-                        $filter: {
-                            input: "$sellers",
-                            as: "seller",
-                            cond: {
-                                $and: [
-                                    { $eq: ["$$seller.is_available", true] },
-                                    { $gt: ["$$seller.stock_quantity", 0] }
-                                ]
+                // 🚨 Step 2: Specialized lookup to fetch the single cheapest in-stock batch [cite: 1.1.2]
+                $lookup: {
+                    from: "medicineinventories",
+                    let: { medId: "$_id" },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ["$medicineId", "$$medId"] },
+                                        { $eq: ["$is_available", true] },
+                                        { $gt: ["$stock_quantity", 0] }
+                                    ]
+                                }
                             }
-                        }
-                    }
+                        },
+                        { $sort: { vendor_price: 1 } }, // Cheapest vendor first [cite: 1.1.2]
+                        { $limit: 1 }
+                    ],
+                    as: "cheapestSeller"
+                }
+            },
+            {
+                $addFields: {
+                    cheapestActiveSeller: { $arrayElemAt: ["$cheapestSeller", 0] }
                 }
             },
             {
                 $addFields: {
                     vendorCount: { $size: "$sellers" },
-                    // Calculate the lowest active vendor price strictly [cite: 1.1.2]
-                    lowestVendorPrice: {
-                        $cond: {
-                            if: { $gt: [{ $size: "$activeSellers" }, 0] },
-                            then: { $min: "$activeSellers.vendor_price" },
-                            else: null 
-                        }
-                    },
-                    isAvailable: { $gt: [{ $size: "$activeSellers" }, 0] }
+                    // Extract lowest active price dynamically [cite: 1.1.2]
+                    lowestVendorPrice: "$cheapestActiveSeller.vendor_price",
+                    // Extract matching batch MRP [cite: 1.1.2]
+                    cheapestMedsMrp: "$cheapestActiveSeller.mrp",
+                    isAvailable: { $gt: [{ $size: "$cheapestSeller" }, 0] }
                 }
             },
             {
@@ -890,17 +939,29 @@ const getStandardMedicineCatalog = async (req, res) => {
                     // 🚨 OVERWRITE best_price with lowest active vendor price [cite: 1.1.2]
                     best_price: {
                         $cond: {
-                            if: { $ne: ["$lowestVendorPrice", null] },
-                            then: { $toString: "$lowestVendorPrice" }, // Convert to string to match Medicine Schema type
-                            else: "$best_price" // fallback to master best_price if no active vendor
+                            if: "$isAvailable",
+                            then: { $toString: "$lowestVendorPrice" }, 
+                            else: "$best_price" 
                         }
                     },
-                    // 🚨 OVERWRITE discont_percent dynamically based on live minimum vendor price [cite: 1.1.2]
+                    // 🚨 OVERWRITE mrp with dynamic batch-specific mrp [cite: 1.1.2]
+                    mrp: {
+                        $cond: {
+                            if: "$isAvailable",
+                            then: { $toString: "$cheapestMedsMrp" },
+                            else: "$mrp"
+                        }
+                    }
+                }
+            },
+            {
+                $addFields: {
+                    // 🚨 OVERWRITE discont_percent dynamically using the live batch-mrp [cite: 1.1.2]
                     discont_percent: {
                         $cond: {
                             if: {
                                 $and: [
-                                    { $ne: ["$lowestVendorPrice", null] },
+                                    "$isAvailable",
                                     { $gt: [{ $toDouble: { $ifNull: ["$mrp", "0"] } }, 0] }
                                 ]
                             },
@@ -913,7 +974,7 @@ const getStandardMedicineCatalog = async (req, res) => {
                                                     $multiply: [
                                                         {
                                                             $divide: [
-                                                                { $subtract: [{ $toDouble: "$mrp" }, "$lowestVendorPrice"] },
+                                                                { $subtract: [{ $toDouble: "$mrp" }, { $toDouble: "$best_price" }] },
                                                                 { $toDouble: "$mrp" }
                                                             ]
                                                         },
@@ -927,7 +988,7 @@ const getStandardMedicineCatalog = async (req, res) => {
                                     "%"
                                 ]
                             },
-                            else: "$discont_percent" // fallback to master discount
+                            else: "$discont_percent" 
                         }
                     }
                 }
@@ -935,8 +996,10 @@ const getStandardMedicineCatalog = async (req, res) => {
             { 
                 $project: {
                     sellers: 0,
-                    activeSellers: 0,
-                    lowestVendorPrice: 0 // Keep clean project payload
+                    cheapestSeller: 0,
+                    cheapestActiveSeller: 0,
+                    lowestVendorPrice: 0,
+                    cheapestMedsMrp: 0
                 }
             },
             { 
@@ -998,7 +1061,7 @@ const getMedicineVendors = async (req, res) => {
         .lean();
 
         const availableInPharmacies = [];
-        const pharmacyMap = new Map(); // 👈 Track unique pharmacies & consolidate duplicate batches
+        const pharmacyMap = new Map(); // Track unique pharmacies & consolidate duplicate batches [1]
         let minPriceFound = null;
 
         for (let item of inventoryRecords) {
@@ -1022,17 +1085,18 @@ const getMedicineVendors = async (req, res) => {
                     minPriceFound = item.vendor_price;
                 }
 
-                // 🚨 FIXED: If pharmacy already added, keep only the cheapest batch option
+                // 🚨 FIXED: If pharmacy already added, keep only the cheapest batch option [cite: 1.1.2]
                 if (pharmacyMap.has(pharmacyIdStr)) {
                     const existingIndex = pharmacyMap.get(pharmacyIdStr);
                     const existingItem = availableInPharmacies[existingIndex];
                     
                     if (item.vendor_price < existingItem.price) {
                         existingItem.price = item.vendor_price;
+                        existingItem.mrp = item.mrp || existingItem.mrp; // Update with cheaper batch MRP [cite: 1.1.2]
                         existingItem.inventoryId = item._id;
                         existingItem.stock = item.stock_quantity;
-                        existingItem.discount = masterMedicine.mrp > item.vendor_price ? 
-                            Math.round(((masterMedicine.mrp - item.vendor_price) / masterMedicine.mrp) * 100) : 0;
+                        existingItem.discount = existingItem.mrp > item.vendor_price ? 
+                            Math.round(((existingItem.mrp - item.vendor_price) / existingItem.mrp) * 100) : 0;
                     }
                 } else {
                     // Record unique index to avoid duplication
@@ -1046,6 +1110,8 @@ const getMedicineVendors = async (req, res) => {
                         expiryDate: { $gte: today }
                     }).lean();
 
+                    const batchMrp = item.mrp || Number(masterMedicine.mrp || 0); // Dynamic batch MRP fallback [cite: 1.1.2]
+
                     availableInPharmacies.push({
                         pharmacyId: pharmacy._id,
                         name: pharmacy.name,
@@ -1055,9 +1121,9 @@ const getMedicineVendors = async (req, res) => {
                         address: `${pharmacy.city}, ${pharmacy.state}`,
                         distance: distance.toFixed(1),
                         price: item.vendor_price,
-                        mrp: masterMedicine.mrp,
-                        discount: masterMedicine.mrp > item.vendor_price ? 
-                            Math.round(((masterMedicine.mrp - item.vendor_price) / masterMedicine.mrp) * 100) : 0,
+                        mrp: batchMrp, // 👈 Saved dynamic batch MRP [cite: 1.1.2]
+                        discount: batchMrp > item.vendor_price ? 
+                            Math.round(((batchMrp - item.vendor_price) / batchMrp) * 100) : 0,
                         stock: item.stock_quantity,
                         isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
                         isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
@@ -1071,6 +1137,15 @@ const getMedicineVendors = async (req, res) => {
                         } : null
                     });
                 }
+            }
+        }
+
+        // 🚨 OVERWRITE masterMedicine best_price & discont_percent to prevent master data leak [cite: 1.1.2]
+        if (minPriceFound !== null) {
+            masterMedicine.best_price = minPriceFound.toString();
+            const mrpNum = Number(masterMedicine.mrp || 0);
+            if (mrpNum > 0) {
+                masterMedicine.discont_percent = `${Math.round(((mrpNum - minPriceFound) / mrpNum) * 100)}%`;
             }
         }
 
@@ -1096,6 +1171,7 @@ const getMedicineVendors = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 // --- NEW: GET PHARMACY SLOTS (Mirroring Lab) ---
@@ -1444,9 +1520,19 @@ const placeOrder = async (req, res) => {
             pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
         );
 
-        const mappedOrderItems = cart.pharmacyCart.items.map(item => {
-            const masterMedsMrp = item.medicineId ? Number(item.medicineId.mrp || 0) : 0;
+        const mappedOrderItems = [];
+        for (const item of cart.pharmacyCart.items) {
             const orderedQty = Number(item.quantity || 1);
+
+            // Fetch the earliest expiring batch of this medicine dynamically [cite: 1.1.2]
+            const activeBatch = await MedicineInventory.findOne({
+                pharmacyId,
+                medicineId: item.medicineId._id,
+                is_available: true,
+                stock_quantity: { $gt: 0 }
+            }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
+
+            const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId ? Number(item.medicineId.mrp || 0) : 0);
 
             let isComboApplied = false;
             let comboOfferId = null;
@@ -1464,10 +1550,10 @@ const placeOrder = async (req, res) => {
                 freeQuantity = fullBundles * Y;
             }
 
-            return {
+            mappedOrderItems.push({
                 medicineId: item.medicineId._id,
                 name: item.name,
-                mrp: masterMedsMrp, 
+                mrp: batchMrp, // Save legally printed batch MRP [cite: 1.1.2]
                 price: item.price,
                 quantity: orderedQty,
                 duration: item.duration,
@@ -1475,8 +1561,8 @@ const placeOrder = async (req, res) => {
                 isComboApplied,
                 comboOfferId,
                 freeQuantity
-            };
-        });
+            });
+        }
 
         const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
@@ -1517,7 +1603,7 @@ const placeOrder = async (req, res) => {
         if (activePaymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-            // 🚨 FIXED: Only deduct subscription deliveries count if delivery charge was waived to 0
+            // Only deduct subscription deliveries count if delivery charge was waived to 0
             if ((collectionType === 'Home Delivery' || collectionType === 'Home Collection') && bill.deliveryCharge === 0) {
                 await deductBenefitCount(req.user.id, 'freePharmacyDeliveriesCount');
             }
@@ -1547,6 +1633,7 @@ const placeOrder = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 2. VERIFY PHARMACY PAYMENT & REDUCE STOCK
@@ -1594,7 +1681,7 @@ const verifyPharmacyPayment = async (req, res) => {
                 }
             }
 
-            // 🚨 UPDATED: Stock Deduction across batches based on FEFO [cite: 1.1.2]
+            // Stock Deduction across batches based on FEFO [cite: 1.1.2]
             await deductPharmacyStockFEFO(order.pharmacyId, item.medicineId, item.quantity);
         }
 
@@ -1606,6 +1693,7 @@ const verifyPharmacyPayment = async (req, res) => {
 
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
+        // Only deduct subscription deliveries count if delivery charge was waived to 0
         if ((order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection') && order.billSummary?.deliveryCharge === 0) {
             const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
             await deductBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
@@ -1629,6 +1717,7 @@ const verifyPharmacyPayment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 const uploadPrescription = async (req, res) => {
     try {
@@ -1680,11 +1769,10 @@ const cancelMedicineOrder = async (req, res) => {
         // DYNAMIC POLICY EVALUATION
         const policyResult = await processCancellationRefund(order, 'Pharmacy');
 
-        // 🚨 STOCK RESTORATION: Return canceled items back to Pharmacy Inventory [cite: 1.1.2]
+        // STOCK RESTORATION: Return canceled items back to Pharmacy Inventory [cite: 1.1.2]
         for (const item of order.items) {
             if (!item.medicineId) continue;
 
-            // Find the first active batch or fallback to any batch to restore stock [cite: 1.1.2]
             let inventory = await MedicineInventory.findOne({ 
                 pharmacyId: order.pharmacyId, 
                 medicineId: item.medicineId,
@@ -1714,7 +1802,6 @@ const cancelMedicineOrder = async (req, res) => {
 
         await order.save();
 
-        // Subscription benefit refund check
         if (order.billSummary?.deliveryCharge === 0 && (order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection')) {
             await refundBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
         }
@@ -1785,13 +1872,15 @@ const getLatestAddedMedicines = async (req, res) => {
             {
                 $sort: { createdAt: -1 }
             },
-            // 3. Medicine ID ke base par group karein taaki duplicate medicines repeat na ho (no data overwrite/duplication)
+            // 3. Medicine ID ke base par group karein taaki duplicate medicines repeat na ho
             {
                 $group: {
                     _id: "$medicineId",
                     latestInventoryId: { $first: "$_id" },
-                    // 🚨 OVERWRITE: Changed from $first to $min to fetch the absolute lowest vendor price [cite: 1.1.2]
+                    // 🚨 OVERWRITE: Fetch the absolute lowest vendor price across active pharmacies [cite: 1.1.2]
                     latestVendorPrice: { $min: "$vendor_price" }, 
+                    // 🚨 OVERWRITE: Extract the dynamic batch MRP safely [cite: 1.1.2]
+                    latestMedsMrp: { $first: "$mrp" }, 
                     pharmacyId: { $first: "$pharmacyId" },
                     latestCreatedAt: { $first: "$createdAt" }
                 }
@@ -1823,15 +1912,15 @@ const getLatestAddedMedicines = async (req, res) => {
                     pharmacyId: 1,
                     name: "$details.name",
                     image: { $arrayElemAt: ["$details.image_url", 0] },
-                    mrp: "$details.mrp",
-                    bestPrice: "$latestVendorPrice", // 👈 This is now strictly the lowest live price [cite: 1.1.2]
-                    // 🚨 DYNAMIC DISCOUNT: Automatically calculated using the lowest live price [cite: 1.1.2]
+                    mrp: { $toString: "$latestMedsMrp" }, // 👈 Overwritten: Dynamic Batch MRP [cite: 1.1.2]
+                    bestPrice: "$latestVendorPrice",      // 👈 Overwritten: Live minimum vendor price [cite: 1.1.2]
+                    // 🚨 DYNAMIC DISCOUNT: Calculated strictly using the lowest live price [cite: 1.1.2]
                     discount: {
                         $cond: {
                             if: { 
                                 $and: [
-                                    { $ne: ["$details.mrp", null] },
-                                    { $gt: [{ $toDouble: { $ifNull: ["$details.mrp", "0"] } }, 0] }
+                                    { $ne: ["$latestMedsMrp", null] },
+                                    { $gt: [{ $toDouble: { $ifNull: ["$latestMedsMrp", "0"] } }, 0] }
                                 ]
                             },
                             then: {
@@ -1840,8 +1929,8 @@ const getLatestAddedMedicines = async (req, res) => {
                                         $multiply: [
                                             {
                                                 $divide: [
-                                                    { $subtract: [{ $toDouble: { $ifNull: ["$details.mrp", "0"] } }, "$latestVendorPrice"] },
-                                                    { $toDouble: { $ifNull: ["$details.mrp", "1"] } }
+                                                    { $subtract: [{ $toDouble: { $ifNull: ["$latestMedsMrp", "0"] } }, "$latestVendorPrice"] },
+                                                    { $toDouble: { $ifNull: ["$latestMedsMrp", "1"] } }
                                                 ]
                                             },
                                             100
@@ -1855,7 +1944,7 @@ const getLatestAddedMedicines = async (req, res) => {
                     },
                     salt: "$details.salt_composition",
                     addedAt: "$latestCreatedAt",
-                    isAvailable: { $literal: true } // Since matched strictly from active stocks
+                    isAvailable: { $literal: true }
                 }
             }
         ]);
@@ -1879,7 +1968,6 @@ const getNonPrescriptionMedicines = async (req, res) => {
         const limit = 20;
         const skip = (parseInt(page) - 1) * limit;
 
-        // Base filter: Only fetch medicines where prescription is not required
         const filter = {
             prescription_required: { $regex: /^(no|false)$/i }
         };
@@ -1894,7 +1982,6 @@ const getNonPrescriptionMedicines = async (req, res) => {
         const pipeline = [
             { $match: filter },
             {
-                // Dynamic inventory check for lowest seller price [cite: 1.1.2]
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -1912,6 +1999,7 @@ const getNonPrescriptionMedicines = async (req, res) => {
                     numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
                     numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
                     numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
+                    numInventoryMRP: { $toDouble: { $arrayElemAt: ["$inventory.mrp", 0] } }, // 👈 Added: Fetch batch MRP [cite: 1.1.2]
                     isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
                 }
             },
@@ -1924,20 +2012,26 @@ const getNonPrescriptionMedicines = async (req, res) => {
                             "$numDocBestPrice"
                         ]
                     },
+                    minimumMRP: { // 👈 Added: Dynamic MRP based on batch [cite: 1.1.2]
+                        $cond: [
+                            "$isInventoryAvailable",
+                            "$numInventoryMRP",
+                            "$numMRP"
+                        ]
+                    },
                     isAvailable: "$isInventoryAvailable"
                 }
             },
             {
                 $addFields: {
-                    // Dynamic discount calculation based on minimum price [cite: 1.1.2]
                     discountPercentage: {
                         $cond: {
-                            if: { $gt: ["$numMRP", 0] },
+                            if: { $gt: ["$minimumMRP", 0] },
                             then: {
                                 $round: [
                                     {
                                         $multiply: [
-                                            { $divide: [{ $subtract: ["$numMRP", "$minimumPrice"] }, "$numMRP"] },
+                                            { $divide: [{ $subtract: ["$minimumMRP", "$minimumPrice"] }, "$minimumMRP"] },
                                             100
                                         ]
                                     },
@@ -1950,14 +2044,21 @@ const getNonPrescriptionMedicines = async (req, res) => {
                 }
             },
             {
-                // 🚨 OVERWRITE best_price and discont_percent with live values to clear static admin data [cite: 1.1.2]
+                // 🚨 OVERWRITE best_price, mrp, and discont_percent with live values [cite: 1.1.2]
                 $addFields: {
-                    best_price: { $toString: "$minimumPrice" },
+                    mrp: { $toString: "$minimumMRP" }, // Overwrite MRP with batch MRP! [cite: 1.1.2]
+                    best_price: {
+                        $cond: {
+                            if: "$isInventoryAvailable",
+                            then: { $toString: "$minimumPrice" },
+                            else: "$best_price"
+                        }
+                    },
                     discont_percent: {
                         $cond: {
                             if: { $gt: ["$discountPercentage", 0] },
                             then: { $concat: [{ $toString: "$discountPercentage" }, "%"] },
-                            else: "$discont_percent" // fallback if discount is 0
+                            else: "$discont_percent"
                         }
                     }
                 }
@@ -1968,8 +2069,10 @@ const getNonPrescriptionMedicines = async (req, res) => {
                     numMRP: 0, 
                     numDocBestPrice: 0, 
                     numInventoryPrice: 0, 
+                    numInventoryMRP: 0,
                     isInventoryAvailable: 0,
                     minimumPrice: 0,
+                    minimumMRP: 0,
                     discountPercentage: 0
                 } 
             },
@@ -1977,7 +2080,6 @@ const getNonPrescriptionMedicines = async (req, res) => {
             { $limit: limit }
         ];
 
-        // Parallel operations for pagination & aggregation
         const [data, total] = await Promise.all([
             Medicine.aggregate(pipeline),
             Medicine.countDocuments(filter)
@@ -1998,8 +2100,8 @@ const getNonPrescriptionMedicines = async (req, res) => {
 const getHighestDiscountMedicines = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 20;
-        const skip = (page - 1) * limit;
+        const limitVal = parseInt(req.query.limit) || 20; // 👈 Dynamic limit from Flutter query params [1]
+        const skip = (page - 1) * limitVal;
 
         const pipeline = [
             {
@@ -2025,8 +2127,8 @@ const getHighestDiscountMedicines = async (req, res) => {
             {
                 $addFields: {
                     numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
-                    numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
                     numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
+                    numInventoryMRP: { $toDouble: { $arrayElemAt: ["$inventory.mrp", 0] } }, // 👈 Dynamic batch MRP extracted [cite: 1.1.2]
                     isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
                 }
             },
@@ -2040,24 +2142,35 @@ const getHighestDiscountMedicines = async (req, res) => {
                         $cond: [
                             "$isInventoryAvailable",
                             "$numInventoryPrice",
-                            null // Set null for unstocked items to avoid master price leak [cite: 1.1.2]
+                            null
                         ]
                     },
-                    isAvailable: "$isInventoryAvailable",
-                    // Dynamic discount percentage based strictly on vendor price
+                    minimumMRP: {
+                        $cond: [
+                            "$isInventoryAvailable",
+                            "$numInventoryMRP",
+                            null // 👈 Strictly hides master MRP if unstocked by vendors [cite: 1.1.2]
+                        ]
+                    },
+                    isAvailable: "$isInventoryAvailable"
+                }
+            },
+            {
+                $addFields: {
+                    // Dynamic discount percentage based strictly on live batch MRP and vendor price [cite: 1.1.2]
                     discountPercentage: {
                         $cond: {
                             if: {
                                 $and: [
                                     "$isInventoryAvailable",
-                                    { $gt: ["$numMRP", 0] }
+                                    { $gt: ["$minimumMRP", 0] }
                                 ]
                             },
                             then: {
                                 $round: [
                                     {
                                         $multiply: [
-                                            { $divide: [{ $subtract: ["$numMRP", "$numInventoryPrice"] }, "$numMRP"] },
+                                            { $divide: [{ $subtract: ["$minimumMRP", "$minimumPrice"] }, "$minimumMRP"] },
                                             100
                                         ]
                                     },
@@ -2070,25 +2183,32 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             {
-                // 🚨 OVERWRITE best_price and discont_percent with live values [cite: 1.1.2]
+                // 🚨 OVERWRITE best_price, mrp, and discont_percent with live values [cite: 1.1.2]
                 $addFields: {
                     best_price: {
                         $cond: {
-                            if: "$isInventoryAvailable",
-                            then: { $toString: "$numInventoryPrice" },
-                            else: null // Strictly hides master best_price if unstocked by vendors [cite: 1.1.2]
+                            if: "$isAvailable",
+                            then: { $toString: "$minimumPrice" },
+                            else: null 
+                        }
+                    },
+                    mrp: {
+                        $cond: {
+                            if: "$isAvailable",
+                            then: { $toString: "$minimumMRP" },
+                            else: null 
                         }
                     },
                     discont_percent: {
                         $cond: {
                             if: {
                                 $and: [
-                                    "$isInventoryAvailable",
+                                    "$isAvailable",
                                     { $gt: ["$discountPercentage", 0] }
                                 ]
                             },
                             then: { $concat: [{ $toString: "$discountPercentage" }, "%"] },
-                            else: "0%" // Safely hides master discont_percent
+                            else: "0%" 
                         }
                     }
                 }
@@ -2103,20 +2223,21 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             { 
+                // Keep clean project payload returning all original keys
                 $project: { 
                     inventory: 0, 
                     numMRP: 0, 
-                    numDocBestPrice: 0, 
                     numInventoryPrice: 0, 
+                    numInventoryMRP: 0,
                     isInventoryAvailable: 0,
-                    hasVendorPrice: 0 // Only project out the temporary sorting field to keep response identical
+                    hasVendorPrice: 0 
                 } 
             },
             {
                 // Dynamic Facet stage: Calculates total count & paginated records in parallel
                 $facet: {
                     metadata: [{ $count: "total" }],
-                    data: [{ $skip: skip }, { $limit: limit }]
+                    data: [{ $skip: skip }, { $limit: limitVal }]
                 }
             }
         ];
@@ -2130,10 +2251,11 @@ const getHighestDiscountMedicines = async (req, res) => {
             success: true,
             total,
             currentPage: page,
-            totalPages: Math.ceil(total / limit),
-            data
+            totalPages: Math.ceil(total / limitVal),
+            data: data
         });
     } catch (error) {
+        console.error("getHighestDiscountMedicines Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2407,7 +2529,7 @@ const payAndConfirmOrder = async (req, res) => {
             });
         }
 
-        // 🚨 FIXED: COD Stock Deduction across batches based on FEFO [cite: 1.1.2]
+        // COD Stock Deduction across batches based on FEFO [cite: 1.1.2]
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
@@ -2483,7 +2605,6 @@ const payAndConfirmOrder = async (req, res) => {
         request.status = 'Paid';
         await request.save();
 
-        // Trigger Notification for COD Prescription Inquiry Payments
         await notifyAdminsAndVendor(
             request.pharmacyId,
             'pharmacy',
@@ -2522,7 +2643,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // 🚨 FIXED: Stock Deduction across batches based on FEFO [cite: 1.1.2]
+        // Stock Deduction across batches based on FEFO [cite: 1.1.2]
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
@@ -2599,7 +2720,6 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
         request.status = 'Paid';
         await request.save();
 
-        // 🚨 Trigger Notification for Online Paid Prescription Inquiry Orders
         await notifyAdminsAndVendor(
             request.pharmacyId,
             'pharmacy',
@@ -2619,6 +2739,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
     }
 };
 
+
 const getActiveStoreComboOffers = async (req, res) => {
     try {
         const { pharmacyId } = req.query;
@@ -2629,12 +2750,30 @@ const getActiveStoreComboOffers = async (req, res) => {
             isActive: true,
             startDate: { $lte: today },
             expiryDate: { $gte: today }
-        }).populate('medicineId', 'name image_url mrp best_price');
+        }).populate('medicineId', 'name image_url mrp best_price').lean();
+
+        // 🚨 OVERWRITE populated master mrp with live batch-specific mrp safely [cite: 1.1.2]
+        const formattedCombos = await Promise.all(activeCombos.map(async (combo) => {
+            if (!combo.medicineId) return combo;
+
+            const bestOffer = await MedicineInventory.findOne({
+                pharmacyId,
+                medicineId: combo.medicineId._id,
+                is_available: true,
+                stock_quantity: { $gt: 0 }
+            }).sort({ expiry_date: 1 }).lean();
+
+            if (bestOffer) {
+                combo.medicineId.mrp = (bestOffer.mrp || combo.medicineId.mrp).toString();
+                combo.medicineId.best_price = bestOffer.vendor_price.toString();
+            }
+            return combo;
+        }));
 
         res.json({
             success: true,
-            count: activeCombos.length,
-            data: activeCombos
+            count: formattedCombos.length,
+            data: formattedCombos
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -2689,7 +2828,7 @@ const ratePharmacyOrder = async (req, res) => {
 const getGlobalActiveComboOffers = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 25; // 25 key strict pagination limit
+        const limit = 25; 
         const skip = (page - 1) * limit;
         const today = new Date();
 
@@ -2705,7 +2844,7 @@ const getGlobalActiveComboOffers = async (req, res) => {
             {
                 // Step 2: Lookup pharmacy details
                 $lookup: {
-                    from: "pharmacies", // Collection name matching MongoDB pharmacies
+                    from: "pharmacies", 
                     localField: "pharmacyId",
                     foreignField: "_id",
                     as: "pharmacyDetails"
@@ -2722,7 +2861,7 @@ const getGlobalActiveComboOffers = async (req, res) => {
             {
                 // Step 4: Lookup Medicine details
                 $lookup: {
-                    from: "medicines", // Collection name matching MongoDB medicines
+                    from: "medicines", 
                     localField: "medicineId",
                     foreignField: "_id",
                     as: "medicineDetails"
@@ -2730,7 +2869,32 @@ const getGlobalActiveComboOffers = async (req, res) => {
             },
             { $unwind: "$medicineDetails" },
             {
-                // Step 5: Format response for frontend/Flutter integration
+                // 🚨 Step 5: DEEP MULTI-KEY LOOKUP (Matches both pharmacyId & medicineId to get live batch MRP) [cite: 1.1.2]
+                $lookup: {
+                    from: "medicineinventories",
+                    let: { pharmId: "$pharmacyId", medId: "$medicineId" },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ["$pharmacyId", "$$pharmId"] },
+                                        { $eq: ["$medicineId", "$$medId"] },
+                                        { $eq: ["$is_available", true] },
+                                        { $gt: ["$stock_quantity", 0] }
+                                    ]
+                                }
+                            }
+                        },
+                        { $sort: { expiry_date: 1 } }, // FEFO Batch Sort [cite: 1.1.2]
+                        { $limit: 1 }
+                    ],
+                    as: "matchedInventory"
+                }
+            },
+            { $unwind: "$matchedInventory" },
+            {
+                // Step 6: Format response overwriting static admin prices with live batch data [cite: 1.1.2]
                 $project: {
                     _id: 1,
                     campaignDisplayName: 1,
@@ -2753,14 +2917,14 @@ const getGlobalActiveComboOffers = async (req, res) => {
                         _id: "$medicineDetails._id",
                         name: "$medicineDetails.name",
                         image: { $arrayElemAt: ["$medicineDetails.image_url", 0] },
-                        mrp: "$medicineDetails.mrp",
-                        bestPrice: "$medicineDetails.best_price"
+                        mrp: { $toString: "$matchedInventory.mrp" }, // 👈 Overwritten: Dynamic batch MRP [cite: 1.1.2]
+                        bestPrice: "$matchedInventory.vendor_price"  // 👈 Overwritten: Live vendor price [cite: 1.1.2]
                     }
                 }
             },
             { $sort: { createdAt: -1 } },
             {
-                // Step 6: Multi-stage Facet for pagination metadata
+                // Step 7: Multi-stage Facet for pagination metadata
                 $facet: {
                     metadata: [{ $count: "total" }],
                     data: [{ $skip: skip }, { $limit: limit }]
@@ -2770,7 +2934,6 @@ const getGlobalActiveComboOffers = async (req, res) => {
 
         const result = await PharmacyComboOffer.aggregate(pipeline);
         
-        // Safety Fallback values checks
         const total = result[0].metadata[0]?.total || 0;
         const data = result[0].data || [];
 
@@ -2792,7 +2955,6 @@ const getComboOfferDetails = async (req, res) => {
     try {
         const { offerId } = req.params;
 
-        // Validation check for Mongo ObjectId format
         if (!mongoose.Types.ObjectId.isValid(offerId)) {
             return res.status(400).json({ 
                 success: false, 
@@ -2800,7 +2962,6 @@ const getComboOfferDetails = async (req, res) => {
             });
         }
 
-        // Fetch combo offer and populate both Pharmacy and Medicine master details
         const offer = await PharmacyComboOffer.findById(offerId)
             .populate({
                 path: 'pharmacyId',
@@ -2817,6 +2978,21 @@ const getComboOfferDetails = async (req, res) => {
                 success: false, 
                 message: "Combo Offer not found, it might have been deleted or expired." 
             });
+        }
+
+        // 🚨 OVERWRITE populated master mrp with live batch-specific mrp safely [cite: 1.1.2]
+        if (offer.medicineId && offer.pharmacyId) {
+            const bestOffer = await MedicineInventory.findOne({
+                pharmacyId: offer.pharmacyId._id,
+                medicineId: offer.medicineId._id,
+                is_available: true,
+                stock_quantity: { $gt: 0 }
+            }).sort({ expiry_date: 1 }).lean();
+
+            if (bestOffer) {
+                offer.medicineId.mrp = (bestOffer.mrp || offer.medicineId.mrp).toString();
+                offer.medicineId.best_price = bestOffer.vendor_price.toString();
+            }
         }
 
         res.json({
