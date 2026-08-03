@@ -6,18 +6,21 @@ const getMedicineInventory = async (req, res) => {
     try {
         const { medicineId } = req.params;
         
+        // 1. Fetch master medicine baseline data
         const masterData = await Medicine.findById(medicineId).lean();
         if (!masterData) return res.status(404).json({ success: false, message: "Medicine not found" });
 
+        // 2. Fetch all pharmacies currently selling this medicine with active stock
         const offers = await MedicineInventory.find({ medicineId, is_available: true, stock_quantity: { $gt: 0 } })
             .populate('pharmacyId', 'name address rating location profileImage isHomeDeliveryAvailable is24x7')
             .sort({ vendor_price: 1 })
             .lean();
 
-        // 🚨 OVERWRITE master medicine mrp and discount based on cheapest available store batch [cite: 1.1.2]
+        // 🚨 OVERWRITE: Sync master data MRP with the cheapest available store batch [cite: 1.1.2]
+        // This keeps the top card MRP synchronized with the active inventory being sold [cite: 1.1.2]
         if (offers.length > 0) {
             const bestOffer = offers[0];
-            masterData.mrp = (bestOffer.mrp || masterData.mrp).toString();
+            masterData.mrp = (bestOffer.mrp || masterData.mrp).toString(); // Convert to string to match master Medicine schema
             masterData.best_price = bestOffer.vendor_price.toString();
             const mrpNum = Number(masterData.mrp || 0);
             if (mrpNum > 0) {
@@ -92,29 +95,71 @@ const getMedicineFullDetails = async (req, res) => {
     try {
         const { medicineId } = req.params;
         const medicine = await Medicine.findById(medicineId).lean();
-        if (!medicine) return res.status(404).json({ message: "Not found" });
+        if (!medicine) return res.status(404).json({ success: false, message: "Not found" });
 
-        // 1. Substitutes (Salt match)
+        // 🚨 Fetch lowest active vendor price and batch-specific MRP [cite: 1.1.2]
+        const bestOffer = await MedicineInventory.findOne({ medicineId: medicine._id, is_available: true, stock_quantity: { $gt: 0 } })
+            .sort({ vendor_price: 1 });
+
+        const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
+        const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0); // 👈 Fetch batch MRP [cite: 1.1.2]
+
+        // Overwrite dynamic properties safely to eliminate static master data leaks [cite: 1.1.2]
+        if (lowestPrice !== null) {
+            medicine.mrp = batchMrp.toString(); // Overwrite master MRP with batch MRP [cite: 1.1.2]
+            medicine.best_price = lowestPrice.toString();
+            medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
+        }
+
+        // Fetch substitutes and popular items in parallel
         const substitutes = await Medicine.find({ 
             salt_composition: medicine.salt_composition, 
             _id: { $ne: medicineId } 
-        }).limit(3);
+        }).limit(3).lean();
 
-        // 2. Popular/Frequently bought together logic
         const frequentlyBought = await Medicine.find({ 
             category: medicine.category, 
             _id: { $ne: medicineId } 
-        }).limit(4);
+        }).limit(4).lean();
+
+        // Synergize pricing overrides for related items too
+        const [enrichedSubs, enrichedFreq] = await Promise.all([
+            Promise.all(substitutes.map(async (item) => {
+                const subOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
+                const subLowest = subOffer ? subOffer.vendor_price : null;
+                const itemMrp = subOffer ? Number(subOffer.mrp || 0) : Number(item.mrp || 0);
+                if (subLowest !== null) {
+                    item.mrp = itemMrp.toString();
+                    item.best_price = subLowest.toString();
+                    if (itemMrp > 0) item.discont_percent = `${Math.round(((itemMrp - subLowest) / itemMrp) * 100)}%`;
+                }
+                return item;
+            })),
+            Promise.all(frequentlyBought.map(async (item) => {
+                const freqOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
+                const freqLowest = freqOffer ? freqOffer.vendor_price : null;
+                const itemMrp = freqOffer ? Number(freqOffer.mrp || 0) : Number(item.mrp || 0);
+                if (freqLowest !== null) {
+                    item.mrp = itemMrp.toString();
+                    item.best_price = freqLowest.toString();
+                    if (itemMrp > 0) item.discont_percent = `${Math.round(((itemMrp - freqLowest) / itemMrp) * 100)}%`;
+                }
+                return item;
+            }))
+        ]);
 
         res.json({
             success: true,
             data: {
-                details: medicine, // Isme safety_advise, side_effect, how_to_use fields hain
-                frequentlyBought,
-                substitutes
+                details: medicine, 
+                frequentlyBought: enrichedFreq,
+                substitutes: enrichedSubs,
+                isAvailable: lowestPrice !== null
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 3. COMPARE SELLERS (Figma Screen: Choose Pharmacy) ---

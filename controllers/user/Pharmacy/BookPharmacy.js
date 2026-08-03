@@ -345,36 +345,52 @@ const getMedicineSuggestions = async (req, res) => {
 // GET /user/pharmacy/full-details/:id
 const getMedicineFullDetails = async (req, res) => {
     try {
-        const { medicineId } = req.params;
-        const medicine = await Medicine.findById(medicineId).lean();
+        const { id } = req.params;
+        const medicine = await Medicine.findById(id).lean();
         if (!medicine) return res.status(404).json({ message: "Not found" });
 
-        // Fetch lowest active vendor price and batch-specific MRP [cite: 1.1.2]
+        // 🚨 DYNAMIC ALTERNATE BRANDS ENRICHMENT FOR DETAIL PAGE
+        if (medicine.salt_composition) {
+            const similarMeds = await Medicine.find({
+                salt_composition: medicine.salt_composition,
+                _id: { $ne: medicine._id }
+            }).select('name manufacturers mrp best_price discont_percent').limit(6).lean();
+
+            if (similarMeds.length > 0) {
+                const formattedAlts = similarMeds.map(med => {
+                    const price = med.best_price || med.mrp || "0";
+                    const discount = med.discont_percent && med.discont_percent !== "0%" 
+                        ? `save ${med.discont_percent}` 
+                        : "same price";
+                    return `${med.name} :: ${med.manufacturers || 'N/A'} :: ${price}/Tablet :: ${discount}`;
+                }).join(' | ');
+
+                medicine.alternate_brand = formattedAlts;
+            }
+        }
+
         const bestOffer = await MedicineInventory.findOne({ medicineId: medicine._id, is_available: true, stock_quantity: { $gt: 0 } })
             .sort({ vendor_price: 1 });
 
         const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
-        const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0); // 👈 Fetch batch MRP [cite: 1.1.2]
+        const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0);
 
-        // Overwrite dynamic properties safely [cite: 1.1.2]
         if (lowestPrice !== null) {
-            medicine.mrp = batchMrp.toString(); // Overwrite master MRP with batch MRP [cite: 1.1.2]
+            medicine.mrp = batchMrp.toString();
             medicine.best_price = lowestPrice.toString();
             medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
         }
 
-        // Fetch substitutes and popular items in parallel
         const substitutes = await Medicine.find({ 
             salt_composition: medicine.salt_composition, 
-            _id: { $ne: medicineId } 
+            _id: { $ne: id } 
         }).limit(3).lean();
 
         const frequentlyBought = await Medicine.find({ 
             category: medicine.category, 
-            _id: { $ne: medicineId } 
+            _id: { $ne: id } 
         }).limit(4).lean();
 
-        // Synergize pricing overrides for related items too
         const [enrichedSubs, enrichedFreq] = await Promise.all([
             Promise.all(substitutes.map(async (item) => {
                 const subOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
@@ -772,6 +788,7 @@ const getPharmacyDetails = async (req, res) => {
     }
 };
 
+
 const getTrendingMedicinesNearUser = async (req, res) => {
     try {
         const lat = req.body.lat || req.query.lat || DEFAULT_LAT;
@@ -863,7 +880,7 @@ const getTrendingMedicinesNearUser = async (req, res) => {
 };
 
 // 1. GET STANDARD LIST (Dawaiyan jinke sabse zyada vendors hain wo pehle)
-// endpoint: GET /user/medicine/standard-list
+// endpoint: GET /user/pharmacy/standard-list
 const getStandardMedicineCatalog = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -1032,7 +1049,7 @@ const getStandardMedicineCatalog = async (req, res) => {
 
 
 // 2. GET medicine with all VENDORS FOR A SPECIFIC MEDICINE
-// endpoint: GET /user/medicine/vendors/:medicineId?lat=28.6&lng=77.2
+// endpoint: GET /user/pharmacy/vendors/:medicineId?lat=28.6&lng=77.2
 const getMedicineVendors = async (req, res) => {
     try {
         const { medicineId } = req.params;
@@ -1044,6 +1061,27 @@ const getMedicineVendors = async (req, res) => {
         const medObjectId = new mongoose.Types.ObjectId(medicineId);
         const masterMedicine = await Medicine.findById(medObjectId).lean();
         if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
+
+        // 🚨 DYNAMIC ALTERNATE BRANDS ENRICHMENT
+        // Same salt composition ki doosri medicines ko dhoond kar list ko expand karein
+        if (masterMedicine.salt_composition) {
+            const similarMeds = await Medicine.find({
+                salt_composition: masterMedicine.salt_composition,
+                _id: { $ne: medObjectId }
+            }).select('name manufacturers mrp best_price discont_percent').limit(6).lean();
+
+            if (similarMeds.length > 0) {
+                const formattedAlts = similarMeds.map(med => {
+                    const price = med.best_price || med.mrp || "0";
+                    const discount = med.discont_percent && med.discont_percent !== "0%" 
+                        ? `save ${med.discont_percent}` 
+                        : "same price";
+                    return `${med.name} :: ${med.manufacturers || 'N/A'} :: ${price}/Tablet :: ${discount}`;
+                }).join(' | ');
+
+                masterMedicine.alternate_brand = formattedAlts;
+            }
+        }
 
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
@@ -1061,7 +1099,7 @@ const getMedicineVendors = async (req, res) => {
         .lean();
 
         const availableInPharmacies = [];
-        const pharmacyMap = new Map(); // Track unique pharmacies & consolidate duplicate batches [1]
+        const pharmacyMap = new Map();
         let minPriceFound = null;
 
         for (let item of inventoryRecords) {
@@ -1085,21 +1123,19 @@ const getMedicineVendors = async (req, res) => {
                     minPriceFound = item.vendor_price;
                 }
 
-                // 🚨 FIXED: If pharmacy already added, keep only the cheapest batch option [cite: 1.1.2]
                 if (pharmacyMap.has(pharmacyIdStr)) {
                     const existingIndex = pharmacyMap.get(pharmacyIdStr);
                     const existingItem = availableInPharmacies[existingIndex];
                     
                     if (item.vendor_price < existingItem.price) {
                         existingItem.price = item.vendor_price;
-                        existingItem.mrp = item.mrp || existingItem.mrp; // Update with cheaper batch MRP [cite: 1.1.2]
+                        existingItem.mrp = item.mrp || existingItem.mrp;
                         existingItem.inventoryId = item._id;
                         existingItem.stock = item.stock_quantity;
                         existingItem.discount = existingItem.mrp > item.vendor_price ? 
                             Math.round(((existingItem.mrp - item.vendor_price) / existingItem.mrp) * 100) : 0;
                     }
                 } else {
-                    // Record unique index to avoid duplication
                     pharmacyMap.set(pharmacyIdStr, availableInPharmacies.length);
 
                     const activePromo = await PharmacyComboOffer.findOne({
@@ -1110,7 +1146,7 @@ const getMedicineVendors = async (req, res) => {
                         expiryDate: { $gte: today }
                     }).lean();
 
-                    const batchMrp = item.mrp || Number(masterMedicine.mrp || 0); // Dynamic batch MRP fallback [cite: 1.1.2]
+                    const batchMrp = item.mrp || Number(masterMedicine.mrp || 0);
 
                     availableInPharmacies.push({
                         pharmacyId: pharmacy._id,
@@ -1121,7 +1157,7 @@ const getMedicineVendors = async (req, res) => {
                         address: `${pharmacy.city}, ${pharmacy.state}`,
                         distance: distance.toFixed(1),
                         price: item.vendor_price,
-                        mrp: batchMrp, // 👈 Saved dynamic batch MRP [cite: 1.1.2]
+                        mrp: batchMrp,
                         discount: batchMrp > item.vendor_price ? 
                             Math.round(((batchMrp - item.vendor_price) / batchMrp) * 100) : 0,
                         stock: item.stock_quantity,
@@ -1140,7 +1176,6 @@ const getMedicineVendors = async (req, res) => {
             }
         }
 
-        // 🚨 OVERWRITE masterMedicine best_price & discont_percent to prevent master data leak [cite: 1.1.2]
         if (minPriceFound !== null) {
             masterMedicine.best_price = minPriceFound.toString();
             const mrpNum = Number(masterMedicine.mrp || 0);
@@ -1169,6 +1204,69 @@ const getMedicineVendors = async (req, res) => {
     } catch (error) { 
         console.error("Crash Error:", error.message);
         res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// --- NEW API: Search Medicine by Clicked Alternate Brand ---
+const searchAlternateBrand = async (req, res) => {
+    try {
+        const { name } = req.query;
+
+        if (!name) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Medicine name query parameter is required." 
+            });
+        }
+
+        const searchName = name.trim();
+
+        // Database me exact aur case-insensitive match dhoondein
+        const medicine = await Medicine.findOne({
+            name: { $regex: new RegExp(`^${searchName}$`, 'i') }
+        }).lean();
+
+        if (!medicine) {
+            // Fallback suggestions agar exact name nahi milta
+            const suggestions = await Medicine.find({
+                name: { $regex: searchName, $options: 'i' }
+            }).limit(5).lean();
+
+            return res.status(404).json({
+                success: false,
+                message: "Exact medicine details not found.",
+                suggestions
+            });
+        }
+
+        // Live Inventory lookup sabse kam price aur valid stock fetch karne ke liye
+        const bestOffer = await MedicineInventory.findOne({ 
+            medicineId: medicine._id, 
+            is_available: true, 
+            stock_quantity: { $gt: 0 } 
+        }).sort({ vendor_price: 1 });
+
+        const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
+        const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0);
+
+        // Agar live pricing milti hai toh master data ko update karein
+        if (lowestPrice !== null) {
+            medicine.mrp = batchMrp.toString();
+            medicine.best_price = lowestPrice.toString();
+            medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                details: medicine,
+                isAvailable: lowestPrice !== null
+            }
+        });
+
+    } catch (error) {
+        console.error("searchAlternateBrand Error:", error.message);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -3005,7 +3103,7 @@ const getComboOfferDetails = async (req, res) => {
 };
 
 
-module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
+module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,searchAlternateBrand,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory, trackOrder,
 getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines, getActiveStoreComboOffers,
 
