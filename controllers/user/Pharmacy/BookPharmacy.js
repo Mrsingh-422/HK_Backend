@@ -1049,7 +1049,7 @@ const getStandardMedicineCatalog = async (req, res) => {
 
 
 // 2. GET medicine with all VENDORS FOR A SPECIFIC MEDICINE
-// endpoint: GET /user/pharmacy/vendors/:medicineId?lat=28.6&lng=77.2
+// endpoint: GET /user/pharmacy/medicine-details/:medicineId?lat=28.6&lng=77.2
 const getMedicineVendors = async (req, res) => {
     try {
         const { medicineId } = req.params;
@@ -1062,8 +1062,10 @@ const getMedicineVendors = async (req, res) => {
         const masterMedicine = await Medicine.findById(medObjectId).lean();
         if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // 🚨 DYNAMIC ALTERNATE BRANDS ENRICHMENT
-        // Same salt composition ki doosri medicines ko dhoond kar list ko expand karein
+        // 🚨 COD STATUS CHECK: Policy helper se check karein ki Pharmacy me COD enabled hai ya nahi
+        const isPharmacyCodAvailable = await isCodEnabled('Pharmacy');
+
+        // DYNAMIC ALTERNATE BRANDS ENRICHMENT
         if (masterMedicine.salt_composition) {
             const similarMeds = await Medicine.find({
                 salt_composition: masterMedicine.salt_composition,
@@ -1134,6 +1136,14 @@ const getMedicineVendors = async (req, res) => {
                         existingItem.stock = item.stock_quantity;
                         existingItem.discount = existingItem.mrp > item.vendor_price ? 
                             Math.round(((existingItem.mrp - item.vendor_price) / existingItem.mrp) * 100) : 0;
+                        
+                        // Dates updates
+                        existingItem.manufacturingDate = (item.manufacturing_date || item.mfg_date)
+                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
+                            : "N/A";
+                        existingItem.expiryDate = item.expiry_date 
+                            ? moment(item.expiry_date).format('MM/YYYY') 
+                            : "N/A";
                     }
                 } else {
                     pharmacyMap.set(pharmacyIdStr, availableInPharmacies.length);
@@ -1164,6 +1174,15 @@ const getMedicineVendors = async (req, res) => {
                         isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
                         isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
                         inventoryId: item._id,
+                        
+                        // Manufacturing & Expiry Dates
+                        manufacturingDate: (item.manufacturing_date || item.mfg_date)
+                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
+                            : "N/A",
+                        expiryDate: item.expiry_date 
+                            ? moment(item.expiry_date).format('MM/YYYY') 
+                            : "N/A",
+
                         comboOffer: activePromo ? {
                             offerId: activePromo._id,
                             campaignDisplayName: activePromo.campaignDisplayName,
@@ -1191,11 +1210,13 @@ const getMedicineVendors = async (req, res) => {
             maxRadius: `${maxRadius} km`,
             locationApplied: (req?.body?.lat || req?.query?.lat) ? "User GPS" : "Delhi (Default)",
             count: availableInPharmacies.length,
+            isCodAvailable: isPharmacyCodAvailable, // 👈 Root Level par COD Status added
             data: { 
                 medicineDetails: { 
                     ...masterMedicine, 
                     minPrice: minPriceFound,
-                    totalSellers: availableInPharmacies.length 
+                    totalSellers: availableInPharmacies.length,
+                    isCodAvailable: isPharmacyCodAvailable // 👈 Medicine details ke andar bhi safety ke liye added
                 }, 
                 availableInPharmacies: availableInPharmacies 
             }
