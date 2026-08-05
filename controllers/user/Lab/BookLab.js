@@ -946,14 +946,54 @@ const getLabInventoryPackages = async (req, res) => {
         const limit = 20;
 
         const total = await LabPackage.countDocuments({ labId, isActive: true });
+        
         const packages = await LabPackage.find({ labId, isActive: true })
             .populate({ path: 'tests', model: 'MasterLabTest' })
+            .populate('masterPackageId') // Populates Master template dynamically [cite: getLabInventoryPackages]
             .skip((page - 1) * limit)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
-        res.json({ success: true, total, page, pages: Math.ceil(total / limit), data: packages });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const resolvedPackages = packages.map(pkg => {
+            const master = pkg.masterPackageId || {};
+            
+            // 🚨 UNIFIED ID RESOLUTION: [cite: 2.1]
+            // If custom, masterPackageId is set to pkg._id (the listed package ID itself).
+            // If standard, it falls back to master._id (the template ID).
+            const unifiedMasterId = pkg.isCustom ? pkg._id : (master._id || pkg._id);
+
+            return {
+                ...pkg,
+                shortDescription: pkg.shortDescription || master.shortDescription || "",
+                longDescription: pkg.longDescription || master.longDescription || "",
+                isFastingRequired: pkg.isFastingRequired !== undefined ? pkg.isFastingRequired : (master.isFastingRequired || false),
+                fastingDuration: pkg.fastingDuration || master.fastingDuration || "",
+                preparations: (pkg.preparations && pkg.preparations.length > 0) ? pkg.preparations : (master.preparations || []),
+                detailedDescription: (pkg.detailedDescription && pkg.detailedDescription.length > 0) ? pkg.detailedDescription : (master.detailedDescription || []),
+                faqs: (pkg.faqs && pkg.faqs.length > 0) ? pkg.faqs : (master.faqs || []),
+                tags: (pkg.tags && pkg.tags.length > 0) ? pkg.tags : (master.tags || []),
+                lifestyleTags: (pkg.lifestyleTags && pkg.lifestyleTags.length > 0) ? pkg.lifestyleTags : (master.lifestyleTags || []),
+                packageImage: pkg.packageImage || master.packageImage || null,
+                mainCategory: pkg.mainCategory || master.mainCategory || "Pathology",
+                category: pkg.category || master.category || "",
+                
+                // 🚨 COMMON KEY: masterPackageId holds the unified ID for both standard and custom packages! [cite: 2.1]
+                masterPackageId: unifiedMasterId
+            };
+        });
+
+        res.json({ 
+            success: true, 
+            total, 
+            page, 
+            pages: Math.ceil(total / limit), 
+            data: resolvedPackages 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 // 5. SEARCH LAB PACKAGES (POST API - Paginated)
 const searchLabInventoryPackages = async (req, res) => {
@@ -2360,23 +2400,86 @@ const getMasterPackageDetails = async (req, res) => {
         const { id } = req.params;
         const { lat, lng } = req.body;
 
-        const masterPkgId = new mongoose.Types.ObjectId(id);
+        // 🚨 Validate if ObjectId format is correct to prevent server crashes
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid ID format." });
+        }
 
-        // 1. Master Package ki info lein
-        const masterData = await MasterLabPackage.findById(masterPkgId).populate('tests', 'testName parameters').lean();
-        if (!masterData) return res.status(404).json({ success: false, message: "Master Package not found" });
+        const targetId = new mongoose.Types.ObjectId(id);
+        let masterData = null;
+        let queryCriteria = {};
 
-        // 2. KM Limit
+        // 🚨 STEP 1: Pehle check karein kya yeh ID listed custom/standard "LabPackage" ki hai?
+        const labPkg = await LabPackage.findById(targetId)
+            .populate({ path: 'tests', model: 'MasterLabTest', select: 'testName parameters' })
+            .populate('masterPackageId')
+            .lean();
+
+        if (labPkg) {
+            // CASE A: User clicked on a listed package from a specific Lab profile [cite: labPackageSchema]
+            if (labPkg.isCustom) {
+                // Custom package has no masterPackageId, so map LabPackage fields to standard MasterLabPackage structure [cite: labPackageSchema]
+                masterData = {
+                    _id: labPkg._id,
+                    packageName: labPkg.packageName,
+                    shortDescription: labPkg.shortDescription || "",
+                    longDescription: labPkg.longDescription || "",
+                    mainCategory: labPkg.mainCategory || "Pathology",
+                    category: labPkg.category || "",
+                    tests: labPkg.tests || [],
+                    sampleTypes: labPkg.sampleTypes || labPkg.sampleType || [],
+                    reportTime: labPkg.reportTime || "24 Hours",
+                    isFastingRequired: labPkg.isFastingRequired || false,
+                    fastingDuration: labPkg.fastingDuration || "",
+                    preparations: labPkg.preparations || [],
+                    detailedDescription: labPkg.detailedDescription || [],
+                    faqs: labPkg.faqs || [],
+                    gender: labPkg.gender || "Both",
+                    ageGroup: labPkg.ageGroup || "All",
+                    tags: labPkg.tags || [],
+                    lifestyleTags: labPkg.lifestyleTags || [],
+                    packageImage: labPkg.packageImage || null,
+                    standardMRP: labPkg.mrp,
+                    isCustom: true // 👈 Dynamic flag
+                };
+                
+                // Since this is custom to one lab, search criteria is only for this specific package [cite: saveLabPackage]
+                queryCriteria = { _id: labPkg._id };
+            } else {
+                // If Standard Template Package listed by lab, load the original master catalog document
+                const masterPkgId = labPkg.masterPackageId?._id || labPkg.masterPackageId;
+                masterData = await MasterLabPackage.findById(masterPkgId).populate('tests', 'testName parameters').lean();
+                if (!masterData) {
+                    return res.status(404).json({ success: false, message: "Master template of this listed package not found." });
+                }
+                queryCriteria = {
+                    $or: [
+                        { masterPackageId: masterPkgId },
+                        { packageName: masterData.packageName }
+                    ]
+                };
+            }
+        } else {
+            // CASE B: User clicked on a Global Standard Catalog package directly (ID belongs to MasterLabPackage) [cite: getMasterPackageDetails]
+            masterData = await MasterLabPackage.findById(targetId).populate('tests', 'testName parameters').lean();
+            if (!masterData) {
+                return res.status(404).json({ success: false, message: "Master Package not found" }); // Mapped exactly to original error message [cite: getMasterPackageDetails]
+            }
+            queryCriteria = {
+                $or: [
+                    { masterPackageId: targetId },
+                    { packageName: masterData.packageName }
+                ]
+            };
+        }
+
+        // 2. Fetch KM Limit
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Lab', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
-        // 3. UPDATED QUERY: ID se dhoondo YA Name se (Fallback logic)
-        // Isse agar ID miss bhi ho gayi ho par Name same hai, toh wo vendor dikhega
+        // 3. Find all active labs offering this package (custom or standard)
         const labsPackages = await LabPackage.find({
-            $or: [
-                { masterPackageId: masterPkgId },
-                { packageName: masterData.packageName } // Agar ID link nahi hai par Name wahi hai
-            ],
+            ...queryCriteria,
             isActive: true 
         })
         .populate({
@@ -2384,8 +2487,6 @@ const getMasterPackageDetails = async (req, res) => {
             match: { profileStatus: 'Approved', isActive: true }
         })
         .lean();
-
-        console.log(`DEBUG: Found ${labsPackages.length} packages by ID or Name`);
 
         const availableInLabs = [];
 
@@ -2417,12 +2518,12 @@ const getMasterPackageDetails = async (req, res) => {
                     discount: item.mrp > 0 ? Math.round(((item.mrp - item.offerPrice) / item.mrp) * 100) : 0,
                     isHomeCollection: item.labId.isHomeCollectionAvailable,
                     isRapid: item.labId.isRapidServiceAvailable,
-                    labPackageId: item._id
+                    labPackageId: item._id // 👈 Returns Listed ID for correct checkout selections
                 });
             }
         }
 
-        // Duplicates remove karein (In case ek hi vendor ID aur Name dono se match ho jaye)
+        // Remove duplicates safely
         const uniqueLabs = [];
         const seenLabIds = new Set();
         for (let lab of availableInLabs) {
@@ -2444,6 +2545,7 @@ const getMasterPackageDetails = async (req, res) => {
         });
 
     } catch (error) { 
+        console.error("getMasterPackageDetails Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

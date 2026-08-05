@@ -192,7 +192,10 @@ const saveLabPackage = async (req, res) => {
         const { 
             id, masterPackageId, packageName, tests, 
             mrp, discountPercent, reportTime, description, precaution,
-            gender, ageGroup 
+            gender, ageGroup,
+            shortDescription, longDescription, mainCategory, category, sampleTypes,
+            isFastingRequired, fastingDuration, preparations, detailedDescription, faqs,
+            tags, lifestyleTags, packageImage
         } = req.body;
 
         let finalTests = [];
@@ -200,26 +203,27 @@ const saveLabPackage = async (req, res) => {
         let finalSampleTypes = [];
         let isCustom = true;
 
+        let masterTemplateData = {};
+
         if (masterPackageId && masterPackageId !== "") {
-            // CASE 1: Template Selection
+            // CASE 1: Template Selection (Auto-copy all rich keys from MasterLabPackage) [cite: saveLabPackage]
             const masterPkg = await MasterLabPackage.findById(masterPackageId);
             if (!masterPkg) return res.status(404).json({ message: "Master Package not found" });
             
-            finalTests = masterPkg.tests; // Master template ke test IDs
+            finalTests = masterPkg.tests; 
             finalName = masterPkg.packageName;
-            // Agar Master template mein sampleTypes pehle se hain toh wo lein
             finalSampleTypes = masterPkg.sampleTypes || []; 
             isCustom = false;
+            masterTemplateData = masterPkg; // Saved template reference
         } else {
-            // CASE 2: Custom Combo
+            // CASE 2: Custom Combo Package
             finalTests = typeof tests === 'string' ? JSON.parse(tests) : tests;
             if (!finalTests || finalTests.length === 0) {
                 return res.status(400).json({ message: "No tests selected for custom package" });
             }
         }
 
-        // AUTO-FETCH Samples (Dono cases ke liye safe side check)
-        // Taaki agar master mein samples na ho toh fetch ho jaye
+        // AUTO-FETCH Samples (Dono cases ke liye dynamic backup resolver)
         if (finalSampleTypes.length === 0) {
             const testsData = await MasterLabTest.find({ _id: { $in: finalTests } });
             finalSampleTypes = [...new Set(testsData.map(t => t.sampleType))].filter(s => s);
@@ -229,6 +233,24 @@ const saveLabPackage = async (req, res) => {
         const disc = parseFloat(discountPercent) || 0;
         const calculatedOfferPrice = packageMRP - (packageMRP * (disc / 100));
 
+        // Safe JSON parsing checks for Arrays and Objects
+        const parsedDetailedDesc = typeof detailedDescription === 'string' ? JSON.parse(detailedDescription) : detailedDescription;
+        const parsedFaqs = typeof faqs === 'string' ? JSON.parse(faqs) : faqs;
+        const parsedPreparations = typeof preparations === 'string' ? JSON.parse(preparations) : preparations;
+        const parsedTags = typeof tags === 'string' ? JSON.parse(tags) : tags;
+        const parsedLifestyleTags = typeof lifestyleTags === 'string' ? JSON.parse(lifestyleTags) : lifestyleTags;
+
+        // Custom package image upload handling
+        let uploadedPackageImage = packageImage || masterTemplateData.packageImage || "";
+        if (req.files && req.files.photos && req.files.photos[0]) {
+            uploadedPackageImage = `/uploads/lab_services/${req.files.photos[0].filename}`;
+        }
+
+        // Sync old singular precaution string with new Array
+        const precautionStringFallback = parsedPreparations 
+            ? parsedPreparations.join(", ") 
+            : (precaution || masterTemplateData.preparations?.join(", ") || "");
+
         const payload = {
             labId: req.user.id,
             masterPackageId: !isCustom ? masterPackageId : null,
@@ -236,15 +258,32 @@ const saveLabPackage = async (req, res) => {
             packageName: finalName,
             tests: finalTests,
             totalTestsIncluded: finalTests.length,
-            sampleType: finalSampleTypes,
             mrp: packageMRP,
             discountPercent: disc,
             offerPrice: calculatedOfferPrice,
-            reportTime, 
-            description, 
-            precaution,
-            gender, 
-            ageGroup
+            
+            // --- BACKWARD COMPATIBLE ARRAYS (Synced with Master Schema Values) ---
+            sampleType: finalSampleTypes, // Synced singular [cite: labPackageSchema]
+            precaution: precautionStringFallback, // Synced string [cite: labPackageSchema]
+            description: description || shortDescription || masterTemplateData.shortDescription || "",
+
+            // --- FULLY SYNCHRONIZED MASTER KEYS [cite: masterPackageSchema] ---
+            shortDescription: shortDescription || masterTemplateData.shortDescription || "",
+            longDescription: longDescription || masterTemplateData.longDescription || "",
+            mainCategory: mainCategory || masterTemplateData.mainCategory || "Pathology",
+            category: category || masterTemplateData.category || "",
+            sampleTypes: finalSampleTypes, // Synced plural
+            reportTime: reportTime || masterTemplateData.reportTime || "24 Hours",
+            isFastingRequired: isFastingRequired !== undefined ? (isFastingRequired === 'true' || isFastingRequired === true) : (masterTemplateData.isFastingRequired || false),
+            fastingDuration: fastingDuration || masterTemplateData.fastingDuration || "",
+            preparations: parsedPreparations || masterTemplateData.preparations || [],
+            detailedDescription: parsedDetailedDesc || masterTemplateData.detailedDescription || [],
+            faqs: parsedFaqs || masterTemplateData.faqs || [],
+            gender: gender || masterTemplateData.gender || "Both",
+            ageGroup: ageGroup || masterTemplateData.ageGroup || "All",
+            tags: parsedTags || masterTemplateData.tags || [],
+            lifestyleTags: parsedLifestyleTags || masterTemplateData.lifestyleTags || [],
+            packageImage: uploadedPackageImage
         };
 
         const result = id
@@ -253,6 +292,7 @@ const saveLabPackage = async (req, res) => {
 
         res.json({ success: true, message: "Package saved successfully", data: result });
     } catch (error) { 
+        console.error("saveLabPackage Error:", error);
         res.status(500).json({ message: error.message }); 
     }
 };
@@ -365,27 +405,57 @@ const updateLabPackage = async (req, res) => {
     try {
         const {
             id, packageName, tests, mrp, discountPercent,
-            reportTime, description, precaution, gender, ageGroup
+            reportTime, description, precaution, gender, ageGroup,
+            shortDescription, longDescription, mainCategory, category,
+            isFastingRequired, fastingDuration, preparations, detailedDescription, faqs,
+            tags, lifestyleTags, packageImage
         } = req.body;
  
         if (!id) return res.status(400).json({ message: "Package ID is required" });
  
         let updateData = {
             packageName, reportTime, description,
-            precaution, gender, ageGroup
+            precaution, gender, ageGroup,
+            shortDescription, longDescription, mainCategory, category, fastingDuration
         };
+
+        if (isFastingRequired !== undefined) {
+            updateData.isFastingRequired = isFastingRequired === 'true' || isFastingRequired === true;
+        }
  
-        // 1. Agar Tests update ho rahe hain toh Sample Types fetch karo
+        // Parsing array fields
+        if (detailedDescription) updateData.detailedDescription = typeof detailedDescription === 'string' ? JSON.parse(detailedDescription) : detailedDescription;
+        if (faqs) updateData.faqs = typeof faqs === 'string' ? JSON.parse(faqs) : faqs;
+        
+        if (preparations) {
+            const parsedPreps = typeof preparations === 'string' ? JSON.parse(preparations) : preparations;
+            updateData.preparations = parsedPreps;
+            updateData.precaution = parsedPreps.join(", "); // Keep old precaution synced [cite: labPackageSchema]
+        }
+        
+        if (tags) updateData.tags = typeof tags === 'string' ? JSON.parse(tags) : tags;
+        if (lifestyleTags) updateData.lifestyleTags = typeof lifestyleTags === 'string' ? JSON.parse(lifestyleTags) : lifestyleTags;
+
+        // Custom image upload
+        if (req.files && req.files.photos && req.files.photos[0]) {
+            updateData.packageImage = `/uploads/lab_services/${req.files.photos[0].filename}`;
+        } else if (packageImage) {
+            updateData.packageImage = packageImage;
+        }
+ 
+        // Tests array updating
         if (tests) {
             const finalTests = typeof tests === 'string' ? JSON.parse(tests) : tests;
             const testsData = await MasterLabTest.find({ _id: { $in: finalTests } });
+            const resolvedSampleTypes = [...new Set(testsData.map(t => t.sampleType))].filter(Boolean);
             
             updateData.tests = finalTests;
             updateData.totalTestsIncluded = finalTests.length;
-            updateData.sampleType = [...new Set(testsData.map(t => t.sampleType))].filter(Boolean);
+            updateData.sampleType = resolvedSampleTypes; // Synced singular [cite: labPackageSchema]
+            updateData.sampleTypes = resolvedSampleTypes; // Synced plural [cite: masterPackageSchema]
         }
  
-        // 2. Price Calculation
+        // Price Calculation
         if (mrp) {
             const packageMRP = parseFloat(mrp);
             const disc = parseFloat(discountPercent) || 0;
@@ -394,7 +464,6 @@ const updateLabPackage = async (req, res) => {
             updateData.offerPrice = packageMRP - (packageMRP * (disc / 100));
         }
  
-        // 3. Update execution
         const updatedPackage = await LabPackage.findByIdAndUpdate(
             id,
             { $set: updateData },
@@ -405,6 +474,7 @@ const updateLabPackage = async (req, res) => {
  
         res.json({ success: true, message: "Package updated successfully", data: updatedPackage });
     } catch (error) {
+        console.error("updateLabPackage Error:", error);
         res.status(500).json({ message: error.message });
     }
 };
