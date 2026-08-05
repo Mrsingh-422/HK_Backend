@@ -9,7 +9,8 @@ getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 createPrescriptionRequest,payAndConfirmOrder,verifyPrescriptionRequestPayment,
  getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices,
 
-getActiveStoreComboOffers,getGlobalActiveComboOffers,getComboOfferDetails,ratePharmacyOrder
+getActiveStoreComboOffers,getGlobalActiveComboOffers,getComboOfferDetails,ratePharmacyOrder,
+getSimilarInStockMedicines
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
@@ -119,6 +120,11 @@ router.get(
 router.get(
     '/global-combo-offers', 
     getGlobalActiveComboOffers
+);
+
+router.get(
+    '/medicine-details/:medicineId/substitutes', 
+    getSimilarInStockMedicines
 );
 
 module.exports = router;

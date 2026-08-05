@@ -3123,11 +3123,129 @@ const getComboOfferDetails = async (req, res) => {
     }
 };
 
+const getSimilarInStockMedicines = async (req, res) => {
+    try {
+        const { medicineId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(medicineId)) {
+            return res.status(400).json({ success: false, message: "Invalid medicine ID format." });
+        }
+
+        // 1. Fetch currently opened master medicine details
+        const currentMed = await Medicine.findById(medicineId).lean();
+        if (!currentMed) {
+            return res.status(404).json({ success: false, message: "Medicine not found." });
+        }
+
+        const salt = currentMed.salt_composition;
+        // If medicine has no salt composition, return empty array immediately
+        if (!salt || salt.trim() === "" || salt.toUpperCase() === "N/A") {
+            return res.json({ success: true, count: 0, data: [] });
+        }
+
+        // 🚀 SMART SALT EXTRACTION: "Paracetamol (650mg)" -> "Paracetamol"
+        // Taaki different dosage wale same salt aapas me match ho sakein
+        const primarySalt = salt.split('(')[0].split(' ')[0].trim(); 
+        const saltRegex = new RegExp(primarySalt, 'i');
+
+        // 2. High-performance aggregate query over MedicineInventory
+        const similarMeds = await MedicineInventory.aggregate([
+            {
+                // strictly filter only live in-stock items, excluding the currently opened medicine
+                $match: {
+                    is_available: true,
+                    stock_quantity: { $gt: 0 },
+                    medicineId: { $ne: currentMed._id } 
+                }
+            },
+            {
+                // Lookup master Medicine details
+                $lookup: {
+                    from: "medicines",
+                    localField: "medicineId",
+                    foreignField: "_id",
+                    as: "medDetails"
+                }
+            },
+            { $unwind: "$medDetails" },
+            {
+                // Match items carrying the same chemical active salt composition (using regex)
+                $match: {
+                    "medDetails.salt_composition": saltRegex
+                }
+            },
+            {
+                // Group by medicineId to deduplicate and pick only the cheapest available batch
+                $group: {
+                    _id: "$medicineId",
+                    cheapestInventoryId: { $first: "$_id" },
+                    lowestVendorPrice: { $min: "$vendor_price" }, 
+                    batchMrp: { $first: "$mrp" }, 
+                    batchPackaging: { $first: "$packaging" },
+                    medicineDetails: { $first: "$medDetails" }
+                }
+            },
+            {
+                // Format output exactly matching frontend specs
+                $project: {
+                    _id: 0,
+                    medicineId: "$_id",
+                    inventoryId: "$cheapestInventoryId",
+                    name: "$medicineDetails.name",
+                    salt: "$medicineDetails.salt_composition",
+                    image: { $arrayElemAt: ["$medicineDetails.image_url", 0] },
+                    mrp: { $toString: "$batchMrp" }, 
+                    bestPrice: "$lowestVendorPrice", 
+                    discount: {
+                        $cond: {
+                            if: { 
+                                $and: [
+                                    { $ne: ["$batchMrp", null] },
+                                    { $gt: [{ $toDouble: { $ifNull: ["$batchMrp", "0"] } }, 0] }
+                                ]
+                            },
+                            then: {
+                                $round: [
+                                    {
+                                        $multiply: [
+                                            { $divide: [ { $subtract: ["$batchMrp", "$lowestVendorPrice"] }, "$batchMrp" ] },
+                                            100
+                                        ]
+                                    },
+                                    0
+                                ]
+                            },
+                            else: 0
+                        }
+                    },
+                    packaging: { $ifNull: ["$batchPackaging", "$medicineDetails.packaging"] },
+                    prescriptionRequired: "$medicineDetails.prescription_required",
+                    isAvailable: { $literal: true }
+                }
+            },
+            { $sort: { bestPrice: 1 } }, // Cheapest substitutes sorted first
+            { $limit: 10 } // Return up to 10 matching substitutes
+        ]);
+
+        res.json({
+            success: true,
+            count: similarMeds.length,
+            data: similarMeds
+        });
+
+    } catch (error) {
+        console.error("getSimilarInStockMedicines Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,searchAlternateBrand,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
    getPharmacySlots,getPharmacyDeliveryCharges, checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory, trackOrder,
 getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines, getActiveStoreComboOffers,
 
 createPrescriptionRequest, payAndConfirmOrder,verifyPrescriptionRequestPayment,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices,
-ratePharmacyOrder,getGlobalActiveComboOffers,getComboOfferDetails
+ratePharmacyOrder,getGlobalActiveComboOffers,getComboOfferDetails,
+getSimilarInStockMedicines
 };

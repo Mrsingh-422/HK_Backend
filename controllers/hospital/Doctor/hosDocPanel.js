@@ -205,32 +205,43 @@ const getDocDashboard = async (req, res) => {
     try {
         const doctorId = req.user.id;
         
-        const stats = {
-            totalCases: await Appointment.countDocuments({ doctorId }),
-            requests: await Appointment.countDocuments({ doctorId, status: 'Hospital-Pending' }),
-            active: await Appointment.countDocuments({ doctorId, status: 'In-Progress' })
-        };
-
-        // FIX: Emergency counts strictly tracks patients brought in by ambulances (ambulanceId is NOT null)
-        const emergencyCount = await Appointment.countDocuments({ 
-            doctorId, 
-            ambulanceId: { $ne: null, $exists: true }, // Brought strictly by Ambulance
-            status: 'In-Progress' 
+        // 🚀 SYNCHRONIZED: Pending transfer requests headed to me
+        const transferCount = await Appointment.countDocuments({ 
+            pendingDoctorId: doctorId 
         });
 
-        // FIX: Admission counts strictly tracks direct bed-bookings by user (ambulanceId is null/missing)
+        // 🚀 SYNCHRONIZED: Total active patients currently assigned to me (excluding in-transit)
+        const activeCount = await Appointment.countDocuments({ 
+            doctorId, 
+            pendingDoctorId: null,
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
+        });
+
+        const stats = {
+            totalCases: await Appointment.countDocuments({ doctorId }),
+            requests: transferCount, // Align requests directly to incoming transfers
+            active: activeCount
+        };
+
+        // 🚀 SYNCHRONIZED: Emergency workload currently assigned to me
+        const emergencyCount = await Appointment.countDocuments({ 
+            doctorId, 
+            pendingDoctorId: null,
+            ambulanceId: { $ne: null, $exists: true }, // Brought strictly by Ambulance
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
+        });
+
+        // 🚀 SYNCHRONIZED: Direct admissions workload currently assigned to me
         const admissionCount = await Appointment.countDocuments({ 
             doctorId, 
+            pendingDoctorId: null,
             bookingType: 'Admission', 
             $or: [
                 { ambulanceId: null },
                 { ambulanceId: { $exists: false } }
             ],
-            status: 'In-Progress' 
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
         });
-
-        // Incoming transfer requests headed to this doctor
-        const transferCount = await Appointment.countDocuments({ doctorId, status: 'Hospital-Pending' }); 
 
         res.json({
             success: true,
@@ -239,8 +250,11 @@ const getDocDashboard = async (req, res) => {
             stats,
             grid: { emergencyCount, admissionCount, transferCount }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 
 
@@ -932,13 +946,13 @@ const completeSpecialistCare = async (req, res) => {
     }
 };
 
-// --- GET DYNAMIC CASE LISTINGS (Updated with Bedside & Pending Bedside tab filters) ---
+// --- UPDATE FOR getAssignedCases: Native support for Bedside and Pending-Admissions tabs ---
 const getAssignedCases = async (req, res) => {
     try {
-        const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'discharge', 'history'
+        const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'discharge', 'history', 'bedside', 'pending-bedside', 'pending-admissions'
         let query = {};
 
-        // Case A: Active patients currently assigned to me (EXCLUDED Discharge-Pending!)
+        // Case A: Active patients currently assigned to me
         if (tab === 'active') {
             query = { 
                 doctorId: req.user.id, 
@@ -946,7 +960,7 @@ const getAssignedCases = async (req, res) => {
                 status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
             };
         } 
-        // Case B: Ready for Discharge patients (Waiting for Admin Billing)
+        // Case B: Ready for Discharge patients
         else if (tab === 'discharge') {
             query = {
                 doctorId: req.user.id,
@@ -958,7 +972,7 @@ const getAssignedCases = async (req, res) => {
         else if (tab === 'pending') {
             query = { pendingDoctorId: req.user.id };
         } 
-        // Case D: History Patients (Treated in past)
+        // Case D: History Patients
         else if (tab === 'history') {
             query = {
                 $and: [
@@ -970,21 +984,50 @@ const getAssignedCases = async (req, res) => {
                     },
                     {
                         $or: [
-                            { doctorId: { $ne: req.user.id } }, // currently with another doctor
-                            { status: 'Completed' }             // fully discharged
+                            { doctorId: { $ne: req.user.id } },
+                            { status: 'Completed' }
                         ]
                     }
                 ]
             };
         }
+        // 🚀 NEW CASE E: Bedside Care (Active/Accepted Specialist Jobs)
+        else if (tab === 'bedside') {
+            query = {
+                "bedsideCareTeam": {
+                    $elemMatch: {
+                        doctorId: req.user.id,
+                        status: { $in: ['Accepted', 'In-Progress'] }
+                    }
+                }
+            };
+        }
+        // 🚀 NEW CASE F: Pending Bedside (Invites awaiting acceptance)
+        else if (tab === 'pending-bedside') {
+            query = {
+                "bedsideCareTeam": {
+                    $elemMatch: {
+                        doctorId: req.user.id,
+                        status: 'Pending'
+                    }
+                }
+            };
+        }
+        // 🚀 NEW CASE G: Pending Admissions (Alias link for cases with no assigned doctor)
+        else if (tab === 'pending-admissions') {
+            query = {
+                hospitalId: req.user.hospitalId,
+                bookingType: 'Admission',
+                doctorId: null,
+                status: 'In-Progress'
+            };
+        }
 
-        // --- FIGMA SINKING FILTERS (Strict ambulanceId presence check) ---
+        // --- SINKING FILTERS (Ambulance vs Direct Admissions) ---
         if (type === 'Emergency') {
-            // Strictly brought by Ambulance
             query.ambulanceId = { $ne: null, $exists: true };
         }
         if (type === 'Admission') {
-            // Strictly direct bed-bookings (No ambulance linked)
             query.bookingType = 'Admission';
             query.$or = [
                 { ambulanceId: null },
@@ -1000,6 +1043,52 @@ const getAssignedCases = async (req, res) => {
 
         res.json({ success: true, count: cases.length, data: cases });
     } catch (error) { res.status(500).json({ message: error.message }); }
+};
+
+// 🚀 NEW CONTROLLER: Fetch existing prescriptions for a patient/appointment
+const getPrescriptionsByAppointment = async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        const prescriptions = await Prescription.find({ appointmentId })
+            .populate('doctorId', 'name speciality qualification')
+            .sort({ createdAt: -1 });
+        res.json({ success: true, data: prescriptions });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 🚀 NEW CONTROLLER: Delete wrongly submitted prescriptions
+const deletePrescriptionById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const prescription = await Prescription.findOneAndDelete({ _id: id, doctorId: req.user.id });
+        
+        if (!prescription) {
+            return res.status(404).json({ success: false, message: "Prescription not found or unauthorized." });
+        }
+        res.json({ success: true, message: "Prescription successfully deleted." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 🚀 NEW CONTROLLER: Get Raw Discharge Summary data for Pre-Print View
+const getRawDischargeSummary = async (req, res) => {
+    try {
+        const { id } = req.params; // Appointment/Admission ID
+        const appointment = await Appointment.findById(id)
+            .select('clinicalSummary status bookingId')
+            .lean();
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission Record Not Found." });
+        }
+
+        res.json({ success: true, data: appointment });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // --- GET PATIENT DETAILS (Updated with populated Bedside team profiles) ---
@@ -1377,7 +1466,11 @@ module.exports = {
     rejectTransfer,
 
     getSpecializations,
-    getDocDashboard, getAssignedCases, getPatientDetails, 
+    getDocDashboard, getAssignedCases,
+    getPrescriptionsByAppointment,
+    deletePrescriptionById,
+    getRawDischargeSummary,
+    getPatientDetails, 
     processPrescription, transferPatient, acceptTransfer,
      getHospitalColleagues,
     submitDischargeSummary,verifyDischargeSheet,uploadPatientReports, updateDutyStatus, getMedicineList, updateClinicalSummary,

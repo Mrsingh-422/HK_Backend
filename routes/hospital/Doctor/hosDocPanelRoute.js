@@ -9,7 +9,9 @@ const {
     takeChargeOfAdmission ,rejectTransfer,
 
     getDocDashboard, 
-    getAssignedCases, 
+    getAssignedCases, getPrescriptionsByAppointment,
+    deletePrescriptionById,
+    getRawDischargeSummary,
     getPatientDetails, getSpecializations,
     processPrescription, 
     getHospitalColleagues, 
@@ -56,7 +58,16 @@ router.post('/case/reject-transfer', protect('hospital-doctor'), rejectTransfer)
 // ==========================================
 // 4. PRESCRIPTIONS & DISCHARGE SUMMARIES
 // ==========================================
+// ==========================================
+// 4. PRESCRIPTIONS & DISCHARGE SUMMARIES
+// ==========================================
 router.post('/prescription/add', protect('hospital-doctor'), hospitalPrescriptionUploads, processPrescription);
+
+// 🚀 NEW: Get existing prescriptions for an appointment
+router.get('/prescriptions/:appointmentId', protect('hospital-doctor'), getPrescriptionsByAppointment);
+
+// 🚀 NEW: Delete wrongly added prescription
+router.delete('/prescription/:id', protect('hospital-doctor'), deletePrescriptionById);
 router.post(
     '/case/discharge-summary', 
     protect('hospital-doctor'), 
@@ -64,6 +75,7 @@ router.post(
     submitDischargeSummary
 );
 
+router.get('/case/discharge-summary/:id', protect('hospital-doctor'), getRawDischargeSummary);
 router.get('/case/discharge-summary/print/:id', protect('hospital-doctor'), getPrintableDischargeSummary); 
 router.get('/verify-discharge/:id', verifyDischargeSheet);
 
