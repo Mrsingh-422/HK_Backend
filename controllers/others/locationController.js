@@ -1,3 +1,4 @@
+// controllers/others/locationController.js
 // Data files import (Path adjust kiya hai aapke structure ke hisab se)
 // Root folder me 'data' folder hona chahiye
 const countries = require('../../data/countries.json');

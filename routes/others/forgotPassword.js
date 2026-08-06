@@ -1,13 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const { forgotPassword, verifyOtp, resetPassword } = require('../../controllers/others/forgotPassword.js');
+const { 
+    forgotPassword, verifyOtp, resetPassword,
+    forgotPasswordPhone, verifyFirebaseOtp, resetPasswordPhone 
+} = require('../../controllers/others/forgotPassword.js');
 
-//end point base: /api/password
+// Endpoint Base: /api/password
 
-// --- 1. Forgot Password Flow ---
-router.post('/forgot-password', forgotPassword); // Sends OTP to email
-router.post('/verify-otp', verifyOtp);           // Verifies OTP
-router.post('/reset-password', resetPassword);   // Sets new password
+// ==========================================
+// ✉️ 1. Email OTP Flow (Brevos Email)
+// ==========================================
+router.post('/forgot-password', forgotPassword); 
+router.post('/verify-otp', verifyOtp);           
+router.post('/reset-password', resetPassword);   
 
+// ==========================================
+// 📱 2. Firebase Mobile SMS OTP Flow (Universal Vendors & Users)
+// ==========================================
+router.post('/forgot-password-phone', forgotPasswordPhone); 
+router.post('/verify-firebase-otp', verifyFirebaseOtp);     
+router.post('/reset-password-phone', resetPasswordPhone);   
 
 module.exports = router;

@@ -1,4 +1,4 @@
-// models/Nurse.js (Nurse Model)
+// models/Nurse.js (Nurse provider Model)
 const mongoose = require('mongoose');
 
 const nurseSchema = new mongoose.Schema({

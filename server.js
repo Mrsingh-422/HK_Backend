@@ -230,7 +230,9 @@ app.use('/admin/dashboard', require('./routes/admin/Dashboard/DashboardRoute'));
 app.use('/api/admin/wallet', require('./routes/admin/AdminWalletRoute')); // Wallet Management Route
 
 
-
+app.get('/forgotpassword.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'htmlFiles', 'forgotpassword.html'));
+});
 
 
 
