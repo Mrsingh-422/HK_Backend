@@ -64,7 +64,8 @@ const fireCaseSchema = new mongoose.Schema({
     // 6. Status Tracking (Matches your Controller Logic)
     status: { 
         type: String, 
-        enum: ['Fresh', 'Pending', 'Under Control', 'Critical', 'Closed', 'Archived'], // Added Under Control & Critical
+        enum: ['Fresh', 'Pending', 'Under Control', 'Critical', 'Closed', 'Archived','On the way','Arriving Soon'
+ ], // Added Under Control & Critical
         default: 'Fresh' 
     },
 

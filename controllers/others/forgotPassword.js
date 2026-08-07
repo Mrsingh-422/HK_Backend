@@ -1,5 +1,3 @@
-// File Path: controllers/others/forgotPassword.js
-
 const Admin = require("../../models/Admin");
 const Doctor = require("../../models/Doctor");
 const Hospital = require("../../models/Hospital");
@@ -16,7 +14,7 @@ const FireStaff = require("../../models/FireStaff");
 
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
-const firebaseAdmin = require("firebase-admin"); // 🚨 Renamed to prevent collision with 'Admin' model
+const firebaseAdmin = require("firebase-admin"); 
 const { getAuth } = require('firebase-admin/auth'); 
 const { sendEmailOTP } = require("../../utils/emailService");
 
@@ -49,20 +47,29 @@ const findAccountByEmail = async (email) => {
     return null;
 };
 
-// Helper: Find account by Phone across any schema
-const findAccountByPhone = async (phone) => {
+// Helper: Find ALL matching accounts by Phone
+const findAllAccountsByPhone = async (phone) => {
     const cleanPhone = phone.trim();
+    const matchedProfiles = [];
+
     for (let item of modelsList) {
         const query = {};
         query[item.phoneKey] = cleanPhone;
         const account = await item.model.findOne(query);
-        if (account) return { account, Model: item.model, meta: item };
+        if (account) {
+            matchedProfiles.push({
+                id: account._id,
+                name: account.name || account.fullName || account.stationName || account.hqName || "Verified Partner",
+                role: item.name,
+                email: account.email || account.officialEmail || "N/A"
+            });
+        }
     }
-    return null;
+    return matchedProfiles;
 };
 
 // =========================================================================
-// ✉️ EMAIL FLOW (Brevo OTP - Existing logic completely preserved)
+// ✉️ EMAIL FLOW (Brevo OTP - Preserved)
 // =========================================================================
 
 const forgotPassword = async (req, res) => {
@@ -178,45 +185,38 @@ const resetPassword = async (req, res) => {
 // 📱 MOBILE SMS FLOW (Firebase Phone OTP)
 // =========================================================================
 
-// A. Check if phone number exists in any model
+// A. Check phone and return list of ALL associated accounts
 const forgotPasswordPhone = async (req, res) => {
     try {
         const { phone } = req.body;
         if (!phone) return res.status(400).json({ success: false, message: "Phone number is required." });
 
-        const result = await findAccountByPhone(phone);
-        if (!result) {
+        const accounts = await findAllAccountsByPhone(phone);
+        if (accounts.length === 0) {
             return res.status(404).json({ success: false, message: "No account registered with this phone number." });
         }
 
         res.json({ 
             success: true, 
-            message: "Phone verified. Please trigger Firebase SMS OTP on the mobile app." 
+            message: `${accounts.length} account(s) found. Select profile to reset.`, 
+            accounts 
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// B. Verify Firebase idToken sent from mobile app and generate secure Reset Token
+// B. Verify idToken and save secure reset token specifically for selectedRole account
 const verifyFirebaseOtp = async (req, res) => {
     try {
-        const { phone, idToken } = req.body;
+        const { phone, idToken, selectedRole } = req.body;
 
-        if (!phone || !idToken) {
-            return res.status(400).json({ success: false, message: "Phone number and Firebase idToken are required." });
+        if (!phone || !idToken || !selectedRole) {
+            return res.status(400).json({ success: false, message: "Phone, idToken and selectedRole are required." });
         }
 
-        // 🚨 FIREBASE v14 RESOLVER: Retrieve the default active auth instance safely (100% crash proof)
-        let authInstance;
-        try {
-            authInstance = getAuth(); 
-        } catch (initError) {
-            console.error("❌ Firebase Auth Initialization Failed:", initError.message);
-            return res.status(500).json({ success: false, message: "Internal Server Error: Firebase Auth not initialized." });
-        }
+        const authInstance = getAuth();
 
-        // Firebase Admin verification step using the modern resolved 'authInstance'
         let decodedToken;
         try {
             decodedToken = await authInstance.verifyIdToken(idToken);
@@ -225,43 +225,49 @@ const verifyFirebaseOtp = async (req, res) => {
             return res.status(401).json({ success: false, message: "Invalid or expired Firebase ID token." });
         }
 
-        const firebasePhone = decodedToken.phone_number; // e.g. "+919876543210"
-        
-        // Match numbers safely
+        const firebasePhone = decodedToken.phone_number; 
         const cleanReqPhone = phone.replace(/\D/g, "");
         const cleanFirebasePhone = firebasePhone.replace(/\D/g, "");
 
         if (!cleanFirebasePhone.includes(cleanReqPhone)) {
-            return res.status(400).json({ success: false, message: "Security Block: Phone number mismatch with Firebase token." });
+            return res.status(400).json({ success: false, message: "Security Block: Phone number mismatch." });
         }
 
-        const result = await findAccountByPhone(phone);
-        if (!result) {
-            return res.status(404).json({ success: false, message: "User profile not found." });
+        const targetMeta = modelsList.find(m => m.name === selectedRole);
+        if (!targetMeta) {
+            return res.status(400).json({ success: false, message: "Invalid model role selected." });
         }
 
-        // Generate secure reset token
+        const query = {};
+        query[targetMeta.phoneKey] = phone.trim();
+        
+        const account = await targetMeta.model.findOne(query);
+        if (!account) {
+            return res.status(404).json({ success: false, message: `Account not found under role: ${selectedRole}` });
+        }
+
         const secureResetToken = crypto.randomBytes(20).toString('hex');
         
-        // TIMEZONE LOCK BYPASS: Set expiry to 2 hours (120 mins) to securely cover the 1-hour timezone offset shifts
         const updateData = {
             resetPasswordOtp: secureResetToken,
-            resetPasswordExpires: Date.now() + 2 * 60 * 60 * 1000 // Expiry shifted to 2 hours
+            resetPasswordExpires: new Date(Date.now() + 2 * 60 * 60 * 1000) // 2-Hours Expiry to prevent timezone offsets
         };
 
-        await result.Model.findByIdAndUpdate(result.account._id, { $set: updateData });
-
-        const accountInfo = {
-            name: result.account.name || result.account.fullName || result.account.stationName || result.account.hqName || "Verified Partner",
-            role: result.meta.name, 
-            email: result.account.email || result.account.officialEmail || "N/A"
-        };
+        // 🚨 CRITICAL BYPASS: Use MongoDB native direct write (updateOne) to bypass Mongoose Schema restrictions!
+        await targetMeta.model.collection.updateOne(
+            { _id: account._id },
+            { $set: updateData }
+        );
 
         res.json({
             success: true,
             message: "OTP Verified by Firebase successfully!",
             resetToken: secureResetToken,
-            accountInfo 
+            accountInfo: {
+                name: account.name || account.fullName || account.stationName || account.hqName || "Verified Partner",
+                role: selectedRole,
+                email: account.email || account.officialEmail || "N/A"
+            }
         });
 
     } catch (error) {
@@ -269,54 +275,44 @@ const verifyFirebaseOtp = async (req, res) => {
     }
 };
 
-
-// C. Reset Password using the generated Reset Token
+// C. Reset Password strictly for the selectedRole account using Reset Token
 const resetPasswordPhone = async (req, res) => {
     try {
-        const { phone, resetToken, newPassword, confirmPassword } = req.body;
+        const { phone, resetToken, selectedRole, newPassword, confirmPassword } = req.body;
 
-        if (!phone || !resetToken || !newPassword) {
-            return res.status(400).json({ success: false, message: "Validation Block: Phone, resetToken and newPassword are required." });
+        if (!phone || !resetToken || !newPassword || !selectedRole) {
+            return res.status(400).json({ success: false, message: "Validation Block: Phone, resetToken, selectedRole and newPassword are required." });
         }
 
         if (newPassword !== confirmPassword) {
             return res.status(400).json({ success: false, message: "Validation Block: Passwords do not match." });
         }
 
-        const cleanPhone = phone.trim();
-        let result = null;
-
-        // Loop through models and strictly select (+resetPasswordOtp) to bypass 'select: false' schema restrictions
-        for (let item of modelsList) {
-            const query = {};
-            query[item.phoneKey] = cleanPhone;
-            
-            const account = await item.model.findOne(query).select('+resetPasswordOtp +resetPasswordExpires');
-            if (account) {
-                result = { account, Model: item.model, meta: item };
-                break;
-            }
+        const targetMeta = modelsList.find(m => m.name === selectedRole);
+        if (!targetMeta) {
+            return res.status(400).json({ success: false, message: "Invalid model role selected." });
         }
 
-        if (!result) {
-            return res.status(404).json({ success: false, message: "Account not found for this phone number." });
+        const query = {};
+        query[targetMeta.phoneKey] = phone.trim();
+
+        // 🚨 CRITICAL BYPASS: Use MongoDB native direct read (findOne) to bypass Mongoose schema select exclusions!
+        const rawAccount = await targetMeta.model.collection.findOne(query);
+        if (!rawAccount) {
+            return res.status(404).json({ success: false, message: `Account not found under role: ${selectedRole}` });
         }
 
-        const account = result.account;
-
-        // 🚨 STRICT EXPLICIT CASTS: Convert to raw trimmed strings to prevent type mismatches
-        const savedToken = String(account.resetPasswordOtp || "").trim();
+        const savedToken = String(rawAccount.resetPasswordOtp || "").trim();
         const receivedToken = String(resetToken || "").trim();
 
-        console.log(`[Reset Audit] Casted Saved Token: ${savedToken} | Casted Received Token: ${receivedToken}`);
+        console.log(`[Reset Audit] DB Saved Token: ${savedToken} | Received Token: ${receivedToken}`);
 
         // Verify token matches
         if (savedToken !== receivedToken) {
             return res.status(400).json({ success: false, message: "Access Denied: Invalid Reset Token." });
         }
 
-        // 🚨 CRITICAL DATE CHECK: Safe cast to getTime() millisecond timestamps
-        const dbExpiryTime = account.resetPasswordExpires ? new Date(account.resetPasswordExpires).getTime() : 0;
+        const dbExpiryTime = rawAccount.resetPasswordExpires ? new Date(rawAccount.resetPasswordExpires).getTime() : 0;
         const currentTime = Date.now();
 
         console.log(`[Reset Audit] DB Expiry: ${dbExpiryTime} | Current Time: ${currentTime}`);
@@ -327,14 +323,14 @@ const resetPasswordPhone = async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-        // Update password and flush dynamic temp OTP fields securely
-        await result.Model.findByIdAndUpdate(account._id, {
-            $set: {
-                password: hashedPassword,
-                resetPasswordOtp: null,
-                resetPasswordExpires: null
+        // 🚨 CRITICAL BYPASS: Save password and completely clean up temporary fields using $unset!
+        await targetMeta.model.collection.updateOne(
+            { _id: rawAccount._id },
+            {
+                $set: { password: hashedPassword },
+                $unset: { resetPasswordOtp: "", resetPasswordExpires: "" } // Removes temp keys from DB document
             }
-        });
+        );
 
         res.json({
             success: true,
@@ -342,7 +338,6 @@ const resetPasswordPhone = async (req, res) => {
         });
 
     } catch (error) {
-        // Returns the exact system error stack to prevent silent crashes
         console.error("Critical Reset Password Error:", error);
         res.status(500).json({ success: false, message: "Server Error: " + error.message });
     }

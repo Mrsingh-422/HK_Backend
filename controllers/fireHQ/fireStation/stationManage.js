@@ -112,34 +112,44 @@ const acceptCase = async (req, res) => {
 // Get Accepted/Ongoing Cases (Figma Screen 100 - Tabs: All, Under Control, Critical)
 const getAcceptedCases = async (req, res) => {
     try {
-        const { type, search } = req.query; 
-        let query = { 
-            stationId: req.user.id, 
-            status: { $in: ['Pending', 'Under Control', 'Critical'] } 
+        const { type, search } = req.query;
+       
+        // 🌟 FIXED: Ab query mein 'On the way' aur 'Arriving Soon' dono status fetch honge 🌟
+        let query = {
+            stationId: req.user.id,
+            status: {
+                $in: ['Pending', 'Under Control', 'Critical', 'On the way', 'Arriving Soon']
+            }
         };
-
+ 
         if (type && type !== 'All') query.status = type;
+       
         if (search) {
             query.$or = [
                 { caseNo: { $regex: search, $options: 'i' } },
                 { address: { $regex: search, $options: 'i' } }
             ];
         }
-
+ 
         const cases = await FireCase.find(query)
-            .populate('assignedStaff', 'fullName rank') 
-            .populate('assignedVehicles', 'vehicleName assetId');
-
+            .sort({ reportedAt: -1 })
+            .populate('assignedStaff', 'fullName rank')
+            .populate('assignedVehicles', 'vehicleName assetId')
+ 
         const formattedCases = cases.map(c => ({
             ...c._doc,
             teamLead: c.assignedStaff.length > 0 ? c.assignedStaff[0].fullName : "Not Assigned",
             trucksCount: c.assignedVehicles.length,
+            // Status based severity label formatting
             severityLabel: c.status === 'Critical' ? 'Fire Spreading' : 'Fire Contained'
         }));
-
+ 
         res.json({ success: true, count: formattedCases.length, data: formattedCases });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
 };
+ 
 
 // 3. CASE HISTORY & DETAILED REPORT (Figma Screen 66 & 102)
 const getCaseHistory = async (req, res) => {
@@ -242,60 +252,67 @@ const getNearbyStations = async (req, res) => {
 };
 
 // NEW: Incident Status Update (Figma Screenshot logic)
+// Endpoint : /fireStation/management/cases/update-status/:id
+ 
 const updateIncidentStatusDetailed = async (req, res) => {
     try {
         const { id } = req.params;
         const { statusLabel, situationReport, backupRequired } = req.body;
-
-        // 1. Pehle current case details fetch karein purani images ke liye
+ 
         const currentCase = await FireCase.findById(id);
         if (!currentCase) return res.status(404).json({ message: "Case not found" });
-
-        let finalStatus = 'Pending'; 
-        if (statusLabel === 'Resolved') finalStatus = 'Closed';
-        else if (statusLabel === 'Under Control') finalStatus = 'Under Control';
-
-        // 2. IMAGE REPLACEMENT & AUTO-DELETE LOGIC
-        let newEvidencePhotos = currentCase.incidentImages; // Default: purani hi rahegi
-
-        // Check karein ki kya naye photos upload huye hain
+ 
+        // --- 🌟 STATUS MAPPING LOGIC 🌟 ---
+        let finalStatus = currentCase.status; // Default: jo purana hai wahi rahe
+ 
+        if (statusLabel === 'Resolved') {
+            finalStatus = 'Closed';
+        } else if (statusLabel === 'Under Control') {
+            finalStatus = 'Under Control';
+        } else if (statusLabel === 'Critical') {
+            finalStatus = 'Critical';
+        } else if (statusLabel === 'On the way') {
+            finalStatus = 'On the way'; // 🌟 new logic
+        } else if (statusLabel === 'Arriving Soon') {
+            finalStatus = 'Arriving Soon'; // 🌟 new logic
+        }
+ 
+        // Image handling (Existing logic)
+        let newEvidencePhotos = currentCase.incidentImages;
         if (req.files && req.files['incidentImages']) {
-            
-            // Step A: Purani photos ko server se delete karein
             if (currentCase.incidentImages && currentCase.incidentImages.length > 0) {
                 currentCase.incidentImages.forEach(oldImagePath => {
-                    deleteFile(oldImagePath); // Aapka helper function
+                    deleteFile(oldImagePath);
                 });
             }
-
-            // Step B: Naye paths ko array mein store karein
             newEvidencePhotos = req.files['incidentImages'].map(f => f.path);
         }
-
-        // 3. Database update karein
+ 
+        // Database Update
         const updatedCase = await FireCase.findByIdAndUpdate(
             id,
-            { 
+            {
                 status: finalStatus,
-                severityStatus: statusLabel,
+                severityStatus: statusLabel, // Frontend label ke liye
                 remarks: situationReport,
-                backupRequired: backupRequired, 
-                incidentImages: newEvidencePhotos, // Purani replace ho gayi naye se
+                backupRequired: backupRequired,
+                incidentImages: newEvidencePhotos,
                 resolvedAt: statusLabel === 'Resolved' ? Date.now() : currentCase.resolvedAt
             },
             { new: true }
         );
-
-        res.json({ 
-            success: true, 
-            message: statusLabel === 'Resolved' ? "Case Resolved and Cleaned" : "Status Updated (Old images deleted)", 
-            data: updatedCase 
+ 
+        res.json({
+            success: true,
+            message: `Status updated to ${finalStatus}`,
+            data: updatedCase
         });
-
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+ 
+    } catch (error) {
+        res.status(500).json({ message: error.message });
     }
 };
+ 
 
 
 // 3. STAFF MANAGEMENT (Screen 8 & 11)
