@@ -397,26 +397,61 @@ const submitPharmacistReview = async (req, res) => {
         }
 
         let itemTotal = 0;
+        let taxableTotal = 0;
+        let cgstTotal = 0;
+        let sgstTotal = 0;
         const verifiedItems = [];
 
         for (const item of items) {
-            const subtotal = Number(item.pricePerUnit || 0) * Number(item.quantity || 1);
+            const qty = Number(item.quantity || 1);
+            const subtotal = Number(item.pricePerUnit || 0) * qty;
             itemTotal += subtotal;
 
-            // Safe database fallback check for true admin MRP
+            // Fetch dynamic HSN code and printed MRP from this pharmacy's specific inventory batch [1]
             let verifiedMrp = Number(item.mrp || 0);
-            if (!verifiedMrp && mongoose.isValidObjectId(item.medicineId)) {
-                const dbMed = await Medicine.findById(item.medicineId).select('mrp').lean();
-                if (dbMed) verifiedMrp = Number(dbMed.mrp || 0);
+            let verifiedHsn = "30049011"; // Default standard fallback [1]
+
+            if (mongoose.isValidObjectId(item.medicineId)) {
+                const inventory = await MedicineInventory.findOne({
+                    pharmacyId: request.pharmacyId,
+                    medicineId: item.medicineId
+                }).select('mrp hsn_number').lean();
+
+                if (inventory) {
+                    if (!verifiedMrp) verifiedMrp = Number(inventory.mrp || 0);
+                    if (inventory.hsn_number) verifiedHsn = inventory.hsn_number;
+                }
             }
+
+            // Indian GST Dynamic calculations per item [1]
+            const isSupplement = verifiedHsn.startsWith('21');
+            const cgstPercent = isSupplement ? 9 : 6;
+            const sgstPercent = isSupplement ? 9 : 6;
+            const totalGstPercent = cgstPercent + sgstPercent;
+
+            const itemTaxableAmount = subtotal / (1 + (totalGstPercent / 100));
+            const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
+            const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
+
+            taxableTotal += itemTaxableAmount;
+            cgstTotal += itemCgstAmount;
+            sgstTotal += itemSgstAmount;
 
             verifiedItems.push({
                 medicineId: mongoose.isValidObjectId(item.medicineId) ? item.medicineId : null,
                 name: item.name,
                 mrp: verifiedMrp,
                 pricePerUnit: Number(item.pricePerUnit || 0),
-                quantity: Number(item.quantity || 1),
-                totalPrice: subtotal
+                quantity: qty,
+                totalPrice: subtotal,
+                
+                // 🚨 Dynamic GST mapped per review item [1]
+                hsn_number: verifiedHsn,
+                taxableAmount: Number(itemTaxableAmount.toFixed(2)),
+                cgstPercent,
+                sgstPercent,
+                cgstAmount: Number(itemCgstAmount.toFixed(2)),
+                sgstAmount: Number(itemSgstAmount.toFixed(2))
             });
         }
 
@@ -425,6 +460,9 @@ const submitPharmacistReview = async (req, res) => {
         request.verifiedBill = {
             items: verifiedItems,
             itemTotal,
+            taxableTotal: Number(taxableTotal.toFixed(2)), // 👈 Dynamic invoice taxable sum [1]
+            cgstTotal: Number(cgstTotal.toFixed(2)),       // 👈 Dynamic invoice CGST sum [1]
+            sgstTotal: Number(sgstTotal.toFixed(2)),       // 👈 Dynamic invoice SGST sum [1]
             deliveryCharge: Number(deliveryCharge || 0),
             totalAmount: Math.round(totalAmount)
         };

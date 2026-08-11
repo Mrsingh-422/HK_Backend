@@ -57,7 +57,7 @@ router.put('/update-work', protect('user'), updateWorkDetails);
 // Add Address
 router.post('/add-address', protect('user'), addUserAddress);
 router.get('/addresses', protect('user'), getAddressList); // Naya GET endpoint
-router.patch('/set-default-address', protect('user'), setDefaultAddress); // Sets Default Address
+router.patch('/set-default-address/:addressId', protect('user'), setDefaultAddress); // Sets Default Address
 router.delete('/remove-address/:itemId', protect('user'), removeAddress);
 
 // Add Emergency Contact

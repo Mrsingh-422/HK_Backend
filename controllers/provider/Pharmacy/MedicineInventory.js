@@ -62,15 +62,18 @@ const getMasterMedicineById = async (req, res) => {
 
 const addToInventory = async (req, res) => {
     try {
-        const { medicineId, mrp, vendor_price, stock_quantity, expiry_date, batch_number, manufacturing_date, hsn_number } = req.body;
+        const { medicineId, mrp, vendor_price, stock_quantity, expiry_date, batch_number, manufacturing_date, hsn_number, packaging } = req.body;
         const pharmacyId = req.user.id;
 
-        // Validation for batch number
         if (!batch_number || batch_number.trim() === "") {
             return res.status(400).json({ success: false, message: "Batch number is required to register medicine inventory." });
         }
 
-        // Validation for batch-specific MRP
+        // 🚨 STRICT COMPLIANCE CHECK: HSN is now mandatory
+        if (!hsn_number || hsn_number.trim() === "") {
+            return res.status(400).json({ success: false, message: "HSN classification code is strictly compulsory to add inventory." });
+        }
+
         if (!mrp || Number(mrp) <= 0) {
             return res.status(400).json({ success: false, message: "A valid batch-specific MRP is required." });
         }
@@ -90,6 +93,7 @@ const addToInventory = async (req, res) => {
         }
 
         const qty = Number(stock_quantity || 0);
+        const finalPackaging = packaging && packaging.trim() !== "" ? packaging.trim() : (masterMed.packaging || "10 tablets");
 
         // Find and update item uniquely matching pharmacy, medicine and specific batch
         const inventoryItem = await MedicineInventory.findOneAndUpdate(
@@ -99,8 +103,9 @@ const addToInventory = async (req, res) => {
                 vendor_price, 
                 stock_quantity: qty, 
                 expiry_date, 
-                manufacturing_date: manufacturing_date ? new Date(manufacturing_date) : undefined, // 👈 Saved securely
-                hsn_number: hsn_number ? hsn_number.trim() : undefined,                         // 👈 Saved securely
+                packaging: finalPackaging, 
+                manufacturing_date: manufacturing_date ? new Date(manufacturing_date) : undefined, 
+                hsn_number: hsn_number.trim(), // 👈 Saved as compulsory string [1]
                 is_available: qty > 0 
             },
             { upsert: true, new: true }
@@ -289,6 +294,7 @@ const updateInventoryItem = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 const deleteInventoryItem = async (req, res) => {
     try {
         const pharmacyId = req.user.id; // Logged-in pharmacy id

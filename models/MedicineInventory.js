@@ -40,8 +40,8 @@ const medicineInventorySchema = new mongoose.Schema({
     },
     hsn_number: {
         type: String,
-        trim: true,
-        default: null
+        required: true, // 🚨 Made strictly compulsory [1]
+        trim: true
     },
     is_available: {
         type: Boolean,

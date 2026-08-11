@@ -49,24 +49,33 @@ const labPrescriptionRequestSchema = new mongoose.Schema({
 
     // Verified bill compiled by the Lab during manual audit
     verifiedBill: {
-        tests: [{
-            testId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabTest' },
+        items: [{
+            medicineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Medicine', default: null },
             name: { type: String },
             mrp: { type: Number, default: 0 },
-            pricePerUnit: { type: Number, default: 0 },
-            precaution: { type: String, default: "" } // 👈 Added for custom lab-tech precaution edits [cite: custom_context]
-        }],
-        packages: [{
-            packageId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabPackage' },
-            name: { type: String },
-            mrp: { type: Number, default: 0 },
-            pricePerUnit: { type: Number, default: 0 },
-            precaution: { type: String, default: "" } // 👈 Added for custom lab-tech precaution edits [cite: custom_context]
+            pricePerUnit: { type: Number },
+            quantity: { type: Number },
+            totalPrice: { type: Number },
+            
+            // 🚨 ADDED: Item-level GST details for Prescription Inquiries
+            hsn_number: { type: String, default: "30049011" },
+            taxableAmount: { type: Number, default: 0 },
+            cgstPercent: { type: Number, default: 6 },
+            sgstPercent: { type: Number, default: 6 },
+            cgstAmount: { type: Number, default: 0 },
+            sgstAmount: { type: Number, default: 0 }
         }],
         itemTotal: { type: Number, default: 0 },
-        homeVisitCharge: { type: Number, default: 0 },
+        
+        // 🚨 ADDED: Global Invoice GST Summaries
+        taxableTotal: { type: Number, default: 0 },
+        cgstTotal: { type: Number, default: 0 },
+        sgstTotal: { type: Number, default: 0 },
+
+        deliveryCharge: { type: Number, default: 0 },
         totalAmount: { type: Number, default: 0 }
     }
+
 
 }, { timestamps: true });
 

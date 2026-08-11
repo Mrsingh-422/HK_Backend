@@ -28,7 +28,15 @@ const pharmacyBookingSchema = new mongoose.Schema({
          // 🚨 NEW COMBO / BOGO TRACKING FIELDS
         isComboApplied: { type: Boolean, default: false },
         comboOfferId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmacyComboOffer', default: null },
-        freeQuantity: { type: Number, default: 0 } // Saved units (Y)
+        freeQuantity: { type: Number, default: 0 }, // Saved units (Y)
+
+        // 🚨 NEW GST KEYS FOR BILL GENERATION
+        hsn_number: { type: String, required: true },
+        taxableAmount: { type: Number, default: 0 },
+        cgstPercent: { type: Number, default: 6 },
+        sgstPercent: { type: Number, default: 6 },
+        cgstAmount: { type: Number, default: 0 },
+        sgstAmount: { type: Number, default: 0 }
     }],
 
     // --- LOGISTICS & SLOTS ---
@@ -58,16 +66,23 @@ const pharmacyBookingSchema = new mongoose.Schema({
     // --- BILLING SUMMARY ---
     billSummary: {
         itemTotal: { type: Number, required: true },
+        originalItemTotal: { type: Number, default: 0 },
+        comboSavings: { type: Number, default: 0 },
+
+        // 🚨 ADDED: Global Invoice GST Summaries for final orders
+        taxableTotal: { type: Number, default: 0 },
+        cgstTotal: { type: Number, default: 0 },
+        sgstTotal: { type: Number, default: 0 },
+
         deliveryCharge: { type: Number, default: 0 },
         rapidDeliveryCharge: { type: Number, default: 0 },
         slotCharge: { type: Number, default: 0 },
         couponDiscount: { type: Number, default: 0 },
         couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
         totalAmount: { type: Number, required: true },
-
         cancellationFeeApplied: { type: Number, default: 0 },
         noShowFeeApplied: { type: Number, default: 0 }
-    }, 
+    },
 
     // --- PAYMENT & STATUS ---
     paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'COD' },

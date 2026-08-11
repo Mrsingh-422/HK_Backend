@@ -39,6 +39,9 @@ const { isCodEnabled } = require('../../../utils/policyHelper');
 const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime, userId) => {
     let rawItemTotalWithoutPromo = 0; 
     let promoDeductedTotal = 0;       
+    let taxableTotal = 0;
+    let cgstTotal = 0;
+    let sgstTotal = 0;
     const today = new Date();
 
     for (const item of items) {
@@ -46,7 +49,7 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         const orderedQty = Number(item.quantity || 1);
         const medicineId = item.medicineId._id || item.medicineId;
 
-        // 🚨 UPDATED: Fetch the earliest expiring batch MRP to calculate correct raw item totals [cite: 1.1.2]
+        // Retrieve active batch-specific MRP & HSN details [cite: 1.1.2]
         const activeBatch = await MedicineInventory.findOne({
             pharmacyId,
             medicineId,
@@ -55,8 +58,11 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
 
         const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId?.mrp ? Number(item.medicineId.mrp) : 0);
+        const batchHsn = activeBatch ? activeBatch.hsn_number : "30049011"; // Fallback to standard medicine HSN [1]
+
         rawItemTotalWithoutPromo += (batchMrp * orderedQty);
 
+        let finalItemPrice = 0;
         if (item.isComboApplied === true && item.comboOfferId) {
             const activePromo = await PharmacyComboOffer.findOne({
                 _id: item.comboOfferId,
@@ -69,19 +75,35 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
             if (activePromo) {
                 const X = activePromo.buyQty;
                 const Y = activePromo.getFreeQty;
-                
                 const bundleSize = X + Y;
                 const fullBundles = Math.floor(orderedQty / bundleSize);
                 const remainingUnits = orderedQty % bundleSize;
 
                 const chargeableQty = (fullBundles * X) + Math.min(remainingUnits, X);
-                promoDeductedTotal += (pricePerUnit * chargeableQty);
+                finalItemPrice = pricePerUnit * chargeableQty;
             } else {
-                promoDeductedTotal += (pricePerUnit * orderedQty);
+                finalItemPrice = pricePerUnit * orderedQty;
             }
         } else {
-            promoDeductedTotal += (pricePerUnit * orderedQty);
+            finalItemPrice = pricePerUnit * orderedQty;
         }
+
+        promoDeductedTotal += finalItemPrice;
+
+        // 🚨 AUTOMATED GST RESOLVER & INCLUSIVE BILLING MATH [1]
+        // Enforce 12% GST for HSN prefix '30' (Medicines), 18% for prefix '21' (Supplements) [1]
+        const isSupplement = batchHsn.startsWith('21');
+        const cgstPercent = isSupplement ? 9 : 6; // 9% or 6% [1]
+        const sgstPercent = isSupplement ? 9 : 6; // 9% or 6% [1]
+        const totalGstPercent = cgstPercent + sgstPercent; // 18% or 12% [1]
+
+        const itemTaxableAmount = finalItemPrice / (1 + (totalGstPercent / 100));
+        const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
+        const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
+
+        taxableTotal += itemTaxableAmount;
+        cgstTotal += itemCgstAmount;
+        sgstTotal += itemSgstAmount;
     }
 
     const comboSavings = rawItemTotalWithoutPromo - promoDeductedTotal;
@@ -130,6 +152,9 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         itemTotal: Math.round(promoDeductedTotal), 
         originalItemTotal: Math.round(rawItemTotalWithoutPromo),
         comboSavings: Math.round(comboSavings), 
+        taxableTotal: Number(taxableTotal.toFixed(2)), // 👈 Injected dynamic Base Price
+        cgstTotal: Number(cgstTotal.toFixed(2)),       // 👈 Injected dynamic CGST Sum
+        sgstTotal: Number(sgstTotal.toFixed(2)),       // 👈 Injected dynamic SGST Sum
         couponDiscount: Math.round(couponDiscount), 
         couponId, 
         deliveryCharge, 
@@ -1639,11 +1664,11 @@ const placeOrder = async (req, res) => {
             pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
         );
 
+        // --- DYNAMIC GST INVOICING ITEM MAPPER [1] ---
         const mappedOrderItems = [];
         for (const item of cart.pharmacyCart.items) {
             const orderedQty = Number(item.quantity || 1);
 
-            // Fetch the earliest expiring batch of this medicine dynamically [cite: 1.1.2]
             const activeBatch = await MedicineInventory.findOne({
                 pharmacyId,
                 medicineId: item.medicineId._id,
@@ -1652,6 +1677,18 @@ const placeOrder = async (req, res) => {
             }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
 
             const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId ? Number(item.medicineId.mrp || 0) : 0);
+            const batchHsn = activeBatch ? activeBatch.hsn_number : "30049011"; // Fallback [1]
+
+            // Indian GST classification based on HSN Code [1]
+            const isSupplement = batchHsn.startsWith('21');
+            const cgstPercent = isSupplement ? 9 : 6;
+            const sgstPercent = isSupplement ? 9 : 6;
+            const totalGstPercent = cgstPercent + sgstPercent;
+
+            const finalPrice = Number(item.price || 0) * orderedQty;
+            const itemTaxableAmount = finalPrice / (1 + (totalGstPercent / 100));
+            const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
+            const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
 
             let isComboApplied = false;
             let comboOfferId = null;
@@ -1672,14 +1709,22 @@ const placeOrder = async (req, res) => {
             mappedOrderItems.push({
                 medicineId: item.medicineId._id,
                 name: item.name,
-                mrp: batchMrp, // Save legally printed batch MRP [cite: 1.1.2]
+                mrp: batchMrp, 
                 price: item.price,
                 quantity: orderedQty,
                 duration: item.duration,
                 startDate: item.startDate,
                 isComboApplied,
                 comboOfferId,
-                freeQuantity
+                freeQuantity,
+                
+                // 🚨 Dynamic GST variables saved per item [1]
+                hsn_number: batchHsn,
+                taxableAmount: Number(itemTaxableAmount.toFixed(2)),
+                cgstPercent,
+                sgstPercent,
+                cgstAmount: Number(itemCgstAmount.toFixed(2)),
+                sgstAmount: Number(itemSgstAmount.toFixed(2))
             });
         }
 
@@ -1689,7 +1734,6 @@ const placeOrder = async (req, res) => {
         if (activePaymentMethod !== 'COD') {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
         } else {
-            // COD: Atomic Stock Deduction across batches based on FEFO [cite: 1.1.2]
             for (const item of cart.pharmacyCart.items) {
                 const isDeducted = await deductPharmacyStockFEFO(pharmacyId, item.medicineId._id, item.quantity);
                 if (!isDeducted) {
@@ -1722,8 +1766,7 @@ const placeOrder = async (req, res) => {
         if (activePaymentMethod === 'COD') {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-            // Only deduct subscription deliveries count if delivery charge was waived to 0
-            if ((collectionType === 'Home Delivery' || collectionType === 'Home Collection') && bill.deliveryCharge === 0) {
+            if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
                 await deductBenefitCount(req.user.id, 'freePharmacyDeliveriesCount');
             }
 
@@ -2648,7 +2691,7 @@ const payAndConfirmOrder = async (req, res) => {
             });
         }
 
-        // COD Stock Deduction across batches based on FEFO [cite: 1.1.2]
+        // COD Stock Deduction
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
@@ -2656,48 +2699,30 @@ const payAndConfirmOrder = async (req, res) => {
             }
         }
 
-        const orderItems = [];
-        for (const item of (request.verifiedBill.items || [])) {
+        // --- UPDATED: Map verified items with HSN and dynamic tax calculations safely ---
+        const orderItems = (request.verifiedBill.items || []).map(item => {
             const orderedQty = Number(item.quantity || 1);
-            
-            const activePromo = await PharmacyComboOffer.findOne({
-                pharmacyId: request.pharmacyId,
-                medicineId: item.medicineId,
-                isActive: true,
-                startDate: { $lte: today },
-                expiryDate: { $gte: today }
-            });
 
-            let isComboApplied = false;
-            let comboOfferId = null;
-            let freeQuantity = 0;
-
-            if (activePromo) {
-                const X = activePromo.buyQty;
-                const Y = activePromo.getFreeQty;
-                const bundleSize = X + Y;
-
-                const fullBundles = Math.floor(orderedQty / bundleSize);
-                freeQuantity = fullBundles * Y;
-                
-                if (freeQuantity > 0) {
-                    isComboApplied = true;
-                    comboOfferId = activePromo._id;
-                }
-            }
-
-            orderItems.push({
+            return {
                 medicineId: item.medicineId || null,
                 name: item.name,
                 mrp: Number(item.mrp || 0),
                 price: Number(item.pricePerUnit || 0),
                 quantity: orderedQty,
                 duration: "15 Days",
-                isComboApplied,
-                comboOfferId,
-                freeQuantity
-            });
-        }
+                isComboApplied: false,
+                comboOfferId: null,
+                freeQuantity: 0,
+                
+                // 🚨 Dynamic GST variables successfully transferred to order items [1]
+                hsn_number: item.hsn_number || "30049011",
+                taxableAmount: item.taxableAmount || 0,
+                cgstPercent: item.cgstPercent || 6,
+                sgstPercent: item.sgstPercent || 6,
+                cgstAmount: item.cgstAmount || 0,
+                sgstAmount: item.sgstAmount || 0
+            };
+        });
 
         const finalOrder = await PharmacyBooking.create({
             orderId: tempOrderId,
@@ -2711,6 +2736,9 @@ const payAndConfirmOrder = async (req, res) => {
             appointmentTime: 'Immediate',
             billSummary: {
                 itemTotal: bill.itemTotal || 0,
+                taxableTotal: bill.taxableTotal || 0, // 👈 Saved GST Taxable Sum [1]
+                cgstTotal: bill.cgstTotal || 0,       // 👈 Saved CGST Sum [1]
+                sgstTotal: bill.sgstTotal || 0,       // 👈 Saved SGST Sum [1]
                 deliveryCharge: bill.deliveryCharge || 0,
                 totalAmount: bill.totalAmount || 0
             },
@@ -2762,7 +2790,6 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // Stock Deduction across batches based on FEFO [cite: 1.1.2]
         if (request.verifiedBill?.items) {
             for (const billItem of request.verifiedBill.items) {
                 if (!billItem.medicineId) continue;
@@ -2770,48 +2797,26 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             }
         }
 
-        const orderItems = [];
-        for (const item of (request.verifiedBill.items || [])) {
-            const orderedQty = Number(item.quantity || 1);
-
-            const activePromo = await PharmacyComboOffer.findOne({
-                pharmacyId: request.pharmacyId,
-                medicineId: item.medicineId,
-                isActive: true,
-                startDate: { $lte: today },
-                expiryDate: { $gte: today }
-            });
-
-            let isComboApplied = false;
-            let comboOfferId = null;
-            let freeQuantity = 0;
-
-            if (activePromo) {
-                const X = activePromo.buyQty;
-                const Y = activePromo.getFreeQty;
-                const bundleSize = X + Y;
-
-                const fullBundles = Math.floor(orderedQty / bundleSize);
-                freeQuantity = fullBundles * Y;
-                
-                if (freeQuantity > 0) {
-                    isComboApplied = true;
-                    comboOfferId = activePromo._id;
-                }
-            }
-
-            orderItems.push({
-                medicineId: item.medicineId || null,
-                name: item.name,
-                mrp: Number(item.mrp || 0),
-                price: Number(item.pricePerUnit || 0),
-                quantity: orderedQty,
-                duration: "15 Days",
-                isComboApplied,
-                comboOfferId,
-                freeQuantity
-            });
-        }
+        // --- UPDATED: Map verified items with HSN and dynamic tax calculations safely ---
+        const orderItems = (request.verifiedBill.items || []).map(item => ({
+            medicineId: item.medicineId || null,
+            name: item.name,
+            mrp: Number(item.mrp || 0),
+            price: Number(item.pricePerUnit || 0),
+            quantity: Number(item.quantity || 1),
+            duration: "15 Days",
+            isComboApplied: false,
+            comboOfferId: null,
+            freeQuantity: 0,
+            
+            // 🚨 Dynamic GST variables successfully transferred to order items [1]
+            hsn_number: item.hsn_number || "30049011",
+            taxableAmount: item.taxableAmount || 0,
+            cgstPercent: item.cgstPercent || 6,
+            sgstPercent: item.sgstPercent || 6,
+            cgstAmount: item.cgstAmount || 0,
+            sgstAmount: item.sgstAmount || 0
+        }));
 
         const finalOrder = await PharmacyBooking.create({
             orderId: `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
@@ -2825,6 +2830,9 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             appointmentTime: 'Immediate',
             billSummary: {
                 itemTotal: request.verifiedBill.itemTotal || 0,
+                taxableTotal: request.verifiedBill.taxableTotal || 0, // 👈 Saved GST Taxable Sum [1]
+                cgstTotal: request.verifiedBill.cgstTotal || 0,       // 👈 Saved CGST Sum [1]
+                sgstTotal: request.verifiedBill.sgstTotal || 0,       // 👈 Saved SGST Sum [1]
                 deliveryCharge: request.verifiedBill.deliveryCharge || 0,
                 totalAmount: request.verifiedBill.totalAmount || 0
             },
@@ -2839,6 +2847,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
         request.status = 'Paid';
         await request.save();
 
+        // Trigger Notification
         await notifyAdminsAndVendor(
             request.pharmacyId,
             'pharmacy',
@@ -2857,6 +2866,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 const getActiveStoreComboOffers = async (req, res) => {
