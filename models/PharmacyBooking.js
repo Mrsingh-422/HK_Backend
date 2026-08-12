@@ -31,7 +31,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
         freeQuantity: { type: Number, default: 0 }, // Saved units (Y)
 
         // 🚨 NEW GST KEYS FOR BILL GENERATION
-        hsn_number: { type: String, required: true },
+        hsn_number: { type: String, required: false, default: "" },
         taxableAmount: { type: Number, default: 0 },
         cgstPercent: { type: Number, default: 6 },
         sgstPercent: { type: Number, default: 6 },

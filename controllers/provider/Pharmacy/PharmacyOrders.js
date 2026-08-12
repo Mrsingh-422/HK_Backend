@@ -407,9 +407,8 @@ const submitPharmacistReview = async (req, res) => {
             const subtotal = Number(item.pricePerUnit || 0) * qty;
             itemTotal += subtotal;
 
-            // Fetch dynamic HSN code and printed MRP from this pharmacy's specific inventory batch [1]
             let verifiedMrp = Number(item.mrp || 0);
-            let verifiedHsn = "30049011"; // Default standard fallback [1]
+            let verifiedHsn = null;
 
             if (mongoose.isValidObjectId(item.medicineId)) {
                 const inventory = await MedicineInventory.findOne({
@@ -423,12 +422,16 @@ const submitPharmacistReview = async (req, res) => {
                 }
             }
 
-            // Indian GST Dynamic calculations per item [1]
-            const isSupplement = verifiedHsn.startsWith('21');
-            const cgstPercent = isSupplement ? 9 : 6;
-            const sgstPercent = isSupplement ? 9 : 6;
-            const totalGstPercent = cgstPercent + sgstPercent;
+            // Dynamic GST Verification
+            let cgstPercent = 0;
+            let sgstPercent = 0;
+            if (verifiedHsn && verifiedHsn.trim() !== "" && verifiedHsn.toUpperCase() !== "N/A") {
+                const isSupplement = verifiedHsn.trim().startsWith('21');
+                cgstPercent = isSupplement ? 9 : 6;
+                sgstPercent = isSupplement ? 9 : 6;
+            }
 
+            const totalGstPercent = cgstPercent + sgstPercent;
             const itemTaxableAmount = subtotal / (1 + (totalGstPercent / 100));
             const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
             const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
@@ -445,8 +448,7 @@ const submitPharmacistReview = async (req, res) => {
                 quantity: qty,
                 totalPrice: subtotal,
                 
-                // 🚨 Dynamic GST mapped per review item [1]
-                hsn_number: verifiedHsn,
+                hsn_number: verifiedHsn || "",
                 taxableAmount: Number(itemTaxableAmount.toFixed(2)),
                 cgstPercent,
                 sgstPercent,
@@ -460,9 +462,9 @@ const submitPharmacistReview = async (req, res) => {
         request.verifiedBill = {
             items: verifiedItems,
             itemTotal,
-            taxableTotal: Number(taxableTotal.toFixed(2)), // 👈 Dynamic invoice taxable sum [1]
-            cgstTotal: Number(cgstTotal.toFixed(2)),       // 👈 Dynamic invoice CGST sum [1]
-            sgstTotal: Number(sgstTotal.toFixed(2)),       // 👈 Dynamic invoice SGST sum [1]
+            taxableTotal: Number(taxableTotal.toFixed(2)),
+            cgstTotal: Number(cgstTotal.toFixed(2)),       
+            sgstTotal: Number(sgstTotal.toFixed(2)),       
             deliveryCharge: Number(deliveryCharge || 0),
             totalAmount: Math.round(totalAmount)
         };

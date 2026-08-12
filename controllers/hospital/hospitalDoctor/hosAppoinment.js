@@ -62,7 +62,7 @@ const approveHospitalBooking = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. REJECT & RELEASE
+// 3. REJECT & RELEASE (Updated with automatic dispatched ambulance release)
 const rejectHospitalBooking = async (req, res) => {
     try {
         const { reason } = req.body;
@@ -79,6 +79,7 @@ const rejectHospitalBooking = async (req, res) => {
             cancelledAt: new Date()
         };
 
+        // 1. Release assigned physical Bed
         if (appointment.bedId) {
             const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             if (bed) {
@@ -86,9 +87,44 @@ const rejectHospitalBooking = async (req, res) => {
             }
         }
 
+        // 2. Auto-release assigned dispatched Ambulance and update Booking status
+        if (appointment.ambulanceId) {
+            const AmbulanceBooking = require('../../../models/AmbulanceBooking'); // Secure local load
+            const Ambulance = require('../../../models/Ambulance');
+
+            const activeBooking = await AmbulanceBooking.findOne({
+                ambulanceId: appointment.ambulanceId,
+                status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
+            });
+
+            if (activeBooking) {
+                activeBooking.status = 'Cancelled';
+                activeBooking.cancelledBy = 'System';
+                activeBooking.cancellationReason = `Admission rejected by hospital: ${reason || 'Admission cancelled'}`;
+                await activeBooking.save();
+            }
+
+            // Release driver back to available state
+            await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
+                $set: { availableForEmergency: true } 
+            });
+
+            // Send push notification to Driver
+            const { sendPushNotification } = require('../../../utils/notification');
+            await sendPushNotification(
+                appointment.ambulanceId,
+                'driver',
+                "Ride Cancelled by Hospital",
+                "Hospital has rejected the admission. Your vehicle is released back to available state.",
+                { type: 'booking_cancelled' }
+            );
+        }
+
         await appointment.save();
-        res.json({ success: true, message: "Booking Rejected & Bed Released successfully" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, message: "Booking Rejected, Bed & Dispatched Ambulance Released successfully" });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 4. STATS (Fixed: Discharge counts track strictly clinically released 'Discharge-Pending' status)

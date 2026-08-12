@@ -356,6 +356,7 @@ const processPrescription = async (req, res) => {
 };
 
 // 2. TRANSFER PATIENT HANDOVER (Doctor A Panel)
+// Updated: Automatically sets the transferring doctor's shift action to 'Discharged' upon initiating transfer
 const transferPatient = async (req, res) => {
     try {
         const { appointmentId, toDoctorId, reason, priority } = req.body;
@@ -377,12 +378,13 @@ const transferPatient = async (req, res) => {
 
         const now = new Date();
 
-        // 1. Close Doctor A's (current doctor) active shift in history
+        // 1. Close Doctor A's (current doctor) active shift in history and mark as 'Discharged'
         const activeShift = appointment.treatmentHistory.find(h => 
             h.toDoctorId && h.toDoctorId.toString() === req.user.id && !h.endTime
         );
         if (activeShift) {
             activeShift.endTime = now;
+            activeShift.action = 'Discharged'; // 🚀 SYNC FIX: Officially discharges Doctor A from active care duty
             activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
         }
 
@@ -403,6 +405,7 @@ const transferPatient = async (req, res) => {
         res.json({ success: true, message: "Patient handover initiated. Pending colleague acceptance." });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 // 3. ACCEPT PATIENT HANDOVER (Doctor B Panel - NEW API)
 const acceptTransfer = async (req, res) => {
@@ -435,6 +438,53 @@ const acceptTransfer = async (req, res) => {
         await appointment.save();
         res.json({ success: true, message: "Transfer accepted. Patient added to your active tray.", data: appointment });
     } catch (error) { res.status(500).json({ message: error.message }); }
+};
+// --- 16. REJECT/DECLINE PATIENT HANDOVER (Doctor B Action - NEW API) ---
+// Updated: Re-activates/re-opens a new active treatment shift for Doctor A if Doctor B declines handover
+const rejectTransfer = async (req, res) => {
+    try {
+        const { appointmentId, reason } = req.body;
+        const doctorId = req.user.id; // Doctor B (Who is rejecting)
+
+        const appointment = await Appointment.findOne({ 
+            _id: appointmentId, 
+            pendingDoctorId: doctorId 
+        });
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Handover request not found or already processed." });
+        }
+
+        const senderDoctorId = appointment.doctorId; // Doctor A (Original sender)
+        const now = new Date();
+
+        // 1. Clear pending transfer state (Patient goes back to Doctor A's active queue instantly)
+        appointment.pendingDoctorId = null;
+        
+        // 2. Push rejection log to timeline history securely
+        appointment.treatmentHistory.push({
+            fromDoctorId: doctorId, // Doctor B
+            toDoctorId: senderDoctorId, // Doctor A
+            action: 'Transfer-Initiated', 
+            notes: `Transfer Rejected by Dr. ${req.user.name}. Reason: ${reason || 'Shift duty mismatch'}`,
+            timestamp: now
+        });
+
+        // 🚀 SYNC FIX: Re-open a new active treatment shift for Doctor A (senderDoctorId) so they can continue tracking stay duration
+        appointment.treatmentHistory.push({
+            toDoctorId: senderDoctorId,
+            action: 'Transfer-Accepted', // Re-activated under Doctor A
+            notes: `Case returned to duty of previous physician after transfer rejection.`,
+            timestamp: now,
+            startTime: now // Start new active shift tracking for Doctor A
+        });
+
+        await appointment.save();
+        res.json({ success: true, message: "Handover transfer declined successfully. Case returned to sender." });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // --- 6. GET COLLEAGUES (Fixed Privacy data leak) ---
@@ -487,6 +537,22 @@ const submitDischargeSummary = async (req, res) => {
             activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
         }
 
+        // 🚀 CRITICAL CLINICAL SYNC FIX: Auto-close any orphaned or active bedside specialist shifts
+        // This unlocks the patient so they instantly appear in the hospital admin's pending discharges list
+        if (appointmentObj.bedsideCareTeam && appointmentObj.bedsideCareTeam.length > 0) {
+            appointmentObj.bedsideCareTeam.forEach(member => {
+                if (['Pending', 'Accepted', 'In-Progress'].includes(member.status)) {
+                    // If they never responded, reject. If they started care, complete their shift.
+                    member.status = member.status === 'Pending' ? 'Rejected' : 'Completed';
+                    member.endTime = member.endTime || now;
+                    member.respondedAt = member.respondedAt || now;
+                    if (member.startTime) {
+                        member.durationDisplay = calculateDurationDisplay(member.startTime, now);
+                    }
+                }
+            });
+        }
+
         // Extract uploaded additional reports from multer files
         let updatedReports = (appointmentObj.clinicalSummary && appointmentObj.clinicalSummary.uploadedReports) 
             ? appointmentObj.clinicalSummary.uploadedReports 
@@ -509,6 +575,7 @@ const submitDischargeSummary = async (req, res) => {
         // --- DYNAMIC DATA MAPPING ---
         const updateData = {
             status: 'Discharge-Pending', 
+            bedsideCareTeam: appointmentObj.bedsideCareTeam, // Save auto-closed specialists
             clinicalSummary: {
                 diagnosis: body.diagnosis || (appointmentObj.clinicalSummary?.diagnosis) || "",
                 investigation: body.investigation || (appointmentObj.clinicalSummary?.investigation) || "",
@@ -522,7 +589,6 @@ const submitDischargeSummary = async (req, res) => {
                 conditionDuringAdmission: body.conditionDuringAdmission || (appointmentObj.clinicalSummary?.conditionDuringAdmission) || "",
                 conditionDuringDischarge: body.conditionDuringDischarge || (appointmentObj.clinicalSummary?.conditionDuringDischarge) || "",
 
-                // 🚨 SAVE THE FINAL COMPILED PDF LINK:
                 dischargeSummaryPdf: dischargePdfPath
             }
         };
@@ -880,10 +946,10 @@ const startSpecialistCare = async (req, res) => {
 // --- 3. SUBMIT CO-DOCTOR CLINICAL FEEDBACK (Fixed: Allows MULTIPLE feedbacks while In-Progress) ---
 const submitSpecialistFeedback = async (req, res) => {
     try {
-        const { appointmentId, observation, patientCondition, priorityRating } = req.body;
+        const { appointmentId, observation, patientCondition, priorityRating, recommendedMedicines } = req.body;
         const specialistId = req.user.id;
 
-        // Can strictly submit feedback ONLY if treatment is currently active ('In-Progress')
+        // Verify active bedside treatment shift is in-progress
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             "bedsideCareTeam.doctorId": specialistId,
@@ -902,15 +968,14 @@ const submitSpecialistFeedback = async (req, res) => {
             });
         }
 
-        // Find specialist object in array
         const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
         
-        // Safeguard array initialization to prevent undefined errors
+        // Safeguard specialistFeedback array initialization
         if (!careTeamObj.specialistFeedback) {
             careTeamObj.specialistFeedback = [];
         }
 
-        // 🚀 FIX: Appending (Pushing) new feedback instead of overwriting existing object
+        // Push new observation logs
         careTeamObj.specialistFeedback.push({
             observation: observation || "",
             patientCondition: patientCondition || "",
@@ -918,8 +983,69 @@ const submitSpecialistFeedback = async (req, res) => {
             submittedAt: new Date()
         });
 
+        // 🚀 SYNC FIX: Parse and push recommended medications into specialist care list
+        if (recommendedMedicines) {
+            const medicinesArray = typeof recommendedMedicines === 'string' ? JSON.parse(recommendedMedicines) : recommendedMedicines;
+            
+            if (Array.isArray(medicinesArray) && medicinesArray.length > 0) {
+                medicinesArray.forEach(med => {
+                    careTeamObj.recommendedMedicines.push({
+                        name: med.name,
+                        dosage: med.dosage || "",
+                        frequency: med.frequency || "",
+                        duration: med.duration || "",
+                        instructions: med.instructions || "",
+                        addedAt: new Date()
+                    });
+                });
+            }
+        }
+
         await appointment.save();
-        res.json({ success: true, message: "Clinical observation feedback appended successfully. Status remains In-Progress!" });
+        res.json({ success: true, message: "Clinical observation and medicine recommendations appended successfully!" });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+const getCollaborativeMedications = async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        const mainDoctorId = req.user.id;
+
+        const appointment = await Appointment.findById(appointmentId)
+            .populate({
+                path: 'bedsideCareTeam.doctorId',
+                select: 'name speciality qualification profileImage'
+            });
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission Record Not Found." });
+        }
+
+        // Verify requesting doctor is indeed the main treating physician
+        const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === mainDoctorId.toString();
+        if (!isPrimaryDoc) {
+            return res.status(403).json({ success: false, message: "Access Denied: Only the main treating physician can compile or review specialist medications." });
+        }
+
+        // Map and flatten all bedside specialists recommendations
+        const collaborativeList = appointment.bedsideCareTeam
+            .filter(member => ['Completed', 'In-Progress', 'Accepted'].includes(member.status))
+            .map(member => ({
+                doctor: {
+                    id: member.doctorId?._id,
+                    name: member.doctorId?.name,
+                    speciality: member.doctorId?.speciality,
+                    profileImage: member.doctorId?.profileImage
+                },
+                recommendations: member.recommendedMedicines || []
+            }));
+
+        res.json({
+            success: true,
+            data: collaborativeList
+        });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -966,10 +1092,15 @@ const completeSpecialistCare = async (req, res) => {
 // --- UPDATE FOR getAssignedCases: Native support for Bedside and Pending-Admissions tabs ---
 const getAssignedCases = async (req, res) => {
     try {
-        const { type, status, tab = 'active' } = req.query; // tab: 'active', 'pending', 'discharge', 'history', 'bedside', 'pending-bedside', 'pending-admissions'
+        const { type, status, tab = 'active', page = 1, limit = 10 } = req.query; 
+
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
         let query = {};
 
-        // Case A: Active patients currently assigned to me
+        // Case A: Active patients currently assigned to me (Active Admitted)
         if (tab === 'active') {
             query = { 
                 doctorId: req.user.id, 
@@ -977,7 +1108,7 @@ const getAssignedCases = async (req, res) => {
                 status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
             };
         } 
-        // Case B: Ready for Discharge patients
+        // Case B: Ready for Discharge patients (Discharged / Archived)
         else if (tab === 'discharge') {
             query = {
                 doctorId: req.user.id,
@@ -985,30 +1116,44 @@ const getAssignedCases = async (req, res) => {
                 status: 'Discharge-Pending' 
             };
         }
-        // Case C: Incoming pending handover requests
+        // Case C: Incoming pending handover requests (Incoming Handovers)
         else if (tab === 'pending') {
             query = { pendingDoctorId: req.user.id };
         } 
-        // Case D: History Patients
+        // Case D: Comprehensive History Tray (Completed primary shifts + completed bedside consults)
         else if (tab === 'history') {
             query = {
-                $and: [
-                    { 
-                        $or: [
-                            { "treatmentHistory.fromDoctorId": req.user.id },
-                            { "treatmentHistory.toDoctorId": req.user.id }
-                        ] 
-                    },
+                $or: [
+                    // Primary Doctor history (Transferred away, or completed)
                     {
-                        $or: [
-                            { doctorId: { $ne: req.user.id } },
-                            { status: 'Completed' }
+                        $and: [
+                            { 
+                                $or: [
+                                    { "treatmentHistory.fromDoctorId": req.user.id },
+                                    { "treatmentHistory.toDoctorId": req.user.id }
+                                ] 
+                            },
+                            {
+                                $or: [
+                                    { doctorId: { $ne: req.user.id } },
+                                    { status: 'Completed' }
+                                ]
+                            }
                         ]
+                    },
+                    // Bedside Specialist history (Completed consults)
+                    {
+                        "bedsideCareTeam": {
+                            $elemMatch: {
+                                doctorId: req.user.id,
+                                status: 'Completed'
+                            }
+                        }
                     }
                 ]
             };
         }
-        // 🚀 NEW CASE E: Bedside Care (Active/Accepted Specialist Jobs)
+        // Case E: Active Bedside Specialist Care
         else if (tab === 'bedside') {
             query = {
                 "bedsideCareTeam": {
@@ -1019,7 +1164,7 @@ const getAssignedCases = async (req, res) => {
                 }
             };
         }
-        // 🚀 NEW CASE F: Pending Bedside (Invites awaiting acceptance)
+        // Case F: Pending Bedside Specialists Requests (Invites awaiting response)
         else if (tab === 'pending-bedside') {
             query = {
                 "bedsideCareTeam": {
@@ -1030,13 +1175,35 @@ const getAssignedCases = async (req, res) => {
                 }
             };
         }
-        // 🚀 NEW CASE G: Pending Admissions (Alias link for cases with no assigned doctor)
+        // Case G: Pending Admissions waiting for Doctor assignment (Unassigned Admissions)
         else if (tab === 'pending-admissions') {
             query = {
                 hospitalId: req.user.hospitalId,
                 bookingType: 'Admission',
                 doctorId: null,
                 status: 'In-Progress'
+            };
+        }
+        // Case H: Transferred Out / Outgoing Handovers (Cases transferred away from me)
+        else if (tab === 'transferred-out') {
+            query = {
+                $or: [
+                    // Sub-case 1: Pending acceptance (Transferred by me, but colleague has not accepted yet)
+                    { 
+                        doctorId: req.user.id, 
+                        pendingDoctorId: { $ne: null } 
+                    },
+                    // Sub-case 2: Transfer completed (Colleague accepted handover, care is taken over)
+                    {
+                        doctorId: { $ne: req.user.id },
+                        "treatmentHistory": {
+                            $elemMatch: {
+                                fromDoctorId: req.user.id,
+                                action: { $in: ['Transfer-Initiated', 'Discharged'] }
+                            }
+                        }
+                    }
+                ]
             };
         }
 
@@ -1054,12 +1221,32 @@ const getAssignedCases = async (req, res) => {
 
         if (status) query.status = status;
 
+        // Count total matching records for pagination meta
+        const totalRecords = await Appointment.countDocuments(query);
+
         const cases = await Appointment.find(query)
             .populate('userId', 'name profilePic phone age gender')
-            .sort({ updatedAt: -1 });
+            // Populating bedId and ward details dynamically so that they are accessible on list view
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .sort({ updatedAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
 
-        res.json({ success: true, count: cases.length, data: cases });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
+            count: cases.length,
+            data: cases 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // 🚀 NEW CONTROLLER: Fetch existing prescriptions for a patient/appointment
@@ -1122,16 +1309,25 @@ const getPatientDetails = async (req, res) => {
                 path: 'treatmentHistory.toDoctorId',
                 select: 'name speciality profileImage'
             })
-            // Populate Bedside team doctor info dynamically
             .populate({
                 path: 'bedsideCareTeam.doctorId',
                 select: 'name speciality profileImage dutyStatus'
+            })
+            .populate({
+                path: 'clinicalLogs.doctorId',
+                select: 'name speciality qualification profileImage'
+            })
+            // 🚀 SYNC FIX: Populates profiles of doctors who ordered stay medicines for clinical transparency
+            .populate({
+                path: 'activeMedications.addedBy',
+                select: 'name speciality qualification profileImage'
             });
 
         if (!patient) return res.status(404).json({ message: "Patient not found" });
         res.json({ success: true, data: patient });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 
 
 // --- API: GET PRINTABLE DIGITAL DISCHARGE SUMMARY (Figma Print Sheet Aligned) ---
@@ -1146,6 +1342,11 @@ const getPrintableDischargeSummary = async (req, res) => {
             .populate({
                 path: 'bedsideCareTeam.doctorId',
                 select: 'name speciality qualification'
+            })
+            // Populate the history to extract transferred doctors' profiles
+            .populate({
+                path: 'treatmentHistory.toDoctorId',
+                select: 'name speciality qualification'
             });
 
         if (!appt) {
@@ -1154,12 +1355,32 @@ const getPrintableDischargeSummary = async (req, res) => {
 
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
+        // 1. Compile Bedside Specialist Care team co-doctors
         const dynamicHandoffDoctors = appt.bedsideCareTeam
             .filter(member => ['Completed', 'Accepted', 'In-Progress'].includes(member.status))
             .map(member => ({
                 name: member.doctorId?.name || "Specialist",
                 department: `Department of ${member.doctorId?.speciality || 'Medicine'}`
             }));
+
+        // 🚀 2. DYNAMIC SYNC: Add Previous Primary Physicians who treated and transferred care
+        if (appt.treatmentHistory && appt.treatmentHistory.length > 0) {
+            appt.treatmentHistory.forEach(historyLog => {
+                if (historyLog.toDoctorId && historyLog.endTime) {
+                    const isCurrent = appt.doctorId && appt.doctorId._id?.toString() === historyLog.toDoctorId._id?.toString();
+                    if (!isCurrent) {
+                        const name = historyLog.toDoctorId.name;
+                        const dept = `Department of ${historyLog.toDoctorId.speciality || 'Medicine'}`;
+                        
+                        // Prevent duplicate display
+                        const exists = dynamicHandoffDoctors.some(d => d.name === name);
+                        if (!exists && name) {
+                            dynamicHandoffDoctors.push({ name, department: dept });
+                        }
+                    }
+                }
+            });
+        }
 
         // Helper to format payment method
         const formatPaymentMethod = (method) => {
@@ -1179,7 +1400,7 @@ const getPrintableDischargeSummary = async (req, res) => {
                     title: `Professor & Head: Department of ${appt.doctorId?.speciality || 'Medicine'}`,
                     qualification: appt.doctorId?.qualification || "MD"
                 },
-                collaborativeDoctors: dynamicHandoffDoctors
+                collaborativeDoctors: dynamicHandoffDoctors // 👈 Includes specialists and previous primary doctors
             },
 
             // --- ALL 9 KEYS MAPPED TO DYNAMIC DATABASE PROPERTIES ---
@@ -1201,18 +1422,18 @@ const getPrintableDischargeSummary = async (req, res) => {
                 // 3. Date of Discharge (endDate)
                 dateOfDischarge: appt.endDate ? moment(appt.endDate).format("YYYY-MM-DD") : "N/A",
                 
-                // 4. Date of Surgery (dynamic key)
+                // 4. Date of Surgery (dynamic check)
                 dateOfSurgery: appt.clinicalSummary?.dateOfSurgery 
                     ? moment(appt.clinicalSummary.dateOfSurgery).format("YYYY-MM-DD") 
                     : "N/A",
                 
-                // 5. Insurance Status (drawn from appointment hasInsurance key)
+                // 5. Insurance Status
                 insuranceStatus: appt.hasInsurance ? "Verified (Cashless)" : "N/A",
                 
-                // 6. Payment Status (drawn from appointment paymentStatus key)
+                // 6. Payment Status
                 paymentStatus: appt.paymentStatus || "Pending",
                 
-                // 7. Payment Type (formatted logically)
+                // 7. Payment Type
                 paymentType: formatPaymentMethod(appt.paymentMethod),
                 
                 // 8. Condition during Admission
@@ -1261,8 +1482,6 @@ const getDoctorHistory = async (req, res) => {
         const { page = 1, limit = 10, search } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Fetching cases where this doctor was ever involved (Primary, Handover sender/receiver, or Bedside specialist)
-        // AND the case is either fully Completed or currently transferred to another primary doctor
         let query = {
             $and: [
                 {
@@ -1275,21 +1494,19 @@ const getDoctorHistory = async (req, res) => {
                 },
                 {
                     $or: [
-                        { doctorId: { $ne: doctorId } }, // currently transferred away
-                        { status: 'Completed' }          // or fully discharged/completed
+                        { doctorId: { $ne: doctorId } }, 
+                        { status: 'Completed' }          
                     ]
                 }
             ]
         };
 
-        // Advanced Search handler
         if (search) {
             const isBookingId = search.toUpperCase().startsWith('HKH-') || search.toUpperCase().startsWith('HK-');
-            
             if (isBookingId) {
                 query.bookingId = { $regex: search, $options: 'i' };
             } else {
-                // If searched by Patient Name
+                const User = require('../../../models/User'); // Resolved path
                 const matchedUsers = await User.find({
                     name: { $regex: search, $options: 'i' }
                 }).select('_id');
@@ -1307,17 +1524,23 @@ const getDoctorHistory = async (req, res) => {
                 select: 'bedNumber pricePerDay',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .sort({ updatedAt: -1 }) // Sorted by latest activity
+            .populate('doctorId', 'name speciality qualification profileImage') // Primary Doctor populate
+            .sort({ updatedAt: -1 })
             .skip(skip)
             .limit(parseInt(limit));
+
+        // 🚀 ENRICH COMPLETED HISTORY FOR DOCTOR PORTAL
+        const enrichedHistory = await Promise.all(history.map(async (appt) => {
+            return await enrichAppointmentClinicalDetails(appt); // 👈 Calls the dynamic pre-billing engine
+        }));
 
         res.json({
             success: true,
             totalRecords,
             totalPages: Math.ceil(totalRecords / parseInt(limit)),
             currentPage: parseInt(page),
-            count: history.length,
-            data: history
+            count: enrichedHistory.length,
+            data: enrichedHistory
         });
 
     } catch (error) {
@@ -1394,43 +1617,6 @@ const takeChargeOfAdmission = async (req, res) => {
     }
 };
 
-// --- 16. REJECT/DECLINE PATIENT HANDOVER (Doctor B Action - NEW API) ---
-const rejectTransfer = async (req, res) => {
-    try {
-        const { appointmentId, reason } = req.body;
-        const doctorId = req.user.id; // Doctor B (Who is rejecting)
-
-        const appointment = await Appointment.findOne({ 
-            _id: appointmentId, 
-            pendingDoctorId: doctorId 
-        });
-
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Handover request not found or already processed." });
-        }
-
-        const senderDoctorId = appointment.doctorId; // Doctor A (Original sender)
-
-        // 1. Clear pending transfer state (Patient goes back to Doctor A's active queue instantly)
-        appointment.pendingDoctorId = null;
-        
-        // 2. Push rejection log to timeline history securely
-        appointment.treatmentHistory.push({
-            fromDoctorId: doctorId, // Doctor B
-            toDoctorId: senderDoctorId, // Doctor A
-            action: 'Transfer-Initiated', // Kept schema enum compatible
-            notes: `Transfer Rejected by Dr. ${req.user.name}. Reason: ${reason || 'Shift duty mismatch'}`,
-            timestamp: new Date()
-        });
-
-        await appointment.save();
-        res.json({ success: true, message: "Handover transfer declined successfully. Case returned to sender." });
-
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
 
 // --- API: DOCTOR SELF-ASSIGN UNASSIGNED CASE (NEW API) ---
 // Endpoint: POST /hospital-doctor/panel/case/self-assign
@@ -1473,6 +1659,142 @@ const doctorSelfAssignCase = async (req, res) => {
     }
 };
 
+// Endpoint: POST /hospital-doctor/panel/case/clinical-log/add
+// Path: controllers/hospital/Doctor/hosDocPanel.js
+const addPrimaryClinicalLog = async (req, res) => {
+    try {
+        const { appointmentId, observation, patientCondition, priorityRating } = req.body;
+        const doctorId = req.user.id;
+
+        if (!appointmentId || !observation) {
+            return res.status(400).json({ success: false, message: "Appointment ID and Observation findings are required." });
+        }
+
+        const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission Case Record Not Found." });
+        }
+
+        // Verify authorization: Only assigned primary doctor can log round checkups
+        const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === doctorId.toString();
+        if (!isPrimaryDoc) {
+            return res.status(403).json({ success: false, message: "Unauthorized: Only the assigned primary physician can submit active round observations." });
+        }
+
+        // Push new clinical observation log with current timestamp
+        appointment.clinicalLogs.push({
+            doctorId,
+            observation,
+            patientCondition: patientCondition || 'Stable',
+            priorityRating: priorityRating || 'Routine',
+            loggedAt: new Date()
+        });
+
+        await appointment.save();
+
+        res.status(201).json({
+            success: true,
+            message: "Clinical observation log recorded successfully.",
+            data: appointment.clinicalLogs[appointment.clinicalLogs.length - 1]
+        });
+
+    } catch (error) {
+        console.error("Add Clinical Log Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API: ADD IN-PATIENT ACTIVE MEDICATION (NEW API - Figma stay meds flow) ---
+// Endpoint: POST /hospital-doctor/panel/case/active-medication/add
+// Path: controllers/hospital/Doctor/hosDocPanel.js
+const addActiveMedication = async (req, res) => {
+    try {
+        const { appointmentId, medicineName, dosage, frequency, instructions } = req.body;
+        const doctorId = req.user.id;
+
+        if (!appointmentId || !medicineName) {
+            return res.status(400).json({ success: false, message: "Appointment ID and Medicine name are required." });
+        }
+
+        const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission record not found." });
+        }
+
+        // Authorization: Only primary treating doctor or accepted bedside specialist can order stay medications
+        const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === doctorId.toString();
+        const isCareTeamMember = appointment.bedsideCareTeam.some(d => 
+            d.doctorId.toString() === doctorId.toString() && ['Accepted', 'In-Progress'].includes(d.status)
+        );
+
+        if (!isPrimaryDoc && !isCareTeamMember) {
+            return res.status(403).json({ success: false, message: "Access Denied: Only treating physicians can order in-patient active medications." });
+        }
+
+        // Push new active medication order
+        appointment.activeMedications.push({
+            medicineName,
+            dosage: dosage || "",
+            frequency: frequency || "",
+            instructions: instructions || "",
+            addedBy: doctorId,
+            status: 'Active',
+            startDate: new Date()
+        });
+
+        await appointment.save();
+
+        res.status(201).json({
+            success: true,
+            message: "Active in-patient medication successfully added.",
+            data: appointment.activeMedications[appointment.activeMedications.length - 1]
+        });
+
+    } catch (error) {
+        console.error("Add Active Med Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API: STOP/DISCONTINUE IN-PATIENT ACTIVE MEDICATION (NEW API) ---
+// Endpoint: PATCH /hospital-doctor/panel/case/active-medication/stop
+// Path: controllers/hospital/Doctor/hosDocPanel.js
+const stopActiveMedication = async (req, res) => {
+    try {
+        const { appointmentId, medicationRecordId } = req.body;
+        const doctorId = req.user.id;
+
+        const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) return res.status(404).json({ success: false, message: "Admission record not found." });
+
+        // Authorization check
+        const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === doctorId.toString();
+        const isCareTeamMember = appointment.bedsideCareTeam.some(d => 
+            d.doctorId.toString() === doctorId.toString() && ['Accepted', 'In-Progress'].includes(d.status)
+        );
+
+        if (!isPrimaryDoc && !isCareTeamMember) {
+            return res.status(403).json({ success: false, message: "Access Denied: Unauthorized to adjust active medications." });
+        }
+
+        // Locate target medication within array and update state
+        const medRecord = appointment.activeMedications.id(medicationRecordId);
+        if (!medRecord) {
+            return res.status(404).json({ success: false, message: "Medication record not found." });
+        }
+
+        medRecord.status = 'Stopped';
+        medRecord.stoppedDate = new Date();
+
+        await appointment.save();
+        res.json({ success: true, message: "In-patient medication discontinued successfully.", data: medRecord });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     getMyDoctorProfile,changeHospitalDoctorPassword,
     updateDoctorProfile,getLatestDoctorProfileRequest,
@@ -1492,7 +1814,7 @@ module.exports = {
      getHospitalColleagues,
     submitDischargeSummary,verifyDischargeSheet,uploadPatientReports, updateDutyStatus, getMedicineList, updateClinicalSummary,
 
-    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
+    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,getCollaborativeMedications,completeSpecialistCare,
     getPrintableDischargeSummary,
-    doctorSelfAssignCase
+    doctorSelfAssignCase,addPrimaryClinicalLog,addActiveMedication,stopActiveMedication
 };

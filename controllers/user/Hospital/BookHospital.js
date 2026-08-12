@@ -135,41 +135,37 @@ const getWards = async (req, res) => {
 const getBedGrid = async (req, res) => {
     try {
         const { wardId } = req.params;
-        const { startDate, endDate } = req.query; // Frontend query parameters
+        const { startDate, endDate } = req.query; 
 
         if (!startDate || !endDate) {
             return res.status(400).json({ success: false, message: "Please select date range." });
         }
 
-        // Timezone offsets door karne ke liye startOf/endOf standard parse kiya hai
         const userStart = moment(startDate).startOf('day').toDate();
         const userEnd = moment(endDate).endOf('day').toDate();
 
-        // Ward ke sabhi beds ko fetch kiya
         const allBeds = await Bed.find({ wardId }).lean();
         const bedIds = allBeds.map(b => b._id);
 
-        // Strictly checking overlapping bookings for target beds
+        // 🚀 SYNC FIX: Included 'Discharge-Pending' in active overlap checking query
         const overlaps = await Appointment.find({
             bedId: { $in: bedIds },
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] },
             $and: [
                 { startDate: { $lte: userEnd } },
                 { endDate: { $gte: userStart } }
             ]
         }).select('bedId');
 
-        // Safe array map (handling null/undefined bedId check)
         const bookedIds = overlaps.filter(o => o.bedId).map(o => o.bedId.toString());
 
-        // Dynamic status mapping logic
         const data = allBeds.map(bed => {
             let dynamicStatus = bed.status;
 
             if (bookedIds.includes(bed._id.toString())) {
-                dynamicStatus = 'Occupied'; // Agar same date ko overlap hai toh block hoga
+                dynamicStatus = 'Occupied'; 
             } else if (bed.status === 'Occupied' || bed.status === 'Reserved') {
-                dynamicStatus = 'Available'; // Past/Future matches ke liye display available hoga
+                dynamicStatus = 'Available'; 
             }
 
             return {
@@ -342,11 +338,11 @@ const getAvailableBedsForRange = async (req, res) => {
         const allBeds = await Bed.find({ wardId }).lean();
         const bedIds = allBeds.map(b => b._id);
 
-        // FIX: wardName database string compare karne ke bajaye direct Bed ObjectIds check karega
+        // 🚀 SYNC FIX: Included 'Discharge-Pending' in active overlap checking query
         const overlappingAppointments = await Appointment.find({
             hospitalId,
             bedId: { $in: bedIds },
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] },
             $and: [
                 { startDate: { $lte: end } },
                 { endDate: { $gte: start } }
@@ -412,7 +408,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
             });
         }
 
-        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
+        // Fetch dynamic COD toggle state from admin panel
         const isCodAllowed = await isCodEnabled('Hospital');
 
         // 3. Fetch Bed and prevent null reference crashes
@@ -447,7 +443,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
         const admissionBenefit = await checkAndApplyBenefit(req.user.id, 'freeHospitalStaysCount', baseFee);
         
         if (admissionBenefit.isApplied) {
-            finalBasePrice = 0; // Price waived to 0
+            finalBaseFee = 0; // 🚀 TYPO FIXED: Properly waives the base fee
             isSubscriptionApplied = true;
 
             const UserSubscription = require('../../../models/UserSubscription');
@@ -492,7 +488,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
                 stayDuration,
                 patients,
                 address,
-                isCodAvailable: isCodAllowed, // 👈 Dynamic indicator added
+                isCodAvailable: isCodAllowed,
                 subscriptionDetails: {
                     isSubscriptionApplied,
                     userSubscriptionId,
@@ -529,7 +525,6 @@ const finalHospitalBooking = async (req, res) => {
 
         const userId = req.user.id;
 
-        // 🚨 STRICTOR COD VALIDATION
         if (paymentMethod === 'COD') {
             const isCodAllowed = await isCodEnabled('Hospital');
             if (!isCodAllowed) {
@@ -702,12 +697,8 @@ const finalHospitalBooking = async (req, res) => {
             startDate: start,
             endDate: end,
             stayDuration,
-            
-            // Screen fields &resolved insurance metadata
             bookingReason: bookingReason || "",
             insuranceDetails: finalInsuranceData,
-
-            // Pricing structure
             pricingBreakdown: {
                 baseFee: finalBasePrice,
                 originalBaseFee: originalBasePrice,
@@ -716,12 +707,9 @@ const finalHospitalBooking = async (req, res) => {
             },
             couponDetails: couponDetailsObj,
             totalAmount: Math.round(totalAmount),
-            
             paymentMethod: paymentMethod || 'Online',
             paymentStatus: paymentMethod === 'COD' || totalAmount === 0 ? 'Pending' : 'Pending',
             status: paymentMethod === 'COD' || totalAmount === 0 ? 'Hospital-Pending' : 'Pending',
-
-            // Subscription timeline audit
             treatmentHistory: [{
                 action: 'Initial-Assignment',
                 notes: `Admitted via Hospital Booking Flow.`,
@@ -746,10 +734,13 @@ const finalHospitalBooking = async (req, res) => {
                 });
             }
 
-            // Lock bed status & update Ward occupancy
-            bed.status = 'Occupied';
+            // 🚀 SYNC FIX 1: Lock bed status to 'Reserved' during booking, not premature 'Occupied'
+            // 🚀 SYNC FIX 2: Decrement Ward capacity ONLY if previous status was 'Available' to prevent leakage
+            if (bed.status === 'Available') {
+                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
+            }
+            bed.status = 'Reserved'; 
             await bed.save();
-            await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
 
             await notifyAdminsAndVendor(
                 hospitalId,
@@ -766,7 +757,6 @@ const finalHospitalBooking = async (req, res) => {
             });
         }
 
-        // 12. Online payment workflow (Razorpay Order details returned)
         res.status(201).json({
             success: true,
             message: "Razorpay order created. Complete payment to confirm.",
@@ -784,7 +774,6 @@ const finalHospitalBooking = async (req, res) => {
 };
 
 
-// 🚨 NEW CONTROLLER: VERIFY HOSPITAL BOOKING PAYMENT SIGNATURE
 // endpoint: POST /user/hospital/verify-payment
 const verifyHospitalPayment = async (req, res) => {
     try {
@@ -815,9 +804,11 @@ const verifyHospitalPayment = async (req, res) => {
         if (appointment.bedId) {
             const bed = await Bed.findById(appointment.bedId).populate('wardId');
             if (bed) {
-                if (bed.wardId) {
+                // 🚀 SYNC FIX: Decrement ward availableBeds ONLY if bed was physically 'Available' before this payment
+                if (bed.wardId && bed.status === 'Available') {
                     await Ward.findByIdAndUpdate(bed.wardId._id, { $inc: { availableBeds: -1 } });
                 }
+                // Set status safely to Reserved (Will turn 'Occupied' during check-in / handoff finalize)
                 await Bed.findByIdAndUpdate(appointment.bedId, { status: 'Reserved' });
             }
         }
@@ -828,7 +819,6 @@ const verifyHospitalPayment = async (req, res) => {
         appointment.paymentDetails = rzpDetails; 
         await appointment.save();
 
-        // 🚨 SUBSCRIPTION DEDUCTION: Online payment successful hone par doctor count minus karein
         if (appointment.doctorId) {
             await deductBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
         }
@@ -881,15 +871,20 @@ const cancelBedBooking = async (req, res) => {
             });
         }
 
-        // 🚨 DYNAMIC POLICY EVALUATION
         const policyResult = await processCancellationRefund(appt, 'Hospital');
 
+        // 🚀 SAFETY UPDATE: Only set bed status and increment availableBeds if bed was actually occupied or reserved
         if (appt.bedId) {
-            await Bed.findByIdAndUpdate(appt.bedId, { $set: { status: 'Available' } });
-            await Ward.findOneAndUpdate(
-                { name: appt.wardName, hospitalId: appt.hospitalId },
-                { $inc: { availableBeds: 1 } }
-            );
+            const bed = await Bed.findById(appt.bedId);
+            if (bed && (bed.status === 'Reserved' || bed.status === 'Occupied')) {
+                bed.status = 'Available';
+                await bed.save();
+                
+                await Ward.findOneAndUpdate(
+                    { name: appt.wardName, hospitalId: appt.hospitalId },
+                    { $inc: { availableBeds: 1 } }
+                );
+            }
         }
 
         appt.status = 'Cancelled-By-User';
@@ -901,7 +896,6 @@ const cancelBedBooking = async (req, res) => {
 
         await appt.save();
 
-        // Subscription benefit refund check
         if (appt.subscriptionDetails?.isSubscriptionApplied && appt.pricingBreakdown?.baseFee === 0) {
             await refundBenefitCount(appt.userId, 'freeHospitalStaysCount');
         }
@@ -931,13 +925,11 @@ const rescheduleBedBooking = async (req, res) => {
         const appt = await Appointment.findById(appointmentId);
         if (!appt) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        // FIX: Fetch platform-wide limit from dynamic global model (Fallback is 2)
         const globalConfig = await BedRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const currentRescheduleCount = appt.rescheduleCount || 0;
 
-        // Validation against Global Limit
         if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({ 
                 success: false, 
@@ -964,10 +956,12 @@ const rescheduleBedBooking = async (req, res) => {
         }
 
         const targetBedId = newBedId || appt.bedId;
+
+        // 🚀 SYNC FIX: Included 'Discharge-Pending' in active overlap checking query
         const isOccupied = await Appointment.findOne({
             _id: { $ne: appointmentId },
             bedId: targetBedId,
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] },
             $and: [
                 { startDate: { $lte: end } },
                 { endDate: { $gte: start } }
@@ -1000,9 +994,6 @@ const rescheduleBedBooking = async (req, res) => {
     }
 };
 
-
-
-
 const getBedMonthlySchedule = async (req, res) => {
     try {
         const { bedId, month, year } = req.query;
@@ -1011,24 +1002,22 @@ const getBedMonthlySchedule = async (req, res) => {
             return res.status(400).json({ success: false, message: "bedId is required." });
         }
 
-        // Agar month ya year nahi bheja, toh current month/year select hoga
-        const targetMonth = month ? parseInt(month) : moment().month() + 1; // 1-indexed (1-12)
+        const targetMonth = month ? parseInt(month) : moment().month() + 1; 
         const targetYear = year ? parseInt(year) : moment().year();
 
         const bed = await Bed.findById(bedId);
         if (!bed) return res.status(404).json({ success: false, message: "Bed not found" });
 
-        // Select kiye gaye month ka start aur end date range nikalenge
         const startOfMonth = moment([targetYear, targetMonth - 1]).startOf('month');
         const endOfMonth = moment([targetYear, targetMonth - 1]).endOf('month');
 
-        const totalDays = endOfMonth.date(); // Us month me total kitne din hain (e.g. 30 ya 31)
+        const totalDays = endOfMonth.date(); 
 
-        // Find active overlapping bookings strictly for this bed inside this month
+        // 🚀 SYNC FIX: Included 'Discharge-Pending' in active overlap checking query
         const bookings = await Appointment.find({
             bedId,
             bookingType: 'Admission',
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] },
             $and: [
                 { startDate: { $lte: endOfMonth.toDate() } },
                 { endDate: { $gte: startOfMonth.toDate() } }
@@ -1037,12 +1026,10 @@ const getBedMonthlySchedule = async (req, res) => {
 
         const calendar = [];
 
-        // Pooray month ke sabhi days ka loop chalayenge (1 to totalDays)
         for (let day = 1; day <= totalDays; day++) {
             const currentDay = moment([targetYear, targetMonth - 1, day]).startOf('day');
             const currentDayDate = currentDay.toDate();
             
-            // Check if any booking is overlapping on this specific day
             const match = bookings.find(b => {
                 const bStart = moment(b.startDate).startOf('day').toDate();
                 const bEnd = moment(b.endDate).startOf('day').toDate();
@@ -1053,7 +1040,7 @@ const getBedMonthlySchedule = async (req, res) => {
             if (match) {
                 dayStatus = 'Occupied';
             } else if (bed.status === 'Maintenance') {
-                dayStatus = 'Maintenance'; // Agar bed manual maintenance par lock hai
+                dayStatus = 'Maintenance'; 
             }
 
             calendar.push({
@@ -1081,9 +1068,6 @@ const getBedMonthlySchedule = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-
-
-
 
 // 5. GET MY BOOKINGS (Screenshot 20, 21 - Upcoming, Pending, History)
 // 5. GET MY BOOKINGS (Strictly mapped with your exact JSON Keys)

@@ -19,9 +19,9 @@ const {
     submitDischargeSummary,verifyDischargeSheet, uploadPatientReports,
     updateDutyStatus,getMedicineList, updateClinicalSummary,
 
-    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,completeSpecialistCare,
+    requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,getCollaborativeMedications,completeSpecialistCare,
     getPrintableDischargeSummary,
-    doctorSelfAssignCase
+    doctorSelfAssignCase,addPrimaryClinicalLog,addActiveMedication,stopActiveMedication
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 
@@ -95,7 +95,17 @@ router.get('/specializations', protect('hospital-doctor'), getSpecializations);
 router.post('/case/bedside-request', protect('hospital-doctor'), requestBedsideSpecialist); 
 router.post('/case/bedside-respond', protect('hospital-doctor'), respondToBedsideRequest);   
 router.post('/case/bedside-start', protect('hospital-doctor'), startSpecialistCare); 
-router.post('/case/bedside-feedback', protect('hospital-doctor'), submitSpecialistFeedback);  
+router.post('/case/bedside-feedback', protect('hospital-doctor'), submitSpecialistFeedback);
+router.get('/case/bedside-medications/:appointmentId', protect('hospital-doctor'), getCollaborativeMedications);
 router.post('/case/bedside-complete', protect('hospital-doctor'), completeSpecialistCare); 
+
+
+
+
+
+router.post('/case/clinical-log/add', protect('hospital-doctor'), addPrimaryClinicalLog);
+// --- IN-PATIENT ACTIVE MEDICATION PATHS ---
+router.post('/case/active-medication/add', protect('hospital-doctor'), addActiveMedication);
+router.patch('/case/active-medication/stop', protect('hospital-doctor'), stopActiveMedication);
 
 module.exports = router;

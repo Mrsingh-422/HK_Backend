@@ -254,8 +254,9 @@ const rejectBooking = async (req, res) => {
     }
 };
 
-// 3. UPDATE TRIP PROGRESS (Figma Screen 37 Timeline)
+// --- 3. UPDATE TRIP PROGRESS (Figma Screen 37 Timeline) ---
 // Status flow: Arrived -> Picked-Up -> En-Route -> Delivered
+// Path: controllers/ambulance/BookingAmb.js
 const updateTripStatus = async (req, res) => {
     try {
         const { id } = req.params;
@@ -267,14 +268,12 @@ const updateTripStatus = async (req, res) => {
         booking.status = status;
         if (patientCondition) booking.patientDetails.condition = patientCondition;
 
-        // 🚨 DUPLICATE GUARD: Check if admission record is already created (Medical/Referral check)
         const existingAdmission = await Appointment.findOne({ transactionId: booking.bookingId });
 
-        // --- 1. ACCIDENTAL DYNAMIC HOSPITAL ALLOCATION (Trips starts) ---
+        // Accidental emergency hospital allocation
         if (status === 'En-Route' && hospitalId) {
-            booking.hospitalId = hospitalId; // Save selected hospital
+            booking.hospitalId = hospitalId;
 
-            // Create admission record ONLY if it doesn't exist already!
             if (!existingAdmission) {
                 const hospitalBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
                 
@@ -299,7 +298,6 @@ const updateTripStatus = async (req, res) => {
                     totalAmount: 0
                 });
 
-                // Trigger Notification to selected Hospital (Figma Screen 11 Alert)
                 await notifyAdminsAndVendor(
                     hospitalId,
                     'hospital',
@@ -321,6 +319,19 @@ const updateTripStatus = async (req, res) => {
         }
 
         await booking.save();
+
+        // 🚀 CRITICAL WORKFLOW SYNC: Update status and tracking timeline in linked hospital Appointment
+        if (booking.bookingId) {
+            const updateFields = { 'tracking.status': status };
+            if (status === 'Delivered') {
+                updateFields.status = 'In-Progress'; // Mark patient physically admitted
+            }
+            await Appointment.findOneAndUpdate(
+                { transactionId: booking.bookingId },
+                { $set: updateFields }
+            );
+        }
+
         res.json({ success: true, message: `Status updated to: ${status}`, data: booking });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
@@ -346,10 +357,12 @@ const uploadIncidentPhoto = async (req, res) => {
 
 
 // --- 3. UPDATE FINALIZE HANDOFF (Update Existing Pre-Admission Record) ---
+// --- 4. FINALIZE HANDOFF (Ambulance Handoff Completed) ---
+// Updated: Automatically releases the ambulance driver back to available state upon delivery
 const finalizeTripHandoff = async (req, res) => {
     try {
         const { id } = req.params; 
-        const { doctorName, wardName, duration, reason, totalDistance, travelTime } = req.body; // Yahan select kiya
+        const { doctorName, wardName, duration, reason, totalDistance, travelTime } = req.body; 
 
         const booking = await Booking.findById(id);
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
@@ -360,7 +373,6 @@ const finalizeTripHandoff = async (req, res) => {
             duration,
             reasonAtHandoff: reason,
             completedAt: new Date(),
-            // 👇 NEW: Mapped with Figma completed statistics
             totalDistance: totalDistance || "8.4 km", 
             travelTime: travelTime || "15 mins"
         };
@@ -368,9 +380,31 @@ const finalizeTripHandoff = async (req, res) => {
         booking.status = 'Delivered';
         await booking.save();
 
-        // Release Ambulance & Auto Hospital Admission logic continues same...
-        res.json({ success: true, message: "Trip Finalized & Hospital Admission Created", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // Release ambulance driver back to available state
+        if (booking.ambulanceId) {
+            await Ambulance.findByIdAndUpdate(booking.ambulanceId, { 
+                $set: { availableForEmergency: true } 
+            });
+        }
+
+        // 🚀 EDGE CASE 3: Only transition appointment status to 'In-Progress' if a Bed is allotted, else preserve 'Hospital-Pending'
+        if (booking.bookingId) {
+            const appointment = await Appointment.findOne({ transactionId: booking.bookingId });
+            if (appointment) {
+                const targetStatus = appointment.bedId ? 'In-Progress' : 'Hospital-Pending';
+                
+                appointment.status = targetStatus;
+                appointment.tracking.status = 'Admitted/Dropped to Hospital';
+                appointment.tracking.rideEndTime = new Date();
+                
+                await appointment.save();
+            }
+        }
+
+        res.json({ success: true, message: "Trip Finalized, Driver Released & Hospital Admission Synced successfully.", data: booking });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // --- 1. VERIFY OTP (Figma Screen 36) ---
@@ -806,6 +840,19 @@ const reportAmbulanceNoShow = async (req, res) => {
         await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: true } });
 
         await booking.save();
+
+        // 🚀 CRITICAL WORKFLOW SYNC FIX: Update status in linked Hospital Appointment
+        if (booking.bookingId) {
+            await Appointment.findOneAndUpdate(
+                { transactionId: booking.bookingId },
+                { 
+                    $set: { 
+                        status: 'No-Show',
+                        'tracking.status': 'No-Show'
+                    } 
+                }
+            );
+        }
 
         res.json({ 
             success: true, 

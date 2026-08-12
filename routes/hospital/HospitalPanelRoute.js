@@ -10,7 +10,7 @@ const {
     toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy,finalizeDischarge, setHospitalShift ,getHospitalReferralBookings, 
     updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,
-    reassignAmbulanceOnBreakdown,reassignDoctorFromPanel,reportHospitalNoShow
+    dispatchAmbulanceForAdmission,reassignAmbulanceOnBreakdown,reassignDoctorFromPanel,reportHospitalNoShow,transferPatientBed
 
 } = require('../../controllers/hospital/HospitalPanel');
  
@@ -84,9 +84,12 @@ router.post('/discharge/emergency', protect('hospital'), emergencyDischarge); //
 router.get('/admissions/details/:id', protect('hospital'), getHospitalCaseDetails); // 👈 ADD THIS ROUTE
 router.get('/discharges/pending', protect('hospital'), getHospitalPendingDischarges); // 👈 ADD THIS ROUTE
 
+router.post('/admissions/dispatch-ambulance', protect('hospital'), dispatchAmbulanceForAdmission);
+
 router.post('/ambulance/reassign-breakdown', protect('hospital'), reassignAmbulanceOnBreakdown); // 👈 ADD THIS ROUTE
 router.post('/reassign-doctor', protect('hospital'), reassignDoctorFromPanel); // 👈 ADD THIS ROUTE
 
 router.post('/admissions/no-show', protect('hospital'), reportHospitalNoShow);
+router.post('/admissions/transfer-bed', protect('hospital'), transferPatientBed);
 
 module.exports = router;

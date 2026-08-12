@@ -141,6 +141,14 @@ const appointmentSchema = new mongoose.Schema({
         
         dischargeSummaryPdf: { type: String, default: null },
     },
+    clinicalLogs: [{
+        doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', required: true },
+        observation: { type: String, required: true }, // Figma: Diagnostic findings
+        patientCondition: { type: String, default: 'Stable' }, // Recovering, Stable, Critical, Deteriorating
+        priorityRating: { type: String, default: 'Routine' }, // Routine, Urgent, Critical
+        loggedAt: { type: Date, default: Date.now }
+    }],
+
 
     // --- NEW: DYNAMIC BEDSIDE CARE TEAM CO-DOCTORS ARRAY ---
     bedsideCareTeam: [{
@@ -151,6 +159,16 @@ const appointmentSchema = new mongoose.Schema({
         priority: { type: String, enum: ['Most Urgent', 'Urgent', 'Routine'], default: 'Routine' },
         rejectionReason: { type: String, default: "" },
 
+        // 🚀 NEW: Specialist recommended medicines before final discharge compilation
+        recommendedMedicines: [{
+            name: { type: String },
+            dosage: { type: String }, // e.g. "1 tab"
+            frequency: { type: String }, // e.g. "TDS (Thrice Daily)"
+            duration: { type: String }, // e.g. "5 days"
+            instructions: { type: String, default: "" }, // e.g. "After meal"
+            addedAt: { type: Date, default: Date.now }
+        }],
+
         // Co-Doctor Clinical feedback notes
         specialistFeedback: [{
             observation: { type: String, default: "" },
@@ -160,6 +178,16 @@ const appointmentSchema = new mongoose.Schema({
         }],
         requestedAt: { type: Date, default: Date.now },
         respondedAt: { type: Date, default: null }
+    }],
+     activeMedications: [{
+        medicineName: { type: String, required: true },
+        dosage: { type: String }, // e.g., "1 tab", "5ml Injection"
+        frequency: { type: String }, // e.g., "TDS", "BD", "Once Daily"
+        instructions: { type: String, default: "" }, // e.g., "Give after nebulization"
+        addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', required: true },
+        status: { type: String, enum: ['Active', 'Stopped'], default: 'Active' },
+        startDate: { type: Date, default: Date.now },
+        stoppedDate: { type: Date, default: null }
     }],
     paymentDetails: {
         razorpayPaymentId: { type: String, default: "" },

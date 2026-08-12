@@ -49,16 +49,15 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         const orderedQty = Number(item.quantity || 1);
         const medicineId = item.medicineId._id || item.medicineId;
 
-        // Retrieve active batch-specific MRP & HSN details [cite: 1.1.2]
         const activeBatch = await MedicineInventory.findOne({
             pharmacyId,
             medicineId,
             is_available: true,
             stock_quantity: { $gt: 0 }
-        }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
+        }).sort({ expiry_date: 1 });
 
         const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId?.mrp ? Number(item.medicineId.mrp) : 0);
-        const batchHsn = activeBatch ? activeBatch.hsn_number : "30049011"; // Fallback to standard medicine HSN [1]
+        const batchHsn = activeBatch ? activeBatch.hsn_number : null; // Fetch HSN
 
         rawItemTotalWithoutPromo += (batchMrp * orderedQty);
 
@@ -90,13 +89,20 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
 
         promoDeductedTotal += finalItemPrice;
 
-        // 🚨 AUTOMATED GST RESOLVER & INCLUSIVE BILLING MATH [1]
-        // Enforce 12% GST for HSN prefix '30' (Medicines), 18% for prefix '21' (Supplements) [1]
-        const isSupplement = batchHsn.startsWith('21');
-        const cgstPercent = isSupplement ? 9 : 6; // 9% or 6% [1]
-        const sgstPercent = isSupplement ? 9 : 6; // 9% or 6% [1]
-        const totalGstPercent = cgstPercent + sgstPercent; // 18% or 12% [1]
+        // 🚨 DYNAMIC GST EVALUATION (Checks if HSN exists)
+        let cgstPercent = 0;
+        let sgstPercent = 0;
 
+        // Agar product ka HSN code daala gaya hai tabhi GST lagega, nahi toh 0%
+        if (batchHsn && batchHsn.trim() !== "" && batchHsn.toUpperCase() !== "N/A") {
+            const isSupplement = batchHsn.trim().startsWith('21');
+            cgstPercent = isSupplement ? 9 : 6;
+            sgstPercent = isSupplement ? 9 : 6;
+        }
+
+        const totalGstPercent = cgstPercent + sgstPercent;
+
+        // Agar totalGstPercent 0 hai, toh taxableAmount directly finalItemPrice ke barabar ho jayega
         const itemTaxableAmount = finalItemPrice / (1 + (totalGstPercent / 100));
         const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
         const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
@@ -152,9 +158,9 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         itemTotal: Math.round(promoDeductedTotal), 
         originalItemTotal: Math.round(rawItemTotalWithoutPromo),
         comboSavings: Math.round(comboSavings), 
-        taxableTotal: Number(taxableTotal.toFixed(2)), // 👈 Injected dynamic Base Price
-        cgstTotal: Number(cgstTotal.toFixed(2)),       // 👈 Injected dynamic CGST Sum
-        sgstTotal: Number(sgstTotal.toFixed(2)),       // 👈 Injected dynamic SGST Sum
+        taxableTotal: Number(taxableTotal.toFixed(2)),
+        cgstTotal: Number(cgstTotal.toFixed(2)),       
+        sgstTotal: Number(sgstTotal.toFixed(2)),       
         couponDiscount: Math.round(couponDiscount), 
         couponId, 
         deliveryCharge, 
@@ -1666,67 +1672,70 @@ const placeOrder = async (req, res) => {
 
         // --- DYNAMIC GST INVOICING ITEM MAPPER [1] ---
         const mappedOrderItems = [];
-        for (const item of cart.pharmacyCart.items) {
-            const orderedQty = Number(item.quantity || 1);
+for (const item of cart.pharmacyCart.items) {
+    const orderedQty = Number(item.quantity || 1);
 
-            const activeBatch = await MedicineInventory.findOne({
-                pharmacyId,
-                medicineId: item.medicineId._id,
-                is_available: true,
-                stock_quantity: { $gt: 0 }
-            }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
+    const activeBatch = await MedicineInventory.findOne({
+        pharmacyId,
+        medicineId: item.medicineId._id,
+        is_available: true,
+        stock_quantity: { $gt: 0 }
+    }).sort({ expiry_date: 1 });
 
-            const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId ? Number(item.medicineId.mrp || 0) : 0);
-            const batchHsn = activeBatch ? activeBatch.hsn_number : "30049011"; // Fallback [1]
+    const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId ? Number(item.medicineId.mrp || 0) : 0);
+    const batchHsn = activeBatch ? activeBatch.hsn_number : null;
 
-            // Indian GST classification based on HSN Code [1]
-            const isSupplement = batchHsn.startsWith('21');
-            const cgstPercent = isSupplement ? 9 : 6;
-            const sgstPercent = isSupplement ? 9 : 6;
-            const totalGstPercent = cgstPercent + sgstPercent;
+    // Dynamic GST Check
+    let cgstPercent = 0;
+    let sgstPercent = 0;
+    if (batchHsn && batchHsn.trim() !== "" && batchHsn.toUpperCase() !== "N/A") {
+        const isSupplement = batchHsn.trim().startsWith('21');
+        cgstPercent = isSupplement ? 9 : 6;
+        sgstPercent = isSupplement ? 9 : 6;
+    }
 
-            const finalPrice = Number(item.price || 0) * orderedQty;
-            const itemTaxableAmount = finalPrice / (1 + (totalGstPercent / 100));
-            const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
-            const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
+    const totalGstPercent = cgstPercent + sgstPercent;
+    const finalPrice = Number(item.price || 0) * orderedQty;
+    const itemTaxableAmount = finalPrice / (1 + (totalGstPercent / 100));
+    const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
+    const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
 
-            let isComboApplied = false;
-            let comboOfferId = null;
-            let freeQuantity = 0;
+    let isComboApplied = false;
+    let comboOfferId = null;
+    let freeQuantity = 0;
 
-            if (item.isComboApplied === true && item.comboOfferId) {
-                isComboApplied = true;
-                comboOfferId = item.comboOfferId._id;
+    if (item.isComboApplied === true && item.comboOfferId) {
+        isComboApplied = true;
+        comboOfferId = item.comboOfferId._id;
 
-                const X = item.comboOfferId.buyQty || 2;
-                const Y = item.comboOfferId.getFreeQty || 1;
-                const bundleSize = X + Y;
+        const X = item.comboOfferId.buyQty || 2;
+        const Y = item.comboOfferId.getFreeQty || 1;
+        const bundleSize = X + Y;
 
-                const fullBundles = Math.floor(orderedQty / bundleSize);
-                freeQuantity = fullBundles * Y;
-            }
+        const fullBundles = Math.floor(orderedQty / bundleSize);
+        freeQuantity = fullBundles * Y;
+    }
 
-            mappedOrderItems.push({
-                medicineId: item.medicineId._id,
-                name: item.name,
-                mrp: batchMrp, 
-                price: item.price,
-                quantity: orderedQty,
-                duration: item.duration,
-                startDate: item.startDate,
-                isComboApplied,
-                comboOfferId,
-                freeQuantity,
-                
-                // 🚨 Dynamic GST variables saved per item [1]
-                hsn_number: batchHsn,
-                taxableAmount: Number(itemTaxableAmount.toFixed(2)),
-                cgstPercent,
-                sgstPercent,
-                cgstAmount: Number(itemCgstAmount.toFixed(2)),
-                sgstAmount: Number(itemSgstAmount.toFixed(2))
-            });
-        }
+    mappedOrderItems.push({
+        medicineId: item.medicineId._id,
+        name: item.name,
+        mrp: batchMrp, 
+        price: item.price,
+        quantity: orderedQty,
+        duration: item.duration,
+        startDate: item.startDate,
+        isComboApplied,
+        comboOfferId,
+        freeQuantity,
+        
+        hsn_number: batchHsn || "", // Empty string fallback
+        taxableAmount: Number(itemTaxableAmount.toFixed(2)),
+        cgstPercent,
+        sgstPercent,
+        cgstAmount: Number(itemCgstAmount.toFixed(2)),
+        sgstAmount: Number(itemSgstAmount.toFixed(2))
+    });
+}
 
         const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;

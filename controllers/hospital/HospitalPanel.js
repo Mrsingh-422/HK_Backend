@@ -53,13 +53,25 @@ const getHospitalMasterData = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// --- GET HOSPITAL DASHBOARD STATS ---
+// Endpoint: GET /hospital/panel/dashboard-stats
 const getHospitalDashboardStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const todayStart = moment().startOf('day').toDate();
         const todayEnd = moment().endOf('day').toDate();
 
-        // Parallel collection execution
+        // Safe Status arrays for dynamic real-time tracking
+        const activeEmergencyStates = [
+            'Confirmed', 
+            'Arrived', 
+            'Picked-Up', 
+            'En-Route', 
+            'In-Progress', 
+            'Hospital-Pending'
+        ];
+
+        // Parallel collection execution for ultra-fast API speed
         const [
             emergencyActive,       
             directAdmissions,      
@@ -69,11 +81,11 @@ const getHospitalDashboardStats = async (req, res) => {
             historyRecords         
         ] = await Promise.all([
             
-            // Tab 1: Emergency Case count (status active and brought by ambulance)
+            // Tab 1: Emergency Case count (Includes active transit states so counts remain accurate during travel)
             Appointment.countDocuments({
                 hospitalId,
                 ambulanceId: { $ne: null, $exists: true },
-                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
+                status: { $in: activeEmergencyStates } // 🚀 FIXED
             }),
 
             // Tab 2: Hospital Admission count (direct and status pending)
@@ -91,7 +103,7 @@ const getHospitalDashboardStats = async (req, res) => {
             Appointment.countDocuments({
                 hospitalId,
                 ambulanceId: { $ne: null, $exists: true },
-                status: 'Discharge-Pending' // 👈 FIXED
+                status: 'Discharge-Pending'
             }),
 
             // Tab 4: Hospital Discharge (Direct admissions clinically ready: Discharge-Pending)
@@ -102,7 +114,7 @@ const getHospitalDashboardStats = async (req, res) => {
                     { ambulanceId: null },
                     { ambulanceId: { $exists: false } }
                 ],
-                status: 'Discharge-Pending' // 👈 FIXED
+                status: 'Discharge-Pending'
             }),
 
             // Tab 5: Referral Ambulance count
@@ -112,7 +124,7 @@ const getHospitalDashboardStats = async (req, res) => {
                 status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
             }),
 
-            // Tab 6: History
+            // Tab 6: History Completed count
             Appointment.countDocuments({
                 hospitalId,
                 status: 'Completed'
@@ -121,7 +133,7 @@ const getHospitalDashboardStats = async (req, res) => {
 
         const topEmergency = emergencyActive; 
         const topAdmission = directAdmissions;
-        const topDischarge = emergencyDischarges + hospitalDischarges; // Dynamic discharge pool
+        const topDischarge = emergencyDischarges + hospitalDischarges; // Dynamic combined discharge pool
 
         res.json({
             success: true,
@@ -145,7 +157,6 @@ const getHospitalDashboardStats = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // --- 2. WARD & BED MANAGEMENT (Strict Sync) ---
 const createWardUnit = async (req, res) => {
@@ -239,12 +250,11 @@ const admitPatientToBed = async (req, res) => {
             return res.status(404).json({ success: false, message: "Admission request record not found." });
         }
 
-        // standardise check-in & check-out dates
+        // Standardise check-in & check-out dates
         const start = startDate ? moment(startDate).startOf('day').toDate() : (appointment.startDate || moment().startOf('day').toDate());
         const end = endDate ? moment(endDate).endOf('day').toDate() : (appointment.endDate || moment().add(1, 'days').endOf('day').toDate());
 
-        // 3. 🚀 STRICT DOUBLE-BOOKING VALIDATION ON CHECK-IN (Figma Standard)
-        // Check if there are any active bookings overlapping on selected bed for requested dates range
+        // 3. STRICT DOUBLE-BOOKING VALIDATION ON CHECK-IN
         const isAlreadyBooked = await Appointment.findOne({
             _id: { $ne: appointmentId },
             bedId: bedId,
@@ -265,6 +275,9 @@ const admitPatientToBed = async (req, res) => {
         // 4. Update physical Bed status to Occupied
         bed.status = 'Occupied';
         await bed.save();
+
+        // 🚀 SYNC FIX: Safely decrement Ward availableBeds counter on physical bed check-in
+        await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
 
         // 5. Update and Sync Appointment record
         appointment.bedId = bedId;
@@ -445,45 +458,89 @@ const generateFinalBillAndDischarge = async (req, res) => {
         const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
         if (!appointment) return res.status(404).json({ success: false, message: "Admission Record Not Found" });
 
-        let overstayCharge = 0;
+        const previousTotalAmount = appointment.totalAmount || 0;
         let actualEndDate = new Date();
+        let bedPricePerDay = 500; // default fallback
 
-        // Safe Dates check
+        // 1. Fetch Target Bed details to extract live pricing
+        if (appointment.bedId) {
+            const bed = await Bed.findById(appointment.bedId);
+            if (bed) {
+                bedPricePerDay = bed.pricePerDay || 500;
+            }
+        }
+
+        // 2. Calculate Standard/Scheduled Base Stay Duration & Charges
+        let baseStayDays = 1;
+        let baseStayCharge = 0;
+        if (appointment.startDate && appointment.endDate) {
+            const start = moment(appointment.startDate).startOf('day');
+            const scheduledEnd = moment(appointment.endDate).startOf('day');
+            baseStayDays = Math.max(1, scheduledEnd.diff(start, 'days'));
+            baseStayCharge = baseStayDays * bedPricePerDay;
+        }
+
+        // 3. Calculate Overstay Days & Surcharge
+        let overstayDays = 0;
+        let overstayCharge = 0;
         if (appointment.startDate && appointment.endDate) {
             const scheduledEnd = moment(appointment.endDate).startOf('day');
             const actualEnd = moment(actualEndDate).startOf('day');
             
-            const extraDays = actualEnd.diff(scheduledEnd, 'days');
-            if (extraDays > 0 && appointment.bedId) {
-                const bed = await Bed.findById(appointment.bedId);
-                const dailyRate = bed ? (bed.pricePerDay || 500) : 500;
-                overstayCharge = extraDays * dailyRate;
+            overstayDays = actualEnd.diff(scheduledEnd, 'days');
+            if (overstayDays > 0) {
+                overstayCharge = overstayDays * bedPricePerDay;
+            } else {
+                overstayDays = 0;
             }
         }
 
+        // 4. Calculate manual additional billing items
         const items = Array.isArray(billingItems) ? billingItems : [];
-        const extraTotal = items.reduce((sum, item) => sum + Number(item.price), 0) + overstayCharge;
-        
-        // Dynamic properties assignment
-        appointment.status = 'Completed';
-        appointment.endDate = actualEndDate;
-        appointment.totalAmount = (appointment.totalAmount || 0) + extraTotal;
-        
+        const extraBillingTotal = items.reduce((sum, item) => sum + Number(item.price), 0);
+
+        // 5. Structure & Heal Pricing Breakdown object
         if (!appointment.pricingBreakdown) {
             appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
         }
-        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + extraTotal;
+
+        // Heal baseFee if originally uncalculated/zero in database
+        if (!appointment.pricingBreakdown.baseFee || appointment.pricingBreakdown.baseFee === 0) {
+            appointment.pricingBreakdown.baseFee = baseStayCharge;
+        }
+
+        // Accumulate extra charges (Dynamic Overstay Bed Surcharge + Additional Billing Items)
+        const combinedExtraCharges = overstayCharge + extraBillingTotal;
+        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + combinedExtraCharges;
+
+        // Recompute dynamic subtotal & final payment amount
+        appointment.pricingBreakdown.subtotal = 
+            (appointment.pricingBreakdown.baseFee || 0) + 
+            (appointment.pricingBreakdown.visitCharges || 0) + 
+            (appointment.pricingBreakdown.extraCharges || 0);
+
+        const discount = appointment.pricingBreakdown.discountAmount || 0;
+        const finalCalculatedTotal = Math.max(0, appointment.pricingBreakdown.subtotal - discount);
         
+        // Map elements into specialServices dynamic schema
         appointment.specialServices = items.map(itm => ({
             serviceName: itm.serviceName,
             price: Number(itm.price)
         }));
 
         if (overstayCharge > 0) {
-            appointment.specialServices.push({ serviceName: `Overstay Bed Surcharge`, price: overstayCharge });
+            appointment.specialServices.push({ 
+                serviceName: `Overstay Bed Surcharge (${overstayDays} days)`, 
+                price: overstayCharge 
+            });
         }
 
-        // 1. Auto-close the Primary Doctor's open active shift
+        // Set status and finalize calculations
+        appointment.status = 'Completed';
+        appointment.endDate = actualEndDate;
+        appointment.totalAmount = finalCalculatedTotal; // Saved corrected sum
+
+        // 6. Auto-close open primary doctor's active shift
         if (appointment.doctorId) {
             const activePrimaryShift = appointment.treatmentHistory.find(h => 
                 h.toDoctorId && 
@@ -496,7 +553,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
             }
         }
 
-        // 2. Auto-close any active bedside specialist care shifts
+        // 7. Auto-close any active bedside specialist care shifts
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(careMember => {
                 if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
@@ -509,35 +566,37 @@ const generateFinalBillAndDischarge = async (req, res) => {
 
         await appointment.save();
 
-        // --- FIXED: ATOMIC WALLET SYNC (Bypasses old document validation conflicts) ---
-        const walletTransaction = {
-            type: 'Credit',
-            amount: extraTotal,
-            remark: `Discharge Bill Extra - ${appointment.bookingId}`,
-            orderId: appointment.bookingId
-        };
+        // 8. Financial Wallet Sync: Calculate dynamic credit amount (Delta logic)
+        const walletDeltaCredit = Math.max(0, finalCalculatedTotal - previousTotalAmount);
 
-        // Determine correct dynamic model name from schema enum
-        const walletSchemaPath = Wallet.schema.path('vendorModel');
-        const allowedEnums = walletSchemaPath ? walletSchemaPath.enumValues : [];
-        let matchedModel = 'Hospital';
-        if (allowedEnums.length > 0) {
-            const match = allowedEnums.find(val => val.toLowerCase() === 'hospital');
-            if (match) matchedModel = match;
+        if (walletDeltaCredit > 0) {
+            const walletTransaction = {
+                type: 'Credit',
+                amount: walletDeltaCredit,
+                remark: `Discharge Bill Finalized - ${appointment.bookingId}`,
+                orderId: appointment.bookingId
+            };
+
+            const walletSchemaPath = Wallet.schema.path('vendorModel');
+            const allowedEnums = walletSchemaPath ? walletSchemaPath.enumValues : [];
+            let matchedModel = 'Hospital';
+            if (allowedEnums.length > 0) {
+                const match = allowedEnums.find(val => val.toLowerCase() === 'hospital');
+                if (match) matchedModel = match;
+            }
+
+            await Wallet.findOneAndUpdate(
+                { vendorId: hospitalId },
+                { 
+                    $setOnInsert: { vendorModel: matchedModel }, 
+                    $inc: { balance: walletDeltaCredit },
+                    $push: { transactions: walletTransaction }
+                },
+                { upsert: true, new: true, runValidators: false }
+            );
         }
 
-        // Atomic update is 100% crash-proof
-        await Wallet.findOneAndUpdate(
-            { vendorId: hospitalId },
-            { 
-                $setOnInsert: { vendorModel: matchedModel }, 
-                $inc: { balance: extraTotal },
-                $push: { transactions: walletTransaction }
-            },
-            { upsert: true, new: true, runValidators: false } // runValidators false prevents old validation crashes!
-        );
-
-        // Release Bed & Update Ward
+        // Release Bed & Update Ward capacity
         if (appointment.bedId) {
             const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             if (bed) {
@@ -552,7 +611,12 @@ const generateFinalBillAndDischarge = async (req, res) => {
             });
         }
 
-        res.json({ success: true, message: "Patient Discharged Successfully", billAmount: appointment.totalAmount });
+        res.json({ 
+            success: true, 
+            message: "Patient Discharged Successfully with corrected stay charges.", 
+            billAmount: appointment.totalAmount 
+        });
+
     } catch (error) { 
         console.error("Discharge Error:", error);
         res.status(500).json({ message: error.message }); 
@@ -691,17 +755,44 @@ const assignDriverToCase = async (req, res) => {
 
 
 // 1. GET INCOMING REFERRALS (Screenshot 28)
+// Updated: Added dynamic pagination and full bed population
 const getIncomingReferrals = async (req, res) => {
     try {
-        const referrals = await Appointment.find({ 
-            hospitalId: req.user.id, 
+        const hospitalId = req.user.id;
+        const { page = 1, limit = 20 } = req.query;
+
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
+
+        const query = { 
+            hospitalId: hospitalId, 
             bookingType: 'Admission', 
             status: 'Hospital-Pending' 
-        })
-        .populate('userId', 'name phone profilePic')
-        .populate('ambulanceId', 'name vehicleNumber'); // 👈 FIXED tracking path to direct populated ambulanceId
+        };
 
-        res.json({ success: true, data: referrals });
+        const totalRecords = await Appointment.countDocuments(query);
+
+        const referrals = await Appointment.find(query)
+            .populate('userId', 'name phone profilePic')
+            .populate('ambulanceId', 'name vehicleNumber')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
+
+        res.json({ 
+            success: true, 
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
+            count: referrals.length,
+            data: referrals 
+        });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
     }
@@ -766,10 +857,16 @@ const deleteWard = async (req, res) => {
 };
 
 // 4. GET ALL ADMISSIONS/PATIENTS (Figma: Patient List)
+// 4. GET ALL ADMISSIONS/PATIENTS (Figma: Patient List)
+// Updated: Added full bedId/ward populations and pagination controls
 const getAllHospitalAdmissions = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { status, bedBookingType } = req.query;
+        const { status, bedBookingType, page = 1, limit = 20 } = req.query;
+
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
 
         let query = { 
             hospitalId, 
@@ -783,44 +880,75 @@ const getAllHospitalAdmissions = async (req, res) => {
         if (status) query.status = status;
         if (bedBookingType) query.bedBookingType = bedBookingType; 
 
-        const admissions = await Appointment.find(query)
-            .populate('userId', 'name phone')
-            .populate('doctorId', 'name speciality')
-            .populate('pendingDoctorId', 'name speciality') // 👈 Populates the pending handover target doctor
-            .sort({ createdAt: -1 });
+        // Count total matching records for pagination meta
+        const totalRecords = await Appointment.countDocuments(query);
 
-        res.json({ success: true, data: admissions });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const admissions = await Appointment.find(query)
+            .populate('userId', 'name phone email profilePic age gender')
+            .populate('doctorId', 'name speciality qualification profileImage')
+            .populate('pendingDoctorId', 'name speciality') 
+            // 🚀 Populating bedId and its ward details so bedNumber/ward details are completely available
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
+
+        res.json({ 
+            success: true, 
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
+            count: admissions.length,
+            data: admissions 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // --- EMERGENCY CASES ---
+// --- EMERGENCY CASES ---
+// Updated: Added dynamic pagination and full populated bed identifiers
 const getEmergencyCases = async (req, res) => {
     try {
         const hospitalId = req.user.id;
+        const { page = 1, limit = 20 } = req.query;
 
-        // 1. Fetch appointments brought in by ambulance
-        const appointments = await Appointment.find({ 
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
+
+        const query = { 
             hospitalId: hospitalId, 
             ambulanceId: { $ne: null, $exists: true }, 
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] }
-        })
-        .populate('userId', 'name profilePic phone age gender')
-        .populate('ambulanceId', 'name vehicleNumber vehicleType')
-        .populate({
-            path: 'bedId',
-            select: 'bedNumber status',
-            populate: { path: 'wardId', select: 'name' }
-        })
-        .sort({ createdAt: -1 })
-        .lean(); // Lean use karne se hum object ko modify kar sakte hain safely
+        };
 
-        // 2. 🚨 DYNAMIC PHOTO & CASE REF INJECTION
-        // Har emergency appointment ke corresponding Ambulance Booking se photos fetch karenge
+        const totalRecords = await Appointment.countDocuments(query);
+
+        // Fetch appointments brought in by ambulance
+        const appointments = await Appointment.find(query)
+            .populate('userId', 'name profilePic phone age gender')
+            .populate('ambulanceId', 'name vehicleNumber vehicleType')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber status pricePerDay',
+                populate: { path: 'wardId', select: 'name' }
+            })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
+            .lean(); 
+
         const enrichedData = await Promise.all(appointments.map(async (appt) => {
             const booking = await AmbulanceBooking.findOne({
                 $or: [
                     { bookingId: appt.bookingId },
-                    { bookingId: appt.transactionId } // Fallback tracking check
+                    { bookingId: appt.transactionId } 
                 ]
             }).select('patientDetails caseReference serviceType triageLevel').lean();
 
@@ -828,7 +956,6 @@ const getEmergencyCases = async (req, res) => {
                 ...appt,
                 caseReference: booking ? booking.caseReference : null,
                 serviceType: booking ? booking.serviceType : null,
-                // Hospital is object se "incidentPhoto" aur "driverOnSpotPhoto" nikal kar dikhayega
                 emergencyPhotos: booking ? {
                     userIncidentPhoto: booking.patientDetails?.incidentPhoto || null,
                     driverOnSpotPhoto: booking.patientDetails?.driverOnSpotPhoto || null,
@@ -840,6 +967,9 @@ const getEmergencyCases = async (req, res) => {
 
         res.json({ 
             success: true, 
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
             count: enrichedData.length, 
             data: enrichedData 
         });
@@ -1320,36 +1450,70 @@ const emergencyDischarge = async (req, res) => {
             return res.status(400).json({ success: false, message: "Patient is already discharged." });
         }
 
-        let overstayCharge = 0;
+        const previousTotalAmount = appointment.totalAmount || 0;
         let actualEndDate = new Date();
+        let bedPricePerDay = 500; // default fallback
 
-        // Calculate dynamic overstay bed charges
+        // 1. Fetch Bed details for dynamic pricing
+        if (appointment.bedId) {
+            const bed = await Bed.findById(appointment.bedId);
+            if (bed) {
+                bedPricePerDay = bed.pricePerDay || 500;
+            }
+        }
+
+        // 2. Calculate Scheduled Base Stay Days & Charge
+        let baseStayDays = 1;
+        let baseStayCharge = 0;
+        if (appointment.startDate && appointment.endDate) {
+            const start = moment(appointment.startDate).startOf('day');
+            const scheduledEnd = moment(appointment.endDate).startOf('day');
+            baseStayDays = Math.max(1, scheduledEnd.diff(start, 'days'));
+            baseStayCharge = baseStayDays * bedPricePerDay;
+        }
+
+        // 3. Calculate dynamic overstay bed charges
+        let overstayDays = 0;
+        let overstayCharge = 0;
         if (appointment.startDate && appointment.endDate) {
             const scheduledEnd = moment(appointment.endDate).startOf('day');
             const actualEnd = moment(actualEndDate).startOf('day');
             
-            const extraDays = actualEnd.diff(scheduledEnd, 'days');
-            if (extraDays > 0 && appointment.bedId) {
-                const bed = await Bed.findById(appointment.bedId);
-                const dailyRate = bed ? (bed.pricePerDay || 500) : 500;
-                overstayCharge = extraDays * dailyRate;
+            overstayDays = actualEnd.diff(scheduledEnd, 'days');
+            if (overstayDays > 0) {
+                overstayCharge = overstayDays * bedPricePerDay;
+            } else {
+                overstayDays = 0;
             }
         }
 
+        // 4. Calculate manual dynamic billing items
         const items = Array.isArray(billingItems) ? billingItems : [];
-        const extraTotal = items.reduce((sum, item) => sum + Number(item.price), 0) + overstayCharge;
-        
-        // Update Appointment status to Completed
-        appointment.status = 'Completed';
-        appointment.endDate = actualEndDate;
-        appointment.totalAmount = (appointment.totalAmount || 0) + extraTotal;
-        
-        // Safeguard pricingBreakdown object
+        const extraBillingTotal = items.reduce((sum, item) => sum + Number(item.price), 0);
+
+        // 5. Structure & Heal Pricing Breakdown object
         if (!appointment.pricingBreakdown) {
             appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
         }
-        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + extraTotal;
-        
+
+        // Heal baseFee if originally zero
+        if (!appointment.pricingBreakdown.baseFee || appointment.pricingBreakdown.baseFee === 0) {
+            appointment.pricingBreakdown.baseFee = baseStayCharge;
+        }
+
+        // Update extra charges
+        const combinedExtraCharges = overstayCharge + extraBillingTotal;
+        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + combinedExtraCharges;
+
+        // Recompute dynamic values
+        appointment.pricingBreakdown.subtotal = 
+            (appointment.pricingBreakdown.baseFee || 0) + 
+            (appointment.pricingBreakdown.visitCharges || 0) + 
+            (appointment.pricingBreakdown.extraCharges || 0);
+
+        const discount = appointment.pricingBreakdown.discountAmount || 0;
+        const finalCalculatedTotal = Math.max(0, appointment.pricingBreakdown.subtotal - discount);
+
         // Mapping billing items dynamically into specialServices array schema
         appointment.specialServices = items.map(itm => ({
             serviceName: itm.serviceName,
@@ -1357,10 +1521,18 @@ const emergencyDischarge = async (req, res) => {
         }));
 
         if (overstayCharge > 0) {
-            appointment.specialServices.push({ serviceName: `Overstay Bed Surcharge`, price: overstayCharge });
+            appointment.specialServices.push({ 
+                serviceName: `Overstay Bed Surcharge (${overstayDays} days)`, 
+                price: overstayCharge 
+            });
         }
 
-        // 1. Auto-close the Primary Doctor's open active shift
+        // Update Appointment status to Completed
+        appointment.status = 'Completed';
+        appointment.endDate = actualEndDate;
+        appointment.totalAmount = finalCalculatedTotal; // Corrected dynamic total sum
+
+        // 6. Auto-close the Primary Doctor's open active shift
         if (appointment.doctorId) {
             const activePrimaryShift = appointment.treatmentHistory.find(h => 
                 h.toDoctorId && 
@@ -1373,7 +1545,7 @@ const emergencyDischarge = async (req, res) => {
             }
         }
 
-        // 2. Auto-close any active bedside specialist care shifts
+        // 7. Auto-close any active bedside specialist care shifts
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(careMember => {
                 if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
@@ -1386,33 +1558,35 @@ const emergencyDischarge = async (req, res) => {
 
         await appointment.save();
 
-        // --- FIXED: ATOMIC WALLET SYNC (Bypasses old document validation conflicts) ---
-        const walletTransaction = {
-            type: 'Credit',
-            amount: extraTotal,
-            remark: `Emergency Discharge Bill Extra - ${appointment.bookingId}`,
-            orderId: appointment.bookingId
-        };
+        // 8. Financial Wallet Sync: Credit dynamic remaining delta balance
+        const walletDeltaCredit = Math.max(0, finalCalculatedTotal - previousTotalAmount);
 
-        // Determine correct dynamic model name from schema enum
-        const walletSchemaPath = Wallet.schema.path('vendorModel');
-        const allowedEnums = walletSchemaPath ? walletSchemaPath.enumValues : [];
-        let matchedModel = 'Hospital';
-        if (allowedEnums.length > 0) {
-            const match = allowedEnums.find(val => val.toLowerCase() === 'hospital');
-            if (match) matchedModel = match;
+        if (walletDeltaCredit > 0) {
+            const walletTransaction = {
+                type: 'Credit',
+                amount: walletDeltaCredit,
+                remark: `Emergency Discharge Bill Finalized - ${appointment.bookingId}`,
+                orderId: appointment.bookingId
+            };
+
+            const walletSchemaPath = Wallet.schema.path('vendorModel');
+            const allowedEnums = walletSchemaPath ? walletSchemaPath.enumValues : [];
+            let matchedModel = 'Hospital';
+            if (allowedEnums.length > 0) {
+                const match = allowedEnums.find(val => val.toLowerCase() === 'hospital');
+                if (match) matchedModel = match;
+            }
+
+            await Wallet.findOneAndUpdate(
+                { vendorId: hospitalId },
+                { 
+                    $setOnInsert: { vendorModel: matchedModel }, 
+                    $inc: { balance: walletDeltaCredit },
+                    $push: { transactions: walletTransaction }
+                },
+                { upsert: true, new: true, runValidators: false }
+            );
         }
-
-        // Atomic update is 100% crash-proof
-        await Wallet.findOneAndUpdate(
-            { vendorId: hospitalId },
-            { 
-                $setOnInsert: { vendorModel: matchedModel }, 
-                $inc: { balance: extraTotal },
-                $push: { transactions: walletTransaction }
-            },
-            { upsert: true, new: true, runValidators: false } // runValidators false prevents old validation crashes!
-        );
 
         // Release Bed & Update Ward capacity
         if (appointment.bedId) {
@@ -1431,7 +1605,7 @@ const emergencyDischarge = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Emergency Patient Discharged. Bed & Ambulance released successfully.", 
+            message: "Emergency Patient Discharged. Bed & Ambulance released successfully with staying charges.", 
             billAmount: appointment.totalAmount 
         });
 
@@ -1447,7 +1621,7 @@ const getHospitalCaseDetails = async (req, res) => {
         const hospitalId = req.user.id;
         const { id } = req.params; // Appointment ID
 
-        // Deep populate patient bio, active bed position, main doctor, co-doctors, and timeline history
+        // Deep populate patient bio, active bed position, main doctor, co-doctors, timeline history, and clinical checkups
         const patient = await Appointment.findOne({ _id: id, hospitalId })
             .populate('userId', 'name phone email profilePic age gender bloodGroup')
             .populate('doctorId', 'name speciality qualification profileImage')
@@ -1467,34 +1641,59 @@ const getHospitalCaseDetails = async (req, res) => {
             .populate({
                 path: 'bedsideCareTeam.doctorId',
                 select: 'name speciality profileImage dutyStatus'
+            })
+            .populate({
+                path: 'clinicalLogs.doctorId',
+                select: 'name speciality qualification profileImage'
+            })
+            .populate({
+                path: 'activeMedications.addedBy',
+                select: 'name speciality qualification profileImage'
             });
 
         if (!patient) {
             return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
         }
 
-        // Fetch latest prescription dynamically
+        // 1. Process files and compile billing breakdown details
+        const enrichedPatient = await enrichAppointmentClinicalDetails(patient);
+
+        // 2. Fetch latest prescription dynamically
         const Prescription = require('../../models/Prescription'); 
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
-        // --- NEW: DYNAMIC AMBULANCE TELEMETRY SYNC ---
+        // 3. Sync dynamic ambulance telemetry
         let ambulanceBooking = null;
         if (patient.ambulanceId) {
             const AmbulanceBooking = require('../../models/AmbulanceBooking');
             ambulanceBooking = await AmbulanceBooking.findOne({
                 $or: [
                     { bookingId: patient.bookingId },
-                    { bookingId: patient.transactionId } // Fallback tracking check
+                    { bookingId: patient.transactionId } 
                 ]
             }).lean();
         }
 
+        // 🚀 4. COLLABORATIVE SYNC: Map and flatten all bedside specialists recommended medicines for ward desk view
+        const bedsideMedications = patient.bedsideCareTeam
+            .filter(member => ['Completed', 'In-Progress', 'Accepted'].includes(member.status))
+            .map(member => ({
+                doctor: {
+                    id: member.doctorId?._id,
+                    name: member.doctorId?.name,
+                    speciality: member.doctorId?.speciality,
+                    profileImage: member.doctorId?.profileImage
+                },
+                recommendations: member.recommendedMedicines || []
+            }));
+
         res.json({ 
             success: true, 
             data: {
-                patient,
+                patient: enrichedPatient,
                 prescription: prescription || null,
-                ambulanceTelemetry: ambulanceBooking // Injects complete transit details, triage levels, and onsite photos
+                ambulanceTelemetry: ambulanceBooking,
+                bedsideMedications // 👈 Recieved identical collaborative medications pool directly in desk response!
             }
         });
     } catch (error) {
@@ -1503,27 +1702,26 @@ const getHospitalCaseDetails = async (req, res) => {
 };
 
 // Helper function to enrich appointment with clinical details, prescriptions, and treatment team timeline
+// Added dynamic Pre-Billing and Overstay bed surcharge calculation mechanics
+// Helper function to enrich appointment with clinical details, prescriptions, and treatment team timeline
+// Fixed: Computes dynamic pricing metrics and heals zero-value database pricing breakdowns on-the-fly
 const enrichAppointmentClinicalDetails = async (appt) => {
-    // Safe conversion of Mongoose document to plain JavaScript object
     const apptObj = appt.toObject ? appt.toObject() : { ...appt };
 
-    // 1. Fetch prescription details for Diet Plan & Discharge PDF Card
     const prescriptionObj = await Prescription.findOne({ appointmentId: apptObj._id })
         .select('pdfUrl dietPlanPdf medicines diagnosis')
         .lean();
 
-    // 2. Consolidate all clinical PDF/Image documents into a unified object
     const clinicalFiles = {
         dietPlanPdf: prescriptionObj?.dietPlanPdf || null,
         dischargeSummaryPdf: apptObj.clinicalSummary?.dischargeSummaryPdf || null,
         clinicalReports: apptObj.clinicalSummary?.uploadedReports || [],
-        dischargeCardUrl: prescriptionObj?.pdfUrl || null // Keeps legacy dischargeCardUrl intact
+        dischargeCardUrl: prescriptionObj?.pdfUrl || null
     };
 
-    // 3. Compile full Treatment Team Timeline (Primary Doctor + Specialists + Handover shifts)
     const treatmentTeamTimeline = [];
 
-    // A. Fetch Primary Doctor Details & active Shift timings
+    // A. Fetch Current Active Primary Doctor details & active Shift timings
     if (apptObj.doctorId) {
         const primaryShift = apptObj.treatmentHistory?.find(h => 
             h.toDoctorId && h.toDoctorId._id?.toString() === apptObj.doctorId._id?.toString() && h.startTime
@@ -1542,7 +1740,7 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         });
     }
 
-    // B. Fetch Bedside Care Team (Co-Doctors) details & shift timings
+    // B. Fetch Bedside Care Team (Co-Doctors) details & active shift timings
     if (apptObj.bedsideCareTeam && apptObj.bedsideCareTeam.length > 0) {
         apptObj.bedsideCareTeam.forEach(member => {
             if (member.doctorId) {
@@ -1561,29 +1759,109 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         });
     }
 
-    // C. Fetch Handover / Transfer details from timeline log
+    // 🚀 C. Fetch Completed / Transferred previous primary shifts from treatmentHistory
     if (apptObj.treatmentHistory && apptObj.treatmentHistory.length > 0) {
         apptObj.treatmentHistory.forEach(historyLog => {
-            if (historyLog.action === 'Transfer-Initiated' && historyLog.fromDoctorId) {
-                treatmentTeamTimeline.push({
-                    doctorId: historyLog.fromDoctorId._id,
-                    name: historyLog.fromDoctorId.name,
-                    speciality: historyLog.fromDoctorId.speciality,
-                    qualification: historyLog.fromDoctorId.qualification || "MD",
-                    profileImage: historyLog.fromDoctorId.profileImage,
-                    role: "Handover Colleague (Sender)",
-                    joinedAt: historyLog.timestamp,
-                    dischargedAt: historyLog.timestamp,
-                    duration: ""
-                });
+            // Find closed doctor shifts (excluding the current active doctor's unended shift)
+            if (historyLog.toDoctorId && historyLog.endTime) {
+                const isCurrentActiveDoc = apptObj.doctorId && 
+                                           apptObj.doctorId._id?.toString() === historyLog.toDoctorId._id?.toString() && 
+                                           !historyLog.endTime;
+                
+                if (!isCurrentActiveDoc) {
+                    // Check if we already pushed this doctor with this shift to avoid duplicates in timeline
+                    const alreadyPushed = treatmentTeamTimeline.some(t => 
+                        t.doctorId?.toString() === historyLog.toDoctorId._id?.toString() && 
+                        String(t.joinedAt) === String(historyLog.startTime)
+                    );
+
+                    if (!alreadyPushed) {
+                        treatmentTeamTimeline.push({
+                            doctorId: historyLog.toDoctorId._id,
+                            name: historyLog.toDoctorId.name,
+                            speciality: historyLog.toDoctorId.speciality,
+                            qualification: historyLog.toDoctorId.qualification || "MD",
+                            profileImage: historyLog.toDoctorId.profileImage,
+                            role: "Previous Physician (Discharged)",
+                            joinedAt: historyLog.startTime,
+                            dischargedAt: historyLog.endTime,
+                            duration: historyLog.durationDisplay || ""
+                        });
+                    }
+                }
             }
         });
     }
 
+    let overstayDays = 0;
+    let overstayCharge = 0;
+    let bedPricePerDay = 0;
+    let baseStayDays = 0;
+    let baseStayCharge = 0;
+
+    if (apptObj.bedId) {
+        bedPricePerDay = apptObj.bedId.pricePerDay || 0;
+    }
+
+    if (apptObj.startDate && apptObj.endDate) {
+        const start = moment(apptObj.startDate);
+        const scheduledEnd = moment(apptObj.endDate);
+        
+        if (start.isValid() && scheduledEnd.isValid()) {
+            baseStayDays = Math.max(1, scheduledEnd.startOf('day').diff(start.startOf('day'), 'days'));
+            baseStayCharge = baseStayDays * bedPricePerDay;
+
+            const checkoutTime = apptObj.status === 'Completed' ? moment(apptObj.endDate) : moment();
+            const actualEnd = checkoutTime.startOf('day');
+            
+            overstayDays = actualEnd.diff(scheduledEnd.startOf('day'), 'days');
+            if (overstayDays > 0) {
+                overstayCharge = overstayDays * bedPricePerDay;
+            } else {
+                overstayDays = 0;
+            }
+        }
+    }
+
+    const dynamicPricingBreakdown = apptObj.pricingBreakdown ? { ...apptObj.pricingBreakdown } : {
+        baseFee: 0, subtotal: 0, originalBaseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, cancellationFeeApplied: 0, noShowFeeApplied: 0
+    };
+
+    if (!dynamicPricingBreakdown.baseFee || dynamicPricingBreakdown.baseFee === 0) {
+        dynamicPricingBreakdown.baseFee = baseStayCharge;
+    }
+
+    if (overstayCharge > 0) {
+        dynamicPricingBreakdown.extraCharges = (dynamicPricingBreakdown.extraCharges || 0) + overstayCharge;
+    }
+
+    const dynamicSubtotal = (dynamicPricingBreakdown.baseFee || 0) + (dynamicPricingBreakdown.visitCharges || 0) + (dynamicPricingBreakdown.extraCharges || 0);
+    dynamicPricingBreakdown.subtotal = dynamicSubtotal;
+
+    const discount = dynamicPricingBreakdown.discountAmount || 0;
+    const dynamicTotalAmount = Math.max(0, dynamicSubtotal - discount);
+
+    apptObj.pricingBreakdown = dynamicPricingBreakdown;
+
+    if (!apptObj.totalAmount || apptObj.totalAmount === 0) {
+        apptObj.totalAmount = dynamicTotalAmount;
+    }
+
+    const billingBreakdown = {
+        baseStayDays,
+        baseStayCharge,
+        overstayDays,
+        overstayCharge,
+        bedPricePerDay,
+        estimatedTotal: dynamicTotalAmount,
+        currentBillAmount: apptObj.totalAmount
+    };
+
     return {
         ...apptObj,
         clinicalFiles,
-        treatmentTeamTimeline
+        treatmentTeamTimeline,
+        billingBreakdown
     };
 };
 
@@ -1638,7 +1916,7 @@ const getHospitalPendingDischarges = async (req, res) => {
             .skip(skip)
             .limit(parseInt(limit));
 
-        // Asynchronously process files and timeline details for each pending discharge
+        // Asynchronously process files, timeline details and PRE-BILLING surcharges for each pending record
         const enrichedList = await Promise.all(list.map(async (appt) => {
             return await enrichAppointmentClinicalDetails(appt);
         }));
@@ -1657,9 +1935,170 @@ const getHospitalPendingDischarges = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// --- API: DISPATCH HOSPITAL AMBULANCE FOR ADMISSION PATIENT (Figma Flow Sync) ---
+// Endpoint: POST /hospital/panel/admissions/dispatch-ambulance
+// Logic: Generates AmbulanceBooking, locks driver availability, and appends transit charges to patient's bill
+const dispatchAmbulanceForAdmission = async (req, res) => {
+    let ambulanceToRollback = null; // Used for transactional database rollback if save fails
 
+    try {
+        const hospitalId = req.user.id;
+        const { 
+            appointmentId, 
+            ambulanceId, 
+            destinationName, 
+            customAddressText, 
+            surgePrice, 
+            baseAmbulanceRate 
+        } = req.body;
 
+        // 1. Fetch Target Appointment
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
+        }
 
+        // 🚀 EDGE CASE 1 GUARD: Prevent duplicate dispatches on the same admission request (Double-Billing protection)
+        if (appointment.ambulanceId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "An ambulance has already been dispatched for this admission. Please cancel the current booking to re-assign." 
+            });
+        }
+
+        // 2. Fetch selected fleet ambulance and verify available state
+        const ambulance = await Ambulance.findOne({
+            _id: ambulanceId,
+            hospitalId,
+            isActive: true,
+            availableForEmergency: true,
+            profileStatus: 'Approved'
+        });
+
+        if (!ambulance) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Selected ambulance is not available or belongs to another hospital fleet." 
+            });
+        }
+
+        // Set pointer for rollback if subsequent steps crash
+        ambulanceToRollback = ambulanceId;
+
+        // 3. Calculate transit pricing parameters as per Figma
+        const basePrice = Number(baseAmbulanceRate || ambulance.pricing?.fixedPrice || 1500);
+        const surge = Number(surgePrice || 0);
+        const totalDispatchPrice = basePrice + surge;
+
+        // 4. Lock physical fleet ambulance to busy state
+        ambulance.availableForEmergency = false;
+        await ambulance.save();
+
+        // 5. Generate distinct Booking ID references
+        const generatedBookingId = `HK-REF-${Date.now().toString().slice(-6)}`;
+        const generatedCaseRef = `HK-${new Date().getFullYear()}-REF-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        // Determine destination address
+        let finalDropAddress = destinationName || "Patient's Registered Residence";
+        if (destinationName === "Custom Destination Address" && customAddressText) {
+            finalDropAddress = customAddressText;
+        }
+
+        const patientObj = appointment.patients?.[0] || {};
+
+        // 6. Create matching Active Trip inside AmbulanceBooking so it flows to Driver App
+        const AmbulanceBooking = require('../../models/AmbulanceBooking'); // Secure model load
+        
+        const booking = await AmbulanceBooking.create({
+            bookingId: generatedBookingId,
+            caseReference: generatedCaseRef,
+            userId: appointment.userId,
+            ambulanceId: ambulanceId,
+            hospitalId: hospitalId, // Origin Hospital
+            serviceType: 'Referral Ambulance',
+            status: 'Confirmed', // Direct hospital dispatch skips searching broadcast phase
+            pickupLocation: {
+                address: req.user.address || "Hospital Base Location",
+                lat: req.user.location?.lat || 30.7046,
+                lng: req.user.location?.lng || 76.7179
+            },
+            patientDetails: {
+                name: patientObj.patientName || "Admitted Patient",
+                age: patientObj.patientAge || 30,
+                gender: patientObj.gender || "Male",
+                condition: "Stable",
+                emergencyDescription: "Referral hospital transit drop-off"
+            },
+            pricing: {
+                ambulanceCharge: basePrice,
+                supportingStaffCharge: 0,
+                subtotal: totalDispatchPrice,
+                discount: 0,
+                total: totalDispatchPrice
+            },
+            paymentStatus: 'Pending', // Collected collectively at hospital checkout discharge
+            paymentMethod: 'Online',
+            otp: Math.floor(1000 + Math.random() * 9000).toString(),
+            trackingTimeline: [{
+                status: 'Confirmed',
+                timestamp: new Date(),
+                note: `Ambulance assigned and dispatched directly by hospital admin control desk to ${finalDropAddress}.`
+            }]
+        });
+
+        // 7. BIND CHARGES TO PATIENT'S FINAL HOSPITAL INVOICE
+        // Append ambulance ride cost to specialServices sub-schema
+        appointment.specialServices.push({
+            serviceName: `Ambulance Dispatch: ${finalDropAddress}`,
+            price: totalDispatchPrice
+        });
+
+        // Increment Pricing breakdown extraCharges of hospital appointment
+        if (!appointment.pricingBreakdown) {
+            appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
+        }
+
+        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + totalDispatchPrice;
+        appointment.totalAmount = (appointment.totalAmount || 0) + totalDispatchPrice;
+
+        // Link references on appointment record
+        appointment.ambulanceId = ambulanceId;
+        appointment.transactionId = generatedBookingId;
+
+        await appointment.save();
+
+        // 8. Push notifications to driver mobile console
+        const { sendPushNotification } = require('../../utils/notification');
+        await sendPushNotification(
+            ambulanceId,
+            'ambulance',
+            "🚨 Assigned Referral Ride",
+            `Hospital has dispatched you for a Referral trip to ${finalDropAddress}. Patient Name: ${patientObj.patientName || 'User'}.`,
+            { bookingId: booking._id.toString(), type: 'assigned_referral' }
+        );
+
+        res.status(201).json({
+            success: true,
+            message: "Ambulance successfully dispatched. Cost appended to patient's hospital invoice.",
+            data: {
+                booking,
+                appointment
+            }
+        });
+
+    } catch (error) {
+        console.error("Ambulance Dispatch Error:", error);
+
+        // 🚀 EDGE CASE 2: Safe transactional rollback if appointment saving fails mid-execution
+        if (ambulanceToRollback) {
+            await Ambulance.findByIdAndUpdate(ambulanceToRollback, { 
+                $set: { availableForEmergency: true } 
+            });
+        }
+
+        res.status(500).json({ success: false, message: "Transactional dispatch failure: " + error.message });
+    }
+};
 
 // --- API: REASSIGNS HOSPITAL AMBULANCE DUE TO BREAKDOWN (Strictly preserves original pricing) ---
 // Endpoint: POST /hospital/panel/ambulance/reassign-breakdown
@@ -1870,6 +2309,131 @@ const reportHospitalNoShow = async (req, res) => {
 };
 
 
+// --- API: TRANSFER PATIENT BED (With Automatic Split Stay Billing Engine) ---
+// Endpoint: POST /hospital/panel/admissions/transfer-bed
+// Path: controllers/hospital/HospitalPanel.js
+const transferPatientBed = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { appointmentId, newBedId } = req.body;
+
+        if (!appointmentId || !newBedId) {
+            return res.status(400).json({ success: false, message: "Appointment ID and New Bed ID are required." });
+        }
+
+        // 1. Fetch Target Appointment
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission request record not found." });
+        }
+
+        const activeStates = ['Confirmed', 'In-Progress', 'Hospital-Pending'];
+        if (!activeStates.includes(appointment.status)) {
+            return res.status(400).json({ success: false, message: "Cannot transfer bed in current patient status." });
+        }
+
+        const oldBedId = appointment.bedId;
+        const oldBedNumber = appointment.bedNumber || "Unassigned Bed";
+        const oldWardName = appointment.wardName || "Unassigned Ward";
+
+        if (oldBedId && String(oldBedId) === String(newBedId)) {
+            return res.status(400).json({ success: false, message: "Patient is already assigned to this bed." });
+        }
+
+        // 2. Fetch and Validate New Bed
+        const newBed = await Bed.findById(newBedId).populate('wardId');
+        if (!newBed) {
+            return res.status(404).json({ success: false, message: "Target Bed not found in system." });
+        }
+
+        if (newBed.status !== 'Available') {
+            return res.status(400).json({ success: false, message: `Target Bed ${newBed.bedNumber} is currently ${newBed.status}.` });
+        }
+
+        let oldBedPricePerDay = 500; // default fallback
+
+        // 3. RELEASE OLD BED & CALCULATE SPLIT BILLING
+        if (oldBedId) {
+            const oldBed = await Bed.findById(oldBedId);
+            if (oldBed) {
+                oldBedPricePerDay = oldBed.pricePerDay || 500;
+                oldBed.status = 'Available';
+                await oldBed.save();
+
+                // Increment old ward capacity
+                await Ward.findByIdAndUpdate(oldBed.wardId, { $inc: { availableBeds: 1 } });
+            }
+
+            // 🚀 DYNAMIC SPLIT STAY ACCUMULATOR (Prepaid Adjusted)
+            if (appointment.startDate) {
+                const start = moment(appointment.startDate).startOf('day');
+                const now = moment().startOf('day');
+                const oldStayDays = Math.max(1, now.diff(start, 'days')); // Minimum 1 day unit billing
+                const oldStayCharge = oldStayDays * oldBedPricePerDay;
+
+                // Lock previous bed stay cost as a special service line item
+                appointment.specialServices.push({
+                    serviceName: `Bed Stay: ${oldWardName} - ${oldBedNumber} (${oldStayDays} days)`,
+                    price: oldStayCharge
+                });
+
+                // Update dynamic pricing breakdown ledger
+                if (!appointment.pricingBreakdown) {
+                    appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
+                }
+
+                // 🚀 PREPAID ADJUSTMENT GUARD: Deduct previous unspent advance base fee from totalAmount to prevent double-billing
+                const originalBaseFee = appointment.pricingBreakdown.baseFee || 0;
+                if (originalBaseFee > 0) {
+                    appointment.totalAmount = Math.max(0, (appointment.totalAmount || 0) - originalBaseFee);
+                }
+                
+                // Reset active baseFee to 0 so the next bed stay starts fresh
+                appointment.pricingBreakdown.baseFee = 0; 
+                appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + oldStayCharge;
+                appointment.totalAmount = (appointment.totalAmount || 0) + oldStayCharge;
+
+                // Reset appointment startDate to "now" so new bed stay duration starts counting from today
+                appointment.startDate = new Date();
+            }
+        }
+
+        // 4. LOCK AND OCCUPY NEW BED
+        newBed.status = 'Occupied';
+        await newBed.save();
+
+        // Decrement new ward capacity
+        await Ward.findByIdAndUpdate(newBed.wardId, { $inc: { availableBeds: -1 } });
+
+        // 5. UPDATE APPOINTMENT TO NEW BED PROPERTIES
+        appointment.bedId = newBedId;
+        appointment.bedNumber = newBed.bedNumber;
+        appointment.wardName = newBed.wardId ? newBed.wardId.name : "Ward";
+
+        const now = new Date();
+
+        // Push audit log to clinical history timeline
+        appointment.treatmentHistory.push({
+            action: 'Transfer-Accepted',
+            notes: `Bed shifted from ${oldWardName} (Bed: ${oldBedNumber}) to ${appointment.wardName} (Bed: ${appointment.bedNumber}).`,
+            timestamp: now
+        });
+
+        await appointment.save();
+
+        res.json({
+            success: true,
+            message: `Patient successfully transferred to ${appointment.wardName} - ${appointment.bedNumber}. Previous stay billing successfully locked.`,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Bed Transfer Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 
 module.exports = { 
@@ -1885,5 +2449,7 @@ module.exports = {
     updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy, finalizeDischarge, setHospitalShift , getHospitalReferralBookings,
     updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,
-    emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,reassignAmbulanceOnBreakdown,reassignDoctorFromPanel,reportHospitalNoShow
+    emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,
+    dispatchAmbulanceForAdmission,reassignAmbulanceOnBreakdown,
+    reassignDoctorFromPanel,reportHospitalNoShow,transferPatientBed
 };
