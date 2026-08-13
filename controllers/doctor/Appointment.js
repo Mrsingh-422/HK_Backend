@@ -965,12 +965,11 @@ const searchMasterMedicinesForDoctor = async (req, res) => {
 
 const reportDoctorNoShow = async (req, res) => {
     try {
-        const { appointmentId, comments } = req.body;
-        const doctorId = req.user.id;
+        // 🚀 SYNC FIX: Reads ID from URL params (req.params.id) directly as requested by Axios
+        const appointmentId = req.params.id || req.body.appointmentId; 
+        const comments = req.body.comments || req.body.reason || "Patient did not show up for consultation.";
 
-        if (!comments) {
-            return res.status(400).json({ success: false, message: "Please select/provide a valid reason for reporting No-Show." });
-        }
+        const doctorId = req.user.id;
 
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
@@ -1001,6 +1000,9 @@ const reportDoctorNoShow = async (req, res) => {
         }
 
         appointment.status = 'No-Show';
+        if (!appointment.tracking) {
+            appointment.tracking = { otp: null, isOtpVerified: false, noShowReason: "" };
+        }
         appointment.tracking.noShowReason = comments;
         appointment.pricingBreakdown.noShowFeeApplied = noShowFee;
         appointment.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
@@ -1009,7 +1011,7 @@ const reportDoctorNoShow = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Consultation No-Show logged. Bed/Resource released.", 
+            message: "Consultation No-Show logged successfully.", 
             noShowFeeApplied: noShowFee,
             limits: {
                 remainingCancellations,
