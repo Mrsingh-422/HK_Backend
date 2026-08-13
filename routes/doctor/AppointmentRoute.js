@@ -60,7 +60,7 @@ router.get('/patient-history/:id', protect('doctor'), getPatientHistoryDetails);
 router.get('/video-consults', protect('doctor'), getDoctorVideoConsults); // 👈 Added
 router.get('/medicines/search', protect('doctor'), searchMasterMedicinesForDoctor);
 
-router.post('/no-show/:id', protect('doctor'), reportDoctorNoShow);
+router.patch('/no-show/:id', protect('doctor'), reportDoctorNoShow);
 
 
 module.exports = router;
