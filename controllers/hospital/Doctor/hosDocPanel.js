@@ -949,7 +949,6 @@ const submitSpecialistFeedback = async (req, res) => {
         const { appointmentId, observation, patientCondition, priorityRating, recommendedMedicines } = req.body;
         const specialistId = req.user.id;
 
-        // Verify active bedside treatment shift is in-progress
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             "bedsideCareTeam.doctorId": specialistId,
@@ -957,10 +956,9 @@ const submitSpecialistFeedback = async (req, res) => {
         });
 
         if (!appointment) {
-            return res.status(403).json({ success: false, message: "Unauthorized: Aapka treatment shift active (In-Progress) nahi hai." });
+            return res.status(403).json({ success: false, message: "Unauthorized: Bedside treatment shift not active." });
         }
 
-        // Block modifications if treatment already ended
         if (['Discharge-Pending', 'Completed'].includes(appointment.status)) {
             return res.status(400).json({ 
                 success: false, 
@@ -970,7 +968,6 @@ const submitSpecialistFeedback = async (req, res) => {
 
         const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
         
-        // Safeguard specialistFeedback array initialization
         if (!careTeamObj.specialistFeedback) {
             careTeamObj.specialistFeedback = [];
         }
@@ -983,7 +980,7 @@ const submitSpecialistFeedback = async (req, res) => {
             submittedAt: new Date()
         });
 
-        // 🚀 SYNC FIX: Parse and push recommended medications into specialist care list
+        // Push new recommended medicines with dynamic stay vs home types
         if (recommendedMedicines) {
             const medicinesArray = typeof recommendedMedicines === 'string' ? JSON.parse(recommendedMedicines) : recommendedMedicines;
             
@@ -995,6 +992,7 @@ const submitSpecialistFeedback = async (req, res) => {
                         frequency: med.frequency || "",
                         duration: med.duration || "",
                         instructions: med.instructions || "",
+                        type: med.type || 'Active-Stay', // 🚀 Dynamic Type: 'Active-Stay' or 'Discharge-Home'
                         addedAt: new Date()
                     });
                 });
@@ -1002,7 +1000,7 @@ const submitSpecialistFeedback = async (req, res) => {
         }
 
         await appointment.save();
-        res.json({ success: true, message: "Clinical observation and medicine recommendations appended successfully!" });
+        res.json({ success: true, message: "Clinical feedback and medication recommendations recorded successfully!" });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -1023,24 +1021,28 @@ const getCollaborativeMedications = async (req, res) => {
             return res.status(404).json({ success: false, message: "Admission Record Not Found." });
         }
 
-        // Verify requesting doctor is indeed the main treating physician
         const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === mainDoctorId.toString();
         if (!isPrimaryDoc) {
             return res.status(403).json({ success: false, message: "Access Denied: Only the main treating physician can compile or review specialist medications." });
         }
 
-        // Map and flatten all bedside specialists recommendations
+        // Map and group bedside specialists recommendations by Type
         const collaborativeList = appointment.bedsideCareTeam
             .filter(member => ['Completed', 'In-Progress', 'Accepted'].includes(member.status))
-            .map(member => ({
-                doctor: {
-                    id: member.doctorId?._id,
-                    name: member.doctorId?.name,
-                    speciality: member.doctorId?.speciality,
-                    profileImage: member.doctorId?.profileImage
-                },
-                recommendations: member.recommendedMedicines || []
-            }));
+            .map(member => {
+                const meds = member.recommendedMedicines || [];
+                return {
+                    doctor: {
+                        id: member.doctorId?._id,
+                        name: member.doctorId?.name,
+                        speciality: member.doctorId?.speciality,
+                        profileImage: member.doctorId?.profileImage
+                    },
+                    // 🚀 Grouping recommendations by type for cleaner frontend rendering
+                    activeStayRecommendations: meds.filter(m => m.type === 'Active-Stay'),
+                    dischargeHomeRecommendations: meds.filter(m => m.type === 'Discharge-Home')
+                };
+            });
 
         res.json({
             success: true,

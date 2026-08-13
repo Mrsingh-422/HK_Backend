@@ -161,11 +161,17 @@ const appointmentSchema = new mongoose.Schema({
 
         // 🚀 NEW: Specialist recommended medicines before final discharge compilation
         recommendedMedicines: [{
-            name: { type: String },
-            dosage: { type: String }, // e.g. "1 tab"
-            frequency: { type: String }, // e.g. "TDS (Thrice Daily)"
-            duration: { type: String }, // e.g. "5 days"
-            instructions: { type: String, default: "" }, // e.g. "After meal"
+            name: { type: String, required: true },
+            dosage: { type: String },
+            frequency: { type: String },
+            duration: { type: String },
+            instructions: { type: String, default: "" },
+            // 🚀 NEW TYPE ENUM: Determines if med is for hospital stay or post-discharge at home
+            type: { 
+                type: String, 
+                enum: ['Active-Stay', 'Discharge-Home'], 
+                default: 'Active-Stay' 
+            },
             addedAt: { type: Date, default: Date.now }
         }],
 
@@ -215,6 +221,12 @@ const appointmentSchema = new mongoose.Schema({
         refundAmountCalculated: { type: Number, default: 0 }, // 👈 Stores net payout return
         penaltyApplied: { type: Number, default: 0 }          // 👈 Stores dynamic cancellation fee applied
     },
+
+    tracking: {
+        otp: { type: String, default: null },
+        isOtpVerified: { type: Boolean, default: false },
+        noShowReason: { type: String, default: "" }
+    }
 
 
 

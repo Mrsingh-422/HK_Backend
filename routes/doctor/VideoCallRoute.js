@@ -5,7 +5,7 @@ const { protect } = require('../../middleware/authMiddleware'); // protect commo
 const { 
     initiateVideoCall, 
     respondToCall, 
-    endVideoCall,
+    endVideoCall,getDoctorCallHistory,
     getIceServers // 👈 IMPORTED FOR DOCTOR
 } = require('../../controllers/doctor/VideoCall');
 
@@ -19,6 +19,8 @@ router.post('/respond', protect('user'), respondToCall);
 
 // 3. Call ends
 router.post('/end', endVideoCall); 
+
+router.get('/history', protect('doctor'), getDoctorCallHistory);
 
 // 4. Fetch WebRTC ICE Servers (STUN Config) for Doctor Peer Connection
 router.get('/ice-servers', protect('doctor'), getIceServers); // 👈 ADDED

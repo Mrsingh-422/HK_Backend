@@ -6,6 +6,7 @@ const moment = require('moment');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const NoShowConfig = require('../../models/NoShowConfig');
+const DocReschleduleLimit = require('../../models/DocRescheduleLimit');
 
 
 // GET: Doctor Dashboard Stats
@@ -109,24 +110,19 @@ const getDoctorBookings = async (req, res) => {
     try {
         const { status, consultationType } = req.query;
         
-        // Security Check: Only independent doctors
         if (req.user.role !== 'doctor') {
             return res.status(403).json({ message: "Access denied. Not an independent doctor." });
         }
 
         let query = { 
             doctorId: req.user.id, 
-            bookingType: 'Appointment' // Only normal appointments
+            bookingType: 'Appointment' 
         };
 
-        // 1. Status Filter
         if (status) query.status = status;
 
-        // 2. Consultation Type Filter (Video Consult, Clinic Visit, Home Visit)
         if (consultationType) {
             const lowerType = consultationType.toLowerCase();
-            
-            // Map query params (video, clinic, home) to exact schema enum values
             if (lowerType === 'video' || lowerType === 'video consult') {
                 query.consultationType = 'Video Consult';
             } else if (lowerType === 'clinic' || lowerType === 'clinic visit') {
@@ -134,16 +130,30 @@ const getDoctorBookings = async (req, res) => {
             } else if (lowerType === 'home' || lowerType === 'home visit') {
                 query.consultationType = 'Home Visit';
             } else {
-                query.consultationType = consultationType; // Fallback in case exact string is passed
+                query.consultationType = consultationType;
             }
         }
 
-        // 3. Sorting (Changed from 1 to -1 to get the latest/newest bookings first)
         const appointments = await Appointment.find(query)
             .populate('userId', 'name phone email')
-            .sort({ appointmentDate: -1, appointmentTime: -1 }); // 👈 Reverse sort (Latest first)
+            .sort({ appointmentDate: -1, appointmentTime: -1 });
 
-        res.json({ success: true, count: appointments.length, data: appointments });
+        // Fetch platform global limits configuration (fallback is 2)
+        const globalConfig = await DocReschleduleLimit.findOne() || { maxLimit: 2 };
+        const maxLimit = globalConfig.maxLimit || 2;
+
+        // 🚀 SYNC FIX: Inject dynamic limits into the doctor's patient cards list response
+        const formattedData = appointments.map(app => {
+            const appObj = app.toObject ? app.toObject() : { ...app };
+            const currentRescheduleCount = appObj.rescheduleCount || 0;
+            const currentCancelCount = appObj.cancellationCount || 0;
+
+            appObj.remainingReschedules = Math.max(0, maxLimit - currentRescheduleCount);
+            appObj.remainingCancellations = Math.max(0, maxLimit - currentCancelCount);
+            return appObj;
+        });
+
+        res.json({ success: true, count: formattedData.length, data: formattedData });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -214,15 +224,32 @@ const confirmAppointment = async (req, res) => {
 const doctorCancelAppointment = async (req, res) => {
     try {
         const { reason, isPermanent = false } = req.body; // isPermanent: true (Auto-Refund) | false (Free Reschedule)
-        const appointment = await Appointment.findOne({ _id: req.params.id, doctorId: req.user.id, bookingType: 'Appointment' });
         
-        if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+        const appointment = await Appointment.findOne({ 
+            _id: req.params.id, 
+            doctorId: req.user.id, 
+            bookingType: 'Appointment' 
+        });
+        
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment not found" });
+        }
+
+        // 🚀 CRITICAL SECURITY CHECK: Block cancellation if the appointment is already finalized or closed [1]
+        const terminalStates = ['Completed', 'Cancelled-By-Doctor', 'Cancelled-By-User', 'No-Show'];
+        if (terminalStates.includes(appointment.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cancellation Blocked: Appointment is already in '${appointment.status}' state.` 
+            });
+        }
 
         const totalPaid = appointment.totalAmount || 0;
 
         if (isPermanent === true || isPermanent === "true") {
+            // Permanent Cancellation: Sets state to refund-ready and reverses subscription benefit counts
             appointment.status = 'Cancelled-By-Doctor';
-            appointment.paymentStatus = 'Refund-Initiated'; // Full refund, no penalty applied to doctor cancellations
+            appointment.paymentStatus = 'Refund-Initiated'; // Full refund triggers under this state [1]
             
             appointment.cancellationDetails = {
                 cancelledBy: req.user.id,
@@ -233,14 +260,14 @@ const doctorCancelAppointment = async (req, res) => {
                 penaltyApplied: 0
             };
 
-            // Subscription benefit refund check
+            // Subscription benefit refund: Reverses the consumed consult count if applicable [1]
             if (appointment.subscriptionDetails?.isSubscriptionApplied && appointment.pricingBreakdown?.baseFee === 0) {
                 await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
             }
         } else {
-            // Normal Cancel: Patient gets a free reschedule option
+            // Temporary Cancellation: Free Reschedule authorization granted to user, payment remains active
             appointment.status = 'Cancelled-By-Doctor';
-            appointment.paymentStatus = 'Paid'; // Keep payment active
+            appointment.paymentStatus = 'Paid'; // Payment remains captured
             
             appointment.cancellationDetails = {
                 cancelledBy: req.user.id,
@@ -253,6 +280,7 @@ const doctorCancelAppointment = async (req, res) => {
         }
 
         await appointment.save();
+
         res.json({ 
             success: true, 
             message: isPermanent 
@@ -261,7 +289,7 @@ const doctorCancelAppointment = async (req, res) => {
             data: appointment 
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -274,27 +302,6 @@ const startVisit = async (req, res) => {
             { new: true }
         );
         res.json({ success: true, message: "Visit started.", otp, data: appointment });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-const completeWithPrescription = async (req, res) => {
-    try {
-        const { diagnosis, medicines, additionalNotes } = req.body;
-        const appointment = await Appointment.findOne({ _id: req.params.id, bookingType: 'Appointment' });
-        if (!appointment) return res.status(404).json({ message: "Appointment not found" });
-
-        const prescription = await Prescription.create({
-            appointmentId: req.params.id,
-            doctorId: req.user.id,
-            userId: appointment.userId,
-            diagnosis,
-            medicines,
-            additionalNotes
-        });
-
-        appointment.status = 'Completed';
-        await appointment.save();
-        res.status(201).json({ success: true, message: "Prescription added and completed", data: prescription });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
@@ -643,8 +650,8 @@ const getAppointmentClinicalDetails = async (req, res) => {
 };
 
 
-// POST: Create a new prescription
-// endpoint: POST /doctor/prescriptions/create
+// --- CREATE PRESCRIPTION (With Vitals & Secure Call OTP Verification Lock) ---
+// Endpoint: POST /doctor/appointments/create-prescription
 const createPrescription = async (req, res) => {
     try {
         const {
@@ -652,28 +659,41 @@ const createPrescription = async (req, res) => {
             appointmentId,
             chiefComplaints,
             diagnosis,
-            medicines, // Expected as a JSON string or parsed array
+            medicines, 
             advisedInvestigations,
             adviceGiven,
             specialInstructions,
             nextAppointment,
-            additionalNotes
+            additionalNotes,
+            // 🚀 NEW: BP, Pulse, Temp, SpO2 keys passed from Figma
+            bp, pulse, temp, spo2
         } = req.body;
 
         if (!userId) {
             return res.status(400).json({ success: false, message: "User/Patient ID is required." });
         }
 
-        // Validate if frontend successfully generated and sent the PDF file
         if (!req.file) {
             return res.status(400).json({ success: false, message: "Compiled prescription PDF file is missing." });
         }
 
-        // Parse nested arrays if they are received as strings from multipart/form-data
+        // 🚀 SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
+        if (appointmentId && appointmentId !== "null") {
+            const appointment = await Appointment.findById(appointmentId);
+            if (appointment && appointment.consultationType === 'Video Consult') {
+                if (appointment.tracking?.isOtpVerified !== true) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: "Prescription Blocked: Video consultation has not been verified via User OTP yet. Verify OTP during active call to proceed." 
+                    });
+                }
+            }
+        }
+
         const parsedMedicines = typeof medicines === 'string' ? JSON.parse(medicines) : medicines;
         const parsedDiagnosis = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : diagnosis;
 
-        // Create new prescription document
+        // Create new prescription document including Vitals
         const newPrescription = new Prescription({
             doctorId: req.user.id,
             userId,
@@ -687,12 +707,19 @@ const createPrescription = async (req, res) => {
             nextAppointment: nextAppointment || "",
             additionalNotes: additionalNotes || "",
             isManualUpload: false,
-            pdfUrl: `/uploads/doctor_prescriptions/${req.file.filename}` // Server path for client rendering
+            pdfUrl: `/uploads/doctor_prescriptions/${req.file.filename}`,
+            
+            // 🚀 Injects captured Patient Vitals
+            vitals: {
+                bp: bp || "",
+                pulse: pulse || "",
+                temp: temp || "",
+                spo2: spo2 || ""
+            }
         });
 
         const savedPrescription = await newPrescription.save();
 
-        // If linked to an appointment, transition status to Completed
         if (appointmentId && appointmentId !== "null") {
             await Appointment.findByIdAndUpdate(appointmentId, {
                 status: 'Completed'
@@ -709,6 +736,46 @@ const createPrescription = async (req, res) => {
         console.error("Prescription Creation Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
+};
+
+// --- COMPLETE WITH PRESCRIPTION (Direct API fallback) ---
+const completeWithPrescription = async (req, res) => {
+    try {
+        const { appointmentId, diagnosis, medicines, additionalNotes, bp, pulse, temp, spo2 } = req.body;
+        const targetId = appointmentId || req.params.id;
+
+        const appointment = await Appointment.findOne({ _id: targetId, bookingType: 'Appointment' });
+        if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+
+        // 🚀 SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
+        if (appointment.consultationType === 'Video Consult') {
+            if (appointment.tracking?.isOtpVerified !== true) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Prescription Blocked: Video consultation has not been verified via User OTP yet." 
+                });
+            }
+        }
+
+        const prescription = await Prescription.create({
+            appointmentId: targetId,
+            doctorId: req.user.id,
+            userId: appointment.userId,
+            diagnosis,
+            medicines,
+            additionalNotes,
+            vitals: {
+                bp: bp || "",
+                pulse: pulse || "",
+                temp: temp || "",
+                spo2: spo2 || ""
+            }
+        });
+
+        appointment.status = 'Completed';
+        await appointment.save();
+        res.status(201).json({ success: true, message: "Prescription added and completed", data: prescription });
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // endpoint: GET /doctor/appointments/patient-history
@@ -901,6 +968,10 @@ const reportDoctorNoShow = async (req, res) => {
         const { appointmentId, comments } = req.body;
         const doctorId = req.user.id;
 
+        if (!comments) {
+            return res.status(400).json({ success: false, message: "Please select/provide a valid reason for reporting No-Show." });
+        }
+
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             doctorId, 
@@ -911,6 +982,13 @@ const reportDoctorNoShow = async (req, res) => {
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Active scheduled booking record not found." });
         }
+
+        // Fetch remaining cancellation & reschedule limits
+        const globalConfig = await DocReschleduleLimit.findOne() || { maxLimit: 2 };
+        const maxLimit = globalConfig.maxLimit || 2;
+
+        const remainingCancellations = Math.max(0, maxLimit - (appointment.cancellationCount || 0));
+        const remainingReschedules = Math.max(0, maxLimit - (appointment.rescheduleCount || 0));
 
         const totalPaid = appointment.totalAmount || 0;
         let noShowFee = 0;
@@ -923,22 +1001,108 @@ const reportDoctorNoShow = async (req, res) => {
         }
 
         appointment.status = 'No-Show';
+        appointment.tracking.noShowReason = comments;
         appointment.pricingBreakdown.noShowFeeApplied = noShowFee;
         appointment.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
-        appointment.noShowComments = comments || "Patient did not show up for scheduled consultation.";
 
         await appointment.save();
 
         res.json({ 
             success: true, 
-            message: "Consultation No-Show logged. Refund initiated.", 
+            message: "Consultation No-Show logged. Bed/Resource released.", 
             noShowFeeApplied: noShowFee,
+            limits: {
+                remainingCancellations,
+                remainingReschedules,
+                maxLimit
+            },
             data: appointment
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// --- 1. SEND APPOINTMENT COMPLETION OTP (NEW API) ---
+// Endpoint: POST /doctor/appointments/send-completion-otp
+const sendCompletionOtp = async (req, res) => {
+    try {
+        const { appointmentId } = req.body;
+        const doctorId = req.user.id;
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, doctorId, bookingType: 'Appointment' });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Active consultation booking not found." });
+        }
+
+        // Generate dynamic 4-digit verification OTP
+        let otp;
+        let isProduction = process.env.NODE_ENV === 'production';
+        if (isProduction) {
+            otp = Math.floor(1000 + Math.random() * 9000).toString();
+        } else {
+            otp = "1111"; // Sandbox master code
+        }
+
+        appointment.tracking.otp = otp;
+        appointment.tracking.isOtpVerified = false;
+        await appointment.save();
+
+        console.log(`[Verification OTP] Appointment: ${appointmentId} | OTP: ${otp}`);
+
+        // Trigger push notification to user containing the verification code
+        const { sendPushNotification } = require('../../utils/notification');
+        await sendPushNotification(
+            appointment.userId,
+            'user',
+            "🔑 Consultation Completion OTP",
+            `Your completion verification code is ${otp}. Please share this with Dr. ${req.user.name} during the call to finalize your prescription.`,
+            { appointmentId: appointmentId.toString(), type: 'completion_otp' }
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Verification OTP successfully sent to user.",
+            dev_otp: isProduction ? undefined : "1111"
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2. VERIFY APPOINTMENT COMPLETION OTP (NEW API) ---
+// Endpoint: POST /doctor/appointments/verify-completion-otp
+const verifyCompletionOtp = async (req, res) => {
+    try {
+        const { appointmentId, otp } = req.body;
+        const doctorId = req.user.id;
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, doctorId, bookingType: 'Appointment' });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Active consultation booking not found." });
+        }
+
+        const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+        const isBypass = isDev && otp === '1111';
+
+        if (!isBypass && String(appointment.tracking?.otp).trim() !== String(otp).trim()) {
+            return res.status(400).json({ success: false, message: "Invalid or expired verification OTP. Please try again." });
+        }
+
+        appointment.tracking.isOtpVerified = true;
+        await appointment.save();
+
+        res.json({ 
+            success: true, 
+            message: "OTP successfully verified! You are now authorized to complete consultation and submit prescription." 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -950,6 +1114,6 @@ module.exports = { getVendorDashboard,
     getPatientHistory, getPatientHistoryDetails,
     getDoctorVideoConsults,
     searchMasterMedicinesForDoctor,
-    reportDoctorNoShow
+    reportDoctorNoShow,sendCompletionOtp,verifyCompletionOtp
 
 };

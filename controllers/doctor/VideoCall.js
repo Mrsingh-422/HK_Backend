@@ -6,13 +6,12 @@ const admin = require('../../config/firebase');
 const { getMessaging } = require('firebase-admin/messaging');
 const mongoose = require('mongoose');
 
-// 1. INITIATE VIDEO CALL (Triggered by Doctor)
+// 1. Doctor triggers call
 const initiateVideoCall = async (req, res) => {
     try {
-        const { appointmentId, callId, callerName ,callType = 'video'} = req.body;
-        const doctorId = req.user.id; // From Auth Middleware (protect('doctor'))
+        const { appointmentId, callId, callerName, callType = 'video' } = req.body;
+        const doctorId = req.user.id;
 
-        // A. Parameters Validation
         if (!appointmentId || !callId || !callerName) {
             return res.status(400).json({ 
                 success: false, 
@@ -20,7 +19,6 @@ const initiateVideoCall = async (req, res) => {
             });
         }
 
-        // B. Appointment Validation
         const appointment = await Appointment.findById(appointmentId).populate('userId');
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Appointment not found." });
@@ -30,19 +28,19 @@ const initiateVideoCall = async (req, res) => {
         if (!patient) {
             return res.status(404).json({ success: false, message: "Patient details not found for this appointment." });
         }
-        appointment.status = 'In-Progress';
-                await appointment.save();
-                console.log(`[VideoCall Status Sync]: Appointment ID ${appointmentId} updated to 'In-Progress' by Doctor.`);
 
-        // C. Database Safe Check: Prevent E11000 Duplicate Key Error
+        // Set appointment progress
+        appointment.status = 'In-Progress';
+        await appointment.save();
+
         let callData = await Call.findOne({ callId });
 
         if (callData) {
-            callData.status = 'initiated';
-            callData.startedAt = null;
+            callData.status = 'initiated'; // Resets state
+            callData.startedAt = new Date(); // Start logging initiation time
             callData.endedAt = null;
             callData.callerName = callerName;
-            callData.callType = callType; // 👈 Updated callType
+            callData.callType = callType;
             callData.appointmentId = appointmentId;
             callData.callerId = doctorId;
             callData.receiverId = patient._id;
@@ -54,12 +52,12 @@ const initiateVideoCall = async (req, res) => {
                 receiverId: patient._id,
                 callId,
                 callerName,
-                callType, // 👈 Updated callType
-                status: 'initiated'
+                callType,
+                status: 'initiated',
+                startedAt: new Date() // Start tracking instantly for missed call calculation
             });
         }
 
-        // D. Push Notification Logic with Soft Fallback
         let notificationSent = false;
         let warningMessage = null;
 
@@ -74,29 +72,17 @@ const initiateVideoCall = async (req, res) => {
                         callerName: String(callerName),
                         callId: String(callId)
                     },
-                    android: {
-                        priority: 'high',
-                        ttl: 0 
-                    },
-                    apns: {
-                        payload: {
-                            aps: {
-                                contentAvailable: true 
-                            }
-                        }
-                    }
+                    android: { priority: 'high', ttl: 0 },
+                    apns: { payload: { aps: { contentAvailable: true } } }
                 };
 
-                // 👈 UPDATED TO MODULAR SYNTAX (getMessaging)
                 await getMessaging().send(message); 
                 notificationSent = true;
             } catch (fcmError) {
-                console.error("FCM Push Failed:", fcmError.message);
-                warningMessage = "Call room registered, but FCM push notification failed. Verify your Firebase Admin config.";
+                warningMessage = "Call room registered, but FCM push notification failed.";
             }
         } else {
-            console.warn(`[VideoCall Warning] Patient (${patient.name}) has no FCM Token.`);
-            warningMessage = "Patient has no FCM Token registered. Notification not sent, but call room is created for WebRTC testing.";
+            warningMessage = "Patient has no FCM Token registered. Missed call log is active.";
         }
 
         res.status(200).json({ 
@@ -113,7 +99,7 @@ const initiateVideoCall = async (req, res) => {
     }
 };
 
-// 2. USER RESPOND TO CALL (Accept / Reject)
+// --- 2. RESPOND TO CALL ---
 const respondToCall = async (req, res) => {
     try {
         const { callId, status } = req.body; // 'accepted' or 'rejected'
@@ -122,13 +108,11 @@ const respondToCall = async (req, res) => {
             return res.status(400).json({ success: false, message: "Both 'callId' and 'status' are required." });
         }
 
-        if (!['accepted', 'rejected'].includes(status)) {
-            return res.status(400).json({ success: false, message: "Status must be either 'accepted' or 'rejected'." });
-        }
-
         const updateData = { status };
         if (status === 'accepted') {
-            updateData.startedAt = new Date();
+            updateData.startedAt = new Date(); // Updates start time when actually accepted
+        } else if (status === 'rejected') {
+            updateData.endedAt = new Date(); // Log rejection timestamp
         }
 
         const updatedCall = await Call.findOneAndUpdate(
@@ -147,7 +131,7 @@ const respondToCall = async (req, res) => {
     }
 };
 
-// 3. END VIDEO CALL (By Doctor or Patient)
+// --- 3. END VIDEO CALL (Handles Missed Call Timer Logs) ---
 const endVideoCall = async (req, res) => {
     try {
         const { callId, totalDurationInSeconds } = req.body;
@@ -161,17 +145,61 @@ const endVideoCall = async (req, res) => {
             return res.status(404).json({ success: false, message: "Call session not found." });
         }
 
-        call.status = 'completed';
-        call.endedAt = new Date();
-        
-        if (totalDurationInSeconds !== undefined) {
-            call.duration = Number(totalDurationInSeconds);
-        } else if (call.startedAt) {
-            call.duration = Math.round((new Date() - call.startedAt) / 1000); // Dynamically calculate seconds
+        const now = new Date();
+
+        // 🚀 SYNC FIX: If call was never accepted by patient, log as missed call
+        if (call.status === 'initiated' || call.status === 'ringing') {
+            call.status = 'missed';
+            call.endedAt = now;
+            call.duration = 0; // Missed call duration remains 0
+        } else {
+            call.status = 'completed';
+            call.endedAt = now;
+            
+            if (totalDurationInSeconds !== undefined) {
+                call.duration = Number(totalDurationInSeconds);
+            } else if (call.startedAt) {
+                call.duration = Math.round((now - call.startedAt) / 1000); // Dynamically calculate seconds
+            }
         }
         
         await call.save();
-        res.json({ success: true, message: "Call session ended and saved successfully.", data: call });
+        res.json({ success: true, message: `Call session successfully recorded as ${call.status}.`, data: call });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// --- 4. GET DOCTOR CALL HISTORY (NEW API - For doctor dashboard call logs list) ---
+// Endpoint: GET /doctor/video-call/history
+// Path: controllers/doctor/VideoCall.js
+const getDoctorCallHistory = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+
+        const history = await Call.find({ callerId: doctorId })
+            .populate('receiverId', 'name phone profilePic')
+            .sort({ createdAt: -1 }) // Latest calls first
+            .limit(20);
+
+        const formattedHistory = history.map(item => ({
+            callId: item.callId,
+            patientName: item.receiverId?.name || item.callerName,
+            patientPhone: item.receiverId?.phone || "N/A",
+            patientImage: item.receiverId?.profilePic || null,
+            status: item.status, // 'completed', 'missed', 'rejected', 'accepted'
+            startedAt: item.startedAt,
+            duration: item.duration, // in seconds
+            timeFormatted: moment(item.createdAt).fromNow() // e.g. "2 hours ago"
+        }));
+
+        res.json({
+            success: true,
+            count: formattedHistory.length,
+            data: formattedHistory
+        });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -201,5 +229,6 @@ module.exports = {
     initiateVideoCall,
     respondToCall,
     endVideoCall,
+    getDoctorCallHistory,
     getIceServers // 👈 EXPORTED FOR DOCTOR
 }; 

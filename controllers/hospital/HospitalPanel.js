@@ -381,19 +381,70 @@ const updateBedStatus = async (req, res) => {
 };
 
 // POST /hospital/panel/admissions/assign-doctor
+// Updated: Verified hospital doctor fleet matching and automatically initiated clinical shift tracking
 const assignDoctorToAdmission = async (req, res) => {
     try {
         const { appointmentId, doctorId } = req.body;
+        const hospitalId = req.user.id; // Logged-in Hospital Admin
 
-        const appointment = await Appointment.findById(appointmentId);
-        if(!appointment) return res.status(404).json({ message: "Admission request not found" });
+        // 1. Fetch Target Appointment
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission request not found on your hospital console." });
+        }
 
+        // 2. Fetch and Validate Doctor (Verify they belong strictly to this hospital and are active)
+        const Doctor = require('../../models/Doctor'); // Path-safe local load
+        const doctor = await Doctor.findOne({ 
+            _id: doctorId, 
+            hospitalId,
+            isActive: true,
+            profileStatus: 'Approved'
+        });
+
+        if (!doctor) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Selected doctor is either inactive, unapproved, or does not belong to your hospital fleet." 
+            });
+        }
+
+        const now = new Date();
+
+        // 3. Assign Doctor & Start Treatment Shift Tracking Timeline (Doctor Panel Sync)
         appointment.doctorId = doctorId;
-        appointment.status = 'Confirmed'; // Request pending se confirmed (admitted) ho gayi
+        appointment.status = 'Confirmed'; // Confirms the pending admission request
+
+        appointment.treatmentHistory.push({
+            toDoctorId: doctorId,
+            action: 'Initial-Assignment',
+            notes: `Assigned Dr. ${doctor.name} from Hospital Admin Control Desk.`,
+            timestamp: now,
+            startTime: now // 🚀 Starts doctor's active treatment shift instantly!
+        });
+
         await appointment.save();
 
-        res.json({ success: true, message: "Doctor Assigned & Admission Confirmed" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 4. Trigger Push Notification to the assigned Doctor (Figma Alerts Sync)
+        const { sendPushNotification } = require('../../utils/notification');
+        await sendPushNotification(
+            doctorId,
+            'doctor',
+            "🚨 New Case Assigned!",
+            `You have been assigned as the primary physician for patient case #${appointment.bookingId}. Please review dossier.`,
+            { appointmentId: appointment._id.toString(), type: 'new_case_assigned' }
+        );
+
+        res.json({ 
+            success: true, 
+            message: `Dr. ${doctor.name} successfully assigned to case and clinical shift tracking activated.`,
+            data: appointment 
+        });
+
+    } catch (error) { 
+        console.error("Assign Doctor Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 

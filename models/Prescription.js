@@ -20,7 +20,13 @@ const prescriptionSchema = new mongoose.Schema({
     time: { type: String, default: "" },                  // Optional (e.g., "Morning - Evening")
     duration: { type: String, default: "" },              // Optional (e.g., "5 Days")
     instructions: { type: String, default: "" }           // Optional extra guidelines
-}],
+                }],
+    vitals: {
+    bp: { type: String, default: "" },      // Blood Pressure (e.g. 120/80)
+    pulse: { type: String, default: "" },   // Pulse Rate (e.g. 72 bpm)
+    temp: { type: String, default: "" },    // Temperature (e.g. 98.6 °F)
+    spo2: { type: String, default: "" }     // SpO2 Saturation (e.g. 99%)
+        },
 
     // Advised & Remarks Sections at bottom of Image
     advisedInvestigations: { type: String, default: "None" }, // e.g. "CBC, HbA1c" or "XXX"

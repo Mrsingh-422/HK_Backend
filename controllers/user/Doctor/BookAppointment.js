@@ -819,11 +819,22 @@ const getUserAppointments = async (req, res) => {
             .populate('doctorId', 'name speciality profileImage profileStatus role')
             .sort({ appointmentDate: -1 });
 
+        // 🚀 SYNC FIX: Map through appointments and dynamically inject remaining counts for frontend rendering
+        const formattedAppointments = appointments.map(app => {
+            const appObj = app.toObject ? app.toObject() : { ...app };
+            const currentRescheduleCount = appObj.rescheduleCount || 0;
+            const currentCancelCount = appObj.cancellationCount || 0;
+
+            appObj.remainingReschedules = Math.max(0, maxLimit - currentRescheduleCount);
+            appObj.remainingCancellations = Math.max(0, maxLimit - currentCancelCount);
+            return appObj;
+        });
+
         res.json({ 
             success: true, 
-            count: appointments.length, 
+            count: formattedAppointments.length, 
             maxRescheduleLimit: maxLimit, 
-            data: appointments 
+            data: formattedAppointments 
         });
     } catch (error) {
         res.status(500).json({ message: error.message });

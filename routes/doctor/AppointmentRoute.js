@@ -15,7 +15,8 @@ const { getVendorDashboard,
     updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
     getPrescriptionDetails, updatePrescription, resendPrescription,getAppointmentClinicalDetails, createPrescription,
     getPatientHistory, getPatientHistoryDetails,
-    getDoctorVideoConsults,searchMasterMedicinesForDoctor, reportDoctorNoShow
+    getDoctorVideoConsults,searchMasterMedicinesForDoctor,
+     reportDoctorNoShow , sendCompletionOtp,verifyCompletionOtp
 } = require('../../controllers/doctor/Appointment');
 
 // Base URL: /doctor/appointments
