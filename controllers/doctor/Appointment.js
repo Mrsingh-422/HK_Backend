@@ -336,21 +336,29 @@ const rescheduleAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Appointment, Date, and TimeSlot are mandatory." });
         }
 
-        // 🚨 STRICTOR QUERY: Block rescheduling if the appointment was cancelled permanently with a refund
         const appt = await Appointment.findOne({ 
             _id: appointmentId, 
-            userId: req.user.id,
-            "cancellationDetails.isPermanent": { $ne: true } // 👈 Block if isPermanent is true
+            doctorId: req.user.id,
+            "cancellationDetails.isPermanent": { $ne: true } 
         });
 
         if (!appt) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Reschedule Blocked: Appointment record not found, or it has been permanently cancelled and refunded." 
+                message: "Reschedule Blocked: Appointment record not found, or permanently cancelled." 
             });
         }
 
-        const globalConfig = await DocRescheduleLimit.findOne();
+        // 🚀 SYNC FIX: Block doctor rescheduling if consultation is finalized, in-progress, or No-Show
+        const blockedStates = ['Completed', 'In-Progress', 'No-Show'];
+        if (blockedStates.includes(appt.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Reschedule Blocked: Consultation is already in '${appt.status}' state.` 
+            });
+        }
+
+        const globalConfig = await DocReschleduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const currentRescheduleCount = appt.rescheduleCount || 0;
@@ -374,13 +382,11 @@ const rescheduleAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Naya selected slot pehle se hi kisi aur patient ke liye booked hai." });
         }
 
-        // Reset details and reinstate appointment status
         appt.appointmentDate = new Date(newDate);
         appt.appointmentTime = newTimeSlot;
         appt.rescheduleCount = currentRescheduleCount + 1;
         appt.status = 'Confirmed'; 
 
-        // Clear temporary cancellation details on reschedule success
         appt.cancellationDetails = undefined;
 
         await appt.save();
@@ -435,7 +441,6 @@ const getPrescriptionDetails = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // 1. Validate ObjectId format to prevent database casting crashes
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ 
                 success: false, 
@@ -443,8 +448,6 @@ const getPrescriptionDetails = async (req, res) => {
             });
         }
 
-        // 2. Hybrid Query: Search by Prescription _id OR associated appointmentId
-        // This prevents rejections if the frontend developer passes the appointment ID
         const prescription = await Prescription.findOne({
             $or: [
                 { _id: id },
@@ -460,7 +463,6 @@ const getPrescriptionDetails = async (req, res) => {
             select: 'bookingId appointmentDate appointmentTime patients address consultationType'
         });
 
-        // 3. Fallback check
         if (!prescription) {
             return res.status(404).json({ 
                 success: false, 
@@ -468,7 +470,6 @@ const getPrescriptionDetails = async (req, res) => {
             });
         }
 
-        // --- Rest of your dynamic mapping logic remains exactly the same ---
         let patientProfile = {
             appointmentId: "N/A",
             date: moment(prescription.createdAt).format('DD/MM/YYYY'),
@@ -537,7 +538,10 @@ const getPrescriptionDetails = async (req, res) => {
                 clinicalDetails: {
                     chiefComplaints: prescription.chiefComplaints || "",
                     diagnosis: prescription.diagnosis || [],
-                    medicines: prescription.medicines || []
+                    medicines: prescription.medicines || [],
+                    
+                    // 🚀 SYNC FIX: Explicitly maps and returns saved vitals inside clinicalDetails so frontend can render them!
+                    vitals: prescription.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
                 },
                 advisedSections: {
                     advisedInvestigations: prescription.advisedInvestigations || "None",
@@ -555,6 +559,7 @@ const getPrescriptionDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
  
 // 3. EDIT PRESCRIPTION (Figma: "Edit" Button)
@@ -664,9 +669,7 @@ const createPrescription = async (req, res) => {
             adviceGiven,
             specialInstructions,
             nextAppointment,
-            additionalNotes,
-            // 🚀 NEW: BP, Pulse, Temp, SpO2 keys passed from Figma
-            bp, pulse, temp, spo2
+            additionalNotes
         } = req.body;
 
         if (!userId) {
@@ -677,7 +680,7 @@ const createPrescription = async (req, res) => {
             return res.status(400).json({ success: false, message: "Compiled prescription PDF file is missing." });
         }
 
-        // 🚀 SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
+        // SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
         if (appointmentId && appointmentId !== "null") {
             const appointment = await Appointment.findById(appointmentId);
             if (appointment && appointment.consultationType === 'Video Consult') {
@@ -692,6 +695,31 @@ const createPrescription = async (req, res) => {
 
         const parsedMedicines = typeof medicines === 'string' ? JSON.parse(medicines) : medicines;
         const parsedDiagnosis = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : diagnosis;
+
+        // 🚀 SYNC FIX: Robust Vitals Parser (Handles nested object, flat body, and stringified JSON formats!)
+        let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
+        if (req.body.vitals) {
+            try {
+                const parsedVitals = typeof req.body.vitals === 'string' 
+                    ? JSON.parse(req.body.vitals) 
+                    : req.body.vitals;
+                
+                if (parsedVitals && typeof parsedVitals === 'object') {
+                    finalVitals.bp = parsedVitals.bp || "";
+                    finalVitals.pulse = parsedVitals.pulse || "";
+                    finalVitals.temp = parsedVitals.temp || "";
+                    finalVitals.spo2 = parsedVitals.spo2 || "";
+                }
+            } catch (e) {
+                console.error("Error parsing vitals object:", e.message);
+            }
+        } else {
+            // Fallback to flat body parameters
+            finalVitals.bp = req.body.bp || "";
+            finalVitals.pulse = req.body.pulse || "";
+            finalVitals.temp = req.body.temp || "";
+            finalVitals.spo2 = req.body.spo2 || "";
+        }
 
         // Create new prescription document including Vitals
         const newPrescription = new Prescription({
@@ -709,13 +737,8 @@ const createPrescription = async (req, res) => {
             isManualUpload: false,
             pdfUrl: `/uploads/doctor_prescriptions/${req.file.filename}`,
             
-            // 🚀 Injects captured Patient Vitals
-            vitals: {
-                bp: bp || "",
-                pulse: pulse || "",
-                temp: temp || "",
-                spo2: spo2 || ""
-            }
+            // Injects successfully captured Patient Vitals
+            vitals: finalVitals 
         });
 
         const savedPrescription = await newPrescription.save();
@@ -741,13 +764,13 @@ const createPrescription = async (req, res) => {
 // --- COMPLETE WITH PRESCRIPTION (Direct API fallback) ---
 const completeWithPrescription = async (req, res) => {
     try {
-        const { appointmentId, diagnosis, medicines, additionalNotes, bp, pulse, temp, spo2 } = req.body;
+        const { appointmentId, diagnosis, medicines, additionalNotes } = req.body;
         const targetId = appointmentId || req.params.id;
 
         const appointment = await Appointment.findOne({ _id: targetId, bookingType: 'Appointment' });
         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
 
-        // 🚀 SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
+        // SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
         if (appointment.consultationType === 'Video Consult') {
             if (appointment.tracking?.isOtpVerified !== true) {
                 return res.status(400).json({ 
@@ -757,6 +780,30 @@ const completeWithPrescription = async (req, res) => {
             }
         }
 
+        // 🚀 SYNC FIX: Robust Vitals Parser (Same checks for safe fallback creation)
+        let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
+        if (req.body.vitals) {
+            try {
+                const parsedVitals = typeof req.body.vitals === 'string' 
+                    ? JSON.parse(req.body.vitals) 
+                    : req.body.vitals;
+                
+                if (parsedVitals && typeof parsedVitals === 'object') {
+                    finalVitals.bp = parsedVitals.bp || "";
+                    finalVitals.pulse = parsedVitals.pulse || "";
+                    finalVitals.temp = parsedVitals.temp || "";
+                    finalVitals.spo2 = parsedVitals.spo2 || "";
+                }
+            } catch (e) {
+                console.error("Error parsing vitals in fallback:", e.message);
+            }
+        } else {
+            finalVitals.bp = req.body.bp || "";
+            finalVitals.pulse = req.body.pulse || "";
+            finalVitals.temp = req.body.temp || "";
+            finalVitals.spo2 = req.body.spo2 || "";
+        }
+
         const prescription = await Prescription.create({
             appointmentId: targetId,
             doctorId: req.user.id,
@@ -764,12 +811,7 @@ const completeWithPrescription = async (req, res) => {
             diagnosis,
             medicines,
             additionalNotes,
-            vitals: {
-                bp: bp || "",
-                pulse: pulse || "",
-                temp: temp || "",
-                spo2: spo2 || ""
-            }
+            vitals: finalVitals
         });
 
         appointment.status = 'Completed';
@@ -832,7 +874,7 @@ const getPatientHistoryDetails = async (req, res) => {
                 name: appointment.patients[0]?.patientName,
                 age: appointment.patients[0]?.patientAge,
                 gender: appointment.patients[0]?.gender,
-                bloodGroup: "O+", // Note: Not in model, adding as placeholder/mock
+                bloodGroup: "O+", // Placeholder
                 phone: appointment.userId?.phone,
                 profileImage: appointment.userId?.profileImage,
                 address: `${appointment.address.houseNo}, ${appointment.address.landmark}, ${appointment.address.city}, ${appointment.address.pincode}`
@@ -841,8 +883,11 @@ const getPatientHistoryDetails = async (req, res) => {
                 diagnosis: prescription?.diagnosis || [],
                 symptoms: appointment.patients[0]?.reasonForVisit || "Not specified",
                 doctorNotes: prescription?.additionalNotes || "No notes provided",
-                mode: appointment.consultationType, // e.g., 'Home Visit' -> 'Home'
-                duration: "45 mins" // Placeholder as duration is not in schema
+                mode: appointment.consultationType, 
+                duration: "45 mins",
+                
+                // 🚀 SYNC FIX: Returns recorded vitals for this historical consultation!
+                vitals: prescription?.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
             },
             prescription: prescription?.medicines.map(m => ({
                 medicineName: m.name,
@@ -854,7 +899,7 @@ const getPatientHistoryDetails = async (req, res) => {
                 consultationFee: appointment.pricingBreakdown.baseFee,
                 platformFee: appointment.pricingBreakdown.extraCharges || 50,
                 totalPaid: appointment.totalAmount,
-                paymentMode: "UPI" // Usually derived from transaction info
+                paymentMode: "UPI" 
             }
         };
  

@@ -946,6 +946,15 @@ const rescheduleAppointment = async (req, res) => {
         const appt = await Appointment.findOne({ _id: appointmentId, userId: req.user.id });
         if (!appt) return res.status(404).json({ success: false, message: "Appointment record not found." });
 
+        // 🚀 SYNC FIX: Block rescheduling if the consultation is already finalized, in-progress, or marked as No-Show
+        const blockedStates = ['Completed', 'In-Progress', 'No-Show'];
+        if (blockedStates.includes(appt.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Reschedule Blocked: Consultation is already in '${appt.status}' state.` 
+            });
+        }
+
         const globalConfig = await DocRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
