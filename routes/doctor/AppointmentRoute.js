@@ -62,5 +62,8 @@ router.get('/medicines/search', protect('doctor'), searchMasterMedicinesForDocto
 
 router.patch('/no-show/:id', protect('doctor'), reportDoctorNoShow);
 
+router.post('/send-completion-otp', protect('doctor'), sendCompletionOtp);
+router.post('/verify-completion-otp', protect('doctor'), verifyCompletionOtp);
+
 
 module.exports = router;
