@@ -679,7 +679,7 @@ const createPrescription = async (req, res) => {
 
         let targetUserId = userId; // Base assignment
 
-        // 🚀 SYNC FIX 1: Secure ObjectId Validation for appointmentId to prevent CastError crashes
+        // Secure ObjectId Validation for appointmentId to prevent CastError crashes
         const isValidApptId = appointmentId && mongoose.Types.ObjectId.isValid(appointmentId);
 
         if ((!targetUserId || targetUserId === "null" || targetUserId === "undefined") && isValidApptId) {
@@ -712,7 +712,7 @@ const createPrescription = async (req, res) => {
             }
         }
 
-        // 🚀 SYNC FIX 2: Try-Catch wrapper on medicines JSON parsing to prevent SyntaxError crashes
+        // Try-Catch wrapper on medicines JSON parsing to prevent SyntaxError crashes
         let parsedMedicines = [];
         if (medicines) {
             try {
@@ -723,7 +723,7 @@ const createPrescription = async (req, res) => {
             }
         }
 
-        // 🚀 SYNC FIX 3: Try-Catch wrapper on diagnosis JSON parsing to prevent SyntaxError crashes
+        // Try-Catch wrapper on diagnosis JSON parsing to prevent SyntaxError crashes
         let parsedDiagnosis = [];
         if (diagnosis) {
             try {
@@ -767,25 +767,49 @@ const createPrescription = async (req, res) => {
             }
         }
 
-        // Create new prescription document including Vitals
-        const newPrescription = new Prescription({
-            doctorId: req.user.id,
-            userId: targetUserId, 
-            appointmentId: isValidApptId ? appointmentId : null,
-            chiefComplaints: chiefComplaints || "",
-            diagnosis: parsedDiagnosis || [],
-            medicines: parsedMedicines || [],
-            advisedInvestigations: advisedInvestigations || "None",
-            adviceGiven: adviceGiven || "",
-            specialInstructions: specialInstructions || "",
-            nextAppointment: nextAppointment || "",
-            additionalNotes: additionalNotes || "",
-            isManualUpload: false,
-            pdfUrl: `/uploads/doctor_prescriptions/${req.file.filename}`,
-            vitals: finalVitals 
-        });
+        // 🚀 SYNC FIX: Check if a prescription already exists for this appointmentId to prevent double entries
+        let prescription = null;
+        if (isValidApptId) {
+            prescription = await Prescription.findOne({ appointmentId });
+        }
 
-        const savedPrescription = await newPrescription.save();
+        if (prescription) {
+            // Update the existing record instead of saving a new duplicate
+            prescription.userId = targetUserId;
+            prescription.chiefComplaints = chiefComplaints || prescription.chiefComplaints || "";
+            prescription.diagnosis = parsedDiagnosis || prescription.diagnosis || [];
+            prescription.medicines = parsedMedicines || prescription.medicines || [];
+            prescription.advisedInvestigations = advisedInvestigations || prescription.advisedInvestigations || "None";
+            prescription.adviceGiven = adviceGiven || prescription.adviceGiven || "";
+            prescription.specialInstructions = specialInstructions || prescription.specialInstructions || "";
+            prescription.nextAppointment = nextAppointment || prescription.nextAppointment || "";
+            prescription.additionalNotes = additionalNotes || prescription.additionalNotes || "";
+            prescription.pdfUrl = `/uploads/doctor_prescriptions/${req.file.filename}`;
+            prescription.vitals = finalVitals;
+
+            await prescription.save();
+            console.log(`[Self-Healed Prescription] Duplicate prevented. Updated existing prescription ID: ${prescription._id}`);
+        } else {
+            // Create new prescription document if no previous record exists
+            prescription = new Prescription({
+                doctorId: req.user.id,
+                userId: targetUserId, 
+                appointmentId: isValidApptId ? appointmentId : null,
+                chiefComplaints: chiefComplaints || "",
+                diagnosis: parsedDiagnosis || [],
+                medicines: parsedMedicines || [],
+                advisedInvestigations: advisedInvestigations || "None",
+                adviceGiven: adviceGiven || "",
+                specialInstructions: specialInstructions || "",
+                nextAppointment: nextAppointment || "",
+                additionalNotes: additionalNotes || "",
+                isManualUpload: false,
+                pdfUrl: `/uploads/doctor_prescriptions/${req.file.filename}`,
+                vitals: finalVitals 
+            });
+
+            await prescription.save();
+        }
 
         if (isValidApptId) {
             await Appointment.findByIdAndUpdate(appointmentId, {
@@ -796,7 +820,7 @@ const createPrescription = async (req, res) => {
         res.status(201).json({
             success: true,
             message: "Prescription successfully generated and saved!",
-            data: savedPrescription
+            data: prescription
         });
 
     } catch (error) {
@@ -824,7 +848,7 @@ const completeWithPrescription = async (req, res) => {
             }
         }
 
-        // 🚀 SYNC FIX: Self-Healing Multi-Format Vitals Parser 
+        // Robust Vitals Parser
         let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
 
         // Option A: Direct Flat Keys
@@ -857,15 +881,29 @@ const completeWithPrescription = async (req, res) => {
             }
         }
 
-        const prescription = await Prescription.create({
-            appointmentId: targetId,
-            doctorId: req.user.id,
-            userId: appointment.userId,
-            diagnosis,
-            medicines,
-            additionalNotes,
-            vitals: finalVitals
-        });
+        // 🚀 SYNC FIX: Check if a prescription already exists for this appointmentId to prevent double entries
+        let prescription = await Prescription.findOne({ appointmentId: targetId });
+
+        if (prescription) {
+            // Update existing prescription details instead of creating a new duplicate
+            prescription.diagnosis = diagnosis || prescription.diagnosis || [];
+            prescription.medicines = medicines || prescription.medicines || [];
+            prescription.additionalNotes = additionalNotes || prescription.additionalNotes || "";
+            prescription.vitals = finalVitals;
+            await prescription.save();
+            console.log(`[Self-Healed Fallback] Duplicate prevented. Updated existing prescription ID: ${prescription._id}`);
+        } else {
+            // Create only if it doesn't exist
+            prescription = await Prescription.create({
+                appointmentId: targetId,
+                doctorId: req.user.id,
+                userId: appointment.userId,
+                diagnosis,
+                medicines,
+                additionalNotes,
+                vitals: finalVitals
+            });
+        }
 
         appointment.status = 'Completed';
         await appointment.save();
