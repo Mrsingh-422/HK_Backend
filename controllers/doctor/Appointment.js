@@ -674,18 +674,20 @@ const createPrescription = async (req, res) => {
 
         let targetUserId = userId; // Base assignment
 
-        // 🚀 SYNC FIX: If frontend forgets to send userId but appointmentId is present,
-        // backend will automatically resolve and fetch the userId from the Appointment document!
-        if ((!targetUserId || targetUserId === "null") && appointmentId && appointmentId !== "null") {
+        // 🚀 SYNC FIX 1: Secure ObjectId Validation for appointmentId to prevent CastError crashes
+        const isValidApptId = appointmentId && mongoose.Types.ObjectId.isValid(appointmentId);
+
+        if ((!targetUserId || targetUserId === "null" || targetUserId === "undefined") && isValidApptId) {
             const appointmentRef = await Appointment.findById(appointmentId);
             if (appointmentRef) {
                 targetUserId = appointmentRef.userId;
             }
         }
 
-        // Final safe-check (Blocks only if completely unresolvable)
-        if (!targetUserId) {
-            return res.status(400).json({ success: false, message: "User/Patient ID is required." });
+        // Validate final targetUserId format before querying database
+        const isValidUserId = targetUserId && mongoose.Types.ObjectId.isValid(targetUserId);
+        if (!isValidUserId) {
+            return res.status(400).json({ success: false, message: "Validation Blocked: A valid User/Patient ID is required." });
         }
 
         if (!req.file) {
@@ -693,7 +695,7 @@ const createPrescription = async (req, res) => {
         }
 
         // SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
-        if (appointmentId && appointmentId !== "null") {
+        if (isValidApptId) {
             const appointment = await Appointment.findById(appointmentId);
             if (appointment && appointment.consultationType === 'Video Consult') {
                 if (appointment.tracking?.isOtpVerified !== true) {
@@ -705,8 +707,27 @@ const createPrescription = async (req, res) => {
             }
         }
 
-        const parsedMedicines = typeof medicines === 'string' ? JSON.parse(medicines) : medicines;
-        const parsedDiagnosis = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : diagnosis;
+        // 🚀 SYNC FIX 2: Try-Catch wrapper on medicines JSON parsing to prevent SyntaxError crashes
+        let parsedMedicines = [];
+        if (medicines) {
+            try {
+                parsedMedicines = typeof medicines === 'string' ? JSON.parse(medicines) : medicines;
+            } catch (e) {
+                console.error("SyntaxError: Failed to parse medicines JSON:", e.message);
+                parsedMedicines = []; // Safe fallback
+            }
+        }
+
+        // 🚀 SYNC FIX 3: Try-Catch wrapper on diagnosis JSON parsing to prevent SyntaxError crashes
+        let parsedDiagnosis = [];
+        if (diagnosis) {
+            try {
+                parsedDiagnosis = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : diagnosis;
+            } catch (e) {
+                console.error("SyntaxError: Failed to parse diagnosis JSON:", e.message);
+                parsedDiagnosis = []; // Safe fallback
+            }
+        }
 
         // Robust Vitals Parser 
         let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
@@ -744,8 +765,8 @@ const createPrescription = async (req, res) => {
         // Create new prescription document including Vitals
         const newPrescription = new Prescription({
             doctorId: req.user.id,
-            userId: targetUserId, // Saved resolved patient ID
-            appointmentId: appointmentId && appointmentId !== "null" ? appointmentId : null,
+            userId: targetUserId, 
+            appointmentId: isValidApptId ? appointmentId : null,
             chiefComplaints: chiefComplaints || "",
             diagnosis: parsedDiagnosis || [],
             medicines: parsedMedicines || [],
@@ -761,7 +782,7 @@ const createPrescription = async (req, res) => {
 
         const savedPrescription = await newPrescription.save();
 
-        if (appointmentId && appointmentId !== "null") {
+        if (isValidApptId) {
             await Appointment.findByIdAndUpdate(appointmentId, {
                 status: 'Completed'
             });
@@ -775,7 +796,7 @@ const createPrescription = async (req, res) => {
 
     } catch (error) {
         console.error("Prescription Creation Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: "Internal Server Error: " + error.message });
     }
 };
 
