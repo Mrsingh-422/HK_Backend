@@ -10,7 +10,9 @@ const {
     toggleAmbulanceStatus,updateHospitalTerms, getHospitalTerms, getHospitalPanelRatings,
     getDailyOccupancy,finalizeDischarge, setHospitalShift ,getHospitalReferralBookings, 
     updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,
-    dispatchAmbulanceForAdmission,reassignAmbulanceOnBreakdown,reassignDoctorFromPanel,reportHospitalNoShow,transferPatientBed
+    dispatchAmbulanceForAdmission,reassignAmbulanceOnBreakdown,reassignDoctorFromPanel,reportHospitalNoShow,transferPatientBed,
+     getTrackCasesList,
+    getTrackCaseSuperDetails
 
 } = require('../../controllers/hospital/HospitalPanel');
  
@@ -91,5 +93,8 @@ router.post('/reassign-doctor', protect('hospital'), reassignDoctorFromPanel); /
 
 router.post('/admissions/no-show', protect('hospital'), reportHospitalNoShow);
 router.post('/admissions/transfer-bed', protect('hospital'), transferPatientBed);
+
+router.get('/cases/track-list', protect('hospital'), getTrackCasesList); // 20-records list
+router.get('/cases/track-details/:id', protect('hospital'), getTrackCaseSuperDetails); // Consolidated super detail
 
 module.exports = router;

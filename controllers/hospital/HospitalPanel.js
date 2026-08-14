@@ -2484,6 +2484,232 @@ const transferPatientBed = async (req, res) => {
     }
 };
 
+// --- API 1: GET HOSPITAL ALL CASES FOR TRACKING (With 20-Record Pagination) ---
+// Endpoint: GET /hospital/panel/cases/track-list
+// Path: controllers/hospital/HospitalPanel.js
+const getTrackCasesList = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { page = 1, search, status } = req.query;
+
+        // Strictly paginated with 10 records per page as requested
+        const pageNum = parseInt(page) || 1;
+        const limitNum = 10; 
+        const skip = (pageNum - 1) * limitNum;
+
+        let query = { 
+            hospitalId,
+            bookingType: 'Admission' // Only track bed admission cases
+        };
+
+        if (status) query.status = status;
+
+        if (search) {
+            const isBookingId = search.toUpperCase().startsWith('HKH-') || search.toUpperCase().startsWith('HK-');
+            if (isBookingId) {
+                query.bookingId = { $regex: search, $options: 'i' };
+            } else {
+                const User = require('../../models/User'); // Safe path load
+                const matchedUsers = await User.find({
+                    name: { $regex: search, $options: 'i' }
+                }).select('_id');
+                const userIds = matchedUsers.map(u => u._id);
+                query.userId = { $in: userIds };
+            }
+        }
+
+        const totalRecords = await Appointment.countDocuments(query);
+
+        const list = await Appointment.find(query)
+            .populate('userId', 'name phone email profilePic age gender')
+            .populate('doctorId', 'name speciality profileImage')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
+
+        res.json({
+            success: true,
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
+            count: list.length,
+            data: list
+        });
+
+    } catch (error) {
+        console.error("Fetch Track List Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API 2: UNIFIED "SUPER DETAILS" ADMISSION FILE (NEW CONSOLIDATED API) ---
+// Endpoint: GET /hospital/panel/cases/track-details/:id
+// Path: controllers/hospital/HospitalPanel.js
+const getTrackCaseSuperDetails = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { id } = req.params; // Appointment ID
+
+        // Deep populate patient bio, active bed position, main doctor, co-doctors, timeline history, and clinical checkups
+        const appointment = await Appointment.findOne({ _id: id, hospitalId })
+            .populate('userId', 'name phone email profilePic age gender bloodGroup')
+            .populate('doctorId', 'name speciality qualification profileImage')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .populate('treatmentHistory.fromDoctorId', 'name speciality qualification profileImage')
+            .populate('treatmentHistory.toDoctorId', 'name speciality qualification profileImage')
+            .populate('bedsideCareTeam.doctorId', 'name speciality qualification profileImage')
+            .populate('clinicalLogs.doctorId', 'name speciality qualification profileImage')
+            .populate('activeMedications.addedBy', 'name speciality qualification profileImage');
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
+        }
+
+        // Fetch final Prescription details (medicines, vitals, PDF Url)
+        const Prescription = require('../../models/Prescription'); // Safe local load
+        const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
+
+        // 🚀 A. Compile: Collaborative Treatment Team Timeline
+        const treatmentTimeline = [];
+
+        // Current active primary doctor shift
+        if (appointment.doctorId) {
+            const primaryShift = appointment.treatmentHistory?.find(h => 
+                h.toDoctorId && h.toDoctorId._id?.toString() === appointment.doctorId._id?.toString() && h.startTime
+            );
+
+            treatmentTimeline.push({
+                doctorId: appointment.doctorId._id,
+                name: appointment.doctorId.name,
+                speciality: appointment.doctorId.speciality,
+                qualification: appointment.doctorId.qualification || "MBBS",
+                profileImage: appointment.doctorId.profileImage,
+                role: "Current Primary Physician",
+                joinedAt: primaryShift ? primaryShift.startTime : appointment.startDate,
+                dischargedAt: primaryShift?.endTime || appointment.endDate || null,
+                duration: primaryShift?.durationDisplay || ""
+            });
+        }
+
+        // Previous transferred doctors' shift history
+        if (appointment.treatmentHistory && appointment.treatmentHistory.length > 0) {
+            appointment.treatmentHistory.forEach(historyLog => {
+                if (historyLog.toDoctorId && historyLog.endTime) {
+                    const isCurrentActiveDoc = appointment.doctorId && 
+                                               appointment.doctorId._id?.toString() === historyLog.toDoctorId._id?.toString() && 
+                                               !historyLog.endTime;
+                    
+                    if (!isCurrentActiveDoc) {
+                        const alreadyPushed = treatmentTimeline.some(t => 
+                            t.doctorId?.toString() === historyLog.toDoctorId._id?.toString() && 
+                            String(t.joinedAt) === String(historyLog.startTime)
+                        );
+
+                        if (!alreadyPushed) {
+                            treatmentTimeline.push({
+                                doctorId: historyLog.toDoctorId._id,
+                                name: historyLog.toDoctorId.name,
+                                speciality: historyLog.toDoctorId.speciality,
+                                qualification: historyLog.toDoctorId.qualification || "MBBS",
+                                profileImage: historyLog.toDoctorId.profileImage,
+                                role: "Previous Primary Physician (Discharged)",
+                                joinedAt: historyLog.startTime,
+                                dischargedAt: historyLog.endTime,
+                                duration: historyLog.durationDisplay || ""
+                            });
+                        }
+                    }
+                }
+            });
+        }
+
+        // 🚀 B. Compile: Bedside Specialists logs and dynamic medications recommendations (Stay & Home)
+        const bedsideCareLogs = appointment.bedsideCareTeam.map(member => {
+            const meds = member.recommendedMedicines || [];
+            return {
+                specialist: {
+                    doctorId: member.doctorId?._id,
+                    name: member.doctorId?.name,
+                    speciality: member.doctorId?.speciality,
+                    profileImage: member.doctorId?.profileImage,
+                    status: member.status
+                },
+                requestedAt: member.requestedAt,
+                respondedAt: member.respondedAt,
+                rejectionReason: member.rejectionReason,
+                clinicalObservations: member.specialistFeedback || [],
+                
+                // Grouping specialist recommendations by Stay and Home types
+                activeStayRecommendations: meds.filter(m => m.type === 'Active-Stay'),
+                dischargeHomeRecommendations: meds.filter(m => m.type === 'Discharge-Home')
+            };
+        });
+
+        // 🚀 C. Compile: Primary Doctor Round checkup logs
+        const primaryDoctorRoundLogs = appointment.clinicalLogs.map(log => ({
+            doctor: {
+                doctorId: log.doctorId?._id,
+                name: log.doctorId?.name,
+                speciality: log.doctorId?.speciality,
+                profileImage: log.doctorId?.profileImage
+            },
+            observation: log.observation,
+            patientCondition: log.patientCondition,
+            priorityRating: log.priorityRating,
+            loggedAt: log.loggedAt
+        }));
+
+        res.json({
+            success: true,
+            data: {
+                caseDetails: {
+                    appointmentId: appointment._id,
+                    bookingId: appointment.bookingId,
+                    status: appointment.status,
+                    triageLevel: appointment.triageLevel,
+                    startDate: appointment.startDate,
+                    endDate: appointment.endDate,
+                    stayDuration: appointment.stayDuration,
+                    totalAmount: appointment.totalAmount,
+                    paymentStatus: appointment.paymentStatus,
+                    paymentMethod: appointment.paymentMethod,
+                    patientProfile: appointment.userId,
+                    bedDetails: appointment.bedId
+                },
+                prescriptionDetails: prescription ? {
+                    prescriptionId: prescription._id,
+                    pdfUrl: prescription.pdfUrl,
+                    medicines: prescription.medicines || [],
+                    vitals: prescription.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
+                    diagnosis: prescription.diagnosis || [],
+                    chiefComplaints: prescription.chiefComplaints || "",
+                    advisedInvestigations: prescription.advisedInvestigations || "None",
+                    adviceGiven: prescription.adviceGiven || "",
+                    specialInstructions: prescription.specialInstructions || ""
+                } : null,
+                treatmentTimeline,         // Previous transfers, shift timings, doctors
+                bedsideCareLogs,           // Specialists, bedside observations, recommended meds (Stay & Home)
+                primaryDoctorRoundLogs     // Active physician rounds observations
+            }
+        });
+
+    } catch (error) {
+        console.error("Super Details Fetch Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
 
 
 
@@ -2502,5 +2728,7 @@ module.exports = {
     updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,
     emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,
     dispatchAmbulanceForAdmission,reassignAmbulanceOnBreakdown,
-    reassignDoctorFromPanel,reportHospitalNoShow,transferPatientBed
+    reassignDoctorFromPanel,reportHospitalNoShow,transferPatientBed,
+     getTrackCasesList,
+    getTrackCaseSuperDetails
 };
