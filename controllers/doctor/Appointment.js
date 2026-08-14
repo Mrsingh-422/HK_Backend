@@ -672,7 +672,19 @@ const createPrescription = async (req, res) => {
             additionalNotes
         } = req.body;
 
-        if (!userId) {
+        let targetUserId = userId; // Base assignment
+
+        // 🚀 SYNC FIX: If frontend forgets to send userId but appointmentId is present,
+        // backend will automatically resolve and fetch the userId from the Appointment document!
+        if ((!targetUserId || targetUserId === "null") && appointmentId && appointmentId !== "null") {
+            const appointmentRef = await Appointment.findById(appointmentId);
+            if (appointmentRef) {
+                targetUserId = appointmentRef.userId;
+            }
+        }
+
+        // Final safe-check (Blocks only if completely unresolvable)
+        if (!targetUserId) {
             return res.status(400).json({ success: false, message: "User/Patient ID is required." });
         }
 
@@ -696,16 +708,16 @@ const createPrescription = async (req, res) => {
         const parsedMedicines = typeof medicines === 'string' ? JSON.parse(medicines) : medicines;
         const parsedDiagnosis = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : diagnosis;
 
-        // 🚀 SYNC FIX: Self-Healing Multi-Format Vitals Parser 
+        // Robust Vitals Parser 
         let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
 
-        // Option A: Direct Flat Keys (req.body.bp)
+        // Option A: Direct Flat Keys
         if (req.body.bp !== undefined) finalVitals.bp = req.body.bp;
         if (req.body.pulse !== undefined) finalVitals.pulse = req.body.pulse;
         if (req.body.temp !== undefined) finalVitals.temp = req.body.temp;
         if (req.body.spo2 !== undefined) finalVitals.spo2 = req.body.spo2;
 
-        // Option B: Flutter Multipart Nested Keys (vitals[bp], vitals[spo2] etc.)
+        // Option B: Flutter Multipart Nested Keys
         if (req.body['vitals[bp]'] !== undefined) finalVitals.bp = req.body['vitals[bp]'];
         if (req.body['vitals[pulse]'] !== undefined) finalVitals.pulse = req.body['vitals[pulse]'];
         if (req.body['vitals[temp]'] !== undefined) finalVitals.temp = req.body['vitals[temp]'];
@@ -725,14 +737,14 @@ const createPrescription = async (req, res) => {
                     if (parsedVitals.spo2 !== undefined) finalVitals.spo2 = parsedVitals.spo2;
                 }
             } catch (e) {
-                console.error("Error parsing vitals in createPrescription:", e.message);
+                console.error("Error parsing vitals object:", e.message);
             }
         }
 
         // Create new prescription document including Vitals
         const newPrescription = new Prescription({
             doctorId: req.user.id,
-            userId,
+            userId: targetUserId, // Saved resolved patient ID
             appointmentId: appointmentId && appointmentId !== "null" ? appointmentId : null,
             chiefComplaints: chiefComplaints || "",
             diagnosis: parsedDiagnosis || [],
