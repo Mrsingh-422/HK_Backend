@@ -425,10 +425,11 @@ const getAllPrescriptions = async (req, res) => {
             patientName: p.appointmentId?.patients[0]?.patientName || p.userId?.name,
             phone: p.userId?.phone,
             symptoms: p.diagnosis.join(', '),
-            date: moment(p.createdAt).format('DD MMM, hh:mm A'),
-            status: 'Sent', // Figma UI badge
             
-            // 🚀 SYNC FIX: Returns the uploaded compiled PDF path directly in the list cards!
+            // 🚀 SYNC FIX: Explicitly shift parsed UTC datetime to Indian Standard Time (IST)
+            date: moment(p.createdAt).utcOffset("+05:30").format('DD MMM, hh:mm A'),
+            
+            status: 'Sent', // Figma UI badge
             pdfUrl: p.pdfUrl || null,
             vitals: p.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
         }));
@@ -476,8 +477,9 @@ const getPrescriptionDetails = async (req, res) => {
 
         let patientProfile = {
             appointmentId: "N/A",
-            date: moment(prescription.createdAt).format('DD/MM/YYYY'),
-            time: moment(prescription.createdAt).format('hh:mm A'),
+            // 🚀 SYNC FIX: Default values shifted to IST timezone offsets
+            date: moment(prescription.createdAt).utcOffset("+05:30").format('DD/MM/YYYY'),
+            time: moment(prescription.createdAt).utcOffset("+05:30").format('hh:mm A'),
             name: "Unknown",
             gender: "N/A",
             age: "N/A",
@@ -491,7 +493,7 @@ const getPrescriptionDetails = async (req, res) => {
             const targetPatient = appointment.patients?.[0];
             patientProfile.appointmentId = appointment.bookingId || "N/A";
             patientProfile.date = appointment.appointmentDate 
-                ? moment(appointment.appointmentDate).format('DD/MM/YYYY') 
+                ? moment(appointment.appointmentDate).utcOffset("+05:30").format('DD/MM/YYYY') 
                 : patientProfile.date;
             patientProfile.time = appointment.appointmentTime || patientProfile.time;
             patientProfile.name = targetPatient?.patientName || user?.name || "Patient";
@@ -543,8 +545,6 @@ const getPrescriptionDetails = async (req, res) => {
                     chiefComplaints: prescription.chiefComplaints || "",
                     diagnosis: prescription.diagnosis || [],
                     medicines: prescription.medicines || [],
-                    
-                    // 🚀 SYNC FIX: Explicitly maps and returns saved vitals inside clinicalDetails so frontend can render them!
                     vitals: prescription.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
                 },
                 advisedSections: {
@@ -554,7 +554,8 @@ const getPrescriptionDetails = async (req, res) => {
                     nextAppointment: prescription.nextAppointment || ""
                 },
                 pdfUrl: prescription.pdfUrl || null,
-                createdAt: prescription.createdAt
+                createdAt: prescription.createdAt,
+                vitals: prescription.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
             }
         });
 
