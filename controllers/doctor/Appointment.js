@@ -426,7 +426,11 @@ const getAllPrescriptions = async (req, res) => {
             phone: p.userId?.phone,
             symptoms: p.diagnosis.join(', '),
             date: moment(p.createdAt).format('DD MMM, hh:mm A'),
-            status: 'Sent' // Figma UI badge
+            status: 'Sent', // Figma UI badge
+            
+            // 🚀 SYNC FIX: Returns the uploaded compiled PDF path directly in the list cards!
+            pdfUrl: p.pdfUrl || null,
+            vitals: p.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
         }));
  
         res.json({ success: true, count: prescriptions.length, data: formattedData });
@@ -933,8 +937,6 @@ const getPatientHistoryDetails = async (req, res) => {
                 doctorNotes: prescription?.additionalNotes || "No notes provided",
                 mode: appointment.consultationType, 
                 duration: "45 mins",
-                
-                // 🚀 SYNC FIX: Returns recorded vitals for this historical consultation!
                 vitals: prescription?.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
             },
             prescription: prescription?.medicines.map(m => ({
@@ -948,7 +950,11 @@ const getPatientHistoryDetails = async (req, res) => {
                 platformFee: appointment.pricingBreakdown.extraCharges || 50,
                 totalPaid: appointment.totalAmount,
                 paymentMode: "UPI" 
-            }
+            },
+            
+            // 🚀 SYNC FIX: Injects prescription unique mongo ID and the compiled PDF link!
+            prescriptionId: prescription?._id || null,
+            pdfUrl: prescription?.pdfUrl || null
         };
  
         res.json({ success: true, data: responseData });
