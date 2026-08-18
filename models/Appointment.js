@@ -138,14 +138,26 @@ const appointmentSchema = new mongoose.Schema({
         dateOfSurgery: { type: Date, default: null },
         conditionDuringAdmission: { type: String, default: "" },
         conditionDuringDischarge: { type: String, default: "" },
-        
+
         dischargeSummaryPdf: { type: String, default: null },
+        vitals: { // 🚀 NEW: Final discharge vitals
+            bp: { type: String, default: "" },
+            pulse: { type: String, default: "" },
+            temp: { type: String, default: "" },
+            spo2: { type: String, default: "" }
+        }
     },
     clinicalLogs: [{
         doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', required: true },
         observation: { type: String, required: true }, // Figma: Diagnostic findings
         patientCondition: { type: String, default: 'Stable' }, // Recovering, Stable, Critical, Deteriorating
         priorityRating: { type: String, default: 'Routine' }, // Routine, Urgent, Critical
+        vitals: { // 🚀 NEW: Attending doctor round vitals
+            bp: { type: String, default: "" },
+            pulse: { type: String, default: "" },
+            temp: { type: String, default: "" },
+            spo2: { type: String, default: "" }
+        },
         loggedAt: { type: Date, default: Date.now }
     }],
 
@@ -167,10 +179,10 @@ const appointmentSchema = new mongoose.Schema({
             duration: { type: String },
             instructions: { type: String, default: "" },
             // 🚀 NEW TYPE ENUM: Determines if med is for hospital stay or post-discharge at home
-            type: { 
-                type: String, 
-                enum: ['Active-Stay', 'Discharge-Home'], 
-                default: 'Active-Stay' 
+            type: {
+                type: String,
+                enum: ['Active-Stay', 'Discharge-Home'],
+                default: 'Active-Stay'
             },
             addedAt: { type: Date, default: Date.now }
         }],
@@ -180,12 +192,18 @@ const appointmentSchema = new mongoose.Schema({
             observation: { type: String, default: "" },
             patientCondition: { type: String, default: "" },
             priorityRating: { type: String, default: "" },
+            vitals: { // 🚀 NEW: Specialist checkup vitals
+                bp: { type: String, default: "" },
+                pulse: { type: String, default: "" },
+                temp: { type: String, default: "" },
+                spo2: { type: String, default: "" }
+            },
             submittedAt: { type: Date, default: Date.now }
         }],
         requestedAt: { type: Date, default: Date.now },
         respondedAt: { type: Date, default: null }
     }],
-     activeMedications: [{
+    activeMedications: [{
         medicineName: { type: String, required: true },
         dosage: { type: String }, // e.g., "1 tab", "5ml Injection"
         frequency: { type: String }, // e.g., "TDS", "BD", "Once Daily"

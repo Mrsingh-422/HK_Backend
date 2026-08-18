@@ -19,6 +19,167 @@ const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
 const bcrypt = require('bcryptjs');
 
 
+const enrichAppointmentClinicalDetails = async (appt) => {
+    const apptObj = appt.toObject ? appt.toObject() : { ...appt };
+
+    const prescriptionObj = await Prescription.findOne({ appointmentId: apptObj._id })
+        .select('pdfUrl dietPlanPdf medicines diagnosis')
+        .lean();
+
+    const clinicalFiles = {
+        dietPlanPdf: prescriptionObj?.dietPlanPdf || null,
+        dischargeSummaryPdf: apptObj.clinicalSummary?.dischargeSummaryPdf || null,
+        clinicalReports: apptObj.clinicalSummary?.uploadedReports || [],
+        dischargeCardUrl: prescriptionObj?.pdfUrl || null
+    };
+
+    const treatmentTeamTimeline = [];
+
+    // A. Fetch Current Active Primary Doctor details & active Shift timings
+    if (apptObj.doctorId) {
+        const primaryShift = apptObj.treatmentHistory?.find(h => 
+            h.toDoctorId && h.toDoctorId._id?.toString() === apptObj.doctorId._id?.toString() && h.startTime
+        );
+
+        treatmentTeamTimeline.push({
+            doctorId: apptObj.doctorId._id,
+            name: apptObj.doctorId.name,
+            speciality: apptObj.doctorId.speciality,
+            qualification: apptObj.doctorId.qualification || "MD",
+            profileImage: apptObj.doctorId.profileImage,
+            role: "Primary Physician",
+            joinedAt: primaryShift ? primaryShift.startTime : apptObj.startDate,
+            dischargedAt: primaryShift?.endTime || apptObj.endDate || null,
+            duration: primaryShift?.durationDisplay || ""
+        });
+    }
+
+    // B. Fetch Bedside Care Team (Co-Doctors) details & active shift timings
+    if (apptObj.bedsideCareTeam && apptObj.bedsideCareTeam.length > 0) {
+        apptObj.bedsideCareTeam.forEach(member => {
+            if (member.doctorId) {
+                treatmentTeamTimeline.push({
+                    doctorId: member.doctorId._id,
+                    name: member.doctorId.name,
+                    speciality: member.doctorId.speciality,
+                    qualification: member.doctorId.qualification || "MD",
+                    profileImage: member.doctorId.profileImage,
+                    role: "Bedside Specialist",
+                    joinedAt: member.startTime || member.requestedAt,
+                    dischargedAt: member.endTime || member.respondedAt || null,
+                    duration: member.durationDisplay || ""
+                });
+            }
+        });
+    }
+
+    // C. Fetch Completed / Transferred previous primary shifts from treatmentHistory
+    if (apptObj.treatmentHistory && apptObj.treatmentHistory.length > 0) {
+        apptObj.treatmentHistory.forEach(historyLog => {
+            // Find closed doctor shifts (excluding the current active doctor's unended shift)
+            if (historyLog.toDoctorId && historyLog.endTime) {
+                const isCurrentActiveDoc = apptObj.doctorId && 
+                                           apptObj.doctorId._id?.toString() === historyLog.toDoctorId._id?.toString() && 
+                                           !historyLog.endTime;
+                
+                if (!isCurrentActiveDoc) {
+                    // Check if we already pushed this doctor with this shift to avoid duplicates in timeline
+                    const alreadyPushed = treatmentTeamTimeline.some(t => 
+                        t.doctorId?.toString() === historyLog.toDoctorId._id?.toString() && 
+                        String(t.joinedAt) === String(historyLog.startTime)
+                    );
+
+                    if (!alreadyPushed) {
+                        treatmentTeamTimeline.push({
+                            doctorId: historyLog.toDoctorId._id,
+                            name: historyLog.toDoctorId.name,
+                            speciality: historyLog.toDoctorId.speciality,
+                            qualification: historyLog.toDoctorId.qualification || "MD",
+                            profileImage: historyLog.toDoctorId.profileImage,
+                            role: "Previous Physician (Discharged)",
+                            joinedAt: historyLog.startTime,
+                            dischargedAt: historyLog.endTime,
+                            duration: historyLog.durationDisplay || ""
+                        });
+                    }
+                }
+            }
+        });
+    }
+
+    let overstayDays = 0;
+    let overstayCharge = 0;
+    let bedPricePerDay = 0;
+    let baseStayDays = 0;
+    let baseStayCharge = 0;
+
+    if (apptObj.bedId) {
+        bedPricePerDay = apptObj.bedId.pricePerDay || 0;
+    }
+
+    if (apptObj.startDate && apptObj.endDate) {
+        const start = moment(apptObj.startDate);
+        const scheduledEnd = moment(apptObj.endDate);
+        
+        if (start.isValid() && scheduledEnd.isValid()) {
+            baseStayDays = Math.max(1, scheduledEnd.startOf('day').diff(start.startOf('day'), 'days'));
+            baseStayCharge = baseStayDays * bedPricePerDay;
+
+            const checkoutTime = apptObj.status === 'Completed' ? moment(apptObj.endDate) : moment();
+            const actualEnd = checkoutTime.startOf('day');
+            
+            overstayDays = actualEnd.diff(scheduledEnd.startOf('day'), 'days');
+            if (overstayDays > 0) {
+                overstayCharge = overstayDays * bedPricePerDay;
+            } else {
+                overstayDays = 0;
+            }
+        }
+    }
+
+    const dynamicPricingBreakdown = apptObj.pricingBreakdown ? { ...apptObj.pricingBreakdown } : {
+        baseFee: 0, subtotal: 0, originalBaseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, cancellationFeeApplied: 0, noShowFeeApplied: 0
+    };
+
+    if (!dynamicPricingBreakdown.baseFee || dynamicPricingBreakdown.baseFee === 0) {
+        dynamicPricingBreakdown.baseFee = baseStayCharge;
+    }
+
+    if (overstayCharge > 0) {
+        dynamicPricingBreakdown.extraCharges = (dynamicPricingBreakdown.extraCharges || 0) + overstayCharge;
+    }
+
+    const dynamicSubtotal = (dynamicPricingBreakdown.baseFee || 0) + (dynamicPricingBreakdown.visitCharges || 0) + (dynamicPricingBreakdown.extraCharges || 0);
+    dynamicPricingBreakdown.subtotal = dynamicSubtotal;
+
+    const discount = dynamicPricingBreakdown.discountAmount || 0;
+    const dynamicTotalAmount = Math.max(0, dynamicSubtotal - discount);
+
+    apptObj.pricingBreakdown = dynamicPricingBreakdown;
+
+    if (!apptObj.totalAmount || apptObj.totalAmount === 0) {
+        apptObj.totalAmount = dynamicTotalAmount;
+    }
+
+    const billingBreakdown = {
+        baseStayDays,
+        baseStayCharge,
+        overstayDays,
+        overstayCharge,
+        bedPricePerDay,
+        estimatedTotal: dynamicTotalAmount,
+        currentBillAmount: apptObj.totalAmount
+    };
+
+    return {
+        ...apptObj,
+        clinicalFiles,
+        treatmentTeamTimeline,
+        billingBreakdown
+    };
+};
+
+
 // --- 11. GET MY DOCTOR PROFILE DETAILS (GET API) ---
 const getMyDoctorProfile = async (req, res) => {
     try {
@@ -537,12 +698,10 @@ const submitDischargeSummary = async (req, res) => {
             activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
         }
 
-        // 🚀 CRITICAL CLINICAL SYNC FIX: Auto-close any orphaned or active bedside specialist shifts
-        // This unlocks the patient so they instantly appear in the hospital admin's pending discharges list
+        // Auto-close any active or accepted bedside specialist consults
         if (appointmentObj.bedsideCareTeam && appointmentObj.bedsideCareTeam.length > 0) {
             appointmentObj.bedsideCareTeam.forEach(member => {
                 if (['Pending', 'Accepted', 'In-Progress'].includes(member.status)) {
-                    // If they never responded, reject. If they started care, complete their shift.
                     member.status = member.status === 'Pending' ? 'Rejected' : 'Completed';
                     member.endTime = member.endTime || now;
                     member.respondedAt = member.respondedAt || now;
@@ -563,7 +722,7 @@ const submitDischargeSummary = async (req, res) => {
             updatedReports = [...updatedReports, ...reportPaths];
         }
 
-        // Extract final generated Discharge PDF path from multer files
+        // Extract final generated Discharge PDF path
         let dischargePdfPath = (appointmentObj.clinicalSummary && appointmentObj.clinicalSummary.dischargeSummaryPdf)
             ? appointmentObj.clinicalSummary.dischargeSummaryPdf
             : null;
@@ -572,10 +731,23 @@ const submitDischargeSummary = async (req, res) => {
             dischargePdfPath = `/uploads/hospital_discharges/${req.files.dischargePdf[0].filename}`;
         }
 
+        // Parse final discharge vitals
+        let parsedVitals = { bp: "", pulse: "", temp: "", spo2: "" };
+        if (body.vitals) {
+            parsedVitals = typeof body.vitals === 'string' ? JSON.parse(body.vitals) : body.vitals;
+        } else {
+            parsedVitals = {
+                bp: body.bp || "",
+                pulse: body.pulse || "",
+                temp: body.temp || "",
+                spo2: body.spo2 || ""
+            };
+        }
+
         // --- DYNAMIC DATA MAPPING ---
         const updateData = {
             status: 'Discharge-Pending', 
-            bedsideCareTeam: appointmentObj.bedsideCareTeam, // Save auto-closed specialists
+            bedsideCareTeam: appointmentObj.bedsideCareTeam, 
             clinicalSummary: {
                 diagnosis: body.diagnosis || (appointmentObj.clinicalSummary?.diagnosis) || "",
                 investigation: body.investigation || (appointmentObj.clinicalSummary?.investigation) || "",
@@ -589,7 +761,10 @@ const submitDischargeSummary = async (req, res) => {
                 conditionDuringAdmission: body.conditionDuringAdmission || (appointmentObj.clinicalSummary?.conditionDuringAdmission) || "",
                 conditionDuringDischarge: body.conditionDuringDischarge || (appointmentObj.clinicalSummary?.conditionDuringDischarge) || "",
 
-                dischargeSummaryPdf: dischargePdfPath
+                dischargeSummaryPdf: dischargePdfPath,
+                
+                // 🚀 Injects Final Discharge Vitals
+                vitals: parsedVitals
             }
         };
 
@@ -946,41 +1121,61 @@ const startSpecialistCare = async (req, res) => {
 // --- 3. SUBMIT CO-DOCTOR CLINICAL FEEDBACK (Fixed: Allows MULTIPLE feedbacks while In-Progress) ---
 const submitSpecialistFeedback = async (req, res) => {
     try {
-        const { appointmentId, observation, patientCondition, priorityRating, recommendedMedicines } = req.body;
+        const { appointmentId, observation, patientCondition, priorityRating, recommendedMedicines, vitals } = req.body;
         const specialistId = req.user.id;
 
+        // 🚀 SYNC FIX 1: Allows both 'Accepted' and 'In-Progress' states to prevent lock errors
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             "bedsideCareTeam.doctorId": specialistId,
-            "bedsideCareTeam.status": "In-Progress" 
+            "bedsideCareTeam.status": { $in: ["In-Progress", "Accepted"] } 
         });
 
         if (!appointment) {
-            return res.status(403).json({ success: false, message: "Unauthorized: Bedside treatment shift not active." });
+            return res.status(403).json({ success: false, message: "Unauthorized: Aapka treatment shift active nahi hai." });
         }
 
         if (['Discharge-Pending', 'Completed'].includes(appointment.status)) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Clinical Block: Patient ka treatment officially end ho chuka hai. Ab aap record change nahi kar sakte." 
+                message: "Clinical Block: Patient ka treatment officially end ho chuka hai." 
             });
         }
 
         const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
         
+        // 🚀 SYNC FIX 2: If the specialist direct submits observation, transition their state to In-Progress & start tracking!
+        if (careTeamObj.status === 'Accepted') {
+            careTeamObj.status = 'In-Progress';
+            careTeamObj.startTime = careTeamObj.startTime || new Date(); 
+            console.log(`[Self-Healed Specialist Shift]: Doctor ${specialistId} status auto-transitioned to 'In-Progress'`);
+        }
+
         if (!careTeamObj.specialistFeedback) {
             careTeamObj.specialistFeedback = [];
         }
 
-        // Push new observation logs
+        // Parse incoming vitals dynamically
+        let parsedVitals = { bp: "", pulse: "", temp: "", spo2: "" };
+        if (vitals) {
+            parsedVitals = typeof vitals === 'string' ? JSON.parse(vitals) : vitals;
+        }
+
+        // Push new observation feedback with vitals
         careTeamObj.specialistFeedback.push({
             observation: observation || "",
             patientCondition: patientCondition || "",
             priorityRating: priorityRating || 'Routine',
+            vitals: {
+                bp: parsedVitals.bp || "",
+                pulse: parsedVitals.pulse || "",
+                temp: parsedVitals.temp || "",
+                spo2: parsedVitals.spo2 || ""
+            },
             submittedAt: new Date()
         });
 
-        // Push new recommended medicines with dynamic stay vs home types
+        // Push recommended medicines
         if (recommendedMedicines) {
             const medicinesArray = typeof recommendedMedicines === 'string' ? JSON.parse(recommendedMedicines) : recommendedMedicines;
             
@@ -992,7 +1187,7 @@ const submitSpecialistFeedback = async (req, res) => {
                         frequency: med.frequency || "",
                         duration: med.duration || "",
                         instructions: med.instructions || "",
-                        type: med.type || 'Active-Stay', // 🚀 Dynamic Type: 'Active-Stay' or 'Discharge-Home'
+                        type: med.type || 'Active-Stay', 
                         addedAt: new Date()
                     });
                 });
@@ -1665,7 +1860,7 @@ const doctorSelfAssignCase = async (req, res) => {
 // Path: controllers/hospital/Doctor/hosDocPanel.js
 const addPrimaryClinicalLog = async (req, res) => {
     try {
-        const { appointmentId, observation, patientCondition, priorityRating } = req.body;
+        const { appointmentId, observation, patientCondition, priorityRating, vitals } = req.body;
         const doctorId = req.user.id;
 
         if (!appointmentId || !observation) {
@@ -1677,18 +1872,29 @@ const addPrimaryClinicalLog = async (req, res) => {
             return res.status(404).json({ success: false, message: "Admission Case Record Not Found." });
         }
 
-        // Verify authorization: Only assigned primary doctor can log round checkups
         const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === doctorId.toString();
         if (!isPrimaryDoc) {
             return res.status(403).json({ success: false, message: "Unauthorized: Only the assigned primary physician can submit active round observations." });
         }
 
-        // Push new clinical observation log with current timestamp
+        // Parse incoming round vitals
+        let parsedVitals = { bp: "", pulse: "", temp: "", spo2: "" };
+        if (vitals) {
+            parsedVitals = typeof vitals === 'string' ? JSON.parse(vitals) : vitals;
+        }
+
+        // Push new clinical observation log with vitals and current timestamp
         appointment.clinicalLogs.push({
             doctorId,
             observation,
             patientCondition: patientCondition || 'Stable',
             priorityRating: priorityRating || 'Routine',
+            vitals: {
+                bp: parsedVitals.bp || "",
+                pulse: parsedVitals.pulse || "",
+                temp: parsedVitals.temp || "",
+                spo2: parsedVitals.spo2 || ""
+            },
             loggedAt: new Date()
         });
 

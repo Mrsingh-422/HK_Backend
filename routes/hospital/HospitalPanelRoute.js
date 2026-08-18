@@ -12,7 +12,11 @@ const {
     updateBedPrice, uploadHospitalTermsPdf ,getHospitalHistory,emergencyDischarge,getHospitalCaseDetails,getHospitalPendingDischarges,
     dispatchAmbulanceForAdmission,reassignAmbulanceOnBreakdown,reassignDoctorFromPanel,reportHospitalNoShow,transferPatientBed,
      getTrackCasesList,
-    getTrackCaseSuperDetails
+    getTrackCaseSuperDetails,
+        getAvailableDischargeAmbulances,
+    calculateDischargeAmbulanceFare,
+    dispatchDischargeAmbulance, cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals
+    
 
 } = require('../../controllers/hospital/HospitalPanel');
  
@@ -96,5 +100,15 @@ router.post('/admissions/transfer-bed', protect('hospital'), transferPatientBed)
 
 router.get('/cases/track-list', protect('hospital'), getTrackCasesList); // 20-records list
 router.get('/cases/track-details/:id', protect('hospital'), getTrackCaseSuperDetails); // Consolidated super detail
+
+// Discharge Ambulance Booking APIs
+router.get('/discharge/available-ambulances', protect('hospital'), getAvailableDischargeAmbulances);
+router.post('/discharge/calculate-fare', protect('hospital'), calculateDischargeAmbulanceFare);
+router.post('/discharge/dispatch-ambulance', protect('hospital'), dispatchDischargeAmbulance);
+router.post('/discharge/cancel-ambulance', protect('hospital'), cancelDischargeAmbulance);
+
+// Hospital-to-Hospital Referral Booking API
+router.post('/referrals/book-transfer', protect('hospital'), bookHospitalToHospitalReferral);
+router.get('/referrals/nearby-hospitals', protect('hospital'), getReferralHospitals);
 
 module.exports = router;

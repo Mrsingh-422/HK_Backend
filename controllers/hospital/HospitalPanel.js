@@ -501,6 +501,7 @@ const calcDuration = (start, end) => {
     return hours > 0 ? `${hours} hr ${minutes} mins` : `${minutes} mins`;
 };
 // --- 3. FINAL DISCHARGE & DYNAMIC BILLING (Full Code - Auto-closes open specialist care shifts on checkout) ---
+// Updated: Added Active Transit Guard to prevent premature fleet release when patient is being driven home
 const generateFinalBillAndDischarge = async (req, res) => {
     try {
         const { appointmentId, billingItems } = req.body; 
@@ -513,7 +514,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
         let actualEndDate = new Date();
         let bedPricePerDay = 500; // default fallback
 
-        // 1. Fetch Target Bed details to extract live pricing
+        // Fetch Target Bed details to extract live pricing
         if (appointment.bedId) {
             const bed = await Bed.findById(appointment.bedId);
             if (bed) {
@@ -521,7 +522,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
             }
         }
 
-        // 2. Calculate Standard/Scheduled Base Stay Duration & Charges
+        // Calculate Standard/Scheduled Base Stay Duration & Charges
         let baseStayDays = 1;
         let baseStayCharge = 0;
         if (appointment.startDate && appointment.endDate) {
@@ -531,7 +532,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
             baseStayCharge = baseStayDays * bedPricePerDay;
         }
 
-        // 3. Calculate Overstay Days & Surcharge
+        // Calculate Overstay Days & Surcharge
         let overstayDays = 0;
         let overstayCharge = 0;
         if (appointment.startDate && appointment.endDate) {
@@ -546,11 +547,11 @@ const generateFinalBillAndDischarge = async (req, res) => {
             }
         }
 
-        // 4. Calculate manual additional billing items
+        // Calculate manual additional billing items
         const items = Array.isArray(billingItems) ? billingItems : [];
         const extraBillingTotal = items.reduce((sum, item) => sum + Number(item.price), 0);
 
-        // 5. Structure & Heal Pricing Breakdown object
+        // Structure & Heal Pricing Breakdown object
         if (!appointment.pricingBreakdown) {
             appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
         }
@@ -560,7 +561,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
             appointment.pricingBreakdown.baseFee = baseStayCharge;
         }
 
-        // Accumulate extra charges (Dynamic Overstay Bed Surcharge + Additional Billing Items)
+        // Accumulate extra charges
         const combinedExtraCharges = overstayCharge + extraBillingTotal;
         appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + combinedExtraCharges;
 
@@ -586,12 +587,13 @@ const generateFinalBillAndDischarge = async (req, res) => {
             });
         }
 
-        // Set status and finalize calculations
+        // 🚀 SYNC FIX: Transition status to Completed and paymentStatus to Paid upon dynamic settle
         appointment.status = 'Completed';
+        appointment.paymentStatus = 'Paid'; 
         appointment.endDate = actualEndDate;
         appointment.totalAmount = finalCalculatedTotal; // Saved corrected sum
 
-        // 6. Auto-close open primary doctor's active shift
+        // Auto-close open primary doctor's active shift
         if (appointment.doctorId) {
             const activePrimaryShift = appointment.treatmentHistory.find(h => 
                 h.toDoctorId && 
@@ -604,7 +606,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
             }
         }
 
-        // 7. Auto-close any active bedside specialist care shifts
+        // Auto-close any active bedside specialist care shifts
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(careMember => {
                 if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
@@ -617,7 +619,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
 
         await appointment.save();
 
-        // 8. Financial Wallet Sync: Calculate dynamic credit amount (Delta logic)
+        // Financial Wallet Sync
         const walletDeltaCredit = Math.max(0, finalCalculatedTotal - previousTotalAmount);
 
         if (walletDeltaCredit > 0) {
@@ -655,11 +657,19 @@ const generateFinalBillAndDischarge = async (req, res) => {
             }
         }
 
-        // Release linked Ambulance
+        // ACTIVE TRANSIT GUARD: Only release ambulance if it is not currently driving the patient home
         if (appointment.ambulanceId) {
-            await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
-                $set: { availableForEmergency: true } 
+            const AmbulanceBooking = require('../../models/AmbulanceBooking');
+            const activeDischargeTrip = await AmbulanceBooking.findOne({
+                ambulanceId: appointment.ambulanceId,
+                status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
             });
+
+            if (!activeDischargeTrip) {
+                await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
+                    $set: { availableForEmergency: true } 
+                });
+            }
         }
 
         res.json({ 
@@ -1477,7 +1487,7 @@ const getHospitalHistory = async (req, res) => {
 const emergencyDischarge = async (req, res) => {
     try {
         const { appointmentId, billingItems } = req.body; 
-        const hospitalId = req.user.id; // Logged-in Hospital Admin
+        const hospitalId = req.user.id; 
 
         // Find the target appointment and verify it belongs to this hospital and is an emergency case
         const appointment = await Appointment.findOne({ 
@@ -1505,7 +1515,7 @@ const emergencyDischarge = async (req, res) => {
         let actualEndDate = new Date();
         let bedPricePerDay = 500; // default fallback
 
-        // 1. Fetch Bed details for dynamic pricing
+        // Fetch Bed details for dynamic pricing
         if (appointment.bedId) {
             const bed = await Bed.findById(appointment.bedId);
             if (bed) {
@@ -1513,7 +1523,7 @@ const emergencyDischarge = async (req, res) => {
             }
         }
 
-        // 2. Calculate Scheduled Base Stay Days & Charge
+        // Calculate Scheduled Base Stay Days & Charge
         let baseStayDays = 1;
         let baseStayCharge = 0;
         if (appointment.startDate && appointment.endDate) {
@@ -1523,7 +1533,7 @@ const emergencyDischarge = async (req, res) => {
             baseStayCharge = baseStayDays * bedPricePerDay;
         }
 
-        // 3. Calculate dynamic overstay bed charges
+        // Calculate dynamic overstay bed charges
         let overstayDays = 0;
         let overstayCharge = 0;
         if (appointment.startDate && appointment.endDate) {
@@ -1538,11 +1548,11 @@ const emergencyDischarge = async (req, res) => {
             }
         }
 
-        // 4. Calculate manual dynamic billing items
+        // Calculate manual dynamic billing items
         const items = Array.isArray(billingItems) ? billingItems : [];
         const extraBillingTotal = items.reduce((sum, item) => sum + Number(item.price), 0);
 
-        // 5. Structure & Heal Pricing Breakdown object
+        // Structure & Heal Pricing Breakdown object
         if (!appointment.pricingBreakdown) {
             appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
         }
@@ -1578,12 +1588,13 @@ const emergencyDischarge = async (req, res) => {
             });
         }
 
-        // Update Appointment status to Completed
+        // 🚀 SYNC FIX: Transition status to Completed and paymentStatus to Paid upon dynamic settle
         appointment.status = 'Completed';
+        appointment.paymentStatus = 'Paid'; 
         appointment.endDate = actualEndDate;
         appointment.totalAmount = finalCalculatedTotal; // Corrected dynamic total sum
 
-        // 6. Auto-close the Primary Doctor's open active shift
+        // Auto-close the Primary Doctor's open active shift
         if (appointment.doctorId) {
             const activePrimaryShift = appointment.treatmentHistory.find(h => 
                 h.toDoctorId && 
@@ -1596,7 +1607,7 @@ const emergencyDischarge = async (req, res) => {
             }
         }
 
-        // 7. Auto-close any active bedside specialist care shifts
+        // Auto-close any active bedside specialist care shifts
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(careMember => {
                 if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
@@ -1609,7 +1620,7 @@ const emergencyDischarge = async (req, res) => {
 
         await appointment.save();
 
-        // 8. Financial Wallet Sync: Credit dynamic remaining delta balance
+        // Financial Wallet Sync
         const walletDeltaCredit = Math.max(0, finalCalculatedTotal - previousTotalAmount);
 
         if (walletDeltaCredit > 0) {
@@ -1772,7 +1783,6 @@ const enrichAppointmentClinicalDetails = async (appt) => {
 
     const treatmentTeamTimeline = [];
 
-    // A. Fetch Current Active Primary Doctor details & active Shift timings
     if (apptObj.doctorId) {
         const primaryShift = apptObj.treatmentHistory?.find(h => 
             h.toDoctorId && h.toDoctorId._id?.toString() === apptObj.doctorId._id?.toString() && h.startTime
@@ -1791,7 +1801,6 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         });
     }
 
-    // B. Fetch Bedside Care Team (Co-Doctors) details & active shift timings
     if (apptObj.bedsideCareTeam && apptObj.bedsideCareTeam.length > 0) {
         apptObj.bedsideCareTeam.forEach(member => {
             if (member.doctorId) {
@@ -1810,17 +1819,14 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         });
     }
 
-    // 🚀 C. Fetch Completed / Transferred previous primary shifts from treatmentHistory
     if (apptObj.treatmentHistory && apptObj.treatmentHistory.length > 0) {
         apptObj.treatmentHistory.forEach(historyLog => {
-            // Find closed doctor shifts (excluding the current active doctor's unended shift)
             if (historyLog.toDoctorId && historyLog.endTime) {
                 const isCurrentActiveDoc = apptObj.doctorId && 
                                            apptObj.doctorId._id?.toString() === historyLog.toDoctorId._id?.toString() && 
                                            !historyLog.endTime;
                 
                 if (!isCurrentActiveDoc) {
-                    // Check if we already pushed this doctor with this shift to avoid duplicates in timeline
                     const alreadyPushed = treatmentTeamTimeline.some(t => 
                         t.doctorId?.toString() === historyLog.toDoctorId._id?.toString() && 
                         String(t.joinedAt) === String(historyLog.startTime)
@@ -1898,13 +1904,29 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         apptObj.totalAmount = dynamicTotalAmount;
     }
 
+    // 🚀 LEDGER ACCUMULATOR: Calculate dynamic advance prepaid amount
+    let paidOnBooking = 0;
+    if (apptObj.paymentStatus === 'Paid') {
+        paidOnBooking = apptObj.paymentDetails?.amount || 0;
+        
+        // Fallback: If amount key is unpopulated but paymentStatus is Paid, use baseFee minus discount
+        if (paidOnBooking === 0) {
+            paidOnBooking = Math.max(0, (dynamicPricingBreakdown.baseFee || 0) - discount);
+        }
+    }
+
+    // Remaining Balance = Total Accumulated Cost - Paid on Booking
+    const remainingBalance = Math.max(0, dynamicTotalAmount - paidOnBooking);
+
     const billingBreakdown = {
         baseStayDays,
         baseStayCharge,
         overstayDays,
         overstayCharge,
         bedPricePerDay,
-        estimatedTotal: dynamicTotalAmount,
+        estimatedTotal: dynamicTotalAmount, // 👈 Total Accumulated Cost
+        paidOnBooking,                       // 🚀 NEW: Paid on Booking
+        remainingBalance,                    // 🚀 NEW: Remaining Balance
         currentBillAmount: apptObj.totalAmount
     };
 
@@ -2646,15 +2668,22 @@ const getTrackCaseSuperDetails = async (req, res) => {
                 requestedAt: member.requestedAt,
                 respondedAt: member.respondedAt,
                 rejectionReason: member.rejectionReason,
-                clinicalObservations: member.specialistFeedback || [],
                 
-                // Grouping specialist recommendations by Stay and Home types
+                // 🚀 SYNC FIX: Map bedside observations with logged checkup vitals!
+                clinicalObservations: member.specialistFeedback.map(obs => ({
+                    observation: obs.observation,
+                    patientCondition: obs.patientCondition,
+                    priorityRating: obs.priorityRating,
+                    submittedAt: obs.submittedAt,
+                    vitals: obs.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+                })),
+                
                 activeStayRecommendations: meds.filter(m => m.type === 'Active-Stay'),
                 dischargeHomeRecommendations: meds.filter(m => m.type === 'Discharge-Home')
             };
         });
 
-        // 🚀 C. Compile: Primary Doctor Round checkup logs
+        // 🚀 C. Compile: Primary Doctor Round checkup logs (Attending progress rounds)
         const primaryDoctorRoundLogs = appointment.clinicalLogs.map(log => ({
             doctor: {
                 doctorId: log.doctorId?._id,
@@ -2665,7 +2694,10 @@ const getTrackCaseSuperDetails = async (req, res) => {
             observation: log.observation,
             patientCondition: log.patientCondition,
             priorityRating: log.priorityRating,
-            loggedAt: log.loggedAt
+            loggedAt: log.loggedAt,
+            
+            // 🚀 SYNC FIX: Map primary round logs with recorded vitals!
+            vitals: log.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
         }));
 
         res.json({
@@ -2683,7 +2715,10 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     paymentStatus: appointment.paymentStatus,
                     paymentMethod: appointment.paymentMethod,
                     patientProfile: appointment.userId,
-                    bedDetails: appointment.bedId
+                    bedDetails: appointment.bedId,
+                    
+                    // 🚀 SYNC FIX: Maps final discharge vitals here!
+                    dischargeVitals: appointment.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
                 },
                 prescriptionDetails: prescription ? {
                     prescriptionId: prescription._id,
@@ -2698,7 +2733,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
                 } : null,
                 treatmentTimeline,         // Previous transfers, shift timings, doctors
                 bedsideCareLogs,           // Specialists, bedside observations, recommended meds (Stay & Home)
-                primaryDoctorRoundLogs     // Active physician rounds observations
+                primaryDoctorRoundLogs     // Active physician rounds observations with Vitals
             }
         });
 
@@ -2710,6 +2745,546 @@ const getTrackCaseSuperDetails = async (req, res) => {
 
 
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////// DISCHARGE ambulance DROP-OFF APIs  ////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+// --- API 1: GET AVAILABLE FLEET FOR DISCHARGE DROP-OFF (Figma Screen 3 Aligned) ---
+// Endpoint: GET /hospital/panel/discharge/available-ambulances
+// Path: controllers/hospital/HospitalPanel.js
+const getAvailableDischargeAmbulances = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+
+        // Fetch active, approved, and available fleet of the hospital
+        const fleet = await Ambulance.find({
+            hospitalId,
+            isActive: true,
+            availableForEmergency: true,
+            profileStatus: 'Approved'
+        }).select('name vehicleNumber vehicleType pricing driverInfo phone availableForEmergency');
+
+        res.json({
+            success: true,
+            count: fleet.length,
+            data: fleet
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API 2: CALCULATE DISCHARGE DROP-OFF FARE (Figma Screen 2/4 Pricing Engine) ---
+// Endpoint: POST /hospital/panel/discharge/calculate-fare
+// Path: controllers/hospital/HospitalPanel.js
+const calculateDischargeAmbulanceFare = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { ambulanceId, homeLat, homeLng } = req.body;
+
+        if (!ambulanceId || !homeLat || !homeLng) {
+            return res.status(400).json({ success: false, message: "Ambulance ID and Home GPS Coordinates (Lat/Lng) are required." });
+        }
+
+        // 1. Fetch Selected Ambulance
+        const ambulance = await Ambulance.findById(ambulanceId);
+        if (!ambulance) return res.status(404).json({ success: false, message: "Ambulance not found." });
+
+        // 2. Fetch Origin Hospital coordinates
+        const hospital = await Hospital.findById(hospitalId);
+        if (!hospital) return res.status(404).json({ success: false, message: "Hospital profile not found." });
+
+        const hospLat = hospital.location?.lat || 30.7046;
+        const hospLng = hospital.location?.lng || 76.7179;
+
+        // 3. Compute GPS Distance (KM)
+        const distance = await getDistance(hospLat, hospLng, parseFloat(homeLat), parseFloat(homeLng));
+
+        // 4. Run Pricing Calculations
+        const baseRate = ambulance.pricing?.fixedPrice || 1500;
+        const baseDistance = ambulance.pricing?.baseDistance || 5;
+        const pricePerKM = ambulance.pricing?.pricePerKM || 15;
+
+        let surgePrice = 0;
+        const extraDistance = distance - baseDistance;
+        if (extraDistance > 0) {
+            surgePrice = Math.round(extraDistance * pricePerKM);
+        }
+
+        const totalFare = baseRate + surgePrice;
+
+        res.json({
+            success: true,
+            data: {
+                distance: `${distance.toFixed(1)} km`,
+                rawDistance: distance,
+                baseAmbulanceRate: baseRate,
+                destinationSurge: surgePrice,
+                totalDispatchPrice: totalFare
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API 3: DISPATCH DISCHARGE AMBULANCE & MERGE FARE WITH HOSPITAL BILL (Figma Action Sync) ---
+// Endpoint: POST /hospital/panel/discharge/dispatch-ambulance
+// Path: controllers/hospital/HospitalPanel.js
+const dispatchDischargeAmbulance = async (req, res) => {
+    let ambulanceToRollback = null;
+
+    try {
+        const hospitalId = req.user.id;
+        const { 
+            appointmentId, 
+            ambulanceId, 
+            homeAddress, 
+            homeLat, 
+            homeLng, 
+            totalFare, 
+            distance 
+        } = req.body;
+
+        if (!appointmentId || !ambulanceId || !totalFare) {
+            return res.status(400).json({ success: false, message: "Required fields (appointmentId, ambulanceId, totalFare) are missing." });
+        }
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
+        if (!appointment) return res.status(404).json({ success: false, message: "Patient Admission Record Not Found." });
+
+        // Ensure patient is in discharge-pending state before dispatching home drop-off
+        if (appointment.status !== 'Discharge-Pending') {
+            return res.status(400).json({ success: false, message: "Ambulance Add-on can only be booked for patients clinically ready for discharge (Discharge-Pending)." });
+        }
+
+        // Fetch and lock ambulance availability
+        const ambulance = await Ambulance.findOne({
+            _id: ambulanceId,
+            hospitalId,
+            isActive: true,
+            availableForEmergency: true,
+            profileStatus: 'Approved'
+        });
+
+        if (!ambulance) {
+            return res.status(400).json({ success: false, message: "Selected ambulance is not available or belongs to another fleet." });
+        }
+
+        ambulanceToRollback = ambulanceId;
+        ambulance.availableForEmergency = false;
+        await ambulance.save();
+
+        const generatedBookingId = `HK-REF-${Date.now().toString().slice(-6)}`;
+        const generatedCaseRef = `HK-${new Date().getFullYear()}-REF-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        const patientObj = appointment.patients?.[0] || {};
+        const dropAddress = homeAddress || appointment.address?.city || "Patient Home Address";
+
+        // Create active Booking for the driver's app
+        const AmbulanceBooking = require('../../models/AmbulanceBooking'); // Secure local load
+        const booking = await AmbulanceBooking.create({
+            bookingId: generatedBookingId,
+            caseReference: generatedCaseRef,
+            userId: appointment.userId,
+            ambulanceId: ambulanceId,
+            hospitalId: hospitalId, // Origin
+            serviceType: 'Referral Ambulance', // Keeps standard referral schema
+            status: 'Confirmed', 
+            pickupLocation: {
+                address: req.user.address || "Hospital Base Location",
+                lat: req.user.location?.lat || 30.7046,
+                lng: req.user.location?.lng || 76.7179
+            },
+            patientDetails: {
+                name: patientObj.patientName || "Admitted Patient",
+                age: patientObj.patientAge || 30,
+                gender: patientObj.gender || "Male",
+                condition: "Stable",
+                emergencyDescription: "Discharge drop-off transit to residence."
+            },
+            pricing: {
+                ambulanceCharge: ambulance.pricing?.fixedPrice || 1500,
+                supportingStaffCharge: 0,
+                subtotal: Number(totalFare),
+                discount: 0,
+                total: Number(totalFare)
+            },
+            paymentStatus: 'Pending', // Managed and collected during final hospital discharge checkout bill
+            paymentMethod: 'Online',
+            otp: Math.floor(1000 + Math.random() * 9000).toString(),
+            trackingTimeline: [{
+                status: 'Confirmed',
+                timestamp: new Date(),
+                note: `Discharge drop-off ambulance successfully assigned by hospital ward control desk to ${dropAddress}.`
+            }]
+        });
+
+        // Merge ambulance fare directly inside Patient's final hospital admission invoice/bill
+        appointment.specialServices.push({
+            serviceName: `Discharge Ambulance Drop-off: ${dropAddress} (${distance || 'N/A'})`,
+            price: Number(totalFare)
+        });
+
+        if (!appointment.pricingBreakdown) {
+            appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
+        }
+
+        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + Number(totalFare);
+        appointment.totalAmount = (appointment.totalAmount || 0) + Number(totalFare);
+
+        // Bind driver reference to appointment
+        appointment.ambulanceId = ambulanceId;
+        await appointment.save();
+
+        // 🚀 SYNC FIX: Corrected relative path to "../../" for controllers/hospital depth level
+        const { sendPushNotification } = require('../../utils/notification');
+        await sendPushNotification(
+            ambulanceId,
+            'driver',
+            "🚨 Assigned Discharge Drop-off",
+            `Hospital has assigned you for a patient drop-off to ${dropAddress}. Patient: ${patientObj.patientName || 'User'}.`,
+            { bookingId: booking._id.toString(), type: 'assigned_discharge_dropoff' }
+        );
+
+        res.status(201).json({
+            success: true,
+            message: "Discharge drop-off ambulance successfully dispatched and merged with patient final bill.",
+            data: {
+                booking,
+                appointment
+            }
+        });
+
+    } catch (error) {
+        console.error("Discharge Dispatch Error:", error);
+        if (ambulanceToRollback) {
+            await Ambulance.findByIdAndUpdate(ambulanceToRollback, { 
+                $set: { availableForEmergency: true } 
+            });
+        }
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API 4: CANCEL DISCHARGE AMBULANCE ADD-ON & REVERT LEDGER CHARGES (NEW API) ---
+// Endpoint: POST /hospital/panel/discharge/cancel-ambulance
+// Path: controllers/hospital/HospitalPanel.js
+const cancelDischargeAmbulance = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { appointmentId } = req.body;
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
+        if (!appointment) return res.status(404).json({ success: false, message: "Patient Admission Record Not Found." });
+
+        if (appointment.status !== 'Discharge-Pending') {
+            return res.status(400).json({ success: false, message: "Cannot cancel ambulance add-on in current patient status." });
+        }
+
+        const assignedAmbulanceId = appointment.ambulanceId;
+        if (!assignedAmbulanceId) {
+            return res.status(400).json({ success: false, message: "No dispatched ambulance found associated with this discharge case." });
+        }
+
+        // 1. Cancel the active Ambulance Booking document
+        const AmbulanceBooking = require('../../models/AmbulanceBooking');
+        const activeBooking = await AmbulanceBooking.findOne({
+            ambulanceId: assignedAmbulanceId,
+            status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
+        });
+
+        let refundedFare = 0;
+        if (activeBooking) {
+            refundedFare = activeBooking.pricing?.total || 0;
+            activeBooking.status = 'Cancelled';
+            activeBooking.cancelledBy = 'System';
+            activeBooking.cancellationReason = "Discharge ambulance drop-off cancelled by ward desk prior to final billing.";
+            await activeBooking.save();
+        }
+
+        // 2. Release Ambulance back to available pool
+        await Ambulance.findByIdAndUpdate(assignedAmbulanceId, { 
+            $set: { availableForEmergency: true } 
+        });
+
+        // 3. DEDUCT AND REVERT LEDGER CHARGES FROM APPOINTMENT
+        // Find and pull the discharge ambulance surcharge item from specialServices array
+        const serviceIndex = appointment.specialServices.findIndex(s => 
+            s.serviceName && s.serviceName.startsWith("Discharge Ambulance Drop-off")
+        );
+
+        if (serviceIndex > -1) {
+            const servicePrice = appointment.specialServices[serviceIndex].price || refundedFare;
+            
+            // Revert charges
+            appointment.pricingBreakdown.extraCharges = Math.max(0, (appointment.pricingBreakdown.extraCharges || 0) - servicePrice);
+            appointment.totalAmount = Math.max(0, (appointment.totalAmount || 0) - servicePrice);
+            
+            // Remove the array item
+            appointment.specialServices.splice(serviceIndex, 1);
+        }
+
+        // Clear references
+        appointment.ambulanceId = null;
+        await appointment.save();
+
+        res.json({
+            success: true,
+            message: "Discharge ambulance add-on cancelled successfully. Bill successfully updated.",
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Cancel Discharge Ambulance Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
+
+///////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////// REFERRAL booking ambulance APIs  //////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////
+// --- API: BOOK HOSPITAL-TO-HOSPITAL REFERRAL TRANSIT (NEW API - Figma Aligned) ---
+// Endpoint: POST /hospital/panel/referrals/book-transfer
+const bookHospitalToHospitalReferral = async (req, res) => {
+    let ambulanceToRollback = null;
+
+    try {
+        const sendingHospitalId = req.user.id; // Logged-in sending hospital
+        const {
+            appointmentId, // Optional: Linked active admission being transferred
+            destinationHospitalId, // Receiving hospital ID
+            ambulanceId, // Chosen ambulance ID
+            scheduledDate,
+            scheduledTime,
+            patientName,
+            patientAge,
+            gender,
+            referralReason,
+            staffType // Optional string/array (e.g. "Doctor,Nurse")
+        } = req.body;
+
+        if (!destinationHospitalId || !ambulanceId) {
+            return res.status(400).json({ success: false, message: "Required fields (destinationHospitalId, ambulanceId) are missing." });
+        }
+
+        // 1. Fetch Sending & Destination Hospitals
+        const hospA = await Hospital.findById(sendingHospitalId);
+        const hospB = await Hospital.findById(destinationHospitalId);
+
+        if (!hospA || !hospB) {
+            return res.status(404).json({ success: false, message: "Origin or Destination Hospital profile not found." });
+        }
+
+        // 2. Fetch Selected Ambulance
+        const ambulance = await Ambulance.findById(ambulanceId);
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Selected Ambulance not found in the system." });
+        }
+
+        // Verify ambulance belongs to same hospital or is globally available
+        if (ambulance.availableForEmergency === false) {
+            return res.status(400).json({ success: false, message: "Selected ambulance is currently busy on another trip." });
+        }
+
+        ambulanceToRollback = ambulanceId;
+
+        // 3. Compute GPS Distance between Hospital A and Hospital B
+        const hospALat = hospA.location?.lat || 30.7046;
+        const hospALng = hospA.location?.lng || 76.7179;
+        const hospBLat = hospB.location?.lat || 30.7333;
+        const hospBLng = hospB.location?.lng || 76.7794;
+
+        const distance = await getDistance(hospALat, hospALng, hospBLat, hospBLng);
+
+        // 4. Calculate Dynamic Pricing Structure
+        const baseRate = ambulance.pricing?.fixedPrice || 1500;
+        const baseDistance = ambulance.pricing?.baseDistance || 5;
+        const pricePerKM = ambulance.pricing?.pricePerKM || 15;
+
+        let surgePrice = 0;
+        const extraDistance = distance - baseDistance;
+        if (extraDistance > 0) {
+            surgePrice = Math.round(extraDistance * pricePerKM);
+        }
+
+        // Parse optional supporting staff surcharges
+        let supportingStaffCharge = 0;
+        let staffList = staffType ? (typeof staffType === 'string' ? staffType.split(',') : staffType) : [];
+        staffList = staffList.map(s => s.trim());
+
+        if (staffList.includes('Doctor')) {
+            supportingStaffCharge += (ambulance.supportStaff?.doctor?.price || 0);
+        }
+        if (staffList.includes('Nurse')) {
+            supportingStaffCharge += (ambulance.supportStaff?.nurse?.price || 0);
+        }
+
+        const totalFare = baseRate + surgePrice + supportingStaffCharge;
+
+        // 5. Create the Referral Ambulance Booking
+        const generatedBookingId = `HK-REF-${Date.now().toString().slice(-6)}`;
+        const generatedCaseRef = `HK-${new Date().getFullYear()}-REF-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        let finalPatientName = patientName || "Referred Patient";
+        let finalPatientAge = patientAge || 30;
+        let finalGender = gender || "Male";
+
+        // Fetch details from active appointment if linked
+        let appointment = null;
+        if (appointmentId) {
+            appointment = await Appointment.findOne({ _id: appointmentId, hospitalId: sendingHospitalId });
+            if (appointment) {
+                const patientObj = appointment.patients?.[0] || {};
+                finalPatientName = patientObj.patientName || finalPatientName;
+                finalPatientAge = patientObj.patientAge || finalPatientAge;
+                finalGender = patientObj.gender || finalGender;
+            }
+        }
+
+        // Lock driver availability status
+        ambulance.availableForEmergency = false;
+        await ambulance.save();
+
+        const AmbulanceBooking = require('../../models/AmbulanceBooking'); // Secure local load
+        const booking = await AmbulanceBooking.create({
+            bookingId: generatedBookingId,
+            caseReference: generatedCaseRef,
+            userId: appointment ? appointment.userId : req.user.id, // Fallback to hospital token id
+            ambulanceId: ambulanceId,
+            pickupHospitalId: sendingHospitalId, // Origin Hospital A
+            hospitalId: destinationHospitalId,  // Destination Hospital B
+            serviceType: 'Referral Ambulance',
+            status: 'Confirmed', 
+            scheduledAt: scheduledDate ? new Date(scheduledDate) : new Date(),
+            scheduledTime: scheduledTime || null,
+            pickupLocation: {
+                address: hospA.address || "Origin Hospital Base",
+                lat: hospALat,
+                lng: hospALng
+            },
+            patientDetails: {
+                name: finalPatientName,
+                age: finalPatientAge,
+                gender: finalGender,
+                condition: "Stable",
+                emergencyDescription: `Referral transit from ${hospA.name} to ${hospB.name}. Reason: ${referralReason || 'Advanced clinical care'}`
+            },
+            pricing: {
+                ambulanceCharge: baseRate,
+                supportingStaffCharge,
+                subtotal: totalFare,
+                discount: 0,
+                total: totalFare
+            },
+            paymentStatus: 'Pending',
+            paymentMethod: 'COD', // Hospital offline settlement
+            otp: Math.floor(1000 + Math.random() * 9000).toString(),
+            trackingTimeline: [{
+                status: 'Confirmed',
+                timestamp: new Date(),
+                note: `Referral booking confirmed from ${hospA.name} to ${hospB.name}. Scheduled on ${scheduledDate || 'today'} at ${scheduledTime || 'now'}.`
+            }]
+        });
+
+        // 6. If linked to an Admitted Patient, append fare to their final Hospital A invoice
+        if (appointment) {
+            appointment.specialServices.push({
+                serviceName: `Referral Transfer to ${hospB.name} (${distance.toFixed(1)} km)`,
+                price: totalFare
+            });
+
+            if (!appointment.pricingBreakdown) {
+                appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
+            }
+
+            appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + totalFare;
+            appointment.totalAmount = (appointment.totalAmount || 0) + totalFare;
+
+            // Log transfer event in appointment timeline history
+            appointment.treatmentHistory.push({
+                action: 'Transfer-Initiated',
+                notes: `Referred and dispatched to ${hospB.name} via ${ambulance.name}. Reason: ${referralReason || 'Advanced care'}`,
+                timestamp: new Date()
+            });
+
+            await appointment.save();
+        }
+
+        // 7. MULTICAST NOTIFICATIONS
+        const { sendPushNotification } = require('../../utils/notification');
+        
+        // Notify the Driver
+        await sendPushNotification(
+            ambulanceId,
+            'driver',
+            "🚨 New Inter-Hospital Referral",
+            `Dispatched from ${hospA.name} to drop-off patient ${finalPatientName} at ${hospB.name}.`,
+            { bookingId: booking._id.toString(), type: 'new_referral' }
+        );
+
+        // Notify the Destination Hospital (B)
+        await sendPushNotification(
+            destinationHospitalId,
+            'hospital',
+            "🚨 Incoming Referral Patient Alert!",
+            `Hospital ${hospA.name} has referred patient ${finalPatientName} to your facility. Arriving shortly via Ambulance #${generatedBookingId}.`,
+            { bookingId: booking._id.toString(), type: 'incoming_referral' }
+        );
+
+        res.status(201).json({
+            success: true,
+            message: `Referral Ambulance successfully scheduled from ${hospA.name} to ${hospB.name}.`,
+            data: {
+                booking,
+                appointment: appointment || null
+            }
+        });
+
+    } catch (error) {
+        console.error("Book Referral Error:", error);
+        if (ambulanceToRollback) {
+            await Ambulance.findByIdAndUpdate(ambulanceToRollback, { 
+                $set: { availableForEmergency: true } 
+            });
+        }
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API: GET DESTINATION HOSPITALS FOR REFERRAL TRANSIT (Figma Dropdown Aligned) ---
+// Endpoint: GET /hospital/panel/referrals/nearby-hospitals
+const getReferralHospitals = async (req, res) => {
+    try {
+        const currentHospitalId = req.user.id; // Logged-in hospital
+        const { search, city } = req.query;
+
+        // Strictly query active/approved hospitals, excluding self
+        let query = { 
+            profileStatus: 'Approved', 
+            isActive: true,
+            _id: { $ne: currentHospitalId } // 🚀 SYNC FIX: Exclude self from dropdown list
+        };
+
+        if (city) query.city = { $regex: city, $options: 'i' };
+        if (search) query.name = { $regex: search, $options: 'i' };
+
+        const hospitals = await Hospital.find(query)
+            .select('name address city state hospitalImage location isOnline')
+            .lean();
+
+        res.json({ 
+            success: true, 
+            count: hospitals.length, 
+            data: hospitals 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 
@@ -2730,5 +3305,8 @@ module.exports = {
     dispatchAmbulanceForAdmission,reassignAmbulanceOnBreakdown,
     reassignDoctorFromPanel,reportHospitalNoShow,transferPatientBed,
      getTrackCasesList,
-    getTrackCaseSuperDetails
+    getTrackCaseSuperDetails,
+    getAvailableDischargeAmbulances,
+    calculateDischargeAmbulanceFare,
+    dispatchDischargeAmbulance,cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals
 };
