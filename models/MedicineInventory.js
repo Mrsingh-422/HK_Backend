@@ -12,7 +12,7 @@ const medicineInventorySchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Medicine',
         required: true,
-        index: true 
+        index: true
     },
     batch_number: {
         type: String,
@@ -40,7 +40,7 @@ const medicineInventorySchema = new mongoose.Schema({
     },
     hsn_number: {
         type: String,
-        required: false, // 🚨 Made strictly compulsory [1]
+        required: false,
         trim: true,
         default: null
     },

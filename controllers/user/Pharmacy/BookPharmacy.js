@@ -27,6 +27,7 @@ const PharmacyPrescriptionRequest = require('../../../models/PharmacyPrescriptio
 const PharmacyComboOffer = require('../../../models/PharmacyComboOffer'); // Import model
 const Review = require('../../../models/Review'); // Import Review model for rating functionality
 const ComboOffer = require('../../../models/PharmacyComboOffer'); // Import ComboOffer model
+const HsnMaster = require('../../../models/HsnMaster'); // Import HSN Master model
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
@@ -57,7 +58,7 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         }).sort({ expiry_date: 1 });
 
         const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId?.mrp ? Number(item.medicineId.mrp) : 0);
-        const batchHsn = activeBatch ? activeBatch.hsn_number : null; // Fetch HSN
+        const batchHsn = activeBatch ? activeBatch.hsn_number : null;
 
         rawItemTotalWithoutPromo += (batchMrp * orderedQty);
 
@@ -89,20 +90,20 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
 
         promoDeductedTotal += finalItemPrice;
 
-        // 🚨 DYNAMIC GST EVALUATION (Checks if HSN exists)
+        // 🚨 LIVE MASTER HSN TAX RESOLUTION (No hardcoding)
         let cgstPercent = 0;
         let sgstPercent = 0;
 
-        // Agar product ka HSN code daala gaya hai tabhi GST lagega, nahi toh 0%
-        if (batchHsn && batchHsn.trim() !== "" && batchHsn.toUpperCase() !== "N/A") {
-            const isSupplement = batchHsn.trim().startsWith('21');
-            cgstPercent = isSupplement ? 9 : 6;
-            sgstPercent = isSupplement ? 9 : 6;
+        if (batchHsn && batchHsn.trim() !== "") {
+            const hsnConfig = await HsnMaster.findOne({ hsnCode: batchHsn.trim(), isActive: true });
+            if (hsnConfig) {
+                const totalGst = hsnConfig.totalGstPercent;
+                cgstPercent = totalGst / 2; // Intrastate splits 50/50
+                sgstPercent = totalGst / 2;
+            }
         }
 
         const totalGstPercent = cgstPercent + sgstPercent;
-
-        // Agar totalGstPercent 0 hai, toh taxableAmount directly finalItemPrice ke barabar ho jayega
         const itemTaxableAmount = finalItemPrice / (1 + (totalGstPercent / 100));
         const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
         const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);

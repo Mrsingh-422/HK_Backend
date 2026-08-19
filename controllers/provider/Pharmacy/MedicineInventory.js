@@ -4,6 +4,7 @@ const Medicine = require('../../../models/Medicine');
 const MedicineInventory = require('../../../models/MedicineInventory');
 const MasterRequest = require('../../../models/MasterRequest');
 const mongoose = require('mongoose')
+const HsnMaster = require('../../../models/HsnMaster');
 
 // 1. Master Medicine Database mein se search karna (Inventory mein add karne ke liye)
 // Endpoint: GET /provider/pharmacy/inventory/getMaster?query=dolo&page=1
@@ -66,36 +67,39 @@ const addToInventory = async (req, res) => {
         const pharmacyId = req.user.id;
 
         if (!batch_number || batch_number.trim() === "") {
-            return res.status(400).json({ success: false, message: "Batch number is required to register medicine inventory." });
+            return res.status(400).json({ success: false, message: "Batch number is required." });
         }
 
-        // 🚨 STRICT COMPLIANCE CHECK: HSN is now mandatory
-        if (!hsn_number || hsn_number.trim() === "") {
-            return res.status(400).json({ success: false, message: "HSN classification code is strictly compulsory to add inventory." });
+        // 1. Verify if HSN exists in Admin's Master List (If HSN is provided)
+        let validatedHsn = "";
+        if (hsn_number && hsn_number.trim() !== "") {
+            const hsnExists = await HsnMaster.findOne({ hsnCode: hsn_number.trim(), isActive: true });
+            if (!hsnExists) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Compliance Blocked: Selected HSN Code is not active or defined by the Admin." 
+                });
+            }
+            validatedHsn = hsnExists.hsnCode;
         }
 
-        if (!mrp || Number(mrp) <= 0) {
-            return res.status(400).json({ success: false, message: "A valid batch-specific MRP is required." });
-        }
-
+        // 2. Fetch master medicine for standard validation (No HSN check required here)
         const masterMed = await Medicine.findById(medicineId);
         if (!masterMed) {
-            return res.status(404).json({ success: false, message: "Medicine not found in master database list." });
+            return res.status(404).json({ success: false, message: "Medicine not found in master catalog." });
         }
 
         const approvedMasterMrp = Number(masterMed.mrp || 0);
-
         if (approvedMasterMrp > 0 && Number(mrp) > approvedMasterMrp) {
             return res.status(400).json({
                 success: false,
-                message: `Compliance Blocked: The entered batch MRP (₹${mrp}) exceeds the approved master catalog MRP limit of ₹${approvedMasterMrp}. If the brand has officially increased the printed price, please submit an 'MRP Increase Request' to the Admin for approval.`
+                message: `Compliance Blocked: MRP exceeds approved catalog limit of ₹${approvedMasterMrp}.`
             });
         }
 
         const qty = Number(stock_quantity || 0);
         const finalPackaging = packaging && packaging.trim() !== "" ? packaging.trim() : (masterMed.packaging || "10 tablets");
 
-        // Find and update item uniquely matching pharmacy, medicine and specific batch
         const inventoryItem = await MedicineInventory.findOneAndUpdate(
             { pharmacyId, medicineId, batch_number: batch_number.trim() },
             { 
@@ -105,13 +109,13 @@ const addToInventory = async (req, res) => {
                 expiry_date, 
                 packaging: finalPackaging, 
                 manufacturing_date: manufacturing_date ? new Date(manufacturing_date) : undefined, 
-                hsn_number: hsn_number.trim(), // 👈 Saved as compulsory string [1]
+                hsn_number: validatedHsn, // 👈 Directly saves the selected HSN from request body dropdown selection
                 is_available: qty > 0 
             },
             { upsert: true, new: true }
         );
 
-        res.status(201).json({ success: true, message: "Medicine batch added to your store!", data: inventoryItem });
+        res.status(201).json({ success: true, message: "Medicine batch added to your inventory successfully!", data: inventoryItem });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

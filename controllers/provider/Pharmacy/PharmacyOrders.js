@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const Medicine = require('../../../models/Medicine');
 const moment = require('moment');
 const Wallet = require('../../../models/Wallet');
+const HsnMaster = require('../../../models/HsnMaster'); // Import HSN Master model
 
 
 // ==========================================
@@ -422,13 +423,16 @@ const submitPharmacistReview = async (req, res) => {
                 }
             }
 
-            // Dynamic GST Verification
+            // Dynamic live HSN tax mapping
             let cgstPercent = 0;
             let sgstPercent = 0;
-            if (verifiedHsn && verifiedHsn.trim() !== "" && verifiedHsn.toUpperCase() !== "N/A") {
-                const isSupplement = verifiedHsn.trim().startsWith('21');
-                cgstPercent = isSupplement ? 9 : 6;
-                sgstPercent = isSupplement ? 9 : 6;
+            if (verifiedHsn && verifiedHsn.trim() !== "") {
+                const hsnConfig = await HsnMaster.findOne({ hsnCode: verifiedHsn.trim(), isActive: true });
+                if (hsnConfig) {
+                    const totalGst = hsnConfig.totalGstPercent;
+                    cgstPercent = totalGst / 2;
+                    sgstPercent = totalGst / 2;
+                }
             }
 
             const totalGstPercent = cgstPercent + sgstPercent;

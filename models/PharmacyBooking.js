@@ -25,29 +25,30 @@ const pharmacyBookingSchema = new mongoose.Schema({
         duration: String, // e.g., "5 Days"
         startDate: Date,
 
-         // 🚨 NEW COMBO / BOGO TRACKING FIELDS
+        // 🚨 NEW COMBO / BOGO TRACKING FIELDS
         isComboApplied: { type: Boolean, default: false },
         comboOfferId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmacyComboOffer', default: null },
         freeQuantity: { type: Number, default: 0 }, // Saved units (Y)
 
-        // 🚨 NEW GST KEYS FOR BILL GENERATION
+        // 🚨 Dynamic GST snapshots inside order items
         hsn_number: { type: String, required: false, default: "" },
         taxableAmount: { type: Number, default: 0 },
-        cgstPercent: { type: Number, default: 6 },
-        sgstPercent: { type: Number, default: 6 },
+        cgstPercent: { type: Number, default: 0 },
+        sgstPercent: { type: Number, default: 0 },
         cgstAmount: { type: Number, default: 0 },
         sgstAmount: { type: Number, default: 0 }
+
     }],
 
     // --- LOGISTICS & SLOTS ---
-    collectionType: { 
-        type: String, 
-        enum: ['Home Delivery', 'Self Pickup'], 
-        required: true 
+    collectionType: {
+        type: String,
+        enum: ['Home Delivery', 'Self Pickup'],
+        required: true
     },
     appointmentDate: { type: Date, required: true },
-    appointmentTime: { type: String, required: true }, 
-    isRapid: { type: Boolean, default: false }, 
+    appointmentTime: { type: String, required: true },
+    isRapid: { type: Boolean, default: false },
 
     // --- ADDRESS SECTION ---
     address: {
@@ -85,39 +86,39 @@ const pharmacyBookingSchema = new mongoose.Schema({
     },
 
     // --- PAYMENT & STATUS ---
-    paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'COD' },
-    paymentStatus: { 
-        type: String, 
-        enum: ['Pending', 'Paid', 'Failed', 'Refunded'], 
-        default: 'Pending' 
+    paymentMethod: { type: String, enum: ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'COD' },
+    paymentStatus: {
+        type: String,
+        enum: ['Pending', 'Paid', 'Failed', 'Refunded'],
+        default: 'Pending'
     },
-    
+
     orderType: { type: String, enum: ['General', 'Prescription'], default: 'General' },
     driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
-    
+
     // Delivery Tracking Statuses
-    deliveryStatus: { 
-        type: String, 
-        enum: ['PendingAssignment', 'Assigned', 'Accepted', 'PickedUp', 'OutForDelivery', 'ReachedLocation', 'Delivered', 'CancelledByDriver', 'UserUnreachable', 'UserRefused'], 
-        default: 'PendingAssignment' 
+    deliveryStatus: {
+        type: String,
+        enum: ['PendingAssignment', 'Assigned', 'Accepted', 'PickedUp', 'OutForDelivery', 'ReachedLocation', 'Delivered', 'CancelledByDriver', 'UserUnreachable', 'UserRefused'],
+        default: 'PendingAssignment'
     },
-    
+
     deliveryOTP: { type: String }, // For final verification
     assignedAt: { type: Date },
     rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }], // To avoid re-assigning to same driver
-    
+
     // For Prescription orders
     prescriptionImages: [String],
-    status: { 
-        type: String, 
-        enum: ['Pending','Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Cancelled'], 
-        default: 'Placed' 
+    status: {
+        type: String,
+        enum: ['Pending', 'Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Cancelled'],
+        default: 'Placed'
     },
 
     cancelReason: { type: String },
     prescriptionFile: { type: String }, // For prescription-based orders
 
-     // 🌟 Figma Screen 14 (Proof of Delivery Photo)
+    // 🌟 Figma Screen 14 (Proof of Delivery Photo)
     deliveryProofPic: { type: String, default: null },
 
     // 🌟 Figma Screen 13 (Return Details)
@@ -146,7 +147,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
         paidAt: { type: Date, default: null }
     }
 
-    
+
 }, { timestamps: true });
 
 
