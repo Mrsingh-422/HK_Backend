@@ -74,6 +74,9 @@ const userSchema = new mongoose.Schema({
     startDate: { type: String },
     endDate: { type: String },
     insuranceDocument: { type: String }, // URL of the uploaded policy file (PDF/Image)
+    // 🚀 NEW: Dual Side card uploads for TPA Claims desk verification
+    insuranceDocumentFront: { type: String, default: null }, // URL of Card Front Side
+    insuranceDocumentBack: { type: String, default: null },  // URL of Card Back Side
     // Reference to specific master plan (Dropdown 2 when not "other")
     masterInsuranceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Insurance', default: null }
 },

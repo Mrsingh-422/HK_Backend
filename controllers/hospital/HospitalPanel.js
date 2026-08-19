@@ -20,6 +20,10 @@ const path = require('path');
 const fs = require('fs');
 const NoShowConfig = require('../../models/NoShowConfig');
 const Prescription = require('../../models/Prescription');
+const Insurance = require('../../models/Insurance');
+const InsuranceType = require('../../models/InsuranceType');
+const { sendPushNotification } = require('../../utils/notification');
+const User = require('../../models/User');
 
 const getShortName = (name) => {
     return name.split(' ').map(word => word[0]).join('').toUpperCase();
@@ -3287,6 +3291,177 @@ const getReferralHospitals = async (req, res) => {
 };
 
 
+/////////////////////////////////////////////////////////////////
+/////////////////////////// INSURANCE  ///////////////////////////
+/////////////////////////////////////////////////////////////////
+
+// --- API 1: GET PATIENTS LIST FOR TPA INSURANCE DESK (With Data-Isolation & Pagination) ---
+// Endpoint: GET /hospital/panel/insurance/patients?tab=Un-Insured&page=1
+// Path: controllers/hospital/HospitalPanel.js
+const getInsurancePatientsList = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { tab = 'Un-Insured', page = 1, limit = 10, search } = req.query;
+
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
+        // 🚀 DATA ISOLATION GUARD: Fetch only patients who have interacted with this specific hospital
+        const uniquePatientIds = await Appointment.find({ hospitalId }).distinct('userId');
+
+        let query = {
+            _id: { $in: uniquePatientIds }
+        };
+
+        // Filter by Tab (Insured vs Un-Insured)
+        if (tab === 'Insured') {
+            query["insuranceDetails.hasInsurance"] = true;
+        } else {
+            query["insuranceDetails.hasInsurance"] = { $ne: true }; // Default to Un-Insured
+        }
+
+        // Apply search by Name or Phone
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { phone: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const totalRecords = await User.countDocuments(query);
+
+        const patients = await User.find(query)
+            .select('name phone email profilePic gender dob insuranceDetails')
+            .populate('insuranceDetails.masterInsuranceId', 'insuranceName provider type')
+            .sort({ updatedAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
+
+        res.json({
+            success: true,
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
+            count: patients.length,
+            data: patients
+        });
+
+    } catch (error) {
+        console.error("Get Insurance Patients Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API 2: GET MASTER DROPDOWNS DATA FOR ADDING INSURANCE (Figma Screen 3 Selector) ---
+// Endpoint: GET /hospital/panel/insurance/master-data
+// Path: controllers/hospital/HospitalPanel.js
+const getInsuranceMasterDropdowns = async (req, res) => {
+    try {
+        const InsuranceType = require('../../models/InsuranceType'); // Safe path load
+        const Insurance = require('../../models/Insurance');
+
+        const [types, providers] = await Promise.all([
+            InsuranceType.find({ isActive: true }).select('name'),
+            Insurance.find({ isActive: true }).select('insuranceName provider type')
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                insuranceTypes: types, // e.g., ["Non Cashless", "Cashless", "Other"]
+                insuranceProviders: providers // e.g., ["HDFC Ergo", "SBI General", "LIC Health Plus"]
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- API 3: SAVE/UPDATE PATIENT INSURANCE DETAILS WITH DUAL SIDE UPLOADS (Figma Save Button) ---
+// Endpoint: PUT /hospital/panel/insurance/save/:patientUserId
+// Path: controllers/hospital/HospitalPanel.js
+const savePatientInsuranceDetails = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { patientUserId } = req.params;
+        const { 
+            insuranceNumber, 
+            companyName, 
+            insuranceType, 
+            startDate, 
+            endDate, 
+            masterInsuranceId 
+        } = req.body;
+
+        // Verify patient isolation ownership
+        const hasInteracted = await Appointment.exists({ hospitalId, userId: patientUserId });
+        if (!hasInteracted) {
+            return res.status(403).json({ success: false, message: "Access Denied: Patient has no registered clinical interaction with your hospital." });
+        }
+
+        const patientUser = await User.findById(patientUserId);
+        if (!patientUser) {
+            return res.status(404).json({ success: false, message: "Patient user profile not found." });
+        }
+
+        // Initialize file paths from Multer fields
+        const files = req.files || {};
+        const frontCardPath = files.insuranceDocumentFront ? `/uploads/insurance/${files.insuranceDocumentFront[0].filename}` : patientUser.insuranceDetails?.insuranceDocumentFront;
+        const backCardPath = files.insuranceDocumentBack ? `/uploads/insurance/${files.insuranceDocumentBack[0].filename}` : patientUser.insuranceDetails?.insuranceDocumentBack;
+
+        const updatedInsuranceData = {
+            hasInsurance: true,
+            insuranceNumber: insuranceNumber || patientUser.insuranceDetails?.insuranceNumber,
+            companyName: companyName || patientUser.insuranceDetails?.companyName,
+            insuranceType: insuranceType || patientUser.insuranceDetails?.insuranceType,
+            startDate: startDate || patientUser.insuranceDetails?.startDate,
+            endDate: endDate || patientUser.insuranceDetails?.endDate,
+            insuranceDocumentFront: frontCardPath,
+            insuranceDocumentBack: backCardPath,
+            masterInsuranceId: masterInsuranceId && mongoose.Types.ObjectId.isValid(masterInsuranceId) ? masterInsuranceId : (patientUser.insuranceDetails?.masterInsuranceId || null)
+        };
+
+        // 1. Save directly inside Patient User document
+        patientUser.insuranceDetails = updatedInsuranceData;
+        await patientUser.save();
+
+        // 2. 🚀 CRITICAL SYNC FIX: Update cashless details for BOTH 'Hospital-Pending' and 'In-Progress' (Active Stays) appointments
+        await Appointment.updateMany(
+            { 
+                hospitalId, 
+                userId: patientUserId, 
+                status: { $in: ['Hospital-Pending', 'In-Progress'] } // 👈 Mapped both check-in states
+            },
+            { 
+                $set: { 
+                    hasInsurance: true,
+                    insuranceDetails: {
+                        hasInsurance: true,
+                        insuranceNumber: updatedInsuranceData.insuranceNumber,
+                        companyName: updatedInsuranceData.companyName,
+                        insuranceType: updatedInsuranceData.insuranceType,
+                        insuranceDocument: frontCardPath // Uses card front as primary doc fallback
+                    }
+                } 
+            }
+        );
+
+        res.json({
+            success: true,
+            message: "Patient health insurance details saved and active check-ins synchronized successfully.",
+            data: patientUser.insuranceDetails
+        });
+
+    } catch (error) {
+        console.error("Save Insurance Details Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
 
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
@@ -3308,5 +3483,8 @@ module.exports = {
     getTrackCaseSuperDetails,
     getAvailableDischargeAmbulances,
     calculateDischargeAmbulanceFare,
-    dispatchDischargeAmbulance,cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals
+    dispatchDischargeAmbulance,cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals,
+    getInsurancePatientsList,
+    getInsuranceMasterDropdowns,
+    savePatientInsuranceDetails
 };

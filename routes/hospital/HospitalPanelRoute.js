@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { protect } = require('../../middleware/authMiddleware');
-const { serviceUpload, termsUpload } = require('../../middleware/multer');
+const { serviceUpload, termsUpload,insuranceCardUploads } = require('../../middleware/multer');
 const { 
     getHospitalMasterData,getHospitalDashboardStats,
     createWardUnit,getBedsInWard,updateBedDetails,admitPatientToBed,updateWardBeds, addHospitalService, updateHospitalService, 
@@ -15,7 +15,10 @@ const {
     getTrackCaseSuperDetails,
         getAvailableDischargeAmbulances,
     calculateDischargeAmbulanceFare,
-    dispatchDischargeAmbulance, cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals
+    dispatchDischargeAmbulance, cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals,
+    getInsurancePatientsList,
+    getInsuranceMasterDropdowns,
+    savePatientInsuranceDetails
     
 
 } = require('../../controllers/hospital/HospitalPanel');
@@ -110,5 +113,10 @@ router.post('/discharge/cancel-ambulance', protect('hospital'), cancelDischargeA
 // Hospital-to-Hospital Referral Booking API
 router.post('/referrals/book-transfer', protect('hospital'), bookHospitalToHospitalReferral);
 router.get('/referrals/nearby-hospitals', protect('hospital'), getReferralHospitals);
+
+// --- MANAGEMENT OF HEALTH INSURANCE PATHS ---
+router.get('/insurance/patients', protect('hospital'), getInsurancePatientsList); // Fetch uninsured/insured tabs
+router.get('/insurance/master-data', protect('hospital'), getInsuranceMasterDropdowns); // Populate dropdown lists
+router.put('/insurance/save/:patientUserId', protect('hospital'), insuranceCardUploads, savePatientInsuranceDetails); 
 
 module.exports = router;

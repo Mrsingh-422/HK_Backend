@@ -892,6 +892,10 @@ const hospitalDischargeFieldsUpload = multer({
     { name: 'clinicalReports', maxCount: 10 }    // Additional clinical report files
 ]);
 
+const insuranceCardUploads = insuranceUpload.fields([
+    { name: 'insuranceDocumentFront', maxCount: 1 },
+    { name: 'insuranceDocumentBack', maxCount: 1 }
+]);
 
 
 
@@ -942,6 +946,6 @@ module.exports = {
 
     nursingPrescriptionUploads,
     labReportUpload,
-    docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload
+    docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,insuranceCardUploads
 
 };  
