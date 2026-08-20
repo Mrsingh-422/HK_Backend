@@ -446,16 +446,16 @@ const processPrescription = async (req, res) => {
             diagnosis, 
             medicines, 
             advice,
-            advisedInvestigations,   // Matches "Advise Investigation" from image
-            adviceGiven,             // Matches "Advice Given" from image
-            specialInstructions,     // Matches "Any Special Instruction Given" from image
-            nextAppointment          // Matches "Next Appointment" from image
+            advisedInvestigations,   
+            adviceGiven,             
+            specialInstructions,     
+            nextAppointment          
         } = req.body;
 
         const appointment = await Appointment.findById(appointmentId);
         if (!appointment) return res.status(404).json({ success: false, message: "Appointment record not found" });
 
-        // SECURE ACCESS VALIDATION: Only primary doctor or accepted bedside specialists can prescribe
+        // SECURE ACCESS VALIDATION
         const isPrimaryDoc = appointment.doctorId && appointment.doctorId.toString() === req.user.id;
         const isCareTeamMember = appointment.bedsideCareTeam.some(d => 
             d.doctorId.toString() === req.user.id && ['Accepted', 'In-Progress'].includes(d.status)
@@ -468,11 +468,9 @@ const processPrescription = async (req, res) => {
             });
         }
         
-        // Safe parsing for inputs coming via multipart/form-data
         const diagnosisArray = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : (Array.isArray(diagnosis) ? diagnosis : []);
         const medicinesArray = typeof medicines === 'string' ? JSON.parse(medicines) : (Array.isArray(medicines) ? medicines : []);
 
-        // Process dynamic file fields uploaded from multer
         let prescriptionPdfPath = null;
         let dietPlanPath = null;
 
@@ -485,24 +483,41 @@ const processPrescription = async (req, res) => {
             }
         }
 
-        const prescription = await Prescription.create({
-            appointmentId,
-            doctorId: req.user.id,
-            userId: appointment.userId,
-            diagnosis: diagnosisArray,
-            medicines: medicinesArray, 
-            additionalNotes: advice || adviceGiven || "",
-            
-            // New database keys mapped from prescription screenshot
-            advisedInvestigations: advisedInvestigations || "None",
-            adviceGiven: adviceGiven || "",
-            specialInstructions: specialInstructions || "",
-            nextAppointment: nextAppointment || "",
-            
-            // PDF Storage Links
-            pdfUrl: prescriptionPdfPath, // Path to compiled prescription layout
-            dietPlanPdf: dietPlanPath     // Path to optional patient diet plan PDF
-        });
+        // 🚀 SYNC FIX: Check if a prescription already exists for this appointmentId to prevent double records
+        let prescription = await Prescription.findOne({ appointmentId });
+
+        if (prescription) {
+            // Update existing record
+            prescription.doctorId = req.user.id;
+            prescription.userId = appointment.userId;
+            prescription.diagnosis = diagnosisArray;
+            prescription.medicines = medicinesArray;
+            prescription.additionalNotes = advice || adviceGiven || prescription.additionalNotes || "";
+            prescription.advisedInvestigations = advisedInvestigations || prescription.advisedInvestigations || "None";
+            prescription.adviceGiven = adviceGiven || prescription.adviceGiven || "";
+            prescription.specialInstructions = specialInstructions || prescription.specialInstructions || "";
+            prescription.nextAppointment = nextAppointment || prescription.nextAppointment || "";
+            if (prescriptionPdfPath) prescription.pdfUrl = prescriptionPdfPath;
+            if (dietPlanPath) prescription.dietPlanPdf = dietPlanPath;
+
+            await prescription.save();
+        } else {
+            // Create new prescription
+            prescription = await Prescription.create({
+                appointmentId,
+                doctorId: req.user.id,
+                userId: appointment.userId,
+                diagnosis: diagnosisArray,
+                medicines: medicinesArray, 
+                additionalNotes: advice || adviceGiven || "",
+                advisedInvestigations: advisedInvestigations || "None",
+                adviceGiven: adviceGiven || "",
+                specialInstructions: specialInstructions || "",
+                nextAppointment: nextAppointment || "",
+                pdfUrl: prescriptionPdfPath,
+                dietPlanPdf: dietPlanPath
+            });
+        }
 
         res.status(201).json({ 
             success: true, 

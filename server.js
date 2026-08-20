@@ -210,9 +210,9 @@ app.use('/api/admin/policy-config', require('./routes/admin/others/PolicyConfigR
 app.use('/api/admin/profile-update', require('./routes/admin/others/ProfileUpdateApprovalRoute')); // Profile Update Approval Management Route
 app.use('/api/admin/refunds', require('./routes/admin/others/RefundsRoute')); // Refunds Management Route
 // --- Admin pharmacy Routes ---
+app.use('/admin/pharmacy/tax-config', require('./routes/admin/Pharmacy/TaxConfigRoute'));
 app.use('/admin/pharmacy', require('./routes/admin/Pharmacy/PharmacyAdminRoute')); // Pharmacy Management Route
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
-app.use('/admin/pharmacy/tax-config', require('./routes/admin/Pharmacy/TaxConfigRoute')); // Tax Config Management Route
 // --- Admin Lab Routes ---
 app.use('/admin/lab', require('./routes/admin/Lab/LabAdminRoute')); // Lab Management Route
 app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // Master Lab Test Upload & List Route

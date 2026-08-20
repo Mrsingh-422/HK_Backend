@@ -16,25 +16,26 @@ const addHealthMetric = async (req, res) => {
             'Calories': 'kcal'
         };
 
-        const numericValue = parseFloat(value.split('/')[0]); // "120/80" -> 120
+        // 🚀 SYNC FIX: Safe string conversion before split
+        const rawStringValue = value !== undefined && value !== null ? String(value) : "0";
+        const numericValue = parseFloat(rawStringValue.split('/')[0]) || 0;
 
         const newData = await HealthData.create({
             userId: req.user.id,
             type,
-            value,
+            value: rawStringValue,
             numericValue,
             unit: units[type] || '',
-            note: notes,
+            note: notes || '',
             date: date || new Date()
         });
 
-        // Dynamic Surcharge mapping (Optional Heart Rate logged during BP check)
         if (type === 'Blood Pressure' && heartRate) {
             await HealthData.create({
                 userId: req.user.id,
                 type: 'Heart rate',
                 value: `${heartRate}`,
-                numericValue: parseFloat(heartRate),
+                numericValue: parseFloat(heartRate) || 0,
                 unit: 'bpm',
                 note: 'Logged during Blood Pressure check',
                 date: date || new Date()
@@ -46,6 +47,7 @@ const addHealthMetric = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // 2. GET STATISTICS (Casting bug completely fixed here)
 const getHealthStats = async (req, res) => {

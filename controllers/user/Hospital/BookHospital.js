@@ -6,7 +6,8 @@ const HospitalService = require('../../../models/HospitalService');
 const Coupon = require('../../../models/Coupon');
 const Doctor = require('../../../models/Doctor');
 const User = require('../../../models/User');
-const BedRescheduleLimit = require('../../../models/BedRescheduleLimit'); // 👈 Ye import hona zaroori hai!
+const Ambulance = require('../../../models/Ambulance');
+const BedRescheduleLimit = require('../../../models/BedRescheduleLimit');
 const UserSubscription = require('../../../models/UserSubscription');
 
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');

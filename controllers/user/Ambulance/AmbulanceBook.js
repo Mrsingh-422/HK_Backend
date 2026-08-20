@@ -15,7 +15,9 @@ const { isCodEnabled } = require('../../../utils/policyHelper');
 
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
-    return `HK-${new Date().getFullYear()}-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const randomHex = crypto.randomBytes(2).toString('hex').toUpperCase();
+    const timeSlice = Date.now().toString().slice(-4);
+    return `HK-${new Date().getFullYear()}-${prefix}-${timeSlice}${randomHex}`;
 };
 
 

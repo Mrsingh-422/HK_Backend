@@ -19,7 +19,6 @@ const addHospitalAmbulance = async (req, res) => {
             accidentalService, emergencyService, referralService, 
             defaultService, optionalService,
             fullName, department, dob,
-            // 👇 Supporting Staff Fields
             hasNurse, nursePrice, 
             hasDoctor, doctorPrice 
         } = req.body;
@@ -30,9 +29,12 @@ const addHospitalAmbulance = async (req, res) => {
         const files = req.files || {};
         const getPath = (key) => (files[key] ? `/uploads/ambulances/${files[key][0].filename}` : null);
 
+        // 🚀 SYNC FIX: Fallback to handle both 'fullName' and 'name' keys
+        const ambulanceName = fullName || name || "Hospital Ambulance";
+
         const newAmbulance = await Ambulance.create({
             hospitalId: req.user.id,
-            name: fullName, 
+            name: ambulanceName, 
             email: email, 
             phone: phone,
             password: hashedPassword,
@@ -40,7 +42,7 @@ const addHospitalAmbulance = async (req, res) => {
             ambulanceNumber: ambulanceNumber,
             vehicleType: vehicleType,
             role: 'hospital-ambulance',
-            profileStatus: 'Approved', // Hospital's own ambulance is usually pre-approved
+            profileStatus: 'Approved',
             
             pricing: {
                 fixedPrice: Number(fixedPrice || 0),
@@ -48,7 +50,6 @@ const addHospitalAmbulance = async (req, res) => {
                 pricePerKM: Number(perKMPrice || 0)
             },
 
-            // 👇 New Support Staff Logic
             supportStaff: {
                 nurse: { 
                     available: hasNurse === 'true' || hasNurse === true, 
@@ -70,9 +71,9 @@ const addHospitalAmbulance = async (req, res) => {
             optionalServices: optionalService ? JSON.parse(optionalService) : [],
             
             driverInfo: {
-                fullName: fullName,
-                department: department,
-                dob: dob
+                fullName: ambulanceName,
+                department: department || "Emergency",
+                dob: dob || null
             },
             
             documents: {

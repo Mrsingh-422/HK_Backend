@@ -28,6 +28,12 @@ const User = require('../../models/User');
 const getShortName = (name) => {
     return name.split(' ').map(word => word[0]).join('').toUpperCase();
 };
+const generateCaseRef = (type) => {
+    const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
+    const randomHex = crypto.randomBytes(2).toString('hex').toUpperCase();
+    const timeSlice = Date.now().toString().slice(-4);
+    return `HK-${new Date().getFullYear()}-${prefix}-${timeSlice}${randomHex}`;
+};
 
 // --- MASTER DATA/Enums FOR HOSPITAL PANEL (Screenshot 6) ---
 const getHospitalMasterData = async (req, res) => {
@@ -790,13 +796,18 @@ const toggleCouponStatus = async (req, res) => {
 // 1. LIST AMBULANCE DRIVERS FOR ASSIGNMENT (Screenshot 34)
 const getAvailableDrivers = async (req, res) => {
     try {
+        // 🚀 SYNC FIX: Strictly filters out inactive or unapproved ambulances
         const drivers = await Ambulance.find({ 
             hospitalId: req.user.id, 
-            availableForEmergency: true 
-        }).select('name phone vehicleNumber vehicleType experienceYears');
+            availableForEmergency: true,
+            isActive: true,
+            profileStatus: 'Approved'
+        }).select('name phone vehicleNumber vehicleType experienceYears pricing');
         
-        res.json({ success: true, data: drivers });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, count: drivers.length, data: drivers });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 // 2. ASSIGN DRIVER TO CASE (Screenshot 35)
 const assignDriverToCase = async (req, res) => {
@@ -2016,7 +2027,7 @@ const getHospitalPendingDischarges = async (req, res) => {
 // Endpoint: POST /hospital/panel/admissions/dispatch-ambulance
 // Logic: Generates AmbulanceBooking, locks driver availability, and appends transit charges to patient's bill
 const dispatchAmbulanceForAdmission = async (req, res) => {
-    let ambulanceToRollback = null; // Used for transactional database rollback if save fails
+    let ambulanceToRollback = null;
 
     try {
         const hospitalId = req.user.id;
@@ -2029,13 +2040,11 @@ const dispatchAmbulanceForAdmission = async (req, res) => {
             baseAmbulanceRate 
         } = req.body;
 
-        // 1. Fetch Target Appointment
         const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
         }
 
-        // 🚀 EDGE CASE 1 GUARD: Prevent duplicate dispatches on the same admission request (Double-Billing protection)
         if (appointment.ambulanceId) {
             return res.status(400).json({ 
                 success: false, 
@@ -2043,7 +2052,6 @@ const dispatchAmbulanceForAdmission = async (req, res) => {
             });
         }
 
-        // 2. Fetch selected fleet ambulance and verify available state
         const ambulance = await Ambulance.findOne({
             _id: ambulanceId,
             hospitalId,
@@ -2059,23 +2067,19 @@ const dispatchAmbulanceForAdmission = async (req, res) => {
             });
         }
 
-        // Set pointer for rollback if subsequent steps crash
         ambulanceToRollback = ambulanceId;
 
-        // 3. Calculate transit pricing parameters as per Figma
         const basePrice = Number(baseAmbulanceRate || ambulance.pricing?.fixedPrice || 1500);
         const surge = Number(surgePrice || 0);
         const totalDispatchPrice = basePrice + surge;
 
-        // 4. Lock physical fleet ambulance to busy state
         ambulance.availableForEmergency = false;
         await ambulance.save();
 
-        // 5. Generate distinct Booking ID references
         const generatedBookingId = `HK-REF-${Date.now().toString().slice(-6)}`;
-        const generatedCaseRef = `HK-${new Date().getFullYear()}-REF-${Math.floor(1000 + Math.random() * 9000)}`;
+        // 🚀 SYNC FIX: Uses collision-proof caseReference generator
+        const generatedCaseRef = generateCaseRef('Referral Ambulance');
 
-        // Determine destination address
         let finalDropAddress = destinationName || "Patient's Registered Residence";
         if (destinationName === "Custom Destination Address" && customAddressText) {
             finalDropAddress = customAddressText;
@@ -2083,17 +2087,15 @@ const dispatchAmbulanceForAdmission = async (req, res) => {
 
         const patientObj = appointment.patients?.[0] || {};
 
-        // 6. Create matching Active Trip inside AmbulanceBooking so it flows to Driver App
-        const AmbulanceBooking = require('../../models/AmbulanceBooking'); // Secure model load
-        
+        const AmbulanceBooking = require('../../models/AmbulanceBooking');
         const booking = await AmbulanceBooking.create({
             bookingId: generatedBookingId,
             caseReference: generatedCaseRef,
             userId: appointment.userId,
             ambulanceId: ambulanceId,
-            hospitalId: hospitalId, // Origin Hospital
+            hospitalId: hospitalId,
             serviceType: 'Referral Ambulance',
-            status: 'Confirmed', // Direct hospital dispatch skips searching broadcast phase
+            status: 'Confirmed',
             pickupLocation: {
                 address: req.user.address || "Hospital Base Location",
                 lat: req.user.location?.lat || 30.7046,
@@ -2113,7 +2115,7 @@ const dispatchAmbulanceForAdmission = async (req, res) => {
                 discount: 0,
                 total: totalDispatchPrice
             },
-            paymentStatus: 'Pending', // Collected collectively at hospital checkout discharge
+            paymentStatus: 'Pending',
             paymentMethod: 'Online',
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{
@@ -2123,14 +2125,11 @@ const dispatchAmbulanceForAdmission = async (req, res) => {
             }]
         });
 
-        // 7. BIND CHARGES TO PATIENT'S FINAL HOSPITAL INVOICE
-        // Append ambulance ride cost to specialServices sub-schema
         appointment.specialServices.push({
             serviceName: `Ambulance Dispatch: ${finalDropAddress}`,
             price: totalDispatchPrice
         });
 
-        // Increment Pricing breakdown extraCharges of hospital appointment
         if (!appointment.pricingBreakdown) {
             appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
         }
@@ -2138,17 +2137,15 @@ const dispatchAmbulanceForAdmission = async (req, res) => {
         appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + totalDispatchPrice;
         appointment.totalAmount = (appointment.totalAmount || 0) + totalDispatchPrice;
 
-        // Link references on appointment record
         appointment.ambulanceId = ambulanceId;
         appointment.transactionId = generatedBookingId;
 
         await appointment.save();
 
-        // 8. Push notifications to driver mobile console
         const { sendPushNotification } = require('../../utils/notification');
         await sendPushNotification(
             ambulanceId,
-            'ambulance',
+            'driver',
             "🚨 Assigned Referral Ride",
             `Hospital has dispatched you for a Referral trip to ${finalDropAddress}. Patient Name: ${patientObj.patientName || 'User'}.`,
             { bookingId: booking._id.toString(), type: 'assigned_referral' }
@@ -2165,14 +2162,11 @@ const dispatchAmbulanceForAdmission = async (req, res) => {
 
     } catch (error) {
         console.error("Ambulance Dispatch Error:", error);
-
-        // 🚀 EDGE CASE 2: Safe transactional rollback if appointment saving fails mid-execution
         if (ambulanceToRollback) {
             await Ambulance.findByIdAndUpdate(ambulanceToRollback, { 
                 $set: { availableForEmergency: true } 
             });
         }
-
         res.status(500).json({ success: false, message: "Transactional dispatch failure: " + error.message });
     }
 };
@@ -2857,12 +2851,10 @@ const dispatchDischargeAmbulance = async (req, res) => {
         const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
         if (!appointment) return res.status(404).json({ success: false, message: "Patient Admission Record Not Found." });
 
-        // Ensure patient is in discharge-pending state before dispatching home drop-off
         if (appointment.status !== 'Discharge-Pending') {
             return res.status(400).json({ success: false, message: "Ambulance Add-on can only be booked for patients clinically ready for discharge (Discharge-Pending)." });
         }
 
-        // Fetch and lock ambulance availability
         const ambulance = await Ambulance.findOne({
             _id: ambulanceId,
             hospitalId,
@@ -2880,20 +2872,20 @@ const dispatchDischargeAmbulance = async (req, res) => {
         await ambulance.save();
 
         const generatedBookingId = `HK-REF-${Date.now().toString().slice(-6)}`;
-        const generatedCaseRef = `HK-${new Date().getFullYear()}-REF-${Math.floor(1000 + Math.random() * 9000)}`;
+        // 🚀 SYNC FIX: Uses collision-proof caseReference generator
+        const generatedCaseRef = generateCaseRef('Referral Ambulance');
 
         const patientObj = appointment.patients?.[0] || {};
         const dropAddress = homeAddress || appointment.address?.city || "Patient Home Address";
 
-        // Create active Booking for the driver's app
-        const AmbulanceBooking = require('../../models/AmbulanceBooking'); // Secure local load
+        const AmbulanceBooking = require('../../models/AmbulanceBooking');
         const booking = await AmbulanceBooking.create({
             bookingId: generatedBookingId,
             caseReference: generatedCaseRef,
             userId: appointment.userId,
             ambulanceId: ambulanceId,
-            hospitalId: hospitalId, // Origin
-            serviceType: 'Referral Ambulance', // Keeps standard referral schema
+            hospitalId: hospitalId,
+            serviceType: 'Referral Ambulance',
             status: 'Confirmed', 
             pickupLocation: {
                 address: req.user.address || "Hospital Base Location",
@@ -2914,7 +2906,7 @@ const dispatchDischargeAmbulance = async (req, res) => {
                 discount: 0,
                 total: Number(totalFare)
             },
-            paymentStatus: 'Pending', // Managed and collected during final hospital discharge checkout bill
+            paymentStatus: 'Pending',
             paymentMethod: 'Online',
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{
@@ -2924,7 +2916,6 @@ const dispatchDischargeAmbulance = async (req, res) => {
             }]
         });
 
-        // Merge ambulance fare directly inside Patient's final hospital admission invoice/bill
         appointment.specialServices.push({
             serviceName: `Discharge Ambulance Drop-off: ${dropAddress} (${distance || 'N/A'})`,
             price: Number(totalFare)
@@ -2937,11 +2928,9 @@ const dispatchDischargeAmbulance = async (req, res) => {
         appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + Number(totalFare);
         appointment.totalAmount = (appointment.totalAmount || 0) + Number(totalFare);
 
-        // Bind driver reference to appointment
         appointment.ambulanceId = ambulanceId;
         await appointment.save();
 
-        // 🚀 SYNC FIX: Corrected relative path to "../../" for controllers/hospital depth level
         const { sendPushNotification } = require('../../utils/notification');
         await sendPushNotification(
             ambulanceId,
@@ -2970,6 +2959,7 @@ const dispatchDischargeAmbulance = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // --- API 4: CANCEL DISCHARGE AMBULANCE ADD-ON & REVERT LEDGER CHARGES (NEW API) ---
 // Endpoint: POST /hospital/panel/discharge/cancel-ambulance
@@ -3057,25 +3047,24 @@ const bookHospitalToHospitalReferral = async (req, res) => {
     let ambulanceToRollback = null;
 
     try {
-        const sendingHospitalId = req.user.id; // Logged-in sending hospital
+        const sendingHospitalId = req.user.id;
         const {
-            appointmentId, // Optional: Linked active admission being transferred
-            destinationHospitalId, // Receiving hospital ID
-            ambulanceId, // Chosen ambulance ID
+            appointmentId,
+            destinationHospitalId,
+            ambulanceId,
             scheduledDate,
             scheduledTime,
             patientName,
             patientAge,
             gender,
             referralReason,
-            staffType // Optional string/array (e.g. "Doctor,Nurse")
+            staffType
         } = req.body;
 
         if (!destinationHospitalId || !ambulanceId) {
             return res.status(400).json({ success: false, message: "Required fields (destinationHospitalId, ambulanceId) are missing." });
         }
 
-        // 1. Fetch Sending & Destination Hospitals
         const hospA = await Hospital.findById(sendingHospitalId);
         const hospB = await Hospital.findById(destinationHospitalId);
 
@@ -3083,20 +3072,17 @@ const bookHospitalToHospitalReferral = async (req, res) => {
             return res.status(404).json({ success: false, message: "Origin or Destination Hospital profile not found." });
         }
 
-        // 2. Fetch Selected Ambulance
         const ambulance = await Ambulance.findById(ambulanceId);
         if (!ambulance) {
             return res.status(404).json({ success: false, message: "Selected Ambulance not found in the system." });
         }
 
-        // Verify ambulance belongs to same hospital or is globally available
         if (ambulance.availableForEmergency === false) {
             return res.status(400).json({ success: false, message: "Selected ambulance is currently busy on another trip." });
         }
 
         ambulanceToRollback = ambulanceId;
 
-        // 3. Compute GPS Distance between Hospital A and Hospital B
         const hospALat = hospA.location?.lat || 30.7046;
         const hospALng = hospA.location?.lng || 76.7179;
         const hospBLat = hospB.location?.lat || 30.7333;
@@ -3104,7 +3090,6 @@ const bookHospitalToHospitalReferral = async (req, res) => {
 
         const distance = await getDistance(hospALat, hospALng, hospBLat, hospBLng);
 
-        // 4. Calculate Dynamic Pricing Structure
         const baseRate = ambulance.pricing?.fixedPrice || 1500;
         const baseDistance = ambulance.pricing?.baseDistance || 5;
         const pricePerKM = ambulance.pricing?.pricePerKM || 15;
@@ -3115,7 +3100,6 @@ const bookHospitalToHospitalReferral = async (req, res) => {
             surgePrice = Math.round(extraDistance * pricePerKM);
         }
 
-        // Parse optional supporting staff surcharges
         let supportingStaffCharge = 0;
         let staffList = staffType ? (typeof staffType === 'string' ? staffType.split(',') : staffType) : [];
         staffList = staffList.map(s => s.trim());
@@ -3129,15 +3113,14 @@ const bookHospitalToHospitalReferral = async (req, res) => {
 
         const totalFare = baseRate + surgePrice + supportingStaffCharge;
 
-        // 5. Create the Referral Ambulance Booking
         const generatedBookingId = `HK-REF-${Date.now().toString().slice(-6)}`;
-        const generatedCaseRef = `HK-${new Date().getFullYear()}-REF-${Math.floor(1000 + Math.random() * 9000)}`;
+        // 🚀 SYNC FIX: Uses collision-proof caseReference generator
+        const generatedCaseRef = generateCaseRef('Referral Ambulance');
 
         let finalPatientName = patientName || "Referred Patient";
         let finalPatientAge = patientAge || 30;
         let finalGender = gender || "Male";
 
-        // Fetch details from active appointment if linked
         let appointment = null;
         if (appointmentId) {
             appointment = await Appointment.findOne({ _id: appointmentId, hospitalId: sendingHospitalId });
@@ -3149,18 +3132,17 @@ const bookHospitalToHospitalReferral = async (req, res) => {
             }
         }
 
-        // Lock driver availability status
         ambulance.availableForEmergency = false;
         await ambulance.save();
 
-        const AmbulanceBooking = require('../../models/AmbulanceBooking'); // Secure local load
+        const AmbulanceBooking = require('../../models/AmbulanceBooking');
         const booking = await AmbulanceBooking.create({
             bookingId: generatedBookingId,
             caseReference: generatedCaseRef,
-            userId: appointment ? appointment.userId : req.user.id, // Fallback to hospital token id
+            userId: appointment ? appointment.userId : req.user.id,
             ambulanceId: ambulanceId,
-            pickupHospitalId: sendingHospitalId, // Origin Hospital A
-            hospitalId: destinationHospitalId,  // Destination Hospital B
+            pickupHospitalId: sendingHospitalId,
+            hospitalId: destinationHospitalId,
             serviceType: 'Referral Ambulance',
             status: 'Confirmed', 
             scheduledAt: scheduledDate ? new Date(scheduledDate) : new Date(),
@@ -3185,7 +3167,7 @@ const bookHospitalToHospitalReferral = async (req, res) => {
                 total: totalFare
             },
             paymentStatus: 'Pending',
-            paymentMethod: 'COD', // Hospital offline settlement
+            paymentMethod: 'COD',
             otp: Math.floor(1000 + Math.random() * 9000).toString(),
             trackingTimeline: [{
                 status: 'Confirmed',
@@ -3194,7 +3176,6 @@ const bookHospitalToHospitalReferral = async (req, res) => {
             }]
         });
 
-        // 6. If linked to an Admitted Patient, append fare to their final Hospital A invoice
         if (appointment) {
             appointment.specialServices.push({
                 serviceName: `Referral Transfer to ${hospB.name} (${distance.toFixed(1)} km)`,
@@ -3208,7 +3189,6 @@ const bookHospitalToHospitalReferral = async (req, res) => {
             appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + totalFare;
             appointment.totalAmount = (appointment.totalAmount || 0) + totalFare;
 
-            // Log transfer event in appointment timeline history
             appointment.treatmentHistory.push({
                 action: 'Transfer-Initiated',
                 notes: `Referred and dispatched to ${hospB.name} via ${ambulance.name}. Reason: ${referralReason || 'Advanced care'}`,
@@ -3218,10 +3198,8 @@ const bookHospitalToHospitalReferral = async (req, res) => {
             await appointment.save();
         }
 
-        // 7. MULTICAST NOTIFICATIONS
         const { sendPushNotification } = require('../../utils/notification');
         
-        // Notify the Driver
         await sendPushNotification(
             ambulanceId,
             'driver',
@@ -3230,7 +3208,6 @@ const bookHospitalToHospitalReferral = async (req, res) => {
             { bookingId: booking._id.toString(), type: 'new_referral' }
         );
 
-        // Notify the Destination Hospital (B)
         await sendPushNotification(
             destinationHospitalId,
             'hospital',

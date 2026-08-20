@@ -23,6 +23,15 @@ const addHospitalDoctor = async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(String(password || '123456'), 10);
 
+        // 🚀 SYNC FIX: Standard web-accessible URL paths instead of OS raw file.path
+        const profileImagePath = req.files?.profileImage 
+            ? `/uploads/doctors/${req.files.profileImage[0].filename}` 
+            : null;
+
+        const certificatePaths = req.files?.certificates 
+            ? req.files.certificates.map(f => `/uploads/doctors/${f.filename}`) 
+            : [];
+
         const doctor = await Doctor.create({
             hospitalId: req.user.id,
             name, 
@@ -31,14 +40,14 @@ const addHospitalDoctor = async (req, res) => {
             password: hashedPassword,
             country, state, city, address,
             speciality, qualification, licenseNumber, councilNumber, councilName, about,
-            role: 'hospital-doctor', // Hospital Linked Role
-            profileStatus: 'Approved', // Pre-approved
+            role: 'hospital-doctor',
+            profileStatus: 'Approved',
             department: {
                 isNormal: isNormal === 'true' || isNormal === true,
                 isEmergency: isEmergency === 'true' || isEmergency === true
             },
-            profileImage: req.files?.profileImage ? req.files.profileImage[0].path : null,
-            documents: req.files?.certificates ? req.files.certificates.map(f => f.path) : []
+            profileImage: profileImagePath,
+            documents: certificatePaths
         });
 
         res.status(201).json({ success: true, message: "Hospital Doctor Added Successfully", data: doctor });

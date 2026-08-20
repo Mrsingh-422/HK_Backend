@@ -7,16 +7,31 @@ const moment = require('moment');
 // endpoint: GET /user/video-call/active
 const getActiveIncomingCall = async (req, res) => {
     try {
-        const userId = req.user.id; // From Auth Middleware (protect('user'))
+        const userId = req.user.id;
 
-        // Ringing Timeout Logic: Hum sirf pichle 45 seconds ke andar initiate hui calls ko hi active manenge.
         const ringingTimeoutLimit = new Date(Date.now() - 45000); // 45 seconds ago
+
+        // 🚀 SYNC FIX: Auto-clean up any expired ringing calls in the background
+        await Call.updateMany(
+            { 
+                receiverId: userId, 
+                status: 'initiated', 
+                createdAt: { $lt: ringingTimeoutLimit } 
+            },
+            { 
+                $set: { 
+                    status: 'missed', 
+                    endedAt: new Date(), 
+                    duration: 0 
+                } 
+            }
+        );
 
         const activeCall = await Call.findOne({
             receiverId: userId,
-            status: 'initiated', // Only show if still ringing
+            status: 'initiated',
             createdAt: { $gte: ringingTimeoutLimit }
-        }).populate('callerId', 'name speciality profileImage'); // Get doctor's basic info
+        }).populate('callerId', 'name speciality profileImage');
 
         if (!activeCall) {
             return res.json({ 

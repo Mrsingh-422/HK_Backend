@@ -9,12 +9,9 @@ const {
 } = require('../../../controllers/admin/Pharmacy/PharmacyAdmin');
 
 // Base URL: /admin/pharmacy
-router.use(protect('admin'));
- router.use(checkRoleAccess(5)); // Only admin with role access 5 can access these routes
 
-
-router.get('/approved-list', adminGetApprovedPharmacies);
-router.get('/bookings', adminGetPharmacyBookings);
-router.patch('/status/active-inactive/:pharmacyId', toggleActiveInactivePharmacy);
+router.get('/approved-list', protect('admin'), checkRoleAccess(5), adminGetApprovedPharmacies);
+router.get('/bookings', protect('admin'), checkRoleAccess(5), adminGetPharmacyBookings);
+router.patch('/status/active-inactive/:pharmacyId', protect('admin'), checkRoleAccess(5), toggleActiveInactivePharmacy);
 
 module.exports = router;
