@@ -36,6 +36,32 @@ const { processCancellationRefund } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
 
 
+// 🔢 Helper: Indian Currency Number to Words Converter
+const numberToWordsIndian = (num) => {
+    if (!num || isNaN(num) || num <= 0) return "RUPEES ZERO ONLY";
+    const a = ['', 'One ', 'Two ', 'Three ', 'Four ', 'Five ', 'Six ', 'Seven ', 'Eight ', 'Nine ', 'Ten ', 'Eleven ', 'Twelve ', 'Thirteen ', 'Fourteen ', 'Fifteen ', 'Sixteen ', 'Seventeen ', 'Eighteen ', 'Nineteen '];
+    const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+    const inWords = (n) => {
+        if (n === 0) return '';
+        let str = '';
+        if (n >= 10000000) { str += inWords(Math.floor(n / 10000000)) + 'Crore '; n %= 10000000; }
+        if (n >= 100000) { str += inWords(Math.floor(n / 100000)) + 'Lakh '; n %= 100000; }
+        if (n >= 1000) { str += inWords(Math.floor(n / 1000)) + 'Thousand '; n %= 1000; }
+        if (n >= 100) { str += inWords(Math.floor(n / 100)) + 'Hundred '; n %= 100; }
+        if (n > 0) {
+            if (n < 20) str += a[n];
+            else str += b[Math.floor(n / 10)] + ' ' + a[n % 10];
+        }
+        return str;
+    };
+
+    const rupees = Math.floor(num);
+    const paise = Math.round((num - rupees) * 100);
+    let result = 'RUPEES ' + inWords(rupees).trim();
+    if (paise > 0) result += ' AND ' + inWords(paise).trim() + ' PAISE';
+    return (result + ' ONLY').toUpperCase();
+};
 // --- HELPER: Bill Calculation (Mirroring Lab logic) ---
 const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, collectionType, couponCode, isRapid, appointmentTime, userId) => {
     let rawItemTotalWithoutPromo = 0; 
@@ -308,16 +334,22 @@ const scanPrescription = async (req, res) => {
 };
 
 
+
+// 🔒 SECURITY HELPER: Escape Regex special characters to prevent ReDoS / Server Crashes
+const escapeRegex = (string) => {
+    return string.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+};
 // --- API 1: GET MEDICINE SUGGESTIONS (Search Bar) ---
 const getMedicineSuggestions = async (req, res) => {
     try {
         const { query } = req.body;
 
-        if (!query || query.length < 2) {
+        if (!query || query.trim().length < 2) {
             return res.json({ success: true, data: [] });
         }
 
-        const searchRegex = new RegExp(query, 'i');
+        // 🚨 Escaped Regex
+        const searchRegex = new RegExp(escapeRegex(query.trim()), 'i');
 
         const suggestions = await Medicine.find({
             $or: [
@@ -329,7 +361,6 @@ const getMedicineSuggestions = async (req, res) => {
         .limit(10)
         .lean();
 
-        // 🚨 Parallel dynamic lookup inside the loop to fetch lowest live vendor prices [cite: 1.1.2]
         const formattedData = await Promise.all(suggestions.map(async (med) => {
             const bestOffer = await MedicineInventory.findOne({ 
                 medicineId: med._id, 
@@ -340,10 +371,8 @@ const getMedicineSuggestions = async (req, res) => {
             const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
             const mrpNum = Number(med.mrp || 0);
 
-            // Overwrite price: use lowest live vendor price if in stock, otherwise fallback safely [cite: 1.1.2]
             const finalPrice = lowestPrice !== null ? lowestPrice : Number(med.best_price || med.mrp || 0);
 
-            // Overwrite discount percent dynamically [cite: 1.1.2]
             let finalDiscount = med.discont_percent;
             if (lowestPrice !== null && mrpNum > 0) {
                 finalDiscount = `${Math.round(((mrpNum - lowestPrice) / mrpNum) * 100)}%`;
@@ -353,11 +382,11 @@ const getMedicineSuggestions = async (req, res) => {
                 id: med._id,
                 name: med.name,
                 salt: med.salt_composition,
-                price: finalPrice.toString(), // converted to string for strict backward compatibility
+                price: finalPrice.toString(),
                 image: med.image_url && med.image_url.length > 0 ? med.image_url[0] : null,
                 discount: finalDiscount,
                 displayType: med.name.toLowerCase().includes(query.toLowerCase()) ? "Name Match" : "Salt Match",
-                isAvailable: lowestPrice !== null // Added extra safety indicator key
+                isAvailable: lowestPrice !== null
             };
         }));
 
@@ -780,9 +809,11 @@ const getPharmacyDetails = async (req, res) => {
     try {
         const { id } = req.params;
         
-        const pharmacy = await Pharmacy.findById(id).select('-password -token').lean();
+        // 🚨 FIXED: Added -bankDetails to prevent leaking bank account/IFSC to patients
+        const pharmacy = await Pharmacy.findById(id)
+            .select('-password -token -bankDetails -__v') 
+            .lean();
         
-        // 🚨 CRITICAL CHECK: Block access if pharmacy is inactive by Admin
         if (!pharmacy || pharmacy.isActive === false) {
             return res.status(404).json({ success: false, message: "Pharmacy profile is inactive or not found." });
         }
@@ -812,7 +843,7 @@ const getPharmacyDetails = async (req, res) => {
                 totalReviews: reviews.length,    
                 gallery: pharmacy.documents?.pharmacyImages || [],
                 recentReviews,
-                isOnline: pharmacy.isOnline ?? true // Sends online status to UI
+                isOnline: pharmacy.isOnline ?? true
             } 
         });
     } catch (error) { 
@@ -1514,21 +1545,39 @@ const getPharmacyAvailableCoupons = async (req, res) => {
 const validateCoupon = async (req, res) => {
     try {
         const { couponName, pharmacyId, totalAmount } = req.body;
+
+        if (!couponName) {
+            return res.status(400).json({ success: false, message: "Coupon code is required." });
+        }
+
+        // 🚨 FIXED: Auto-Trim and UpperCase normalizer
+        const cleanCouponCode = couponName.trim().toUpperCase();
+
         const coupon = await Coupon.findOne({ 
-            couponName, 
-            vendorId: pharmacyId, 
+            couponName: cleanCouponCode, 
+            $or: [
+                { vendorId: pharmacyId },
+                { isAdminCreated: true, vendorType: { $in: ['Pharmacy', 'All'] } }
+            ],
             isActive: true,
             expiryDate: { $gte: new Date() }
         });
 
-        if (!coupon) return res.status(404).json({ message: "Invalid or expired coupon" });
-        if (totalAmount < coupon.minOrderAmount) return res.status(400).json({ message: "Min amount not met" });
+        if (!coupon) return res.status(404).json({ success: false, message: "Invalid or expired coupon." });
+        if (totalAmount < coupon.minOrderAmount) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Minimum order amount of ₹${coupon.minOrderAmount} required to apply this coupon.` 
+            });
+        }
 
         const discount = (totalAmount * coupon.discountPercentage) / 100;
         const finalDiscount = Math.min(discount, coupon.maxDiscount);
 
-        res.json({ success: true, discount: finalDiscount });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, discount: Math.round(finalDiscount) });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 // POST /user/pharmacy/checkout
 // --- CHECKOUT MEDICINE ORDER (Updated with COD Check) ---
@@ -1842,7 +1891,6 @@ const verifyPharmacyPayment = async (req, res) => {
                 const X = activePromo.buyQty;
                 const Y = activePromo.getFreeQty;
                 const bundleSize = X + Y;
-
                 const fullBundles = Math.floor(item.quantity / bundleSize);
                 const freeQty = fullBundles * Y;
                 
@@ -1853,7 +1901,6 @@ const verifyPharmacyPayment = async (req, res) => {
                 }
             }
 
-            // Stock Deduction across batches based on FEFO [cite: 1.1.2]
             await deductPharmacyStockFEFO(order.pharmacyId, item.medicineId, item.quantity);
         }
 
@@ -1865,7 +1912,6 @@ const verifyPharmacyPayment = async (req, res) => {
 
         await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-        // Only deduct subscription deliveries count if delivery charge was waived to 0
         if ((order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection') && order.billSummary?.deliveryCharge === 0) {
             const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
             await deductBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
@@ -1879,10 +1925,17 @@ const verifyPharmacyPayment = async (req, res) => {
             { bookingId: order._id.toString(), type: 'new_pharmacy_booking' }
         );
 
+        // 🚨 SECURITY SANITIZATION BEFORE SENDING RESPONSE
+        const orderResponse = order.toObject();
+        if (orderResponse.paymentDetails) {
+            delete orderResponse.paymentDetails.razorpaySignature;
+            delete orderResponse.paymentDetails.razorpayOrderId;
+        }
+
         res.json({
             success: true,
             message: "Pharmacy payment successfully verified & order placed!",
-            data: order
+            data: orderResponse
         });
 
     } catch (error) {
@@ -1998,16 +2051,19 @@ const cancelMedicineOrder = async (req, res) => {
 const getOrderHistory = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 20; // Pagination strictly set to 20
+        const limit = 20;
         const skip = (page - 1) * limit;
 
         const userId = req.user.id;
         
         const orders = await PharmacyBooking.find({ userId })
-            .populate('pharmacyId', 'name profileImage city')
+            .select('-paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
+            .populate('pharmacyId', 'name profileImage city documents.gstNumber')
+            .populate('driverId', 'name phone vehicleNumber profilePic')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
         const total = await PharmacyBooking.countDocuments({ userId });
 
@@ -2022,13 +2078,123 @@ const getOrderHistory = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+
+
 const trackOrder = async (req, res) => {
     try {
-        const order = await PharmacyBooking.findOne({ _id: req.params.orderId, userId: req.user.id })
-            .populate('pharmacyId', 'name address phone');
-        res.json({ success: true, data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const { orderId } = req.params;
+        const userId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            userId
+        })
+        .select('-paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
+        .populate({
+            path: 'pharmacyId',
+            select: 'name address city state country phone email documents.gstNumber documents.drugLicenses documents.drugLicenseType'
+        })
+        .populate('driverId', 'name phone vehicleNumber profilePic')
+        .lean();
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order not found." });
+        }
+
+        let calculatedTaxableTotal = 0;
+        let calculatedCgstTotal = 0;
+        let calculatedSgstTotal = 0;
+
+        // GST Class Breakdown Map (0%, 5%, 12%, 18%, 28%)
+        const gstSlabBreakdown = {};
+
+        // 🚨 Enrich items with Batch, Expiry, Packaging & Taxes
+        const enrichedItems = await Promise.all(order.items.map(async (item) => {
+            const itemQty = Number(item.quantity || 1);
+            const itemTotalPrice = Number(item.price || 0) * itemQty;
+            const hsn = item.hsn_number || "30049099";
+
+            // Active batch lookup for batch_number, packaging and expiry
+            let batchNo = item.batch_number || "N/A";
+            let expDate = item.expiry_date || "N/A";
+            let packin = item.packaging || "10 TAB";
+
+            if (item.medicineId && (batchNo === "N/A" || expDate === "N/A")) {
+                const inv = await MedicineInventory.findOne({
+                    pharmacyId: order.pharmacyId?._id || order.pharmacyId,
+                    medicineId: item.medicineId
+                }).sort({ expiry_date: 1 }).lean();
+
+                if (inv) {
+                    if (inv.batch_number) batchNo = inv.batch_number;
+                    if (inv.expiry_date) expDate = moment(inv.expiry_date).format('MM/YY');
+                    if (inv.packaging) packin = inv.packaging;
+                }
+            }
+
+            let cgstP = item.cgstPercent;
+            let sgstP = item.sgstPercent;
+            if (cgstP === undefined || sgstP === undefined) {
+                const isSupplement = hsn.startsWith('21');
+                cgstP = isSupplement ? 9 : 6;
+                sgstP = isSupplement ? 9 : 6;
+            }
+
+            const totalGstP = cgstP + sgstP;
+            const taxableAmt = item.taxableAmount || Number((itemTotalPrice / (1 + (totalGstP / 100))).toFixed(2));
+            const cgstAmt = item.cgstAmount || Number((taxableAmt * (cgstP / 100)).toFixed(2));
+            const sgstAmt = item.sgstAmount || Number((taxableAmt * (sgstP / 100)).toFixed(2));
+
+            calculatedTaxableTotal += taxableAmt;
+            calculatedCgstTotal += cgstAmt;
+            calculatedSgstTotal += sgstAmt;
+
+            // Slab aggregation for bottom-left invoice table
+            const slabKey = `${totalGstP}%`;
+            if (!gstSlabBreakdown[slabKey]) {
+                gstSlabBreakdown[slabKey] = { gstClass: slabKey, taxable: 0, cgst: 0, sgst: 0 };
+            }
+            gstSlabBreakdown[slabKey].taxable = Number((gstSlabBreakdown[slabKey].taxable + taxableAmt).toFixed(2));
+            gstSlabBreakdown[slabKey].cgst = Number((gstSlabBreakdown[slabKey].cgst + cgstAmt).toFixed(2));
+            gstSlabBreakdown[slabKey].sgst = Number((gstSlabBreakdown[slabKey].sgst + sgstAmt).toFixed(2));
+
+            return {
+                ...item,
+                batch_number: batchNo,
+                expiry_date: expDate,
+                packaging: packin,
+                hsn_number: hsn,
+                taxableAmount: taxableAmt,
+                cgstPercent: cgstP,
+                sgstPercent: sgstP,
+                cgstAmount: cgstAmt,
+                sgstAmount: sgstAmt,
+                itemTotalAmount: itemTotalPrice
+            };
+        }));
+
+        order.items = enrichedItems;
+
+        if (!order.billSummary.taxableTotal) {
+            order.billSummary.taxableTotal = Number(calculatedTaxableTotal.toFixed(2));
+            order.billSummary.cgstTotal = Number(calculatedCgstTotal.toFixed(2));
+            order.billSummary.sgstTotal = Number(calculatedSgstTotal.toFixed(2));
+        }
+
+        // 🚨 ADDED: Injected Invoice Specials (Amount in words & GST Class Grid)
+        order.billSummary.amountInWords = numberToWordsIndian(order.billSummary.totalAmount);
+        order.billSummary.gstClassBreakdown = Object.values(gstSlabBreakdown);
+
+        res.json({
+            success: true,
+            data: order
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
+
 
 const getLatestAddedMedicines = async (req, res) => {
     try {
@@ -2807,7 +2973,6 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             }
         }
 
-        // --- UPDATED: Map verified items with HSN and dynamic tax calculations safely ---
         const orderItems = (request.verifiedBill.items || []).map(item => ({
             medicineId: item.medicineId || null,
             name: item.name,
@@ -2819,8 +2984,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             comboOfferId: null,
             freeQuantity: 0,
             
-            // 🚨 Dynamic GST variables successfully transferred to order items [1]
-            hsn_number: item.hsn_number || "30049011",
+            hsn_number: item.hsn_number || "30049099",
             taxableAmount: item.taxableAmount || 0,
             cgstPercent: item.cgstPercent || 6,
             sgstPercent: item.sgstPercent || 6,
@@ -2840,9 +3004,9 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             appointmentTime: 'Immediate',
             billSummary: {
                 itemTotal: request.verifiedBill.itemTotal || 0,
-                taxableTotal: request.verifiedBill.taxableTotal || 0, // 👈 Saved GST Taxable Sum [1]
-                cgstTotal: request.verifiedBill.cgstTotal || 0,       // 👈 Saved CGST Sum [1]
-                sgstTotal: request.verifiedBill.sgstTotal || 0,       // 👈 Saved SGST Sum [1]
+                taxableTotal: request.verifiedBill.taxableTotal || 0,
+                cgstTotal: request.verifiedBill.cgstTotal || 0,
+                sgstTotal: request.verifiedBill.sgstTotal || 0,
                 deliveryCharge: request.verifiedBill.deliveryCharge || 0,
                 totalAmount: request.verifiedBill.totalAmount || 0
             },
@@ -2857,7 +3021,6 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
         request.status = 'Paid';
         await request.save();
 
-        // Trigger Notification
         await notifyAdminsAndVendor(
             request.pharmacyId,
             'pharmacy',
@@ -2866,10 +3029,17 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             { bookingId: finalOrder._id.toString(), type: 'new_pharmacy_booking' }
         );
 
+        // 🚨 FIXED: Sanitized signature token before response
+        const orderResponse = finalOrder.toObject();
+        if (orderResponse.paymentDetails) {
+            delete orderResponse.paymentDetails.razorpaySignature;
+            delete orderResponse.paymentDetails.razorpayOrderId;
+        }
+
         res.status(201).json({
             success: true,
             message: "Prescription payment verified and order placed successfully!",
-            data: finalOrder
+            data: orderResponse
         });
 
     } catch (error) {
@@ -2923,28 +3093,31 @@ const ratePharmacyOrder = async (req, res) => {
     try {
         const { bookingId, rating, comment } = req.body;
 
+        if (!rating || rating < 1 || rating > 5) {
+            return res.status(400).json({ success: false, message: "Rating must be between 1 and 5." });
+        }
+
         const booking = await PharmacyBooking.findOne({ _id: bookingId, userId: req.user.id });
         if (!booking || booking.status !== 'Delivered') {
             return res.status(400).json({ success: false, message: "You can only rate successfully delivered medicine orders." });
         }
 
+        // 🚨 FIXED: Race-condition duplicate review preventer
         const existingReview = await Review.findOne({ userId: req.user.id, orderId: bookingId });
         if (existingReview) {
             return res.status(400).json({ success: false, message: "You have already submitted a review for this medicine order." });
         }
 
-        // Create Polymorphic Review
         await Review.create({
             userId: req.user.id,
             userName: req.user.name || "Verified User",
             targetId: booking.pharmacyId,
             targetType: 'Pharmacy',
             orderId: bookingId,
-            rating,
+            rating: Number(rating),
             comment: comment || ""
         });
 
-        // Recalculate average rating & sync to Pharmacy profile
         const stats = await Review.aggregate([
             { $match: { targetId: booking.pharmacyId, targetType: 'Pharmacy' } },
             { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }

@@ -5,6 +5,7 @@ const MedicineInventory = require('../../../models/MedicineInventory');
 const MasterRequest = require('../../../models/MasterRequest');
 const mongoose = require('mongoose')
 const HsnMaster = require('../../../models/HsnMaster');
+const HsnRequest = require('../../../models/HsnRequest');
 
 // 1. Master Medicine Database mein se search karna (Inventory mein add karne ke liye)
 // Endpoint: GET /provider/pharmacy/inventory/getMaster?query=dolo&page=1
@@ -405,6 +406,70 @@ const requestMrpIncrease = async (req, res) => {
 };
 
 
+
+////////////////////////////////////
+// 3. Vendor: Request Admin to add a new HSN code to the master list
+////////////////////////////////////
+
+// 1. Vendor: Admin ko Naya HSN add karne ki request bhejna
+// Endpoint: POST /provider/pharmacy/hsn-request/create
+const requestNewHsnCode = async (req, res) => {
+    try {
+        const { hsnCode, description, suggestedTaxPercent, reason } = req.body;
+        const vendorId = req.user.id;
+
+        if (!hsnCode || !description || suggestedTaxPercent === undefined) {
+            return res.status(400).json({ success: false, message: "HSN Code, description, and tax rate are required." });
+        }
+
+        const cleanCode = hsnCode.trim();
+
+        // Check karein agar HSN pehle se active list me hai
+        const alreadyExists = await HsnMaster.findOne({ hsnCode: cleanCode, isActive: true });
+        if (alreadyExists) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `HSN Code '${cleanCode}' already exists in the master list with ${alreadyExists.totalGstPercent}% GST.` 
+            });
+        }
+
+        // Pending Request create karein
+        const newRequest = await HsnRequest.create({
+            vendorId,
+            hsnCode: cleanCode,
+            description: description.trim(),
+            suggestedTaxPercent: Number(suggestedTaxPercent),
+            reason: reason || "New medicine/device batch arrived."
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Request submitted to Admin successfully! You can track its status in your dashboard.",
+            data: newRequest
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. Vendor: Apni bheji hui HSN requests aur Rejection Reasons dekhna
+// Endpoint: GET /provider/pharmacy/hsn-request/my-requests
+const getMyHsnRequests = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const requests = await HsnRequest.find({ vendorId }).sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            count: requests.length,
+            data: requests
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     searchMasterMedicines, 
     getMasterMedicineById, 
@@ -414,5 +479,7 @@ module.exports = {
     updateInventoryItem ,
     deleteInventoryItem,
     requestNewMedicineAdd,
-    requestMrpIncrease
+    requestMrpIncrease,
+    requestNewHsnCode,
+    getMyHsnRequests
 };

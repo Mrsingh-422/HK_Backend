@@ -6,6 +6,34 @@ const Medicine = require('../../../models/Medicine');
 const moment = require('moment');
 const Wallet = require('../../../models/Wallet');
 const HsnMaster = require('../../../models/HsnMaster'); // Import HSN Master model
+const MedicineInventory = require('../../../models/MedicineInventory');
+
+// 🔢 Helper: Indian Currency Number to Words Converter
+const numberToWordsIndian = (num) => {
+    if (!num || isNaN(num) || num <= 0) return "RUPEES ZERO ONLY";
+    const a = ['', 'One ', 'Two ', 'Three ', 'Four ', 'Five ', 'Six ', 'Seven ', 'Eight ', 'Nine ', 'Ten ', 'Eleven ', 'Twelve ', 'Thirteen ', 'Fourteen ', 'Fifteen ', 'Sixteen ', 'Seventeen ', 'Eighteen ', 'Nineteen '];
+    const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+    const inWords = (n) => {
+        if (n === 0) return '';
+        let str = '';
+        if (n >= 10000000) { str += inWords(Math.floor(n / 10000000)) + 'Crore '; n %= 10000000; }
+        if (n >= 100000) { str += inWords(Math.floor(n / 100000)) + 'Lakh '; n %= 100000; }
+        if (n >= 1000) { str += inWords(Math.floor(n / 1000)) + 'Thousand '; n %= 1000; }
+        if (n >= 100) { str += inWords(Math.floor(n / 100)) + 'Hundred '; n %= 100; }
+        if (n > 0) {
+            if (n < 20) str += a[n];
+            else str += b[Math.floor(n / 10)] + ' ' + a[n % 10];
+        }
+        return str;
+    };
+
+    const rupees = Math.floor(num);
+    const paise = Math.round((num - rupees) * 100);
+    let result = 'RUPEES ' + inWords(rupees).trim();
+    if (paise > 0) result += ' AND ' + inWords(paise).trim() + ' PAISE';
+    return (result + ' ONLY').toUpperCase();
+};
 
 
 // ==========================================
@@ -84,35 +112,31 @@ const getPharmacyOrders = async (req, res) => {
         const { orderType, status, isPriority } = req.query; 
         let query = { pharmacyId: req.user.id };
         
-        if (orderType) query.orderType = orderType; // 'General' or 'Prescription'
+        if (orderType) query.orderType = orderType;
         if (status) query.status = status;
 
-        // Priority / Rapid Delivery filter logic
         if (isPriority === 'true') {
             query['billSummary.rapidDeliveryCharge'] = { $gt: 0 };
         } else if (isPriority === 'false') {
             query['billSummary.rapidDeliveryCharge'] = 0;
         }
 
-        // Fetching orders and deeply populating BOGO campaign details per item [1]
         const orders = await PharmacyBooking.find(query)
+            .select('-deliveryOTP -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v') // 👈 Sanitized for Vendor
             .populate('userId', 'name phone')
             .populate('driverId', 'name phone profilePic vehicleNumber')
             .populate({
-                path: 'items.comboOfferId', // 🚀 Nested populate: fetches active BOGO rule variables [1]
+                path: 'items.comboOfferId',
                 select: 'campaignDisplayName buyQty getFreeQty projectedPromoMargin'
             })
             .sort({ createdAt: -1 })
-            .lean(); // .lean() converts document to plain JS object for dynamic property injection
+            .lean();
 
-        // Mapping orders to add high-level dashboard flags for easy UI badge rendering [1]
         const enrichedOrders = orders.map(order => {
-            // Check if at-least one item in this order has BOGO/combo applied [1]
             const hasComboApplied = order.items.some(item => item.isComboApplied === true);
-            
             return {
                 ...order,
-                hasComboApplied // 👈 Root-level helper: returns true if any item has active BOGO [1]
+                hasComboApplied
             };
         });
 
@@ -390,11 +414,23 @@ const startPrescriptionReview = async (req, res) => {
 const submitPharmacistReview = async (req, res) => {
     try {
         const { requestId } = req.params;
+        const pharmacyId = req.user.id; // Logged-in Pharmacy ID
         const { items, deliveryCharge } = req.body; 
 
-        const request = await PharmacyPrescriptionRequest.findOne({ requestId });
+        // 🚨 FIXED: Added pharmacyId check to prevent IDOR attacks
+        const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
         if (!request) {
-            return res.status(404).json({ success: false, message: "Review request not found" });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Review request not found or you are not authorized to bill this prescription." 
+            });
+        }
+
+        if (request.status !== 'Pending Review' && request.status !== 'Reviewing') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot generate bill. Current status is already '${request.status}'.` 
+            });
         }
 
         let itemTotal = 0;
@@ -426,7 +462,7 @@ const submitPharmacistReview = async (req, res) => {
             // Dynamic live HSN tax mapping
             let cgstPercent = 0;
             let sgstPercent = 0;
-            if (verifiedHsn && verifiedHsn.trim() !== "") {
+            if (verifiedHsn && verifiedHsn.trim() !== "" && verifiedHsn.toUpperCase() !== "N/A") {
                 const hsnConfig = await HsnMaster.findOne({ hsnCode: verifiedHsn.trim(), isActive: true });
                 if (hsnConfig) {
                     const totalGst = hsnConfig.totalGstPercent;
@@ -477,7 +513,7 @@ const submitPharmacistReview = async (req, res) => {
 
         res.json({
             success: true,
-            message: "Invoice successfully sent to client",
+            message: "Invoice successfully generated and sent to client.",
             data: request
         });
     } catch (error) {
@@ -492,16 +528,24 @@ const rejectPrescriptionRequest = async (req, res) => {
 
         const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
         if (!request) {
-            return res.status(404).json({ success: false, message: "Request not found" });
+            return res.status(404).json({ success: false, message: "Prescription request not found or unauthorized." });
+        }
+
+        // 🚨 FIXED: Prevent rejecting paid/in-process orders
+        if (request.status === 'Paid') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Action Blocked: This prescription request is already paid and converted to an active order." 
+            });
         }
 
         request.status = 'Rejected';
-        request.rejectReason = reason || "Invalid Prescription Document"; // Now this will be saved successfully
+        request.rejectReason = reason || "Prescription verification failed or medicines out of stock.";
         await request.save();
 
         res.json({
             success: true,
-            message: "Prescription request has been rejected successfully",
+            message: "Prescription request has been rejected successfully.",
             rejectReason: request.rejectReason,
             data: request
         });
@@ -518,29 +562,30 @@ const trackPharmacyDrivers = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
 
-        // 1. Fetch all drivers linked to this pharmacy store
-        const drivers = await Driver.find({ vendorId: pharmacyId }).lean();
+        // 🚨 HIDE SENSITIVE DRIVER DATA (Token, Aadhaar, Password)
+        const drivers = await Driver.find({ vendorId: pharmacyId })
+            .select('-token -aadhaarNumber -password -__v') // 👈 Sanitized for Vendor
+            .lean();
 
         const driversTrackingData = [];
 
         for (let driver of drivers) {
             let currentActiveOrder = null;
 
-            // If driver status is 'Busy', find the active delivery order they are working on
             if (driver.status === 'Busy') {
                 currentActiveOrder = await PharmacyBooking.findOne({
                     pharmacyId,
                     driverId: driver._id,
-                    status: { $in: ['Packed', 'Shipped', 'Accepted', 'OutForDelivery'] } // Active delivery states
+                    status: { $in: ['Packed', 'Shipped', 'Accepted', 'OutForDelivery'] }
                 })
+                .select('-deliveryOTP -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v') // 👈 Order sanitized
                 .populate('userId', 'name phone')
-                .select('orderId status deliveryStatus address billSummary createdAt')
                 .lean();
             }
 
             driversTrackingData.push({
                 ...driver,
-                currentActiveOrder: currentActiveOrder || null // 👈 Will bind active order details or null
+                currentActiveOrder: currentActiveOrder || null
             });
         }
 
@@ -555,8 +600,123 @@ const trackPharmacyDrivers = async (req, res) => {
     }
 };
 
+// =========================================================================
+// 🚀 NEW: GET PHARMACY ORDER INVOICE DETAILS (For Printing / PDF Generation)
+// Endpoint: GET /provider/pharmacy/orders/invoice/:orderId
+// =========================================================================
+const getPharmacyOrderInvoiceDetails = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const pharmacyId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            pharmacyId
+        })
+        .select('-deliveryOTP -rejectedBy -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -__v')
+        .populate({
+            path: 'pharmacyId',
+            select: 'name address city state country phone email documents.gstNumber documents.drugLicenses documents.drugLicenseType'
+        })
+        .populate('userId', 'name phone')
+        .lean();
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order details not found." });
+        }
+
+        let calculatedTaxableTotal = 0;
+        let calculatedCgstTotal = 0;
+        let calculatedSgstTotal = 0;
+        const gstSlabBreakdown = {};
+
+        const enrichedItems = await Promise.all(order.items.map(async (item) => {
+            const itemQty = Number(item.quantity || 1);
+            const itemTotalPrice = Number(item.price || 0) * itemQty;
+            const hsn = item.hsn_number || "30049099";
+
+            let batchNo = item.batch_number || "N/A";
+            let expDate = item.expiry_date || "N/A";
+            let packin = item.packaging || "10 TAB";
+
+            if (item.medicineId && (batchNo === "N/A" || expDate === "N/A")) {
+                const inv = await MedicineInventory.findOne({
+                    pharmacyId: order.pharmacyId?._id || order.pharmacyId,
+                    medicineId: item.medicineId
+                }).sort({ expiry_date: 1 }).lean();
+
+                if (inv) {
+                    if (inv.batch_number) batchNo = inv.batch_number;
+                    if (inv.expiry_date) expDate = moment(inv.expiry_date).format('MM/YY');
+                    if (inv.packaging) packin = inv.packaging;
+                }
+            }
+
+            let cgstP = item.cgstPercent;
+            let sgstP = item.sgstPercent;
+            if (cgstP === undefined || sgstP === undefined) {
+                const isSupplement = hsn.startsWith('21');
+                cgstP = isSupplement ? 9 : 6;
+                sgstP = isSupplement ? 9 : 6;
+            }
+
+            const totalGstP = cgstP + sgstP;
+            const taxableAmt = item.taxableAmount || Number((itemTotalPrice / (1 + (totalGstP / 100))).toFixed(2));
+            const cgstAmt = item.cgstAmount || Number((taxableAmt * (cgstP / 100)).toFixed(2));
+            const sgstAmt = item.sgstAmount || Number((taxableAmt * (sgstP / 100)).toFixed(2));
+
+            calculatedTaxableTotal += taxableAmt;
+            calculatedCgstTotal += cgstAmt;
+            calculatedSgstTotal += sgstAmt;
+
+            const slabKey = `${totalGstP}%`;
+            if (!gstSlabBreakdown[slabKey]) {
+                gstSlabBreakdown[slabKey] = { gstClass: slabKey, taxable: 0, cgst: 0, sgst: 0 };
+            }
+            gstSlabBreakdown[slabKey].taxable = Number((gstSlabBreakdown[slabKey].taxable + taxableAmt).toFixed(2));
+            gstSlabBreakdown[slabKey].cgst = Number((gstSlabBreakdown[slabKey].cgst + cgstAmt).toFixed(2));
+            gstSlabBreakdown[slabKey].sgst = Number((gstSlabBreakdown[slabKey].sgst + sgstAmt).toFixed(2));
+
+            return {
+                ...item,
+                batch_number: batchNo,
+                expiry_date: expDate,
+                packaging: packin,
+                hsn_number: hsn,
+                taxableAmount: taxableAmt,
+                cgstPercent: cgstP,
+                sgstPercent: sgstP,
+                cgstAmount: cgstAmt,
+                sgstAmount: sgstAmt,
+                itemTotalAmount: itemTotalPrice
+            };
+        }));
+
+        order.items = enrichedItems;
+
+        if (!order.billSummary.taxableTotal) {
+            order.billSummary.taxableTotal = Number(calculatedTaxableTotal.toFixed(2));
+            order.billSummary.cgstTotal = Number(calculatedCgstTotal.toFixed(2));
+            order.billSummary.sgstTotal = Number(calculatedSgstTotal.toFixed(2));
+        }
+
+        // Amount in words & Slab grid
+        order.billSummary.amountInWords = numberToWordsIndian(order.billSummary.totalAmount);
+        order.billSummary.gstClassBreakdown = Object.values(gstSlabBreakdown);
+
+        res.json({
+            success: true,
+            message: "Invoice data fetched successfully matching GST receipt.",
+            data: order
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = { getPharmacyDashboardStats, getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
 
-    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers
+    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers, getPharmacyOrderInvoiceDetails
  };

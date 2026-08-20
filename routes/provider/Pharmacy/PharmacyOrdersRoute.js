@@ -6,8 +6,8 @@ const {
     getPharmacyOrders, 
     getAvailableDrivers, 
     assignDriverManual , reassignDriverManual,updateOrderStatus,
-
-    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers
+    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers,
+    getPharmacyOrderInvoiceDetails
 } = require('../../../controllers/provider/Pharmacy/PharmacyOrders');
 
 // Base: /provider/pharmacy/orders
@@ -49,5 +49,5 @@ router.post(
 
 
 router.get('/track-drivers', protect('pharmacy'), trackPharmacyDrivers);
-
+router.get('/invoice/:orderId', protect('pharmacy'), getPharmacyOrderInvoiceDetails);
 module.exports = router;

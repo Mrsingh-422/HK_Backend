@@ -62,10 +62,16 @@ const updateConsultationSettings = async (req, res) => {
         if (clinicPrice !== undefined) updateData['fees.clinic'] = Number(clinicPrice);
         if (homePrice !== undefined) updateData['fees.home'] = Number(homePrice);
 
-        // Toggle (On/Off) Updates
-        if (onlineStatus !== undefined) updateData['consultationStatus.online'] = onlineStatus;
-        if (clinicStatus !== undefined) updateData['consultationStatus.clinic'] = clinicStatus;
-        if (homeStatus !== undefined) updateData['consultationStatus.home'] = homeStatus;
+        // 🚀 SYNC FIX: Strict string-to-boolean conversions
+        if (onlineStatus !== undefined) {
+            updateData['consultationStatus.online'] = (onlineStatus === true || onlineStatus === 'true');
+        }
+        if (clinicStatus !== undefined) {
+            updateData['consultationStatus.clinic'] = (clinicStatus === true || clinicStatus === 'true');
+        }
+        if (homeStatus !== undefined) {
+            updateData['consultationStatus.home'] = (homeStatus === true || homeStatus === 'true');
+        }
 
         const updatedDoctor = await Doctor.findByIdAndUpdate(
             req.user.id,
@@ -78,7 +84,9 @@ const updateConsultationSettings = async (req, res) => {
             message: "Settings updated successfully", 
             data: updatedDoctor 
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 module.exports = { getMyConsultationFees, updateConsultationFees, updateConsultationSettings };

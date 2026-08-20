@@ -1032,22 +1032,31 @@ const getAvailableSlots = async (req, res) => {
     try {
         const { doctorId } = req.params;
         const { date } = req.query; 
+
+        if (!date) {
+            return res.status(400).json({ success: false, message: "Date query parameter is required." });
+        }
         
         const config = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
         
         if (!config) {
-            return res.json({ success: true, message: "Availability not set", slots:[] });
+            return res.json({ success: true, message: "Availability not set", slots: [] });
         }
 
         const dayName = moment(date).format('dddd'); 
         if (config.offDays.includes(dayName) || config.blockedDates.includes(date)) {
-            return res.json({ success: true, message: "Doctor is unavailable on this date", slots:[] });
+            return res.json({ success: true, message: "Doctor is unavailable on this date", slots: [] });
         }
 
+        // 🚀 SYNC FIX 1: Safe Date-Range boundaries to prevent UTC offset mismatches
+        const queryStart = moment(date).startOf('day').toDate();
+        const queryEnd = moment(date).endOf('day').toDate();
+
+        // 🚀 SYNC FIX 2: Excluded 'No-Show' along with Cancelled states to free up slots
         const booked = await Appointment.find({ 
             doctorId, 
-            appointmentDate: date, 
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] } 
+            appointmentDate: { $gte: queryStart, $lte: queryEnd },
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] } 
         }).select('appointmentTime');
         
         const bookedTimes = booked.map(b => b.appointmentTime);

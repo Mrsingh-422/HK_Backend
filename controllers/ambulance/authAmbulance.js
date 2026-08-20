@@ -172,18 +172,36 @@ const completeAmbulanceProfile = async (req, res) => {
 
 const toggleDriverAvailability = async (req, res) => {
     try {
-        const { available } = req.body; // true (Online) or false (Offline)
+        const { available } = req.body; 
 
         if (available === undefined) {
             return res.status(400).json({ success: false, message: "available parameter is required." });
+        }
+
+        const isTargetAvailable = Boolean(available === true || available === 'true');
+
+        // 🚀 SYNC FIX: Prevent driver from marking themselves available while actively driving a patient
+        if (isTargetAvailable) {
+            const Booking = require('../../models/AmbulanceBooking');
+            const activeTrip = await Booking.findOne({
+                ambulanceId: req.user.id,
+                status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
+            });
+
+            if (activeTrip) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cannot toggle to available while an active trip is in progress. Please complete the ongoing ride first."
+                });
+            }
         }
 
         const ambulance = await Ambulance.findByIdAndUpdate(
             req.user.id,
             { 
                 $set: { 
-                    availableForEmergency: Boolean(available),
-                    isOnline: Boolean(available) // 🚨 Synchronized to keep both model fields perfectly aligned
+                    availableForEmergency: isTargetAvailable,
+                    isOnline: isTargetAvailable 
                 } 
             },
             { new: true }
@@ -193,7 +211,7 @@ const toggleDriverAvailability = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: `Driver status updated to ${available ? 'Online' : 'Offline'}`, 
+            message: `Driver status updated to ${isTargetAvailable ? 'Online' : 'Offline'}`, 
             available: ambulance.availableForEmergency,
             isOnline: ambulance.isOnline
         });

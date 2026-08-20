@@ -46,7 +46,9 @@ const pharmacySchema = new mongoose.Schema({
             type: String,
             enum: ['Retail', 'Wholesale', 'Restricted', 'Blood Bank', 'None'],
             default: 'Retail'
-        }
+        },
+        signatureImage: { type: String, default: null } // 👈 Chemist signature / stamp photo
+
     },
 
     alternatePhone: { type: String, default: null },
