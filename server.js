@@ -156,7 +156,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Form Data (Optional)
 
 // Static folder for uploads
-app.use('/uploads', express.static('public/uploads'));
+// app.use('/uploads', express.static('public/uploads'));
+
+// 🚨 static foleder paath Isse REPLACE karein:
+app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
 app.use((err, req, res, next) => {
     const multer = require('multer');
