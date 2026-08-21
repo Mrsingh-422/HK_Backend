@@ -3272,9 +3272,8 @@ const getReferralHospitals = async (req, res) => {
 /////////////////////////// INSURANCE  ///////////////////////////
 /////////////////////////////////////////////////////////////////
 
-// --- API 1: GET PATIENTS LIST FOR TPA INSURANCE DESK (With Data-Isolation & Pagination) ---
-// Endpoint: GET /hospital/panel/insurance/patients?tab=Un-Insured&page=1
-// Path: controllers/hospital/HospitalPanel.js
+// --- API 1: GET PATIENTS LIST FOR TPA INSURANCE DESK (With insuranceType & Approval Status) ---
+// Endpoint: GET /hospital/panel/insurance/patients?tab=Insured&page=1
 const getInsurancePatientsList = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -3284,21 +3283,19 @@ const getInsurancePatientsList = async (req, res) => {
         const limitNum = parseInt(limit) || 10;
         const skip = (pageNum - 1) * limitNum;
 
-        // 🚀 DATA ISOLATION GUARD: Fetch only patients who have interacted with this specific hospital
+        // DATA ISOLATION GUARD: Fetch only patients who have interacted with this specific hospital
         const uniquePatientIds = await Appointment.find({ hospitalId }).distinct('userId');
 
         let query = {
             _id: { $in: uniquePatientIds }
         };
 
-        // Filter by Tab (Insured vs Un-Insured)
         if (tab === 'Insured') {
             query["insuranceDetails.hasInsurance"] = true;
         } else {
-            query["insuranceDetails.hasInsurance"] = { $ne: true }; // Default to Un-Insured
+            query["insuranceDetails.hasInsurance"] = { $ne: true };
         }
 
-        // Apply search by Name or Phone
         if (search) {
             query.$or = [
                 { name: { $regex: search, $options: 'i' } },
@@ -3315,13 +3312,43 @@ const getInsurancePatientsList = async (req, res) => {
             .skip(skip)
             .limit(limitNum);
 
+        // 🚀 SYNC FIX: Map insuranceType and lookup active appointment approval status
+        const enrichedPatients = await Promise.all(patients.map(async (p) => {
+            const pObj = p.toObject ? p.toObject() : { ...p };
+            
+            // Find latest active/pending appointment for this patient at this hospital
+            const activeAppt = await Appointment.findOne({
+                hospitalId,
+                userId: p._id
+            })
+            .sort({ createdAt: -1 })
+            .select('bookingId status insuranceDetails createdAt')
+            .lean();
+
+            // Approval status is Pending by default until hospital uploads the approval letter PDF
+            const approvalStatus = activeAppt?.insuranceDetails?.approvalStatus || (activeAppt?.insuranceDetails?.approvalLetterPdf ? 'Approved' : 'Pending');
+            const approvalLetterPdf = activeAppt?.insuranceDetails?.approvalLetterPdf || null;
+
+            return {
+                ...pObj,
+                insuranceType: pObj.insuranceDetails?.insuranceType || pObj.insuranceDetails?.masterInsuranceId?.type || "Cashless Insurance",
+                latestAppointment: activeAppt ? {
+                    appointmentId: activeAppt._id,
+                    bookingId: activeAppt.bookingId,
+                    appointmentStatus: activeAppt.status,
+                    approvalStatus, // 👈 'Pending' by default, turns 'Approved' when PDF is uploaded
+                    approvalLetterPdf // 👈 Path of uploaded TPA approval letter PDF
+                } : null
+            };
+        }));
+
         res.json({
             success: true,
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
-            count: patients.length,
-            data: patients
+            count: enrichedPatients.length,
+            data: enrichedPatients
         });
 
     } catch (error) {
@@ -3329,6 +3356,79 @@ const getInsurancePatientsList = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// --- API: UPLOAD TPA APPROVAL LETTER PDF & AUTO-CONFIRM ORDER (NEW API) ---
+// Endpoint: PUT /hospital/panel/insurance/upload-approval-letter/:appointmentId
+const uploadInsuranceApprovalLetter = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { appointmentId } = req.params;
+
+        if (!req.file) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Kripya insurance company ka approval letter PDF upload karein (approvalLetterPdf key me)." 
+            });
+        }
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission booking record not found." });
+        }
+
+        const pdfPath = `/uploads/insurance_approvals/${req.file.filename}`;
+
+        // 1. Save approval letter PDF and update status to Approved
+        if (!appointment.insuranceDetails) {
+            appointment.insuranceDetails = { hasInsurance: true };
+        }
+        
+        appointment.hasInsurance = true;
+        appointment.insuranceDetails.hasInsurance = true;
+        appointment.insuranceDetails.approvalLetterPdf = pdfPath;
+        appointment.insuranceDetails.approvalStatus = 'Approved'; // 🚀 Turns Approved
+
+        // 2. 🚀 AUTO-CONFIRM ORDER: Transition appointment status from pending to Confirmed!
+        if (appointment.status === 'Hospital-Pending' || appointment.status === 'Pending') {
+            appointment.status = 'Confirmed';
+        }
+
+        // Reserve assigned bed if present
+        if (appointment.bedId) {
+            const Bed = require('../../models/Bed');
+            await Bed.findByIdAndUpdate(appointment.bedId, { status: 'Reserved' });
+        }
+
+        await appointment.save();
+
+        // 3. Trigger Notification to Patient
+        const { sendPushNotification } = require('../../utils/notification');
+        await sendPushNotification(
+            appointment.userId,
+            'user',
+            "🎉 Cashless Admission Approved & Confirmed!",
+            `Your cashless admission #${appointment.bookingId} has been verified with TPA insurance approval letter. Booking is now Confirmed.`,
+            { appointmentId: appointment._id.toString(), type: 'cashless_approval_confirmed' }
+        );
+
+        res.json({
+            success: true,
+            message: "TPA Approval letter uploaded successfully. Order is now Confirmed!",
+            data: {
+                appointmentId: appointment._id,
+                bookingId: appointment.bookingId,
+                status: appointment.status,
+                approvalStatus: 'Approved',
+                approvalLetterPdf: pdfPath
+            }
+        });
+
+    } catch (error) {
+        console.error("Upload Approval Letter Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // --- API 2: GET MASTER DROPDOWNS DATA FOR ADDING INSURANCE (Figma Screen 3 Selector) ---
 // Endpoint: GET /hospital/panel/insurance/master-data
@@ -3461,7 +3561,7 @@ module.exports = {
     getAvailableDischargeAmbulances,
     calculateDischargeAmbulanceFare,
     dispatchDischargeAmbulance,cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals,
-    getInsurancePatientsList,
+    getInsurancePatientsList,uploadInsuranceApprovalLetter,
     getInsuranceMasterDropdowns,
     savePatientInsuranceDetails
 };

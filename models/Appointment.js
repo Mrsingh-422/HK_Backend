@@ -67,7 +67,15 @@ const appointmentSchema = new mongoose.Schema({
         insuranceNumber: { type: String, default: "" },
         companyName: { type: String, default: "" },
         insuranceType: { type: String, default: "" },
-        insuranceDocument: { type: String, default: null } // Snapshot path of PDF or image
+        insuranceDocument: { type: String, default: null }, // Snapshot path of PDF or image
+        // 🚀 NEW: TPA Approval Letter PDF from insurance company
+        approvalLetterPdf: { type: String, default: null }, 
+        // 🚀 NEW: Approval status ('Pending' until PDF is uploaded, then 'Approved')
+        approvalStatus: { 
+            type: String, 
+            enum: ['Pending', 'Approved', 'Rejected'], 
+            default: 'Pending' 
+        }
     },
 
     totalAmount: { type: Number }, // Final Payable

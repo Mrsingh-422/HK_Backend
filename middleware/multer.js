@@ -898,6 +898,22 @@ const insuranceCardUploads = insuranceUpload.fields([
     { name: 'insuranceDocumentBack', maxCount: 1 }
 ]);
 
+// ==========================================
+// 46. HOSPITAL INSURANCE APPROVAL LETTER UPLOAD (TPA Desk)
+// ==========================================
+const insuranceApprovalDir = 'public/uploads/insurance_approvals';
+ensureDir(insuranceApprovalDir);
+
+const insuranceApprovalUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, insuranceApprovalDir),
+        filename: (req, file, cb) => cb(null, `approval-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter, // PDF aur Images dono allow rahenge
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+}).single('approvalLetterPdf'); // 👈 Multipart form key: 'approvalLetterPdf'
+
+
 
 
 module.exports = { 
@@ -947,6 +963,7 @@ module.exports = {
 
     nursingPrescriptionUploads,
     labReportUpload,
-    docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,insuranceCardUploads
+    docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,insuranceCardUploads,
+    insuranceApprovalUpload
 
 };  
