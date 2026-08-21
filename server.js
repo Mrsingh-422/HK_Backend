@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');       // 👈 Add karein
+const axios = require('axios'); // 👈 Add karein
 const dotenv = require('dotenv');
 const os = require('os');
 const morgan = require('morgan');
@@ -157,10 +159,63 @@ app.use(express.urlencoded({ extended: true })); // Form Data (Optional)
 
 // Static folder for uploads
 // app.use('/uploads', express.static('public/uploads'));
+// =========================================================================
+// 🚀 AUTO-DOWNLOAD & SYNC FROM RENDER TO LOCAL DISK
+// =========================================================================
+const LIVE_RENDER_URL = "https://hk-backend-9jm8.onrender.com"; // 🚨 Apna Render Backend URL yahan dalein
 
-// 🚨 static foleder paath Isse REPLACE karein:
+const autoSyncFromRender = async (req, res, next) => {
+    const localFilePath = path.join(__dirname, 'public/uploads', req.url);
+    const folderDir = path.dirname(localFilePath);
+
+    // 1. Agar laptop ke folder me file pehle se maujood hai toh wahi se serve karein
+    if (fs.existsSync(localFilePath) && fs.lstatSync(localFilePath).isFile()) {
+        return res.sendFile(localFilePath);
+    }
+
+    // 2. Agar laptop me nahi mili (Render par upload hui thi), toh Render se download karke local disk me save karein
+    try {
+        const remoteUrl = `${LIVE_RENDER_URL}/public/uploads${req.url}`;
+        
+        const response = await axios({
+            method: 'GET',
+            url: remoteUrl,
+            responseType: 'stream'
+        });
+
+        // Local directory create karein agar nahi bani hai
+        if (!fs.existsSync(folderDir)) {
+            fs.mkdirSync(folderDir, { recursive: true });
+        }
+
+        // File ko laptop ke disk par write (save) karein
+        const writer = fs.createWriteStream(localFilePath);
+        response.data.pipe(writer);
+
+        writer.on('finish', () => {
+            console.log(`\x1b[32m[Auto-Sync Success]: Downloaded & permanently saved to local folder: ${req.url}\x1b[0m`);
+            return res.sendFile(localFilePath);
+        });
+
+        writer.on('error', (err) => {
+            console.error("Local file write error:", err);
+            next();
+        });
+
+    } catch (error) {
+        // Agar file Render par bhi nahi mili toh next (404)
+        next();
+    }
+};
+
+// Static & Auto-sync Routes
+app.use('/public/uploads', autoSyncFromRender);
+app.use('/uploads', autoSyncFromRender);
 app.use('/public', express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+// =========================================================================
+
+
+
 
 app.use((err, req, res, next) => {
     const multer = require('multer');

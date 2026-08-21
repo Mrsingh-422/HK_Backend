@@ -39,6 +39,10 @@ const pharmacySchema = new mongoose.Schema({
         drugLicenses: [{ type: String }],        // Figma: Drug License
         otherCertificates: [{ type: String }],   // Figma: Other Certificate (Optional)
 
+        cinNumber: { type: String, default: "" }, // 👈 Compulsory (e.g. "U74999DL2026PTC123456")
+        gstNumber: { type: String, default: "" }, // 👈 Either GSTIN
+        tanNumber: { type: String, default: "" }, // 👈 OR (TAN + PAN)
+        panNumber: { type: String, default: "" }, // 👈 OR (TAN + PAN)
         drugLicenseNumber: { type: String, default: "" }, // 👈 E.g., "27192-195" ya "DRUG/19-20/32879-80"
         foodLicenseNumber: { type: String, default: "" }, // 👈 E.g., "Food Lic No.: 122200260001" (FSSAI)
         signatureImage: { type: String, default: null },   // 👈 Authorised Signatory Stamp/Signature photo
@@ -46,7 +50,6 @@ const pharmacySchema = new mongoose.Schema({
 
         documentState: { type: String },          // Figma: State
         issuingAuthority: { type: String },       // Figma: Issuing Authority Name
-        gstNumber: { type: String },              // Figma: GST Certificate Number
         drugLicenseType: {                        // Figma: Drug License Type
             type: String,
             enum: ['Retail', 'Wholesale', 'Restricted', 'Blood Bank', 'None'],

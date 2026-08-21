@@ -36,9 +36,7 @@ const numberToWordsIndian = (num) => {
 };
 
 
-// ==========================================
 // NEW: GET PHARMACY DASHBOARD STATS
-// ==========================================
 // Endpoint: GET /provider/pharmacy/orders/dashboard-stats
 const getPharmacyDashboardStats = async (req, res) => {
     try {
@@ -103,9 +101,6 @@ const getPharmacyDashboardStats = async (req, res) => {
 
 
 
-// 1. DASHBOARD LISTING (Updated with Priority/Rapid Delivery Filter)
-// Endpoint: GET /provider/pharmacy/orders/list
-// 1. DASHBOARD LISTING (Enriched with Dynamic BOGO/Combo verification markers)
 // Endpoint: GET /provider/pharmacy/orders/list
 const getPharmacyOrders = async (req, res) => {
     try {
@@ -125,9 +120,10 @@ const getPharmacyOrders = async (req, res) => {
             .select('-deliveryOTP -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
             .populate('userId', 'name phone')
             .populate('driverId', 'name phone profilePic vehicleNumber')
+            // 🚨 4. POPULATE PHARMACY CORPORATE & TAX CREDENTIALS IN DASHBOARD
             .populate({
                 path: 'pharmacyId',
-                select: 'name documents.gstNumber documents.drugLicenseNumber documents.signatureImage'
+                select: 'name documents.cinNumber documents.gstNumber documents.tanNumber documents.panNumber documents.drugLicenseNumber documents.signatureImage'
             })
             .populate({
                 path: 'items.comboOfferId',
@@ -339,7 +335,7 @@ const updateOrderStatus = async (req, res) => {
 
 
 
-
+////////////////////////////////////////////
 ////// ai prescription requests ////////////
 ////////////////////////////////////////////
 
@@ -559,10 +555,13 @@ const rejectPrescriptionRequest = async (req, res) => {
     }
 };
 
+
+
+
+
 // =========================================================================
 // 🚀 NEW: TRACK ALL PHARMACY DRIVERS & THEIR LIVE ACTIVE ORDERS
 // Endpoint: GET /provider/pharmacy/orders/track-drivers
-// =========================================================================
 const trackPharmacyDrivers = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
@@ -608,7 +607,6 @@ const trackPharmacyDrivers = async (req, res) => {
 // =========================================================================
 // 🚀 NEW: GET PHARMACY ORDER INVOICE DETAILS (For Printing / PDF Generation)
 // Endpoint: GET /provider/pharmacy/orders/invoice/:orderId
-// =========================================================================
 const getPharmacyOrderInvoiceDetails = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -619,9 +617,10 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
             pharmacyId
         })
         .select('-deliveryOTP -rejectedBy -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -__v')
+        // 🚨 3. FULL POPULATE: CIN, GST, TAN, PAN, DL, FSSAI, Signature for Vendor Receipt
         .populate({
             path: 'pharmacyId',
-            select: 'name address city state country phone email documents.gstNumber documents.drugLicenseNumber documents.foodLicenseNumber documents.signatureImage documents.drugLicenses documents.drugLicenseType'
+            select: 'name address city state country phone email documents.cinNumber documents.gstNumber documents.tanNumber documents.panNumber documents.drugLicenseNumber documents.foodLicenseNumber documents.signatureImage documents.drugLicenses documents.drugLicenseType'
         })
         .populate('userId', 'name phone')
         .lean();
@@ -630,7 +629,7 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Order details not found." });
         }
 
-        // 🚨 Extract 2-digit GST State Code (e.g. "08" from "08ADKPA...")
+        // Extract 2-digit State Code from GSTIN
         const gst = order.pharmacyId?.documents?.gstNumber || "";
         if (order.pharmacyId) {
             order.pharmacyId.stateCode = gst.length >= 2 ? gst.substring(0, 2) : "N/A";
@@ -694,7 +693,7 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
                 expiry_date: expDate,
                 packaging: packin,
                 hsn_number: hsn,
-                discount: 0.00, // 👈 Explicit Item Discount column
+                discount: 0.00,
                 taxableAmount: taxableAmt,
                 cgstPercent: cgstP,
                 sgstPercent: sgstP,

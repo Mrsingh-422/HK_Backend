@@ -281,11 +281,30 @@ const uploadPharmacyDocs = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
         const { 
-            documentState, issuingAuthority, gstNumber, drugLicenseType, about, 
-            isHomeDeliveryAvailable, is24x7,
-            drugLicenseNumber, foodLicenseNumber // 👈 Added
+            documentState, issuingAuthority, gstNumber, tanNumber, panNumber, cinNumber,
+            drugLicenseType, about, isHomeDeliveryAvailable, is24x7,
+            drugLicenseNumber, foodLicenseNumber 
         } = req.body;
         const files = req.files;
+
+        // 🚨 1. VALIDATION: CIN Number is strictly COMPULSORY
+        if (!cinNumber || cinNumber.trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "CIN Number (Corporate Identity Number) is compulsory." 
+            });
+        }
+
+        // 🚨 2. VALIDATION: Either GST Number OR (TAN + PAN) is COMPULSORY
+        const hasGst = gstNumber && gstNumber.trim() !== "";
+        const hasTanAndPan = (tanNumber && tanNumber.trim() !== "") && (panNumber && panNumber.trim() !== "");
+
+        if (!hasGst && !hasTanAndPan) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Compliance Error: You must provide either a valid 'GST Number' OR both 'TAN Number and PAN Number'." 
+            });
+        }
 
         const existingPharmacy = await Pharmacy.findById(pharmacyId);
         if (!existingPharmacy) {
@@ -295,11 +314,14 @@ const uploadPharmacyDocs = async (req, res) => {
         const documentsObj = {
             documentState,
             issuingAuthority,
-            gstNumber,
+            cinNumber: cinNumber.trim().toUpperCase(),
+            gstNumber: hasGst ? gstNumber.trim().toUpperCase() : "",
+            tanNumber: hasTanAndPan ? tanNumber.trim().toUpperCase() : "",
+            panNumber: hasTanAndPan ? panNumber.trim().toUpperCase() : "",
             drugLicenseType,
-            drugLicenseNumber: drugLicenseNumber ? drugLicenseNumber.trim() : "", // 👈 Added
-            foodLicenseNumber: foodLicenseNumber ? foodLicenseNumber.trim() : "", // 👈 Added
-            signatureImage: files?.signatureImage ? files.signatureImage[0].path.replace(/\\/g, "/") : null, // 👈 Added
+            drugLicenseNumber: drugLicenseNumber ? drugLicenseNumber.trim() : "",
+            foodLicenseNumber: foodLicenseNumber ? foodLicenseNumber.trim() : "",
+            signatureImage: files?.signatureImage ? files.signatureImage[0].path.replace(/\\/g, "/") : null,
             pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => f.path.replace(/\\/g, "/")) : [],
             pharmacyCertificates: files?.pharmacyCertificates ? files.pharmacyCertificates.map(f => f.path.replace(/\\/g, "/")) : [],
             pharmacyLicenses: files?.pharmacyLicenses ? files.pharmacyLicenses.map(f => f.path.replace(/\\/g, "/")) : [],
@@ -308,7 +330,7 @@ const uploadPharmacyDocs = async (req, res) => {
             otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path.replace(/\\/g, "/")) : []
         };
 
-        // Old files cleanup
+        // File cleanup
         if (files?.profileImage && existingPharmacy.profileImage) {
             deleteFile(existingPharmacy.profileImage);
         }

@@ -2057,9 +2057,10 @@ const getOrderHistory = async (req, res) => {
         
         const orders = await PharmacyBooking.find({ userId })
             .select('-paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
+            // 🚨 2. POPULATE PHARMACY COMPLIANCE DETAILS IN HISTORY
             .populate({
                 path: 'pharmacyId',
-                select: 'name profileImage city state documents.gstNumber documents.drugLicenseNumber'
+                select: 'name profileImage city state documents.cinNumber documents.gstNumber documents.drugLicenseNumber'
             })
             .populate('driverId', 'name phone vehicleNumber profilePic')
             .sort({ createdAt: -1 })
@@ -2093,10 +2094,10 @@ const trackOrder = async (req, res) => {
             userId
         })
         .select('-paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
+        // 🚨 1. FULL COMPLIANCE POPULATE: CIN, GST, TAN, PAN, DL, FSSAI, Signature
         .populate({
             path: 'pharmacyId',
-            // 🚨 UPDATED POPULATE: Added drugLicenseNumber, foodLicenseNumber, signatureImage
-            select: 'name address city state country phone email documents.gstNumber documents.drugLicenseNumber documents.foodLicenseNumber documents.signatureImage documents.drugLicenses documents.drugLicenseType'
+            select: 'name address city state country phone email documents.cinNumber documents.gstNumber documents.tanNumber documents.panNumber documents.drugLicenseNumber documents.foodLicenseNumber documents.signatureImage'
         })
         .populate('driverId', 'name phone vehicleNumber profilePic')
         .lean();
@@ -2105,11 +2106,18 @@ const trackOrder = async (req, res) => {
             return res.status(404).json({ success: false, message: "Order not found." });
         }
 
+        // Extract 2-digit State Code from GSTIN if available
+        const gst = order.pharmacyId?.documents?.gstNumber || "";
+        if (order.pharmacyId) {
+            order.pharmacyId.stateCode = gst.length >= 2 ? gst.substring(0, 2) : "N/A";
+        }
+
         let calculatedTaxableTotal = 0;
         let calculatedCgstTotal = 0;
         let calculatedSgstTotal = 0;
         const gstSlabBreakdown = {};
 
+        // Enrich items with Batch, Expiry, Packaging & GST splits
         const enrichedItems = await Promise.all(order.items.map(async (item) => {
             const itemQty = Number(item.quantity || 1);
             const itemTotalPrice = Number(item.price || 0) * itemQty;
@@ -2163,6 +2171,7 @@ const trackOrder = async (req, res) => {
                 expiry_date: expDate,
                 packaging: packin,
                 hsn_number: hsn,
+                discount: 0.00,
                 taxableAmount: taxableAmt,
                 cgstPercent: cgstP,
                 sgstPercent: sgstP,
@@ -2191,6 +2200,7 @@ const trackOrder = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 const getLatestAddedMedicines = async (req, res) => {
