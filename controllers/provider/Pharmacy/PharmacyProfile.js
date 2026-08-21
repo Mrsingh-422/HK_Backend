@@ -31,7 +31,14 @@ const updatePharmacyProfile = async (req, res) => {
             isHomeDeliveryAvailable, isRapidServiceAvailable, 
             isInsuranceAccepted, acceptedInsurances, is24x7,
             country, state, city, lat, lng,
-            alternatePhone
+            alternatePhone,
+            
+            // 🚨 NEW LICENSE & REGISTRATION FIELDS
+            drugLicenseNumber,
+            foodLicenseNumber,
+            gstNumber,
+            issuingAuthority,
+            drugLicenseType
         } = req.body;
  
         let updateData = {
@@ -40,7 +47,7 @@ const updatePharmacyProfile = async (req, res) => {
             isRapidServiceAvailable: isRapidServiceAvailable === 'true',
             isInsuranceAccepted: isInsuranceAccepted === 'true',
             is24x7: is24x7 === 'true',
-            location: { lat, lng },
+            location: { lat: Number(lat || 0), lng: Number(lng || 0) },
             alternatePhone
         };
  
@@ -49,9 +56,29 @@ const updatePharmacyProfile = async (req, res) => {
                 ? JSON.parse(acceptedInsurances) 
                 : acceptedInsurances;
         }
+
+        // 🚨 TEXT LICENSE NUMBERS MAPPING (Using dot-notation to avoid erasing existing document arrays)
+        if (drugLicenseNumber !== undefined) updateData['documents.drugLicenseNumber'] = drugLicenseNumber.trim();
+        if (foodLicenseNumber !== undefined) updateData['documents.foodLicenseNumber'] = foodLicenseNumber.trim();
+        if (gstNumber !== undefined) updateData['documents.gstNumber'] = gstNumber.trim();
+        if (issuingAuthority !== undefined) updateData['documents.issuingAuthority'] = issuingAuthority.trim();
+        if (drugLicenseType !== undefined) updateData['documents.drugLicenseType'] = drugLicenseType;
  
-        if (req.files && req.files.profileImage) {
-            updateData.profileImage = req.files.profileImage[0].path;
+        // 🚨 FILE ATTACHMENTS (Profile Image & Signature/Stamp)
+        if (req.files) {
+            if (req.files.profileImage && req.files.profileImage[0]) {
+                updateData.profileImage = req.files.profileImage[0].path.replace(/\\/g, "/");
+            }
+            if (req.files.signatureImage && req.files.signatureImage[0]) {
+                // Authorised Signatory Stamp/Signature
+                updateData['documents.signatureImage'] = req.files.signatureImage[0].path.replace(/\\/g, "/");
+            }
+            if (req.files.drugLicenses && req.files.drugLicenses.length > 0) {
+                updateData['documents.drugLicenses'] = req.files.drugLicenses.map(f => f.path.replace(/\\/g, "/"));
+            }
+            if (req.files.pharmacyImages && req.files.pharmacyImages.length > 0) {
+                updateData['documents.pharmacyImages'] = req.files.pharmacyImages.map(f => f.path.replace(/\\/g, "/"));
+            }
         }
 
         // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
@@ -60,9 +87,13 @@ const updatePharmacyProfile = async (req, res) => {
             if (updateData.profileImage && existingPending.updatedFields?.profileImage) {
                 deleteFile(existingPending.updatedFields.profileImage);
             }
+            if (updateData['documents.signatureImage'] && existingPending.updatedFields?.['documents.signatureImage']) {
+                deleteFile(existingPending.updatedFields['documents.signatureImage']);
+            }
             await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
  
+        // Create new pending approval request for Admin
         const request = await ProfileUpdateRequest.create({
             vendorId: pharmacyId,
             vendorModel: 'Pharmacy',
@@ -72,7 +103,7 @@ const updatePharmacyProfile = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            message: "Profile and License changes submitted to Admin for review. It will update on your bills once approved.", 
             data: request 
         });
 

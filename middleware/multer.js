@@ -93,6 +93,7 @@ const pharmacyDocUploads = multer({
     limits: { fileSize: 5 * 1024 * 1024 }
 }).fields([
     { name: 'profileImage', maxCount: 1 },
+    { name: 'signatureImage', maxCount: 1 }, 
     { name: 'pharmacyImages', maxCount: 10 },       // Matches Figma
     { name: 'pharmacyCertificates', maxCount: 10 }, // Matches Figma
     { name: 'pharmacyLicenses', maxCount: 10 },     // Matches Figma

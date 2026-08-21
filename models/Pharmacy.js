@@ -39,6 +39,11 @@ const pharmacySchema = new mongoose.Schema({
         drugLicenses: [{ type: String }],        // Figma: Drug License
         otherCertificates: [{ type: String }],   // Figma: Other Certificate (Optional)
 
+        drugLicenseNumber: { type: String, default: "" }, // 👈 E.g., "27192-195" ya "DRUG/19-20/32879-80"
+        foodLicenseNumber: { type: String, default: "" }, // 👈 E.g., "Food Lic No.: 122200260001" (FSSAI)
+        signatureImage: { type: String, default: null },   // 👈 Authorised Signatory Stamp/Signature photo
+
+
         documentState: { type: String },          // Figma: State
         issuingAuthority: { type: String },       // Figma: Issuing Authority Name
         gstNumber: { type: String },              // Figma: GST Certificate Number
@@ -47,8 +52,6 @@ const pharmacySchema = new mongoose.Schema({
             enum: ['Retail', 'Wholesale', 'Restricted', 'Blood Bank', 'None'],
             default: 'Retail'
         },
-        signatureImage: { type: String, default: null } // 👈 Chemist signature / stamp photo
-
     },
 
     alternatePhone: { type: String, default: null },

@@ -122,9 +122,13 @@ const getPharmacyOrders = async (req, res) => {
         }
 
         const orders = await PharmacyBooking.find(query)
-            .select('-deliveryOTP -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v') // 👈 Sanitized for Vendor
+            .select('-deliveryOTP -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
             .populate('userId', 'name phone')
             .populate('driverId', 'name phone profilePic vehicleNumber')
+            .populate({
+                path: 'pharmacyId',
+                select: 'name documents.gstNumber documents.drugLicenseNumber documents.signatureImage'
+            })
             .populate({
                 path: 'items.comboOfferId',
                 select: 'campaignDisplayName buyQty getFreeQty projectedPromoMargin'
@@ -207,10 +211,11 @@ const triggerAutoAssignment = async (orderId) => {
         order.assignedAt = new Date();
         await order.save();
 
-        // 2 Minute Timer: Agar driver respond nahi karta toh next ko bhejo
+        // 2 Minute Timer
         setTimeout(async () => {
             const checkOrder = await PharmacyBooking.findById(orderId);
-            if (checkOrder.deliveryStatus === 'Assigned') {
+            // 🚨 Check lagaya gaya hai ki agar driver ne abhi tak accept nahi kiya aur reassign nahi hua
+            if (checkOrder && checkOrder.deliveryStatus === 'Assigned' && String(checkOrder.driverId) === String(nextDriver._id)) {
                 checkOrder.rejectedBy.push(checkOrder.driverId);
                 checkOrder.driverId = null;
                 checkOrder.deliveryStatus = 'PendingAssignment';
@@ -616,13 +621,19 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
         .select('-deliveryOTP -rejectedBy -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -__v')
         .populate({
             path: 'pharmacyId',
-            select: 'name address city state country phone email documents.gstNumber documents.drugLicenses documents.drugLicenseType'
+            select: 'name address city state country phone email documents.gstNumber documents.drugLicenseNumber documents.foodLicenseNumber documents.signatureImage documents.drugLicenses documents.drugLicenseType'
         })
         .populate('userId', 'name phone')
         .lean();
 
         if (!order) {
             return res.status(404).json({ success: false, message: "Order details not found." });
+        }
+
+        // 🚨 Extract 2-digit GST State Code (e.g. "08" from "08ADKPA...")
+        const gst = order.pharmacyId?.documents?.gstNumber || "";
+        if (order.pharmacyId) {
+            order.pharmacyId.stateCode = gst.length >= 2 ? gst.substring(0, 2) : "N/A";
         }
 
         let calculatedTaxableTotal = 0;
@@ -683,6 +694,7 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
                 expiry_date: expDate,
                 packaging: packin,
                 hsn_number: hsn,
+                discount: 0.00, // 👈 Explicit Item Discount column
                 taxableAmount: taxableAmt,
                 cgstPercent: cgstP,
                 sgstPercent: sgstP,
@@ -700,7 +712,6 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
             order.billSummary.sgstTotal = Number(calculatedSgstTotal.toFixed(2));
         }
 
-        // Amount in words & Slab grid
         order.billSummary.amountInWords = numberToWordsIndian(order.billSummary.totalAmount);
         order.billSummary.gstClassBreakdown = Object.values(gstSlabBreakdown);
 
@@ -714,6 +725,7 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 module.exports = { getPharmacyDashboardStats, getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,

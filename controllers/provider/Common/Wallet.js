@@ -32,7 +32,7 @@ const calculateProviderBalances = async (vendorId, role) => {
         BookingModel = PharmacyBooking; // 👈 Resolved to correct model
         matchQuery = { pharmacyId: new mongoose.Types.ObjectId(vendorId) };
         sumField = "$billSummary.totalAmount"; // 👈 Nested inside billSummary
-        completedStatuses = ['Placed', 'Packed', 'Shipped', 'Delivered', 'Completed'];
+        completedStatuses = ['Delivered', 'Completed'];
     } 
     else if (role === 'Nurse') {
         BookingModel = NurseBooking; // 👈 Resolved to correct model

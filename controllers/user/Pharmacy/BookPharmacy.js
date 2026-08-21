@@ -2053,12 +2053,14 @@ const getOrderHistory = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = 20;
         const skip = (page - 1) * limit;
-
         const userId = req.user.id;
         
         const orders = await PharmacyBooking.find({ userId })
             .select('-paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
-            .populate('pharmacyId', 'name profileImage city documents.gstNumber')
+            .populate({
+                path: 'pharmacyId',
+                select: 'name profileImage city state documents.gstNumber documents.drugLicenseNumber'
+            })
             .populate('driverId', 'name phone vehicleNumber profilePic')
             .sort({ createdAt: -1 })
             .skip(skip)
@@ -2093,7 +2095,8 @@ const trackOrder = async (req, res) => {
         .select('-paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
         .populate({
             path: 'pharmacyId',
-            select: 'name address city state country phone email documents.gstNumber documents.drugLicenses documents.drugLicenseType'
+            // 🚨 UPDATED POPULATE: Added drugLicenseNumber, foodLicenseNumber, signatureImage
+            select: 'name address city state country phone email documents.gstNumber documents.drugLicenseNumber documents.foodLicenseNumber documents.signatureImage documents.drugLicenses documents.drugLicenseType'
         })
         .populate('driverId', 'name phone vehicleNumber profilePic')
         .lean();
@@ -2105,17 +2108,13 @@ const trackOrder = async (req, res) => {
         let calculatedTaxableTotal = 0;
         let calculatedCgstTotal = 0;
         let calculatedSgstTotal = 0;
-
-        // GST Class Breakdown Map (0%, 5%, 12%, 18%, 28%)
         const gstSlabBreakdown = {};
 
-        // 🚨 Enrich items with Batch, Expiry, Packaging & Taxes
         const enrichedItems = await Promise.all(order.items.map(async (item) => {
             const itemQty = Number(item.quantity || 1);
             const itemTotalPrice = Number(item.price || 0) * itemQty;
             const hsn = item.hsn_number || "30049099";
 
-            // Active batch lookup for batch_number, packaging and expiry
             let batchNo = item.batch_number || "N/A";
             let expDate = item.expiry_date || "N/A";
             let packin = item.packaging || "10 TAB";
@@ -2150,7 +2149,6 @@ const trackOrder = async (req, res) => {
             calculatedCgstTotal += cgstAmt;
             calculatedSgstTotal += sgstAmt;
 
-            // Slab aggregation for bottom-left invoice table
             const slabKey = `${totalGstP}%`;
             if (!gstSlabBreakdown[slabKey]) {
                 gstSlabBreakdown[slabKey] = { gstClass: slabKey, taxable: 0, cgst: 0, sgst: 0 };
@@ -2182,7 +2180,6 @@ const trackOrder = async (req, res) => {
             order.billSummary.sgstTotal = Number(calculatedSgstTotal.toFixed(2));
         }
 
-        // 🚨 ADDED: Injected Invoice Specials (Amount in words & GST Class Grid)
         order.billSummary.amountInWords = numberToWordsIndian(order.billSummary.totalAmount);
         order.billSummary.gstClassBreakdown = Object.values(gstSlabBreakdown);
 

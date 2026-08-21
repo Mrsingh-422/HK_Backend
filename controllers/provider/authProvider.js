@@ -280,7 +280,11 @@ const uploadLabDocs = async (req, res) => {
 const uploadPharmacyDocs = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
-        const { documentState, issuingAuthority, gstNumber, drugLicenseType, about, isHomeDeliveryAvailable, is24x7 } = req.body;
+        const { 
+            documentState, issuingAuthority, gstNumber, drugLicenseType, about, 
+            isHomeDeliveryAvailable, is24x7,
+            drugLicenseNumber, foodLicenseNumber // 👈 Added
+        } = req.body;
         const files = req.files;
 
         const existingPharmacy = await Pharmacy.findById(pharmacyId);
@@ -293,49 +297,36 @@ const uploadPharmacyDocs = async (req, res) => {
             issuingAuthority,
             gstNumber,
             drugLicenseType,
-            pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => f.path) : [],
-            pharmacyCertificates: files?.pharmacyCertificates ? files.pharmacyCertificates.map(f => f.path) : [],
-            pharmacyLicenses: files?.pharmacyLicenses ? files.pharmacyLicenses.map(f => f.path) : [],
-            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path) : [],
-            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => f.path) : [],
-            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
+            drugLicenseNumber: drugLicenseNumber ? drugLicenseNumber.trim() : "", // 👈 Added
+            foodLicenseNumber: foodLicenseNumber ? foodLicenseNumber.trim() : "", // 👈 Added
+            signatureImage: files?.signatureImage ? files.signatureImage[0].path.replace(/\\/g, "/") : null, // 👈 Added
+            pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => f.path.replace(/\\/g, "/")) : [],
+            pharmacyCertificates: files?.pharmacyCertificates ? files.pharmacyCertificates.map(f => f.path.replace(/\\/g, "/")) : [],
+            pharmacyLicenses: files?.pharmacyLicenses ? files.pharmacyLicenses.map(f => f.path.replace(/\\/g, "/")) : [],
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path.replace(/\\/g, "/")) : [],
+            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => f.path.replace(/\\/g, "/")) : [],
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path.replace(/\\/g, "/")) : []
         };
 
-        // ==========================================
-        // 💾 DELETE OLD FILES (PHARMACY CLEANUP)
-        // ==========================================
+        // Old files cleanup
         if (files?.profileImage && existingPharmacy.profileImage) {
             deleteFile(existingPharmacy.profileImage);
         }
-
-        if (existingPharmacy.documents) {
-            const documentFields = [
-                'pharmacyImages', 'pharmacyCertificates', 'pharmacyLicenses', 
-                'gstCertificates', 'drugLicenses', 'otherCertificates'
-            ];
-
-            documentFields.forEach(field => {
-                const oldFileList = existingPharmacy.documents[field];
-                if (Array.isArray(oldFileList)) {
-                    oldFileList.forEach(filePath => {
-                        if (filePath) deleteFile(filePath);
-                    });
-                }
-            });
+        if (files?.signatureImage && existingPharmacy.documents?.signatureImage) {
+            deleteFile(existingPharmacy.documents.signatureImage);
         }
-        // ==========================================
 
         const updatedPharmacy = await Pharmacy.findByIdAndUpdate(
             pharmacyId, 
             { 
                 $set: { 
                     about,
-                    isHomeDeliveryAvailable,
-                    is24x7,
+                    isHomeDeliveryAvailable: isHomeDeliveryAvailable === 'true',
+                    is24x7: is24x7 === 'true',
                     profileStatus: 'Pending',
                     rejectionReason: null,
                     documents: documentsObj,
-                    ...(files?.profileImage && { profileImage: files.profileImage[0].path })
+                    ...(files?.profileImage && { profileImage: files.profileImage[0].path.replace(/\\/g, "/") })
                 } 
             }, 
             { new: true, runValidators: true }
