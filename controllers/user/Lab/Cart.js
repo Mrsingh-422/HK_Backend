@@ -254,6 +254,7 @@ const getMyCart = async (req, res) => {
             .populate('labCart.labId', 'name city address profileImage')
             .populate('pharmacyCart.pharmacyId', 'name address rating city')
             .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp prescription_required')
+            .populate('pharmacyCart.items.comboOfferId');
 
         if (!cart) {
             return res.json({ 
@@ -268,37 +269,51 @@ const getMyCart = async (req, res) => {
             });
         }
 
-        // 1. Totals calculate karein (Price * Quantity)
         let labTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-        let medTotal = cart.pharmacyCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+        
+        // 🚨 DYNAMIC PHARMACY CART TOTAL (Subtracts free BOGO units from cart total)
+        let medTotal = 0;
+        const today = new Date();
 
-        // 2. Total Items Count calculate karein (Sum of all quantities)
-        let labItemCount = cart.labCart.items.reduce((acc, i) => acc + i.quantity, 0);
-        let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
-        let totalItems = labItemCount + pharmacyItemCount;
-
-        // 🚨 3. DYNAMIC BATCH MRP OVERWRITE FOR PHARMACY CART ITEMS [cite: 1.1.2]
-        // Loop through pharmacy cart items to fetch and overwrite with the earliest expiring batch MRP [cite: 1.1.2]
         const mappedPharmacyItems = await Promise.all(cart.pharmacyCart.items.map(async (item) => {
             const itemObj = item.toObject();
+            const orderedQty = Number(itemObj.quantity || 1);
+            const unitPrice = Number(itemObj.price || 0);
+
             if (itemObj.medicineId && cart.pharmacyCart.pharmacyId) {
-                // Fetch the earliest expiring batch for this medicine [cite: 1.1.2]
                 const activeBatch = await MedicineInventory.findOne({
                     pharmacyId: cart.pharmacyCart.pharmacyId,
                     medicineId: itemObj.medicineId._id,
                     is_available: true,
                     stock_quantity: { $gt: 0 }
-                }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
+                }).sort({ expiry_date: 1 });
 
                 if (activeBatch && activeBatch.mrp !== undefined) {
-                    // Overwrite the populated master mrp with the legally correct batch MRP [cite: 1.1.2]
                     itemObj.medicineId.mrp = activeBatch.mrp.toString();
                 }
             }
+
+            // BOGO Promo Calculation
+            if (itemObj.isComboApplied === true && itemObj.comboOfferId) {
+                const X = itemObj.comboOfferId.buyQty || 2;
+                const Y = itemObj.comboOfferId.getFreeQty || 1;
+                const bundleSize = X + Y;
+
+                const fullBundles = Math.floor(orderedQty / bundleSize);
+                const remainingUnits = orderedQty % bundleSize;
+                const chargeableQty = (fullBundles * X) + Math.min(remainingUnits, X);
+                medTotal += (unitPrice * chargeableQty);
+            } else {
+                medTotal += (unitPrice * orderedQty);
+            }
+
             return itemObj;
         }));
 
-        // 4. DYNAMIC PREPARATION GUIDE & MAIN CATEGORY INJECTOR FOR LAB ITEMS [1]
+        let labItemCount = cart.labCart.items.reduce((acc, i) => acc + i.quantity, 0);
+        let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
+        let totalItems = labItemCount + pharmacyItemCount;
+
         const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
             let precaution = "No special preparation required."; 
             let itemCategory = "Pathology"; 
@@ -331,7 +346,6 @@ const getMyCart = async (req, res) => {
             };
         }));
 
-        // 5. Construct response ensuring NO OTHER KEY is modified [1]
         res.json({ 
             success: true, 
             data: { 
@@ -342,10 +356,10 @@ const getMyCart = async (req, res) => {
                 },
                 pharmacyCart: {
                     ...cart.pharmacyCart.toObject(),
-                    items: mappedPharmacyItems // Replaced with updated dynamic batch MRP items [cite: 1.1.2]
+                    items: mappedPharmacyItems
                 },
-                labCartTotal: labTotal, 
-                pharmacyCartTotal: medTotal,
+                labCartTotal: Math.round(labTotal), 
+                pharmacyCartTotal: Math.round(medTotal),
                 totalItems: totalItems 
             } 
         });
@@ -353,6 +367,7 @@ const getMyCart = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
 
 // 3. REMOVE ITEM / CLEAR LAB CART
 // endpoint: /user/cart/lab/clear
@@ -695,29 +710,47 @@ const removePharmacyItem = async (req, res) => {
 
 
 const checkBetterOptions = async (req, res) => {
-    const { medicineId, currentPrice } = req.body;
-    
-    const currentMed = await Medicine.findById(medicineId);
-    
-    // Check if any other medicine with same salt has lower vendor_price
-    const cheaperOption = await MedicineInventory.find({ is_available: true })
-        .populate({
-            path: 'medicineId',
-            match: { salt_composition: currentMed.salt_composition, _id: { $ne: medicineId } }
-        })
-        .sort({ vendor_price: 1 })
-        .limit(1);
+    try {
+        const { medicineId, currentPrice } = req.body;
+        
+        const currentMed = await Medicine.findById(medicineId);
+        if (!currentMed || !currentMed.salt_composition) {
+            return res.json({ betterOptionAvailable: false });
+        }
+        
+        // Find medicines with same salt having lower vendor_price and active stock
+        const sameSaltMeds = await Medicine.find({ 
+            salt_composition: currentMed.salt_composition, 
+            _id: { $ne: medicineId } 
+        }).select('_id');
 
-    if(cheaperOption[0] && cheaperOption[0].vendor_price < currentPrice) {
-        res.json({ 
-            betterOptionAvailable: true, 
-            saveAmount: currentPrice - cheaperOption[0].vendor_price,
-            product: cheaperOption[0] 
-        });
-    } else {
-        res.json({ betterOptionAvailable: false });
+        const sameSaltIds = sameSaltMeds.map(m => m._id);
+
+        const cheaperOption = await MedicineInventory.findOne({ 
+            medicineId: { $in: sameSaltIds },
+            is_available: true,
+            stock_quantity: { $gt: 0 },
+            vendor_price: { $lt: Number(currentPrice) }
+        })
+        .populate('medicineId', 'name image_url packaging mrp')
+        .populate('pharmacyId', 'name city rating')
+        .sort({ vendor_price: 1 })
+        .lean();
+
+        if (cheaperOption && cheaperOption.medicineId) {
+            res.json({ 
+                betterOptionAvailable: true, 
+                saveAmount: Number((currentPrice - cheaperOption.vendor_price).toFixed(2)),
+                product: cheaperOption 
+            });
+        } else {
+            res.json({ betterOptionAvailable: false });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // PUT /user/cart/pharmacy/update-duration
 const updateMedicineDuration = async (req, res) => {

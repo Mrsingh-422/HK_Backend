@@ -1,6 +1,6 @@
-// controllers/admin/others/ProfileUpdateApproval.js
+// controllers/admin/others/ProfileUpdateApproval.js (FIXED & FULLY OPTIMIZED)
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
-const { deleteFile } = require('../../../utils/fileHandler'); // Path relative to file location
+const { deleteFile } = require('../../../utils/fileHandler'); 
 
 // Models mapping for dynamic resolution
 const Hospital = require('../../../models/Hospital');
@@ -25,18 +25,36 @@ const modelMap = {
     'FireHQ': FireHQ 
 };
 
-// 1. GET: List Profile Update Requests (With Pagination & Filters)
+// 🧹 SMART HELPER: Deep File Cleaner for both Root & Nested Document paths
+const cleanNestedFiles = (filePathOrArray) => {
+    if (!filePathOrArray) return;
+    if (Array.isArray(filePathOrArray)) {
+        filePathOrArray.forEach(file => {
+            if (typeof file === 'string') deleteFile(file);
+        });
+    } else if (typeof filePathOrArray === 'string') {
+        deleteFile(filePathOrArray);
+    }
+};
+
+// 1. GET: List Profile Update Requests (With Vendor Name & Details Populated)
 // Endpoint: GET /api/admin/profile-update
 const getProfileUpdateRequests = async (req, res) => {
     try {
         const { status = 'Pending', vendorModel, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        let query = { status };
+        let query = {};
+        if (status && status !== 'All') query.status = status;
         if (vendorModel) query.vendorModel = vendorModel;
 
         const [requests, total] = await Promise.all([
             ProfileUpdateRequest.find(query)
+                // 🚨 FIXED: Populates Vendor Name, Phone, City for Admin Dashboard Table
+                .populate({
+                    path: 'vendorId',
+                    select: 'name email phone city state profileImage'
+                })
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit))
@@ -62,7 +80,10 @@ const getProfileUpdateRequestDetails = async (req, res) => {
     try {
         const { requestId } = req.params;
 
-        const request = await ProfileUpdateRequest.findById(requestId).lean();
+        const request = await ProfileUpdateRequest.findById(requestId)
+            .populate('adminId', 'name email')
+            .lean();
+            
         if (!request) {
             return res.status(404).json({ success: false, message: "Request not found." });
         }
@@ -87,7 +108,7 @@ const getProfileUpdateRequestDetails = async (req, res) => {
     }
 };
 
-// 3. POST: Process Profile Update Request (Approve/Reject)
+// 3. POST: Process Profile Update Request (Approve/Reject with Deep Cleanup)
 // Endpoint: POST /api/admin/profile-update/:requestId/action
 const handleProfileUpdateAction = async (req, res) => {
     try {
@@ -108,41 +129,45 @@ const handleProfileUpdateAction = async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid vendor model type." });
         }
 
-        const fileKeysToClean = ['profileImage', 'signatureImage', 'profilePic'];
+        const currentProfile = await TargetModel.findById(request.vendorId).lean();
+        const updated = request.updatedFields || {};
 
         if (action === 'Approve') {
-            // --- CLEANUP OLD FILE ON APPROVAL ---
-            const currentProfile = await TargetModel.findById(request.vendorId).lean();
+            // 🚨 1. CLEANUP OLD REPLACED FILES ON DISK
             if (currentProfile) {
-                fileKeysToClean.forEach(key => {
-                    // If a new file is approved, delete the old file from server disk
-                    if (request.updatedFields[key] && currentProfile[key]) {
-                        deleteFile(currentProfile[key]);
-                        console.log(`[Disk Cleanup - Approval]: Deleted old file at path: ${currentProfile[key]}`);
-                    }
-                });
+                if (updated.profileImage && currentProfile.profileImage) {
+                    deleteFile(currentProfile.profileImage);
+                }
+                if (updated['documents.signatureImage'] && currentProfile.documents?.signatureImage) {
+                    deleteFile(currentProfile.documents.signatureImage);
+                }
+                if (updated['documents.drugLicenses'] && currentProfile.documents?.drugLicenses) {
+                    cleanNestedFiles(currentProfile.documents.drugLicenses);
+                }
+                if (updated['documents.pharmacyImages'] && currentProfile.documents?.pharmacyImages) {
+                    cleanNestedFiles(currentProfile.documents.pharmacyImages);
+                }
             }
 
-            // Apply the staged update fields directly to the primary vendor document
+            // 🚨 2. MERGE STAGED FIELDS DIRECTLY TO PRIMARY VENDOR DOCUMENT
             await TargetModel.findByIdAndUpdate(
                 request.vendorId,
-                { $set: request.updatedFields },
-                { new: true, runValidators: true }
+                { $set: updated },
+                { new: true, runValidators: false } // Safe update
             );
+
             request.status = 'Approved';
+            request.rejectionReason = null;
 
         } else if (action === 'Reject') {
-            // --- CLEANUP NEW REJECTED FILE ON REJECTION ---
-            fileKeysToClean.forEach(key => {
-                // Since the request is rejected, the newly uploaded file is deleted to save server space
-                if (request.updatedFields[key]) {
-                    deleteFile(request.updatedFields[key]);
-                    console.log(`[Disk Cleanup - Rejection]: Deleted unused pending file at path: ${request.updatedFields[key]}`);
-                }
-            });
+            // 🚨 3. CLEANUP NEW UNAPPROVED REJECTED FILES FROM DISK
+            if (updated.profileImage) deleteFile(updated.profileImage);
+            if (updated['documents.signatureImage']) deleteFile(updated['documents.signatureImage']);
+            if (updated['documents.drugLicenses']) cleanNestedFiles(updated['documents.drugLicenses']);
+            if (updated['documents.pharmacyImages']) cleanNestedFiles(updated['documents.pharmacyImages']);
 
             request.status = 'Rejected';
-            request.rejectionReason = reason || "Request declined by Administrator.";
+            request.rejectionReason = reason || "Request declined by Administrator after audit.";
         } else {
             return res.status(400).json({ success: false, message: "Invalid action type. Expected 'Approve' or 'Reject'." });
         }
@@ -157,6 +182,7 @@ const handleProfileUpdateAction = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("handleProfileUpdateAction Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

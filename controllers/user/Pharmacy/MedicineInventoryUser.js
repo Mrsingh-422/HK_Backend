@@ -1,26 +1,30 @@
+// controllers/user/Pharmacy/MedicineInventoryUser.js
 const MedicineInventory = require('../../../models/MedicineInventory');
 const Medicine = require('../../../models/Medicine');
 const PharmacyComboOffer = require('../../../models/PharmacyComboOffer');
+const mongoose = require('mongoose');
 
+// 🔒 Anti-Crash Regex Sanitizer
+const escapeRegex = (string) => {
+    return string.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+};
+
+// 1. GET MEDICINE INVENTORY OFFERS
 const getMedicineInventory = async (req, res) => {
     try {
         const { medicineId } = req.params;
         
-        // 1. Fetch master medicine baseline data
         const masterData = await Medicine.findById(medicineId).lean();
         if (!masterData) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // 2. Fetch all pharmacies currently selling this medicine with active stock
         const offers = await MedicineInventory.find({ medicineId, is_available: true, stock_quantity: { $gt: 0 } })
             .populate('pharmacyId', 'name address rating location profileImage isHomeDeliveryAvailable is24x7')
             .sort({ vendor_price: 1 })
             .lean();
 
-        // 🚨 OVERWRITE: Sync master data MRP with the cheapest available store batch [cite: 1.1.2]
-        // This keeps the top card MRP synchronized with the active inventory being sold [cite: 1.1.2]
         if (offers.length > 0) {
             const bestOffer = offers[0];
-            masterData.mrp = (bestOffer.mrp || masterData.mrp).toString(); // Convert to string to match master Medicine schema
+            masterData.mrp = (bestOffer.mrp || masterData.mrp).toString();
             masterData.best_price = bestOffer.vendor_price.toString();
             const mrpNum = Number(masterData.mrp || 0);
             if (mrpNum > 0) {
@@ -33,15 +37,15 @@ const getMedicineInventory = async (req, res) => {
             medicine: masterData,
             available_at: offers.map(o => ({
                 ...o,
-                mrp: o.mrp || Number(masterData.mrp || 0) // Overwrite each offer mrp with its own batch mrp safely [cite: 1.1.2]
+                mrp: o.mrp || Number(masterData.mrp || 0)
             }))
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// --- 1. SEARCH MEDICINES (Homepage/List View) ---
-// Isme hum dikhayenge master data + uska sabse sasta wala vendor price
+
+// 2. SEARCH MEDICINES (Anti-Crash Regex Added)
 const searchMedicinesUser = async (req, res) => {
     try {
         const { query, category, page = 1 } = req.body;
@@ -49,111 +53,105 @@ const searchMedicinesUser = async (req, res) => {
         const skip = (page - 1) * limit;
 
         let filter = {};
-        if (query) {
+        if (query && query.trim().length > 0) {
+            const safeRegex = new RegExp(escapeRegex(query.trim()), 'i');
             filter.$or = [
-                { name: { $regex: query, $options: 'i' } },
-                { salt_composition: { $regex: query, $options: 'i' } }
+                { name: safeRegex },
+                { salt_composition: safeRegex }
             ];
         }
-        if (category && category !== 'All') filter.category = category;
+        if (category && category !== 'All') filter.bread_crumb = new RegExp(`^${category}`, 'i');
 
         const medicines = await Medicine.find(filter).skip(skip).limit(limit).lean();
 
-        // Overwrite static values inside loop with real-time minimum stock prices & batch MRP [cite: 1.1.2]
         const dataWithOffers = await Promise.all(medicines.map(async (med) => {
             const bestOffer = await MedicineInventory.findOne({ medicineId: med._id, is_available: true, stock_quantity: { $gt: 0 } })
-                .sort({ vendor_price: 1 }) // sasta vendor pehle [cite: 1.1.2]
+                .sort({ vendor_price: 1 })
                 .populate('pharmacyId', 'name rating');
             
             const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
-            const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(med.mrp || 0); // 👈 Fetch batch MRP [cite: 1.1.2]
+            const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(med.mrp || 0);
 
-            // Dynamic fields overwrites [cite: 1.1.2]
             if (lowestPrice !== null) {
-                med.mrp = batchMrp.toString(); // Overwrite master MRP with batch MRP [cite: 1.1.2]
+                med.mrp = batchMrp.toString();
                 med.best_price = lowestPrice.toString();
-                med.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
+                if (batchMrp > 0) {
+                    med.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
+                }
             }
 
             return {
                 ...med,
                 best_vendor_price: lowestPrice,
-                vendor_id: bestOffer ? bestOffer.pharmacyId._id : null,
-                pharmacy_name: bestOffer ? bestOffer.pharmacyId.name : null,
+                vendor_id: bestOffer ? bestOffer.pharmacyId?._id : null,
+                pharmacy_name: bestOffer ? bestOffer.pharmacyId?.name : null,
                 isAvailable: lowestPrice !== null
             };
         }));
 
         res.json({ success: true, data: dataWithOffers });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
-
-
-// --- 2. MEDICINE DETAILS (Figma Screen: Detailed View) ---
+// 3. MEDICINE FULL DETAILS (Dynamic Alternate Brands Synced)
 const getMedicineFullDetails = async (req, res) => {
     try {
         const { medicineId } = req.params;
         const medicine = await Medicine.findById(medicineId).lean();
-        if (!medicine) return res.status(404).json({ success: false, message: "Not found" });
+        if (!medicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // 🚨 Fetch lowest active vendor price and batch-specific MRP [cite: 1.1.2]
+        // 🚨 Dynamic Alternate Brands
+        if (medicine.salt_composition) {
+            const similarMeds = await Medicine.find({
+                salt_composition: medicine.salt_composition,
+                _id: { $ne: medicine._id }
+            }).select('name manufacturers mrp best_price discont_percent').limit(6).lean();
+
+            if (similarMeds.length > 0) {
+                const formattedAlts = similarMeds.map(med => {
+                    const price = med.best_price || med.mrp || "0";
+                    const discount = med.discont_percent && med.discont_percent !== "0%" 
+                        ? `save ${med.discont_percent}` 
+                        : "same price";
+                    return `${med.name} :: ${med.manufacturers || 'N/A'} :: ${price}/Tablet :: ${discount}`;
+                }).join(' | ');
+
+                medicine.alternate_brand = formattedAlts;
+            }
+        }
+
         const bestOffer = await MedicineInventory.findOne({ medicineId: medicine._id, is_available: true, stock_quantity: { $gt: 0 } })
             .sort({ vendor_price: 1 });
 
         const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
-        const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0); // 👈 Fetch batch MRP [cite: 1.1.2]
+        const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0);
 
-        // Overwrite dynamic properties safely to eliminate static master data leaks [cite: 1.1.2]
         if (lowestPrice !== null) {
-            medicine.mrp = batchMrp.toString(); // Overwrite master MRP with batch MRP [cite: 1.1.2]
+            medicine.mrp = batchMrp.toString();
             medicine.best_price = lowestPrice.toString();
-            medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
+            if (batchMrp > 0) {
+                medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
+            }
         }
 
-        // Fetch substitutes and popular items in parallel
         const substitutes = await Medicine.find({ 
             salt_composition: medicine.salt_composition, 
             _id: { $ne: medicineId } 
         }).limit(3).lean();
 
         const frequentlyBought = await Medicine.find({ 
-            category: medicine.category, 
+            bread_crumb: medicine.bread_crumb, 
             _id: { $ne: medicineId } 
         }).limit(4).lean();
-
-        // Synergize pricing overrides for related items too
-        const [enrichedSubs, enrichedFreq] = await Promise.all([
-            Promise.all(substitutes.map(async (item) => {
-                const subOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
-                const subLowest = subOffer ? subOffer.vendor_price : null;
-                const itemMrp = subOffer ? Number(subOffer.mrp || 0) : Number(item.mrp || 0);
-                if (subLowest !== null) {
-                    item.mrp = itemMrp.toString();
-                    item.best_price = subLowest.toString();
-                    if (itemMrp > 0) item.discont_percent = `${Math.round(((itemMrp - subLowest) / itemMrp) * 100)}%`;
-                }
-                return item;
-            })),
-            Promise.all(frequentlyBought.map(async (item) => {
-                const freqOffer = await MedicineInventory.findOne({ medicineId: item._id, is_available: true, stock_quantity: { $gt: 0 } }).sort({ vendor_price: 1 });
-                const freqLowest = freqOffer ? freqOffer.vendor_price : null;
-                const itemMrp = freqOffer ? Number(freqOffer.mrp || 0) : Number(item.mrp || 0);
-                if (freqLowest !== null) {
-                    item.mrp = itemMrp.toString();
-                    item.best_price = freqLowest.toString();
-                    if (itemMrp > 0) item.discont_percent = `${Math.round(((itemMrp - freqLowest) / itemMrp) * 100)}%`;
-                }
-                return item;
-            }))
-        ]);
 
         res.json({
             success: true,
             data: {
                 details: medicine, 
-                frequentlyBought: enrichedFreq,
-                substitutes: enrichedSubs,
+                frequentlyBought,
+                substitutes,
                 isAvailable: lowestPrice !== null
             }
         });
@@ -162,20 +160,19 @@ const getMedicineFullDetails = async (req, res) => {
     }
 };
 
-// --- 3. COMPARE SELLERS (Figma Screen: Choose Pharmacy) ---
-// --- 2. POPULATE COMBO OFFERS IN SELLERS COMPARISON SCREEN ---
+// 4. GET SELLERS FOR MEDICINE
 const getSellersForMedicine = async (req, res) => {
     try {
         const { medicineId } = req.params;
         const today = new Date();
         
-        const sellers = await MedicineInventory.find({ medicineId, is_available: true })
-            .populate('pharmacyId', 'name address rating profileImage city location')
+        const sellers = await MedicineInventory.find({ medicineId, is_available: true, stock_quantity: { $gt: 0 } })
+            .populate('pharmacyId', 'name address rating profileImage city location isHomeDeliveryAvailable is24x7')
             .sort({ vendor_price: 1 })
             .lean();
 
         const availableInPharmacies = [];
-        const pharmacyMap = new Map(); // Track unique pharmacies & consolidate duplicate batches [1]
+        const pharmacyMap = new Map();
 
         for (let item of sellers) {
             if (!item.pharmacyId) continue;
@@ -183,14 +180,13 @@ const getSellersForMedicine = async (req, res) => {
             const pharmacy = item.pharmacyId;
             const pharmacyIdStr = pharmacy._id.toString();
 
-            // If pharmacy is already processed, keep only the cheapest active batch option [cite: 1.1.2]
             if (pharmacyMap.has(pharmacyIdStr)) {
                 const existingIndex = pharmacyMap.get(pharmacyIdStr);
                 const existingItem = availableInPharmacies[existingIndex];
                 
                 if (item.vendor_price < existingItem.price) {
                     existingItem.price = item.vendor_price;
-                    existingItem.mrp = item.mrp || existingItem.mrp; // Update with cheaper batch MRP
+                    existingItem.mrp = item.mrp || existingItem.mrp;
                     existingItem.inventoryId = item._id;
                     existingItem.stock = item.stock_quantity;
                     existingItem.discount = existingItem.mrp > item.vendor_price 
@@ -216,7 +212,7 @@ const getSellersForMedicine = async (req, res) => {
                     totalReviews: pharmacy.totalReviews,
                     address: `${pharmacy.city}, ${pharmacy.state}`,
                     price: item.vendor_price,
-                    mrp: item.mrp || 0, // Dynamic batch-specific MRP [cite: 1.1.2]
+                    mrp: item.mrp || 0,
                     discount: (item.mrp || 0) > item.vendor_price ? 
                         Math.round((((item.mrp || 0) - item.vendor_price) / (item.mrp || 0)) * 100) : 0,
                     stock: item.stock_quantity,
@@ -242,7 +238,8 @@ const getSellersForMedicine = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
-// --- 1. POPULATE ACTIVE BOGO OFFERS IN STORE'S MEDICINE CATALOGUE ---
+
+// 5. GET PHARMACY SPECIFIC MEDICINES (Salt bug fixed)
 const getPharmacySpecificMedicines = async (req, res) => {
     try {
         const { pharmacyId } = req.params;
@@ -253,36 +250,34 @@ const getPharmacySpecificMedicines = async (req, res) => {
 
         const total = await MedicineInventory.countDocuments({ 
             pharmacyId, 
-            is_available: true 
+            is_available: true,
+            stock_quantity: { $gt: 0 }
         });
 
-        // Fetch active inventory records sorted by earliest expiry date [cite: 1.1.2]
         const inventory = await MedicineInventory.find({ 
             pharmacyId, 
-            is_available: true 
+            is_available: true,
+            stock_quantity: { $gt: 0 }
         })
         .populate({
             path: 'medicineId',
-            select: 'name mrp packaging image_url prescription_required salt'
+            // 🚨 FIXED: Changed 'salt' to 'salt_composition'
+            select: 'name mrp packaging image_url prescription_required salt_composition'
         })
-        .sort({ expiry_date: 1 }) // FEFO sorting dynamically [cite: 1.1.2]
+        .sort({ expiry_date: 1 })
         .skip(skip)
         .limit(limit)
         .lean();
 
         const formattedMedicines = [];
-        const medicineMap = new Map(); // Consolidates multiple batches under a single card to avoid UI clutter [1]
+        const medicineMap = new Map();
 
         for (let item of inventory) {
             const med = item.medicineId;
             if (!med) continue;
 
             const medIdStr = med._id.toString();
-
-            // Keeps only the earliest expiring batch card to avoid UI duplication
-            if (medicineMap.has(medIdStr)) {
-                continue; 
-            }
+            if (medicineMap.has(medIdStr)) continue; 
 
             medicineMap.set(medIdStr, formattedMedicines.length);
 
@@ -298,9 +293,10 @@ const getPharmacySpecificMedicines = async (req, res) => {
                 inventoryId: item._id,
                 medicineId: med._id,
                 name: med.name,
-                salt: med.salt,
+                // 🚨 FIXED: Correctly passes salt_composition as salt
+                salt: med.salt_composition || "N/A",
                 image: med.image_url && med.image_url.length > 0 ? med.image_url[0] : null,
-                mrp: item.mrp || Number(med.mrp || 0), // Dynamic batch-specific MRP [cite: 1.1.2]
+                mrp: item.mrp || Number(med.mrp || 0),
                 vendorPrice: item.vendor_price,
                 discountPercentage: (item.mrp || Number(med.mrp || 0)) > item.vendor_price 
                     ? Math.round((((item.mrp || Number(med.mrp || 0)) - item.vendor_price) / (item.mrp || Number(med.mrp || 0))) * 100) 
@@ -331,9 +327,6 @@ const getPharmacySpecificMedicines = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
-
-
 
 module.exports = {
     getMedicineInventory,
