@@ -7,7 +7,7 @@ const fireCaseSchema = new mongoose.Schema({
         type: String, 
         unique: true, 
         required: true,
-        default: () => `FIRE-${Math.floor(1000 + Math.random() * 9000)}` // Auto-generate like FIRE-1234
+        default: () => `FIRE-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}` // Auto-generate like FIRE-1234
     },
 
     // 2. Relations
@@ -100,6 +100,6 @@ backupReason: { type: String },
 }, { timestamps: true });
 
 // Geo-spatial index for location-based searching
-fireCaseSchema.index({ location: "2dsphere" });
+fireCaseSchema.index({ "location.lat": 1, "location.lng": 1 });
 
 module.exports = mongoose.model('FireCase', fireCaseSchema);

@@ -6,7 +6,7 @@ const policeCaseSchema = new mongoose.Schema({
         type: String,
         unique: true,
         required: true,
-        default: () => `POLICE-${Math.floor(100000 + Math.random() * 900000)}`
+        default: () => `POLICE-${Date.now().toString().slice(-4)}${Math.floor(1000 + Math.random() * 9000)}`
     },
     hqId: { type: mongoose.Schema.Types.ObjectId, ref: 'PoliceHQ', required: true },
     stationId: { type: mongoose.Schema.Types.ObjectId, ref: 'PoliceStation', required: true },
@@ -129,6 +129,6 @@ enum: [
 
 }, { timestamps: true });
 
-policeCaseSchema.index({ location: "2dsphere" });
+policeCaseSchema.index({ "location.lat": 1, "location.lng": 1 });
 
 module.exports = mongoose.model('PoliceCase', policeCaseSchema);

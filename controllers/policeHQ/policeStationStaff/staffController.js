@@ -46,10 +46,9 @@ const getAssignedCases = async (req, res) => {
         const { priority, search, status } = req.query;
         let query = { assignedStaff: req.user.id };
  
-        // Agar status request 'Fresh' hai, to 'Fresh' aur 'Pending' dono status wale cases query karenge
         if (status) {
             if (status === 'Fresh') {
-                query.status = { $in: ['Fresh', 'Pending'] }; // 👈 'Fresh' and 'Pending' dono show honge
+                query.status = { $in: ['Fresh', 'Pending'] };
             } else {
                 query.status = status;
             }
@@ -59,11 +58,13 @@ const getAssignedCases = async (req, res) => {
  
         const cases = await PoliceCase.find(query).sort({ createdAt: -1 });
  
+        // FIX: Safe object destructuring taaki null/lean query par crash na ho
         const formattedCases = cases.map(c => {
-            const start = moment(c.updatedAt);
+            const doc = c._doc ? c._doc : c;
+            const start = moment(doc.updatedAt || doc.createdAt || Date.now());
             const now = moment();
             return {
-                ...c._doc,
+                ...doc,
                 runningDays: now.diff(start, 'days') || 0
             };
         });
@@ -357,7 +358,6 @@ const updateStaffCaseStatus = async (req, res) => {
             return res.status(404).json({ success: false, message: "Case not found." });
         }
 
-        // State-Machine update based on option
         if (statusStep === 'Site Visit Completed') {
             caseData.progress.isSiteVisited = true;
         } else if (statusStep === 'Evidence Collected') {
@@ -372,17 +372,21 @@ const updateStaffCaseStatus = async (req, res) => {
             caseData.remarks = `[Milestone: ${statusStep}] - ${remarks}\n` + (caseData.remarks || '');
         }
 
-        // 🚨 CORRECTED: Using req.files (array) from policeEvidenceUploads
-        if (req.files && req.files.length > 0) {
-            req.files.forEach(file => {
-                const milestoneAttachment = {
+        // FIX: Safe array extraction jo single file aur multi-file dono accept kare bina crash hue
+        const filesList = req.files ? (Array.isArray(req.files) ? req.files : Object.values(req.files).flat()) : (req.file ? [req.file] : []);
+
+        if (filesList.length > 0) {
+            filesList.forEach(file => {
+                let cleanPath = file.path.replace(/\\/g, '/');
+                cleanPath = cleanPath.startsWith('public/') ? cleanPath.replace('public/', '/') : (cleanPath.startsWith('/') ? cleanPath : '/' + cleanPath);
+
+                caseData.evidence.push({
                     fileName: file.originalname,
-                    fileUrl: `/uploads/police_evidence/${file.filename}`, // Saved in police_evidence directory
+                    fileUrl: cleanPath,
                     fileType: file.mimetype.startsWith('image/') ? 'Image' : 'Document',
                     fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
                     uploadedAt: Date.now()
-                };
-                caseData.evidence.push(milestoneAttachment);
+                });
             });
         }
 
@@ -407,8 +411,10 @@ const addStaffCaseEvidence = async (req, res) => {
         const { id } = req.params;
         const { evidenceType, description } = req.body;
 
-        // 🚨 CORRECTED: Check for req.files (array)
-        if (!req.files || req.files.length === 0) {
+        // FIX: Safe multi-part handler
+        const filesList = req.files ? (Array.isArray(req.files) ? req.files : Object.values(req.files).flat()) : (req.file ? [req.file] : []);
+
+        if (filesList.length === 0) {
             return res.status(400).json({ success: false, message: "Please upload at least one evidence file." });
         }
 
@@ -422,15 +428,17 @@ const addStaffCaseEvidence = async (req, res) => {
             return res.status(404).json({ success: false, message: "Case not found." });
         }
 
-        // 🚨 CORRECTED: Loop through req.files array
-        req.files.forEach(file => {
+        filesList.forEach(file => {
             let schemaFileType = 'Document';
             if (file.mimetype.startsWith('image/')) schemaFileType = 'Image';
             else if (file.mimetype.startsWith('video/')) schemaFileType = 'Video';
 
+            let cleanPath = file.path.replace(/\\/g, '/');
+            cleanPath = cleanPath.startsWith('public/') ? cleanPath.replace('public/', '/') : (cleanPath.startsWith('/') ? cleanPath : '/' + cleanPath);
+
             caseData.evidence.push({
                 fileName: file.originalname,
-                fileUrl: `/uploads/police_evidence/${file.filename}`, // Saved in police_evidence folder
+                fileUrl: cleanPath,
                 fileType: schemaFileType,
                 fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
                 uploadedAt: Date.now()
@@ -444,7 +452,7 @@ const addStaffCaseEvidence = async (req, res) => {
 
         res.json({
             success: true,
-            message: `${req.files.length} Evidence file(s) successfully submitted`,
+            message: `${filesList.length} Evidence file(s) successfully submitted`,
             data: caseData
         });
     } catch (error) {

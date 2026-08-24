@@ -528,8 +528,8 @@ const assignResources = async (req, res) => {
             caseId,
             {
                 $set: {
-                    stationId: stationId, // Primary Station handle karega
-                    supportingStations: supportingStationIds || [], // Backup stations ki list
+                    stationId: stationId,
+                    supportingStations: supportingStationIds || [],
                     status: status || 'Pending',
                     dispatchedAt: Date.now()
                 }
@@ -543,7 +543,8 @@ const assignResources = async (req, res) => {
             data: updatedCase
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error. Message });
+        // FIX: error. Message typo ko error.message kiya
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

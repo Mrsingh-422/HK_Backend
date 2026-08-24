@@ -594,7 +594,8 @@ const requestJurisdictionUpdate = async (req, res) => {
         });
         res.json({ success: true, message: "Update request sent to HQ" });
     } catch (error) {
-        res.status(500).json({ message: error. Message });
+        // FIX: error. Message typo ko error.message kiya
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -648,36 +649,41 @@ const getAppLegalInfo = async (req, res) => {
 
 const createFireCase = async (req, res) => {
     try {
-        const { callerName, callerPhone, fireType, severity, description, address, lat, lng, stationId } = req.body;
+        const { callerName, callerPhone, fireType, severity, description, address, lat, lng } = req.body;
  
         if (!lat || !lng) return res.status(400).json({ success: false, message: "Lat/Lng required." });
- 
-        // Generate a readable Case No (Figma Match: Fire-2026-XXXX)
+
+        // Station fetch kiya taaki HQ ID automatically bind ho sake
+        const station = await FireStation.findById(req.user.id);
+        if (!station) return res.status(404).json({ success: false, message: "Station not found" });
+
         const year = new Date().getFullYear();
         const randomStr = Math.floor(10000 + Math.random() * 90000);
         const caseNo = `Fire-${year}-${randomStr}`;
  
         const newCase = await FireCase.create({
-            hqId: req.user.id,
-            stationId,
-            caseNo, // Custom generated
+            hqId: station.hqId,
+            stationId: req.user.id,
+            caseNo,
             callerName, callerPhone, fireType, severity, description, address,
             location: { lat: Number(lat), lng: Number(lng) },
             status: 'Fresh',
             reportedAt: Date.now()
         });
  
-        // Notify the specific station
         await FireNotification.create({
-            stationId: stationId, // Station ko notification bhejna zaroori hai
-            hqId: req.user.id,
+            stationId: req.user.id,
+            hqId: station.hqId,
             title: "New Emergency Case Dispatched",
             message: `Emergency at ${address}. Incident ID: ${caseNo}`,
             type: 'Emergency'
         });
  
         res.status(201).json({ success: true, message: "Fresh Case Dispatched Successfully!", data: newCase });
-    } catch (error) { res.status(500).json({ success: false, message: error. Message }); }
+    } catch (error) { 
+        // FIX: error. Message typo ko error.message kiya
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
  
 

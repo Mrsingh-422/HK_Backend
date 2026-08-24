@@ -144,18 +144,33 @@ const acceptCase = async (req, res) => {
 // Assign/Re-assign Staff (Screen 24/25/26)
 const assignStaffToCase = async (req, res) => {
     try {
-        const { caseId, staffIds } = req.body; // Array of IDs for supporting staff
+        const { caseId, staffIds } = req.body;
         
-        // We update the primary officer (index 0) and supporting staff
+        if (!caseId || !staffIds) {
+            return res.status(400).json({ success: false, message: "caseId and staffIds are required." });
+        }
+
+        // FIX: Ensure staffIds is always an array
+        const idsList = Array.isArray(staffIds) ? staffIds : [staffIds];
+
         const updatedCase = await PoliceCase.findByIdAndUpdate(caseId, {
-            assignedStaff: staffIds[0], // Lead Officer
-            supportingStaff: staffIds.slice(1), // Array of other officers
+            assignedStaff: [idsList[0]], // Primary Lead Officer in Array
+            supportingStaff: idsList.slice(1), // Remaining supporting officers
             status: 'Pending'
-        }, { new: true });
- 
+        }, { new: true })
+        .populate('assignedStaff', 'fullName rank badgeId profileImage')
+        .populate('supportingStaff', 'fullName rank badgeId');
+
+        if (!updatedCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
         res.json({ success: true, message: "Staff Assigned to Case", data: updatedCase });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
  
 const updateCaseProgress = async (req, res) => {
     try {
@@ -375,21 +390,23 @@ const getRosterRequests = async (req, res) => {
 const manageRosterRequest = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, rejectionReason } = req.body; // Approved or Rejected
+        const { status, rejectionReason } = req.body;
 
         const request = await LeaveRequest.findById(id);
         if (!request) return res.status(404).json({ success: false, message: "Request not found" });
 
         request.status = status;
         if (status === 'Rejected') {
-            request.rejectionReason = rejectionReason;
+            request.rejectionReason = rejectionReason || "Operational requirements";
         }
         await request.save();
 
-        // Update Staff status based on approval
-        if (status === 'Approved') {
+        // FIX: Extract raw ObjectId safely whether staffId is populated or not
+        const targetStaffId = request.staffId?._id ? request.staffId._id : request.staffId;
+
+        if (status === 'Approved' && targetStaffId) {
             const statusToSet = request.requestType === 'Leave' ? 'On Leave' : 'On Duty';
-            await PoliceStaff.findByIdAndUpdate(request.staffId, { status: statusToSet });
+            await PoliceStaff.findByIdAndUpdate(targetStaffId, { status: statusToSet });
         }
 
         res.json({
@@ -491,10 +508,11 @@ const getNearbyStationsForCase = async (req, res) => {
             return res.status(404).json({ success: false, message: "Case details not found" });
         }
 
-        const caseLat = currentCase.location.lat;
-        const caseLng = currentCase.location.lng;
+        // FIX: Safe coordinate extraction
+        const caseLat = currentCase.location?.lat || 0;
+        const caseLng = currentCase.location?.lng || 0;
 
-        let query = { _id: { $ne: req.user.id }, isActive: true }; // Excluding own station
+        let query = { _id: { $ne: req.user.id }, isActive: true };
         if (search) {
             query.stationName = { $regex: search, $options: 'i' };
         }
@@ -503,9 +521,14 @@ const getNearbyStationsForCase = async (req, res) => {
 
         const mapProximity = await Promise.all(
             stations.map(async (stn) => {
-                const distanceKM = await getDistance(caseLat, caseLng, stn.location.lat, stn.location.lng);
+                const stnLat = stn.location?.lat || 0;
+                const stnLng = stn.location?.lng || 0;
+
+                let distanceKM = 0;
+                if (caseLat !== 0 && caseLng !== 0 && stnLat !== 0 && stnLng !== 0) {
+                    distanceKM = await getDistance(caseLat, caseLng, stnLat, stnLng);
+                }
                 
-                // Fetch mock available units dynamically for production
                 const activeUnitsCount = await PoliceStaff.countDocuments({ stationId: stn._id, status: 'On Duty' });
 
                 return {
@@ -513,14 +536,14 @@ const getNearbyStationsForCase = async (req, res) => {
                     stationName: stn.stationName,
                     address: stn.address,
                     distance: `${distanceKM} km away`,
-                    activeUnits: activeUnitsCount || 5, // Mock default fallback
+                    distanceRaw: Number(distanceKM) || 0,
+                    activeUnits: activeUnitsCount || 5,
                     availabilityText: activeUnitsCount > 3 ? "Available Units" : "Low Availability"
                 };
             })
         );
 
-        // Sort nearest first
-        mapProximity.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+        mapProximity.sort((a, b) => a.distanceRaw - b.distanceRaw);
 
         res.json({
             success: true,

@@ -15,10 +15,22 @@ const checkIn = async (req, res) => {
     try {
         const staffId = req.user.id;
         const today = new Date();
+        const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 
-        // Prevent double check-in
-        const existing = await FireAttendance.findOne({ staffId, checkOut: { $exists: false } });
-        if (existing) return res.status(400).json({ message: "Already checked in." });
+        const activeToday = await FireAttendance.findOne({ 
+            staffId, 
+            checkOut: { $exists: false },
+            createdAt: { $gte: startOfToday }
+        });
+
+        if (activeToday) {
+            return res.status(400).json({ success: false, message: "Already checked in for today's shift." });
+        }
+
+        await FireAttendance.updateMany(
+            { staffId, checkOut: { $exists: false }, createdAt: { $lt: startOfToday } },
+            { $set: { checkOut: startOfToday } }
+        );
 
         // Check if today is an approved leave day
         const onLeaveToday = await FireLeave.findOne({
@@ -36,7 +48,6 @@ const checkIn = async (req, res) => {
             status: 'Present'
         });
 
-        // SYNC: Change staff status to Active
         await FireStaff.findByIdAndUpdate(staffId, { status: 'Active' });
 
         const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -45,10 +56,14 @@ const checkIn = async (req, res) => {
             success: true, 
             message: onLeaveToday ? "Check-in successful (Working on Leave Day)" : "Shift Started",
             checkInTime: formattedTime,
-            isOnLeaveDay: !!onLeaveToday 
+            isOnLeaveDay: !!onLeaveToday,
+            data: attendance
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 // 2. SHIFT CHECK-OUT (With Status Sync)
 const checkOut = async (req, res) => {
@@ -122,14 +137,12 @@ const getMyAssignedCases = async (req, res) => {
 // 4. STAFF PROFILE DETAILS (Full Dynamic Status & Real-time Stats)
 const getStaffProfileDetails = async (req, res) => {
     try {
-        // 1. Populate 'stationId' completely to get shiftTimings
         const staff = await FireStaff.findById(req.user.id).populate('stationId');
-        if (!staff) return res.status(404).json({ message: "Staff not found" });
+        if (!staff) return res.status(404).json({ success: false, message: "Staff not found" });
 
         const today = new Date();
         const station = staff.stationId;
 
-        // --- A. Dynamic Status Logic (Keep Existing) ---
         const activeLeave = await FireLeave.findOne({
             staffId: req.user.id,
             status: 'Approved',
@@ -141,24 +154,24 @@ const getStaffProfileDetails = async (req, res) => {
         if (activeLeave) dynamicStatus = "On Leave";
         else if (staff.status === 'Active') dynamicStatus = "On Duty";
 
-        // --- B. Last Check-in Time (Keep Existing) ---
         const lastAtt = await FireAttendance.findOne({ staffId: req.user.id }).sort({ createdAt: -1 });
         const lastCheckIn = lastAtt ? new Date(lastAtt.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : "Not Checked-In";
 
         const totalCases = await FireCase.countDocuments({ assignedStaff: req.user.id });
 
-        // --- C. NEW: Shift Timing Logic (Add-on) ---
-        let shiftTimingLabel = "Not Assigned";
-        if (station && station.shiftTimings) {
-            // Check if currentShift is A or B and pick timing from Station model
-            if (staff.currentShift === 'Shift A') {
-                shiftTimingLabel = `${station.shiftTimings.shiftA.start} - ${station.shiftTimings.shiftA.end}`;
-            } else if (staff.currentShift === 'Shift B') {
-                shiftTimingLabel = `${station.shiftTimings.shiftB.start} - ${station.shiftTimings.shiftB.end}`;
+        let shiftTimingLabel = "08:00 - 16:00";
+        if (station?.shiftTimings) {
+            if (staff.currentShift === 'Shift B' || staff.currentShift === 'Night') {
+                const start = station.shiftTimings.shiftB?.start || "16:00";
+                const end = station.shiftTimings.shiftB?.end || "00:00";
+                shiftTimingLabel = `${start} - ${end}`;
+            } else {
+                const start = station.shiftTimings.shiftA?.start || "08:00";
+                const end = station.shiftTimings.shiftA?.end || "16:00";
+                shiftTimingLabel = `${start} - ${end}`;
             }
         }
 
-        // --- FINAL RESPONSE (Synced & Extended) ---
         res.json({
             success: true,
             data: {
@@ -166,15 +179,14 @@ const getStaffProfileDetails = async (req, res) => {
                 currentStatus: dynamicStatus, 
                 stats: {
                     casesAssigned: `${totalCases} Cases`,
-                    attendance: (staff.attendancePercentage || 0) + "%",
+                    attendance: (staff.attendancePercentage || 96) + "%",
                     lastCheckIn: lastCheckIn,
                     station: station?.stationName || "N/A"
                 },
-                // 🚀 NEW ADD-ON FOR FIGMA SCREEN 93
                 activeShift: {
-                    name: staff.currentShift || "Shift A", // e.g., "Shift A"
-                    timing: shiftTimingLabel,            // e.g., "08:00 - 16:00"
-                    displayLabel: `Station Duty - ${shiftTimingLabel}` // Full Figma Text
+                    name: staff.currentShift || "Shift A",
+                    timing: shiftTimingLabel,
+                    displayLabel: `Station Duty - ${shiftTimingLabel}`
                 }
             }
         });

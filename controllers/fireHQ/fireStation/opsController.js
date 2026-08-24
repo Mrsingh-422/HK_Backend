@@ -213,27 +213,34 @@ const getLeaveEnums = (req, res) => {
 // 3. APPLY FOR LEAVE (POST Request)
 const applyLeave = async (req, res) => {
     try {
-        // Agar req.body undefined hai toh error na aaye isliye empty object {} default rakha hai
         const { staffId, leaveType, fromDate, toDate, reason } = req.body || {};
 
         if (!staffId) {
             return res.status(400).json({ success: false, message: "staffId is required in request body" });
         }
 
-        const start = new Date(fromDate);
-        const end = new Date(toDate);
-        const duration = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24)) + 1;
+        const start = fromDate ? new Date(fromDate) : new Date();
+        const end = toDate ? new Date(toDate) : new Date();
+        
+        // FIX: NaN duration prevention
+        let durationDays = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24)) + 1;
+        if (isNaN(durationDays) || durationDays <= 0) durationDays = 1;
+
+        let attachmentUrl = null;
+        if (req.file) {
+            let p = req.file.path.replace(/\\/g, '/');
+            attachmentUrl = p.startsWith('public/') ? p.replace('public/', '/') : (p.startsWith('/') ? p : '/' + p);
+        }
 
         const newLeave = await FireLeave.create({
             staffId,
             stationId: req.user.id,
-            leaveType,
-            fromDate,
-            toDate,
-            duration,
-            reason,
-            // req.file Multer se aayega
-            attachment: req.file ? req.file.path : null, 
+            leaveType: leaveType || 'Casual',
+            fromDate: start,
+            toDate: end,
+            duration: durationDays,
+            reason: reason || "Leave requested",
+            attachment: attachmentUrl, 
             status: 'Pending'
         });
 
@@ -261,36 +268,33 @@ const submitFinalReport = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // 1. Check if Case exists
         const existingCase = await FireCase.findById(id);
-        if (!existingCase) return res.status(404).json({ message: "Case not found" });
+        if (!existingCase) return res.status(404).json({ success: false, message: "Case not found" });
 
         const { 
             incidentType, damageLevel, injuries, casualties, 
             trucksAssigned, firefightersCount, equipmentUsed 
         } = req.body;
 
-        // 2. Extract Images (Multer .fields() logic)
+        // FIX: Safe file extraction aur clean URL path
         let incidentImages = [];
         if (req.files && req.files['incidentImages']) {
-            incidentImages = req.files['incidentImages'].map(f => f.path);
+            incidentImages = req.files['incidentImages'].map(f => {
+                let p = f.path.replace(/\\/g, '/');
+                return p.startsWith('public/') ? p.replace('public/', '/') : (p.startsWith('/') ? p : '/' + p);
+            });
         }
 
-        // 3. Update according to EXACT Schema keys
         const updatedCase = await FireCase.findByIdAndUpdate(id, {
             status: 'Closed',
             resolvedAt: Date.now(),
             fireType: incidentType || 'Other',
-            incidentImages: incidentImages,
-            
-            // Matches Schema: resourcesUsed
+            incidentImages: incidentImages.length > 0 ? incidentImages : existingCase.incidentImages,
             resourcesUsed: {
                 trucksCount: Number(trucksAssigned) || 0,
                 personnelCount: Number(firefightersCount) || 0,
                 equipmentList: typeof equipmentUsed === 'string' ? equipmentUsed.split(',') : (equipmentUsed || [])
             },
-            
-            // Matches Schema: damageImpact
             damageImpact: {
                 damageLevel: damageLevel || "Minor",
                 injuries: Number(injuries) || 0,
@@ -299,12 +303,11 @@ const submitFinalReport = async (req, res) => {
         }, { new: true, runValidators: true });
 
         res.json({ success: true, message: "Final Report Submitted", data: updatedCase });
-
     } catch (error) {
-        console.error("SERVER ERROR:", error); // Terminal mein error check karne ke liye
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // List Equipment
 const getEquipment = async (req, res) => {
