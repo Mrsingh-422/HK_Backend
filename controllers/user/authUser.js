@@ -8,91 +8,145 @@ const HealthData = require('../../models/HealthData');
 const PillReminder = require('../../models/PillReminder');
 const HealthNews = require('../../models/HealthNews'); // New Model
 const { getActiveSubscriptionMetadata } = require('../../utils/subscriptionBenefitHelper'); // New Helper
+const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); // 👈 Firebase Helper
 
-// Helper: Generate Token
-const generateToken = (id) => {
-    return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+// Helper: Token Generator
+const generateToken = (id, role = 'user') => {
+    const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
+    return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
+// Endpoint: POST /api/auth/user/check-exists
+const checkUserExists = async (req, res) => {
+    try {
+        const { phone, email } = req.body;
+
+        if (!phone && !email) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Phone number or Email is required." 
+            });
+        }
+
+        const query = [];
+        if (phone) query.push({ phone: phone.trim().replace(/\D/g, "").slice(-10) });
+        if (email) query.push({ email: email.toLowerCase().trim() });
+
+        const exists = await User.findOne({ $or: query });
+
+        if (exists) {
+            const isPhoneMatch = exists.phone === (phone ? phone.trim().replace(/\D/g, "").slice(-10) : "");
+            return res.status(200).json({ 
+                success: false, 
+                exists: true, 
+                message: isPhoneMatch 
+                    ? "This mobile number is already registered. Please Login instead." 
+                    : "This email address is already registered. Please Login instead."
+            });
+        }
+
+        // Available for registration
+        res.status(200).json({ 
+            success: true, 
+            exists: false, 
+            message: "Mobile number is available." 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 // ==========================================
-// 1. REGISTER USER (Matches Figma Register Screen)
-// endpoint: POST /api/auth/user/register
+// 1. REGISTER USER (With Firebase Phone Verification)
+// Endpoint: POST /api/auth/user/register
+// ==========================================
 const registerUser = async (req, res) => {
     try {
         const { 
             name, email, phone, countryCode,
             country, state, city, 
-            password, confirmPassword 
+            password, confirmPassword, idToken 
         } = req.body;
 
-        // ==============================
-        // 1. VALIDATION
-        // ==============================
-        if (!email && !phone) {
-            return res.status(400).json({ message: 'Email or Phone required' });
-        }
-
-        if (!password) {
-            return res.status(400).json({ message: 'Password is required' });
-        }
-
-        if (confirmPassword && password !== confirmPassword) {
-            return res.status(400).json({ message: 'Passwords do not match' });
-        }
-
-        // ✅ Phone + Country Code validation
-        if (phone && !countryCode) {
-            return res.status(400).json({ message: 'Country code is required with phone' });
-        }
-
-        // ==============================
-        // 2. DUPLICATE CHECK (FIXED)
-        // ==============================
-        let query = [];
-
-        if (email) query.push({ email });
-        if (phone && countryCode) query.push({ phone, countryCode });
-
-        const exists = await User.findOne({ $or: query });
-
-        if (exists) {
+        // 1. Validations
+        if (!name || !phone || !password) {
             return res.status(400).json({ 
-                message: 'User already exists with this Email or Phone' 
+                success: false, 
+                message: 'Name, Phone number, and Password are required.' 
             });
         }
 
-        // ==============================
-        // 3. HASH PASSWORD
-        // ==============================
+        if (confirmPassword && password !== confirmPassword) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Passwords do not match.' 
+            });
+        }
+
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+        const cleanPhone = phone.trim();
+
+        // 2. Duplicate Check
+        const query = [{ phone: cleanPhone }];
+        if (normalizedEmail) query.push({ email: normalizedEmail });
+
+        const exists = await User.findOne({ $or: query });
+        if (exists) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'User already exists with this Email or Phone number.' 
+            });
+        }
+
+        // 3. 🚨 Firebase Phone Verification Check
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Firebase idToken is required for phone verification." 
+                });
+            }
+
+            const fullPhoneToVerify = countryCode ? `${countryCode}${cleanPhone}` : cleanPhone;
+            const verification = await verifyFirebasePhoneToken(idToken, fullPhoneToVerify);
+
+            if (!verification.success) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: verification.message 
+                });
+            }
+        }
+
+        // 4. Hash Password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // ==============================
-        // 4. CREATE USER
-        // ==============================
+        // 5. Create User (Instantly Approved with Phone Verified)
         const user = await User.create({
             name,
-            email: email || undefined,
-            phone: phone || undefined,
-            countryCode: phone ? countryCode : undefined,
-            country,
-            state,
-            city,
+            email: normalizedEmail || undefined,
+            phone: cleanPhone,
+            countryCode: countryCode || '+91',
+            country: country || null,
+            state: state || null,
+            city: city || null,
             password: hashedPassword,
             role: 'user',
-            profileStatus: 'Approved'
+            isPhoneVerified: true, // Phone verified via Firebase
+            profileStatus: 'Approved' // Users are directly approved
         });
 
-        // ==============================
-        // 5. GENERATE TOKEN
-        // ==============================
-        const token = generateToken(user._id);
+        // 6. Generate Session Token
+        const token = generateToken(user._id, 'user');
+        user.token = token;
+        await user.save();
 
-        // ==============================
-        // 6. RESPONSE
-        // ==============================
         res.status(201).json({ 
             success: true,
-            message: "User Registered Successfully",
+            message: "User Registered & Phone Verified Successfully!",
             token,
             user: {
                 id: user._id,
@@ -100,15 +154,15 @@ const registerUser = async (req, res) => {
                 email: user.email,
                 phone: user.phone,
                 countryCode: user.countryCode,
-                fullPhone: user.countryCode 
-                    ? `${user.countryCode}${user.phone}` 
-                    : null,
-                location: `${user.city || ''}, ${user.state || ''}, ${user.country || ''}`
+                fullPhone: `${user.countryCode}${user.phone}`,
+                location: `${user.city || ''}, ${user.state || ''}, ${user.country || ''}`.replace(/^, |, $/g, ''),
+                role: user.role,
+                profileStatus: user.profileStatus
             }
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1060,6 +1114,7 @@ const getUserDashboard = async (req, res) => {
 };
 
 module.exports = { 
+    checkUserExists,
     registerUser, 
     loginUser, 
     updateUserProfile,

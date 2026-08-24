@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware.js'); 
 const { userProfileUpload, insuranceUpload } = require('../../middleware/multer');
 const { 
-    registerUser, 
+    registerUser, checkUserExists,
     loginUser, 
     updateUserProfile,
     forgotPassword,
@@ -37,6 +37,7 @@ const {
 
 router.get('/dashboard', protect('user'), getUserDashboard); // User Dashboard Stats
 // Auth
+router.post('/check-exists', checkUserExists);
 router.post('/register', registerUser);
 router.post('/login', loginUser);
 

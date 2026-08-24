@@ -21,25 +21,15 @@ const getModelByCategory = (category) => {
     return map[category];
 };
 
-// Helper: Global Duplicate Check
-const checkGlobalExists = async (query) => {
-    const models = [Lab, Pharmacy, Nurse];
-    for (let Model of models) {
-        const exists = await Model.findOne(query);
-        if (exists) return true;
-    }
-    return false;
-};
-
 // ==========================================
-// 1. REGISTER PROVIDER (With Firebase Phone Verification)
+// 1. REGISTER PROVIDER (Category-Specific Registration)
 // Endpoint: POST /api/auth/provider/register
 // ==========================================
 const registerProvider = async (req, res) => {
     try {
         const { name, email, phone, countryCode, password, category, country, state, city, idToken } = req.body;
 
-        // 1. Validation
+        // 1. Validations
         if (!name || !phone || !password || !category) {
             return res.status(400).json({ 
                 success: false, 
@@ -56,17 +46,18 @@ const registerProvider = async (req, res) => {
         }
 
         const normalizedEmail = email ? email.toLowerCase().trim() : null;
-        const cleanPhone = phone.trim();
+        const cleanPhone = phone.trim().replace(/\D/g, "").slice(-10);
 
-        // 2. Duplicate Check across all Providers
+        // 2. 🚨 CATEGORY-SCOPED DUPLICATE CHECK (Sirf Selected Category me check karega)
         const query = [{ phone: cleanPhone }];
         if (normalizedEmail) query.push({ email: normalizedEmail });
 
-        const isDuplicate = await checkGlobalExists({ $or: query });
-        if (isDuplicate) {
+        const isAlreadyRegisteredInCategory = await Model.findOne({ $or: query });
+
+        if (isAlreadyRegisteredInCategory) {
             return res.status(400).json({ 
                 success: false, 
-                message: 'Email or Phone is already registered with another provider.' 
+                message: `This mobile number or email is already registered as a ${category}. Please Login or select another category.` 
             });
         }
 
@@ -90,7 +81,7 @@ const registerProvider = async (req, res) => {
         // 4. Hash Password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // 5. Create Provider (Directly Phone Verified)
+        // 5. Create Provider in the selected Category Collection
         const newProvider = await Model.create({
             name, 
             email: normalizedEmail || undefined, 
@@ -102,7 +93,7 @@ const registerProvider = async (req, res) => {
             country: country || null, 
             state: state || null, 
             city: city || null,
-            isPhoneVerified: true, // Firebase Phone verified
+            isPhoneVerified: true,
             profileStatus: 'Incomplete'
         });
 
@@ -113,11 +104,53 @@ const registerProvider = async (req, res) => {
 
         res.status(201).json({ 
             success: true, 
-            message: `${category} registered & phone verified successfully. Please upload documents.`, 
+            message: `${category} account registered & phone verified successfully. Please upload documents.`, 
             token,
             category,
             providerId: newProvider._id,
             profileStatus: 'Incomplete' 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Endpoint: POST /api/auth/provider/check-exists
+const checkProviderExists = async (req, res) => {
+    try {
+        const { phone, email, category } = req.body;
+
+        if (!phone && !email) {
+            return res.status(400).json({ success: false, message: "Phone or Email is required." });
+        }
+
+        const Model = getModelByCategory(category);
+        if (!Model) {
+            return res.status(400).json({ success: false, message: "Please specify category (Lab/Pharmacy/Nurse)." });
+        }
+
+        const cleanPhone = phone ? phone.trim().replace(/\D/g, "").slice(-10) : null;
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+
+        const query = [];
+        if (cleanPhone) query.push({ phone: cleanPhone });
+        if (normalizedEmail) query.push({ email: normalizedEmail });
+
+        const exists = await Model.findOne({ $or: query });
+
+        if (exists) {
+            return res.status(200).json({ 
+                success: false, 
+                exists: true, 
+                message: `This phone/email is already registered as a ${category}. Please login instead.` 
+            });
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            exists: false, 
+            message: `Available for registration as ${category}.` 
         });
 
     } catch (error) {

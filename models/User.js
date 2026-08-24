@@ -3,13 +3,13 @@ const mongoose = require('mongoose');
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true }, // Figma: "User" field
     email: { type: String, unique: true, sparse: true },
+    countryCode: { type: String }, // +91, +1, etc.
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
+    isPhoneVerified: { type: Boolean, default: false },
+    isEmailVerified: { type: Boolean, default: false },
 
     profilePic: { type: String, default: null },
-
-    // --- New Fields from Figma ---
-    countryCode: { type: String }, // +91, +1, etc.
 
     fatherName: { type: String },
     weight: { type: String }, // e.g., "61 kg"
