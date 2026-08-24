@@ -3,464 +3,359 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FireStation Pro | Operations & Doctor Onboarding</title>
+    <title>Health Kangaroo | Secure Password Reset</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- 🔥 Firebase Client SDKs (Compat Version for Web) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
-        .sidebar-link.active { @apply bg-red-600 text-white shadow-lg shadow-red-200; }
-        .req-type-btn.active { @apply bg-green-600 text-white border-green-600; }
-        .req-type-btn { @apply border-2 border-gray-200 px-6 py-2 rounded-xl font-bold text-gray-500 transition-all; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        .step-bubble.active { @apply bg-red-600 text-white shadow-lg shadow-red-200 border-red-600; }
+        .step-bubble.completed { @apply bg-green-600 text-white border-green-600; }
+        .step-bubble { @apply w-10 h-10 rounded-2xl flex items-center justify-center font-black border-2 border-slate-200 text-slate-400 transition-all; }
     </style>
 </head>
-<body class="overflow-hidden">
+<body class="min-h-screen flex items-center justify-center p-6">
 
-    <!-- Auth Layer -->
-    <div id="authOverlay" class="fixed inset-0 z-[100] bg-slate-900 flex items-center justify-center">
-        <div class="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md">
-            <h2 class="text-2xl font-black text-center mb-6">Station Login</h2>
-            <div class="space-y-4">
-                <input id="loginEmail" type="email" placeholder="Email" class="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl outline-none">
-                <input id="loginPassword" type="password" placeholder="Password" class="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl outline-none">
-                <button onclick="handleLogin()" class="w-full bg-red-600 text-white font-bold py-4 rounded-2xl">LOGIN</button>
+    <!-- Invisible Firebase Recaptcha Container -->
+    <div id="recaptcha-container"></div>
+
+    <div class="w-full max-w-xl bg-white p-10 rounded-[2.5rem] shadow-2xl border border-slate-100 space-y-8">
+        
+        <!-- Header -->
+        <div class="text-center space-y-2">
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-red-50 text-red-600 rounded-3xl text-2xl shadow-inner mb-2">
+                <i class="fas fa-key"></i>
+            </div>
+            <h2 class="text-3xl font-black text-slate-800 tracking-tight">Reset Password</h2>
+            <p class="text-xs text-slate-400 font-medium">Verify your registered phone number with Firebase OTP</p>
+        </div>
+
+        <!-- Stepper -->
+        <div class="flex items-center justify-between px-4">
+            <div class="flex flex-col items-center gap-1.5">
+                <div id="bubble1" class="step-bubble active">1</div>
+                <span class="text-[10px] font-black uppercase text-slate-500">Phone</span>
+            </div>
+            <div id="line1" class="h-1 flex-grow bg-slate-100 mx-3 rounded-full"></div>
+            <div class="flex flex-col items-center gap-1.5">
+                <div id="bubble2" class="step-bubble">2</div>
+                <span class="text-[10px] font-black uppercase text-slate-500">Verify OTP</span>
+            </div>
+            <div id="line2" class="h-1 flex-grow bg-slate-100 mx-3 rounded-full"></div>
+            <div class="flex flex-col items-center gap-1.5">
+                <div id="bubble3" class="step-bubble">3</div>
+                <span class="text-[10px] font-black uppercase text-slate-500">New Password</span>
             </div>
         </div>
-    </div>
 
-    <!-- Main Layout -->
-    <div class="flex h-screen">
-        <!-- Sidebar -->
-        <aside class="w-72 bg-white border-r border-slate-100 flex flex-col p-6 space-y-8 h-full">
-            <div class="flex items-center gap-3 px-2">
-                <div class="bg-red-600 p-2.5 rounded-xl text-white"><i class="fas fa-fire-alt"></i></div>
-                <span class="font-black text-xl tracking-tight uppercase">FireOps<span class="text-red-600">.</span></span>
+        <!-- Notification Banner -->
+        <div id="alertBox" class="hidden p-4 rounded-2xl text-xs font-bold transition-all"></div>
+
+        <!-- ========================================== -->
+        <!-- 📱 STEP 1: PHONE INPUT & ROLE SELECTION -->
+        <!-- ========================================== -->
+        <div id="step1Container" class="space-y-6">
+            <div>
+                <label class="text-xs font-bold text-slate-400 uppercase">Registered Phone Number</label>
+                <div class="flex gap-3 mt-2">
+                    <input id="countryCodeInput" type="text" value="+91" class="w-24 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none text-center">
+                    <input id="phoneInput" type="tel" placeholder="9876543210" class="flex-grow bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
+                </div>
             </div>
-            <nav class="flex-grow space-y-2">
-                <button onclick="switchTab('dashboard')" class="sidebar-link active w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
-                    <i class="fas fa-grid-2"></i> Dashboard
-                </button>
-                <button onclick="switchTab('doctor-register')" class="sidebar-link w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
-                    <i class="fas fa-user-md"></i> Doctor Register
-                </button>
-                <button onclick="switchTab('new-request')" class="sidebar-link w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
-                    <i class="fas fa-plus-circle"></i> New Request
-                </button>
-                <button onclick="switchTab('staff')" class="sidebar-link w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
-                    <i class="fas fa-users-viewfinder"></i> Personnel Roster
-                </button>
-                <button onclick="switchTab('leaves')" class="sidebar-link w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition text-slate-400">
-                    <i class="fas fa-calendar-check"></i> Leave Requests
-                </button>
-            </nav>
-        </aside>
 
-        <!-- Main Content -->
-        <main class="flex-grow flex flex-col h-full overflow-hidden">
-            <header class="h-24 bg-white border-b border-slate-100 flex items-center justify-between px-10">
-                <h2 id="pageTitle" class="text-2xl font-black text-slate-800">Station Overview</h2>
-                <div class="bg-slate-50 px-5 py-3 rounded-2xl border border-slate-100"><span class="text-[10px] font-black text-slate-600 uppercase">Server: Online</span></div>
-            </header>
+            <!-- Role Selector (Auto populated if multiple accounts found) -->
+            <div id="roleSelectorBox" class="hidden space-y-2">
+                <label class="text-xs font-bold text-slate-400 uppercase">Select Target Account / Role</label>
+                <select id="roleSelect" class="w-full bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
+                </select>
+            </div>
 
-            <div id="viewport" class="p-10 overflow-y-auto flex-grow bg-slate-50/50"></div>
-        </main>
+            <button id="sendOtpBtn" onclick="handleSendOtp()" class="w-full bg-red-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-red-100 hover:bg-red-700 transition-all flex items-center justify-center gap-3">
+                <i class="fas fa-paper-plane"></i> Send Firebase SMS OTP
+            </button>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- 🔢 STEP 2: ENTER OTP -->
+        <!-- ========================================== -->
+        <div id="step2Container" class="hidden space-y-6">
+            <div class="text-center p-4 bg-slate-50 rounded-2xl">
+                <p class="text-xs text-slate-500 font-medium">6-digit verification code sent to</p>
+                <p id="displayTargetPhone" class="text-sm font-black text-slate-800 font-mono mt-1">+91 XXXXXXXXXX</p>
+            </div>
+
+            <div>
+                <label class="text-xs font-bold text-slate-400 uppercase">Enter SMS OTP</label>
+                <input id="otpInput" type="text" maxlength="6" placeholder="• • • • • •" class="w-full mt-2 bg-slate-50 border border-slate-200 rounded-2xl p-4 font-black text-center text-2xl tracking-[0.5em] text-slate-800 outline-none">
+            </div>
+
+            <button id="verifyOtpBtn" onclick="handleVerifyOtp()" class="w-full bg-red-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-red-100 hover:bg-red-700 transition-all flex items-center justify-center gap-3">
+                <i class="fas fa-shield-check"></i> Verify OTP & Proceed
+            </button>
+
+            <button onclick="goToStep(1)" class="w-full text-slate-400 text-xs font-bold hover:text-slate-600 transition">
+                <i class="fas fa-arrow-left"></i> Change Phone Number
+            </button>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- 🔒 STEP 3: NEW PASSWORD -->
+        <!-- ========================================== -->
+        <div id="step3Container" class="hidden space-y-6">
+            <div>
+                <label class="text-xs font-bold text-slate-400 uppercase">New Password</label>
+                <input id="newPasswordInput" type="password" placeholder="Min. 6 characters" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
+            </div>
+
+            <div>
+                <label class="text-xs font-bold text-slate-400 uppercase">Confirm Password</label>
+                <input id="confirmPasswordInput" type="password" placeholder="Re-enter password" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
+            </div>
+
+            <button id="resetPassBtn" onclick="handleResetPassword()" class="w-full bg-green-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-green-100 hover:bg-green-700 transition-all flex items-center justify-center gap-3">
+                <i class="fas fa-check-circle"></i> Update Password
+            </button>
+        </div>
+
     </div>
 
+    <!-- SCRIPT LOGIC -->
     <script>
         const baseUrl = "http://localhost:5002";
-        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5ZTc1MWJhNDFkMWQ2NWYyNzliZjlhMSIsInJvbGUiOiJGaXJlLVN0YXRpb24iLCJpYXQiOjE3NzgwNDM2NjEsImV4cCI6NDkzMTY0MzY2MX0.TX5DkoM85xMqbGyhX2thxGZ0nCSBjZI0KddifJF15Ss";
-        
-        // Variable to hold registered Doctor's Auth Token for Step 2
-        let doctorSessionToken = null;
 
-        window.onload = () => { 
-    if(token) { 
-        document.getElementById('authOverlay').classList.add('hidden'); 
-        switchTab('dashboard', document.querySelector('.sidebar-link')); 
-    } 
-};
+        // =========================================================================
+        // 🚨 1. PASTE YOUR FIREBASE WEB CONFIG HERE
+        // (Firebase Console -> Project Settings -> General -> Your Apps -> Web App)
+        // =========================================================================
+        const firebaseConfig = {
+            apiKey: "YOUR_FIREBASE_API_KEY",
+            authDomain: "your-project-id.firebaseapp.com",
+            projectId: "your-project-id",
+            storageBucket: "your-project-id.appspot.com",
+            messagingSenderId: "1234567890",
+            appId: "1:1234567890:web:abcdef"
+        };
 
-async function switchTab(tab, element) {
-    document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
-    
-    // Agar element pass hua hai ya event trigger hua hai
-    const targetElement = element || (typeof event !== 'undefined' && event?.currentTarget);
-    if (targetElement) {
-        targetElement.classList.add('active');
-    }
-    
-    if(tab === 'dashboard') loadDashboard();
-    if(tab === 'doctor-register') loadDoctorRegisterUI();
-    if(tab === 'new-request') loadNewRequestUI();
-    if(tab === 'staff') loadStaff();
-    if(tab === 'leaves') loadLeaveRequests();
-}
-
-        // ==========================================
-        // 🩺 DOCTOR REGISTRATION & ONBOARDING UI
-        // ==========================================
-        function loadDoctorRegisterUI() {
-            document.getElementById('pageTitle').innerText = "Doctor Onboarding";
-
-            document.getElementById('viewport').innerHTML = `
-                <div class="max-w-3xl mx-auto space-y-8">
-                    <!-- Progress Stepper -->
-                    <div class="flex items-center justify-between px-6">
-                        <div class="flex items-center gap-3 text-red-600 font-black text-sm">
-                            <span class="w-8 h-8 rounded-full bg-red-600 text-white flex items-center justify-center">1</span>
-                            <span>Account Details</span>
-                        </div>
-                        <div class="h-[2px] flex-grow bg-slate-200 mx-4"></div>
-                        <div id="step2Indicator" class="flex items-center gap-3 text-slate-400 font-bold text-sm">
-                            <span class="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center">2</span>
-                            <span>Documents & Verification</span>
-                        </div>
-                    </div>
-
-                    <!-- STEP 1: Basic Register Form -->
-                    <div id="doctorStep1Card" class="bg-white p-10 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6">
-                        <div class="border-b border-slate-100 pb-4">
-                            <h3 class="text-lg font-black text-slate-800">Doctor Registration (Step 1)</h3>
-                            <p class="text-xs text-slate-400">Create doctor profile with phone & basic info.</p>
-                        </div>
-
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Doctor Name *</label>
-                                <input id="docName" type="text" placeholder="Dr. Rohit Verma" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Email Address</label>
-                                <input id="docEmail" type="email" placeholder="dr.rohit@example.com" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-3 gap-4">
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Country Code</label>
-                                <input id="docCountryCode" type="text" value="+91" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                            <div class="col-span-2">
-                                <label class="text-xs font-bold text-slate-400 uppercase">Phone Number *</label>
-                                <input id="docPhone" type="tel" placeholder="9876543210" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-3 gap-4">
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">City</label>
-                                <input id="docCity" type="text" placeholder="Mohali" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">State</label>
-                                <input id="docState" type="text" placeholder="Punjab" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Country</label>
-                                <input id="docCountry" type="text" value="India" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="text-xs font-bold text-slate-400 uppercase">Password *</label>
-                            <input id="docPassword" type="password" placeholder="Create strong password" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                        </div>
-
-                        <div>
-                            <label class="text-xs font-bold text-slate-400 uppercase">Firebase ID Token (Optional in Dev)</label>
-                            <input id="docIdToken" type="text" placeholder="Paste Firebase ID token if real phone auth enabled" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 text-xs font-mono text-slate-600 outline-none">
-                        </div>
-
-                        <button onclick="submitDoctorRegistration()" class="w-full bg-red-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-red-100 hover:bg-red-700 transition-all flex items-center justify-center gap-3">
-                            <i class="fas fa-user-plus"></i> Register Doctor
-                        </button>
-                    </div>
-
-                    <!-- STEP 2: Document Upload Form (Hidden Initially) -->
-                    <div id="doctorStep2Card" class="hidden bg-white p-10 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6">
-                        <div class="border-b border-slate-100 pb-4">
-                            <div class="flex items-center justify-between">
-                                <h3 class="text-lg font-black text-slate-800">Upload Professional Documents (Step 2)</h3>
-                                <span class="bg-orange-100 text-orange-600 text-[10px] font-black uppercase px-3 py-1 rounded-full">Status: Incomplete</span>
-                            </div>
-                            <p class="text-xs text-slate-400 mt-1">Submit qualification and registration details for admin approval.</p>
-                        </div>
-
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Qualification *</label>
-                                <input id="docQualification" type="text" placeholder="MBBS, MD (General Medicine)" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Speciality *</label>
-                                <input id="docSpeciality" type="text" placeholder="Cardiologist" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-3 gap-4">
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">License Number *</label>
-                                <input id="docLicenseNumber" type="text" placeholder="MCI-12345" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Council Number *</label>
-                                <input id="docCouncilNumber" type="text" placeholder="DMC/R/2021" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Council Name *</label>
-                                <input id="docCouncilName" type="text" placeholder="Delhi Medical Council" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Profile Image</label>
-                                <input id="docProfileImage" type="file" accept="image/*" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-3 text-xs">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Certificates (Multiple PDF/Images)</label>
-                                <input id="docCertificates" type="file" multiple accept="image/*,application/pdf" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-3 text-xs">
-                            </div>
-                        </div>
-
-                        <button onclick="submitDoctorDocuments()" class="w-full bg-green-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-green-100 hover:bg-green-700 transition-all flex items-center justify-center gap-3">
-                            <i class="fas fa-file-shield"></i> Submit Documents For Approval
-                        </button>
-                    </div>
-                </div>
-            `;
+        // Initialize Firebase
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
         }
 
-        // Step 1: Submit Register API
-        async function submitDoctorRegistration() {
-            const body = {
-                name: document.getElementById('docName').value.trim(),
-                email: document.getElementById('docEmail').value.trim(),
-                phone: document.getElementById('docPhone').value.trim(),
-                countryCode: document.getElementById('docCountryCode').value.trim(),
-                country: document.getElementById('docCountry').value.trim(),
-                state: document.getElementById('docState').value.trim(),
-                city: document.getElementById('docCity').value.trim(),
-                password: document.getElementById('docPassword').value,
-                idToken: document.getElementById('docIdToken').value.trim() || undefined
-            };
+        // Global State
+        let confirmationResult = null;
+        let backendResetToken = null;
+        let selectedPhone = "";
+        let selectedRole = "";
+        let appVerifier = null;
 
-            if(!body.name || !body.phone || !body.password) {
-                alert("Please fill Doctor Name, Phone, and Password!");
+        // UI Helpers
+        function showAlert(msg, isError = false) {
+            const box = document.getElementById('alertBox');
+            box.classList.remove('hidden', 'bg-red-50', 'text-red-600', 'bg-green-50', 'text-green-600');
+            box.classList.add(isError ? 'bg-red-50' : 'bg-green-50', isError ? 'text-red-600' : 'text-green-600');
+            box.innerHTML = `<i class="fas ${isError ? 'fa-circle-exclamation' : 'fa-check-circle'} mr-2"></i> ${msg}`;
+        }
+
+        function goToStep(step) {
+            document.getElementById('step1Container').classList.toggle('hidden', step !== 1);
+            document.getElementById('step2Container').classList.toggle('hidden', step !== 2);
+            document.getElementById('step3Container').classList.toggle('hidden', step !== 3);
+
+            const b1 = document.getElementById('bubble1');
+            const b2 = document.getElementById('bubble2');
+            const b3 = document.getElementById('bubble3');
+            const l1 = document.getElementById('line1');
+            const l2 = document.getElementById('line2');
+
+            b1.className = step > 1 ? 'step-bubble completed' : 'step-bubble active';
+            b2.className = step === 2 ? 'step-bubble active' : (step > 2 ? 'step-bubble completed' : 'step-bubble');
+            b3.className = step === 3 ? 'step-bubble active' : 'step-bubble';
+
+            l1.className = step > 1 ? 'h-1 flex-grow bg-green-500 mx-3 rounded-full' : 'h-1 flex-grow bg-slate-100 mx-3 rounded-full';
+            l2.className = step > 2 ? 'h-1 flex-grow bg-green-500 mx-3 rounded-full' : 'h-1 flex-grow bg-slate-100 mx-3 rounded-full';
+        }
+
+        // =========================================================================
+        // 🚀 STEP 1: SEND OTP (BACKEND CHECK + FIREBASE TRIGGER)
+        // =========================================================================
+        async function handleSendOtp() {
+            const code = document.getElementById('countryCodeInput').value.trim();
+            const phone = document.getElementById('phoneInput').value.trim();
+            const btn = document.getElementById('sendOtpBtn');
+
+            if (!phone || phone.length < 10) {
+                showAlert("Please enter a valid 10-digit phone number.", true);
                 return;
             }
 
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Checking Account & Sending OTP...`;
+
             try {
-                const res = await fetch(`${baseUrl}/api/auth/doctor/register`, {
+                // 1. Call Backend to check registered roles
+                const checkRes = await fetch(`${baseUrl}/api/password/forgot-password-phone`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
+                    body: JSON.stringify({ phone })
                 });
 
-                const data = await res.json();
-
-                if(res.ok && data.success) {
-                    alert("Step 1 Complete: " + data.message);
-                    doctorSessionToken = data.token; // Save Token for Step 2
-
-                    // Show Step 2 UI
-                    document.getElementById('doctorStep1Card').classList.add('hidden');
-                    document.getElementById('doctorStep2Card').classList.remove('hidden');
-
-                    const step2Ind = document.getElementById('step2Indicator');
-                    step2Ind.classList.remove('text-slate-400');
-                    step2Ind.classList.add('text-green-600');
-                    step2Ind.querySelector('span').classList.remove('bg-slate-200', 'text-slate-600');
-                    step2Ind.querySelector('span').classList.add('bg-green-600', 'text-white');
-                } else {
-                    alert("Registration Failed: " + (data.message || "Unknown error"));
+                const checkData = await checkRes.json();
+                if (!checkRes.ok || !checkData.success) {
+                    throw new Error(checkData.message || "Account check failed.");
                 }
+
+                // Populate Role Selector if multiple accounts exist
+                const roleSelect = document.getElementById('roleSelect');
+                roleSelect.innerHTML = checkData.accounts.map(acc => 
+                    `<option value="${acc.role}">${acc.name} (${acc.role}) - ${acc.maskedEmail}</option>`
+                ).join('');
+
+                if (checkData.accounts.length > 1) {
+                    document.getElementById('roleSelectorBox').classList.remove('hidden');
+                }
+                selectedRole = checkData.accounts[0].role;
+                selectedPhone = phone;
+
+                // 2. Initialize Firebase Invisible Recaptcha
+                if (!appVerifier) {
+                    appVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+                        size: 'invisible'
+                    });
+                }
+
+                // 3. Trigger Firebase SMS
+                const fullPhone = `${code}${phone}`;
+                confirmationResult = await firebase.auth().signInWithPhoneNumber(fullPhone, appVerifier);
+
+                document.getElementById('displayTargetPhone').innerText = fullPhone;
+                showAlert("OTP sent successfully to your mobile number!");
+                goToStep(2);
+
             } catch (err) {
-                console.error(err);
-                alert("API Error: Make sure your server is running on " + baseUrl);
+                console.error("Firebase/Backend Error:", err);
+                showAlert(err.message || "Failed to send SMS OTP.", true);
+                if (appVerifier) {
+                    appVerifier.render().then(widgetId => grecaptcha.reset(widgetId));
+                }
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fas fa-paper-plane"></i> Send Firebase SMS OTP`;
             }
         }
 
-        // Step 2: Submit Documents API
-        async function submitDoctorDocuments() {
-            if(!doctorSessionToken) {
-                alert("Doctor session expired! Please register again.");
+        // =========================================================================
+        // 🚀 STEP 2: VERIFY OTP (FIREBASE ID TOKEN -> BACKEND RESET TOKEN)
+        // =========================================================================
+        async function handleVerifyOtp() {
+            const otp = document.getElementById('otpInput').value.trim();
+            const btn = document.getElementById('verifyOtpBtn');
+
+            if (!otp || otp.length !== 6) {
+                showAlert("Please enter a valid 6-digit OTP code.", true);
                 return;
             }
 
-            const qualification = document.getElementById('docQualification').value.trim();
-            const speciality = document.getElementById('docSpeciality').value.trim();
-            const licenseNumber = document.getElementById('docLicenseNumber').value.trim();
-            const councilNumber = document.getElementById('docCouncilNumber').value.trim();
-            const councilName = document.getElementById('docCouncilName').value.trim();
-
-            if(!qualification || !speciality || !licenseNumber) {
-                alert("Please enter Qualification, Speciality, and License Number!");
-                return;
+            const roleDropdown = document.getElementById('roleSelect');
+            if (!document.getElementById('roleSelectorBox').classList.contains('hidden')) {
+                selectedRole = roleDropdown.value;
             }
 
-            const formData = new FormData();
-            formData.append('qualification', qualification);
-            formData.append('speciality', speciality);
-            formData.append('licenseNumber', licenseNumber);
-            formData.append('councilNumber', councilNumber);
-            formData.append('councilName', councilName);
-
-            const profileImg = document.getElementById('docProfileImage').files[0];
-            if(profileImg) formData.append('profileImage', profileImg);
-
-            const certificates = document.getElementById('docCertificates').files;
-            for (let i = 0; i < certificates.length; i++) {
-                formData.append('certificates', certificates[i]);
-            }
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Verifying with Firebase...`;
 
             try {
-                const res = await fetch(`${baseUrl}/api/auth/doctor/upload-docs`, {
-                    method: 'PUT',
-                    headers: { 'Authorization': `Bearer ${doctorSessionToken}` },
-                    body: formData
+                // 1. Confirm OTP with Firebase Client SDK
+                const userCredential = await confirmationResult.confirm(otp);
+                const idToken = await userCredential.user.getIdToken();
+
+                // 2. Send idToken to Backend to get Reset Token
+                const verifyRes = await fetch(`${baseUrl}/api/password/verify-firebase-otp`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        phone: selectedPhone,
+                        idToken: idToken,
+                        selectedRole: selectedRole
+                    })
                 });
 
-                const data = await res.json();
-
-                if(res.ok && data.success) {
-                    alert("Step 2 Complete! " + data.message);
-                    switchTab('dashboard');
-                } else {
-                    alert("Document Upload Failed: " + (data.message || "Server error"));
+                const verifyData = await verifyRes.json();
+                if (!verifyRes.ok || !verifyData.success) {
+                    throw new Error(verifyData.message || "Backend verification failed.");
                 }
-            } catch(err) {
-                console.error(err);
-                alert("Upload Error: Check console for logs.");
+
+                backendResetToken = verifyData.resetToken;
+                showAlert("OTP Verified Successfully! Now set your new password.");
+                goToStep(3);
+
+            } catch (err) {
+                console.error("Verification Error:", err);
+                showAlert(err.message || "Invalid or Expired OTP.", true);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fas fa-shield-check"></i> Verify OTP & Proceed`;
             }
         }
 
-        // --- FIGMA SCREEN UI: NEW REQUEST ---
-        async function loadNewRequestUI() {
-            document.getElementById('pageTitle').innerText = "New Request";
-            
-            try {
-                const staffRes = await fetch(`${baseUrl}/fireStation/ops/staff-dropdown`, { headers: { 'Authorization': `Bearer ${token}` } });
-                const staffList = (await staffRes.json()).data || [];
-                
-                const enumRes = await fetch(`${baseUrl}/fireStation/ops/leaves/enums`, { headers: { 'Authorization': `Bearer ${token}` } });
-                const leaveEnums = (await enumRes.json()).data || ['Casual', 'Medical', 'Earned'];
+        // =========================================================================
+        // 🚀 STEP 3: SUBMIT NEW PASSWORD (USING BACKEND RESET TOKEN)
+        // =========================================================================
+        async function handleResetPassword() {
+            const newPassword = document.getElementById('newPasswordInput').value;
+            const confirmPassword = document.getElementById('confirmPasswordInput').value;
+            const btn = document.getElementById('resetPassBtn');
 
-                document.getElementById('viewport').innerHTML = `
-                    <div class="max-w-2xl mx-auto space-y-8">
-                        <div>
-                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Request Type</p>
-                            <div class="flex gap-3">
-                                <button class="req-type-btn active">Leave</button>
-                                <button class="req-type-btn">Present</button>
-                                <button class="req-type-btn">Shift Change</button>
-                                <button class="req-type-btn">Overtime</button>
-                            </div>
-                        </div>
-
-                        <div class="bg-white p-10 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6">
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Requesting For</label>
-                                <select id="reqStaff" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700">
-                                    ${staffList.map(s => `<option value="${s._id}">${s.fullName} (${s.rank || 'Staff'})</option>`).join('')}
-                                </select>
-                            </div>
-
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Leave Category</label>
-                                <select id="reqCategory" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700">
-                                    ${leaveEnums.map(e => `<option value="${e}">${e} Leave</option>`).join('')}
-                                </select>
-                            </div>
-
-                            <div class="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label class="text-xs font-bold text-slate-400 uppercase">From</label>
-                                    <input id="reqFrom" type="date" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold">
-                                </div>
-                                <div>
-                                    <label class="text-xs font-bold text-slate-400 uppercase">To</label>
-                                    <input id="reqTo" type="date" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold">
-                                </div>
-                            </div>
-
-                            <div>
-                                <label class="text-xs font-bold text-slate-400 uppercase">Reason</label>
-                                <textarea id="reqReason" placeholder="Describe the reason for leave" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-medium" rows="4"></textarea>
-                            </div>
-
-                            <button onclick="submitStationRequest()" class="w-full bg-green-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-green-100 hover:bg-green-700 transition-all">
-                                Submit Request
-                            </button>
-                        </div>
-                    </div>`;
-            } catch(e) {
-                console.error(e);
+            if (!newPassword || newPassword.length < 6) {
+                showAlert("Password must be at least 6 characters long.", true);
+                return;
             }
-        }
 
-        async function submitStationRequest() {
-            const body = {
-                staffId: document.getElementById('reqStaff').value,
-                leaveType: document.getElementById('reqCategory').value,
-                fromDate: document.getElementById('reqFrom').value,
-                toDate: document.getElementById('reqTo').value,
-                reason: document.getElementById('reqReason').value
-            };
-
-            const res = await fetch(`${baseUrl}/fireStation/ops/leaves/post`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            const data = await res.json();
-            if(data.success) {
-                alert("Leave applied for staff member!");
-                switchTab('leaves');
-            } else alert(data.message);
-        }
-
-        // --- DASHBOARD LOADER ---
-        async function loadDashboard() {
-            document.getElementById('pageTitle').innerText = "Station Overview";
-            try {
-                const res = await fetch(`${baseUrl}/fireStation/management/dashboard`, { headers: { 'Authorization': `Bearer ${token}` } });
-                const { data } = await res.json();
-                document.getElementById('viewport').innerHTML = `
-                    <div class="grid grid-cols-3 gap-8">
-                        <div class="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex items-center gap-6"><div class="w-16 h-16 bg-red-50 text-red-600 rounded-3xl flex items-center justify-center text-2xl shadow-inner"><i class="fas fa-bullhorn"></i></div><div><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">New Alerts</p><h3 class="text-4xl font-black text-slate-800">${data?.newFireAlerts || 0}</h3></div></div>
-                        <div class="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex items-center gap-6"><div class="w-16 h-16 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-2xl shadow-inner"><i class="fas fa-truck-fast"></i></div><div><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ongoing</p><h3 class="text-4xl font-black text-slate-800">${data?.ongoingOperations || 0}</h3></div></div>
-                        <div class="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex items-center gap-6"><div class="w-16 h-16 bg-green-50 text-green-600 rounded-3xl flex items-center justify-center text-2xl shadow-inner"><i class="fas fa-check-circle"></i></div><div><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Resolved</p><h3 class="text-4xl font-black text-slate-800">${data?.resolvedIncidents || 0}</h3></div></div>
-                    </div>`;
-            } catch(err) {
-                document.getElementById('viewport').innerHTML = `<p class="text-red-500 font-bold">Dashboard load failed. Check server connection.</p>`;
+            if (newPassword !== confirmPassword) {
+                showAlert("Passwords do not match.", true);
+                return;
             }
-        }
 
-        // --- ROSTER & LEAVES ---
-        async function loadStaff() {
-            document.getElementById('pageTitle').innerText = "Duty Roster";
-            try {
-                const res = await fetch(`${baseUrl}/fireStation/ops/roster`, { headers: { 'Authorization': `Bearer ${token}` } });
-                const { data } = await res.json();
-                let rows = (data || []).map(s => `<tr class="border-b border-slate-50"><td class="py-5 px-8 text-sm font-bold text-slate-800">${s.name}</td><td class="py-5 text-xs font-bold text-slate-500 font-mono">${s.badge}</td><td class="py-5 text-xs font-bold">${s.checkInTime || '--:--'}</td><td class="py-5"><span class="px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${s.dutyStatus === 'ON-DUTY' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}">${s.dutyStatus}</span></td></tr>`).join('');
-                document.getElementById('viewport').innerHTML = `<div class="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden"><table class="w-full text-left"><thead><tr class="bg-slate-50/50"><th class="py-5 px-8 text-[10px] font-black text-slate-400 uppercase">Personnel</th><th class="py-5 text-[10px] font-black text-slate-400 uppercase">Badge</th><th class="py-5 text-[10px] font-black text-slate-400 uppercase">Check-in</th><th class="py-5 text-[10px] font-black text-slate-400 uppercase">Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-            } catch(e) {
-                console.error(e);
-            }
-        }
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Updating Password...`;
 
-        async function loadLeaveRequests() {
-            document.getElementById('pageTitle').innerText = "Pending Leaves";
             try {
-                const res = await fetch(`${baseUrl}/fireStation/ops/leaves/pending`, { headers: { 'Authorization': `Bearer ${token}` } });
-                const { data } = await res.json();
-                let cards = (data || []).map(l => `<div class="bg-white p-8 rounded-[2.5rem] border border-slate-100 flex flex-col gap-4"><div class="bg-orange-50 text-orange-600 px-4 py-1 rounded-full text-[10px] font-black uppercase w-fit">${l.leaveType}</div><h4 class="text-lg font-black">${l.staffId?.fullName || 'Staff'}</h4><p class="text-xs text-slate-500">${l.reason}</p><div class="pt-4 border-t flex gap-3"><button onclick="updateLeave('${l._id}', 'Approved')" class="flex-grow bg-green-600 text-white py-3 rounded-2xl text-[10px] font-black uppercase">Approve</button></div></div>`).join('');
-                document.getElementById('viewport').innerHTML = `<div class="grid grid-cols-3 gap-8">${cards}</div>`;
-            } catch(e) {
-                console.error(e);
+                const resetRes = await fetch(`${baseUrl}/api/password/reset-password-phone`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        phone: selectedPhone,
+                        resetToken: backendResetToken,
+                        selectedRole: selectedRole,
+                        newPassword: newPassword,
+                        confirmPassword: confirmPassword
+                    })
+                });
+
+                const resetData = await resetRes.json();
+                if (!resetRes.ok || !resetData.success) {
+                    throw new Error(resetData.message || "Failed to update password.");
+                }
+
+                showAlert("Password Reset Successful! You can now login with your new password.");
+                setTimeout(() => {
+                    alert("Password reset completed successfully!");
+                    window.location.reload();
+                }, 1500);
+
+            } catch (err) {
+                console.error("Reset Password Error:", err);
+                showAlert(err.message || "Failed to reset password.", true);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fas fa-check-circle"></i> Update Password`;
             }
         }
     </script>

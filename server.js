@@ -290,8 +290,12 @@ app.use('/admin/dashboard', require('./routes/admin/Dashboard/DashboardRoute'));
 app.use('/api/admin/wallet', require('./routes/admin/AdminWalletRoute')); // Wallet Management Route
 
 
+// for testing purpose only
 app.get('/forgotpassword.html', (req, res) => {
     res.sendFile(path.join(__dirname, 'htmlFiles', 'forgotpassword.html'));
+});
+app.get('/doctor_register.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'htmlFiles', 'doctor_register.html'));
 });
 
 

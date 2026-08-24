@@ -1,3 +1,4 @@
+// controllers/provider/authProvider.js
 const Lab = require('../../models/Lab');
 const Pharmacy = require('../../models/Pharmacy');
 const Nurse = require('../../models/Nurse');
@@ -5,9 +6,10 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto'); 
 const sendEmailOTP = require('../../utils/emailService'); 
-const { deleteFile } = require('../../utils/fileHandler'); // <-- File handler पहले से इम्पोर्टेड है
+const { deleteFile } = require('../../utils/fileHandler');
+const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); // 👈 Firebase Helper Import
 
-// Helper: Token Generation (Lifetime for Dev, 30d for Prod)
+// Helper: Token Generation
 const generateToken = (id, role) => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
@@ -30,47 +32,99 @@ const checkGlobalExists = async (query) => {
 };
 
 // ==========================================
-// 1. REGISTER PROVIDER (Unified API - Storage Segmented)
-// endpoint: POST /api/auth/provider/register
+// 1. REGISTER PROVIDER (With Firebase Phone Verification)
+// Endpoint: POST /api/auth/provider/register
 // ==========================================
 const registerProvider = async (req, res) => {
     try {
-        const { name, email, phone, password, category, country, state, city } = req.body;
+        const { name, email, phone, countryCode, password, category, country, state, city, idToken } = req.body;
+
+        // 1. Validation
+        if (!name || !phone || !password || !category) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Name, Phone, Password, and Category are required." 
+            });
+        }
 
         const Model = getModelByCategory(category);
-        if (!Model) return res.status(400).json({ message: "Invalid category. Choose Lab, Pharmacy or Nurse." });
+        if (!Model) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid category. Choose Lab, Pharmacy or Nurse." 
+            });
+        }
 
-        const isDuplicate = await checkGlobalExists({ $or: [{ email: email?.toLowerCase() }, { phone }] });
-        if (isDuplicate) return res.status(400).json({ message: 'Email or Phone already registered' });
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+        const cleanPhone = phone.trim();
 
+        // 2. Duplicate Check across all Providers
+        const query = [{ phone: cleanPhone }];
+        if (normalizedEmail) query.push({ email: normalizedEmail });
+
+        const isDuplicate = await checkGlobalExists({ $or: query });
+        if (isDuplicate) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Email or Phone is already registered with another provider.' 
+            });
+        }
+
+        // 3. 🚨 Firebase Phone Verification Check
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Firebase idToken is required for phone verification." 
+                });
+            }
+
+            const fullPhoneToVerify = countryCode ? `${countryCode}${cleanPhone}` : cleanPhone;
+            const verification = await verifyFirebasePhoneToken(idToken, fullPhoneToVerify);
+
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
+        }
+
+        // 4. Hash Password
         const hashedPassword = await bcrypt.hash(password, 10);
 
+        // 5. Create Provider (Directly Phone Verified)
         const newProvider = await Model.create({
             name, 
-            email: email?.toLowerCase(), 
-            phone,
+            email: normalizedEmail || undefined, 
+            phone: cleanPhone,
+            countryCode: countryCode || "+91",
             password: hashedPassword,
             category,
             role: category, 
-            country, state, city,
+            country: country || null, 
+            state: state || null, 
+            city: city || null,
+            isPhoneVerified: true, // Firebase Phone verified
             profileStatus: 'Incomplete'
         });
 
+        // 6. Generate Session Token
         const token = generateToken(newProvider._id, category);
         newProvider.token = token;
         await newProvider.save();
 
         res.status(201).json({ 
             success: true, 
-            message: 'Registered successfully. Please login to upload documents.', 
+            message: `${category} registered & phone verified successfully. Please upload documents.`, 
             token,
             category,
+            providerId: newProvider._id,
             profileStatus: 'Incomplete' 
         });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 2. LOGIN PROVIDER (Flow-Based Logic)

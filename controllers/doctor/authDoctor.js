@@ -1,93 +1,101 @@
 const Doctor = require('../../models/Doctor');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest'); // For handling profile update requests
-const { deleteFile } = require('../../utils/fileHandler'); // Import the deleteFile utility
+const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
+const { deleteFile } = require('../../utils/fileHandler');
+const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper');
 
-// Helper: Generate Token (Lifetime for Dev, 30d for Prod)
+// Helper: Generate Token
 const generateToken = (id, role) => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
-// --- 1. REGISTER (Step 1: Basic Info) ---
+// ==========================================
+// 1. REGISTER DOCTOR (With Real Firebase OTP Verification)
 // Endpoint: POST /api/auth/doctor/register
+// ==========================================
 const registerDoctor = async (req, res) => {
     try {
-        // countryCode add kiya gaya hai (Optional)
-        const { name, email, phone, countryCode, country, state, city, password } = req.body;
-        
-        // Validation: Email/Phone ki duplicate check
-        const normalizedEmail = email?.toLowerCase();
-        const exists = await Doctor.findOne({ $or: [{ email: normalizedEmail }, { phone }] });
-        if (exists) return res.status(400).json({ success: false, message: 'Email or Phone already exists' });
+        const { name, email, phone, countryCode, country, state, city, password, idToken } = req.body;
 
+        // 1. Basic Validations
+        if (!name || !phone || !password) {
+            return res.status(400).json({ success: false, message: "Name, Phone and Password are required." });
+        }
+
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+        const cleanPhone = phone.trim();
+
+        // 2. Duplicate check
+        const query = [];
+        if (normalizedEmail) query.push({ email: normalizedEmail });
+        if (cleanPhone) query.push({ phone: cleanPhone });
+
+        const exists = await Doctor.findOne({ $or: query });
+        if (exists) {
+            return res.status(400).json({ success: false, message: 'Email or Phone already exists with another Doctor account.' });
+        }
+
+        // 3. 🚨 Firebase Phone Verification Check
+        // Production me idToken compulsory hai, Dev/Local testing me optional
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Firebase idToken is required for phone verification." 
+                });
+            }
+
+            const verification = await verifyFirebasePhoneToken(idToken, cleanPhone);
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
+        }
+
+        // 4. Hash Password
         const hashedPassword = await bcrypt.hash(password, 10);
-        
-        // Doctor creation logic (Logic remains same, countryCode added to object)
+
+        // 5. Create Doctor in DB (Directly Phone Verified)
         const doctor = await Doctor.create({
-            name, 
-            email: normalizedEmail, 
-            phone, 
-            countryCode, // Agar req.body me nahi hoga toh null/undefined save hoga
-            country, 
-            state, 
-            city,
+            name,
+            email: normalizedEmail || undefined,
+            phone: cleanPhone,
+            countryCode: countryCode || "+91",
+            country: country || null,
+            state: state || null,
+            city: city || null,
             password: hashedPassword,
             role: 'doctor',
+            isPhoneVerified: true, // Firebase se verified ho chuka hai
             profileStatus: 'Incomplete'
         });
 
-        // 🚀 Auto-Login Token: Taaki register ke baad session maintain rahe
+        // 6. Generate Session Token (Step 2 document upload ke liye)
         const token = generateToken(doctor._id, doctor.role);
         doctor.token = token;
         await doctor.save();
 
-        res.status(201).json({ 
-            success: true, 
-            message: 'Registration successful. OTP sent to your phone (Static: 1111)', 
-            token, 
+        res.status(201).json({
+            success: true,
+            message: "Doctor registered & Phone verified successfully. Please upload documents to complete profile.",
+            token,
             doctorId: doctor._id,
             profileStatus: doctor.profileStatus
         });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 2. VERIFY OTP (Step 2) ---
-// Flow: OTP verify hoga -> isPhoneVerified true hoga -> Token refresh/return hoga
-const verifyOTP = async (req, res) => {
-    try {
-        const { phone, otp } = req.body;
-
-        if (otp !== '1111') return res.status(400).json({ success: false, message: 'Invalid OTP' });
-
-        const doctor = await Doctor.findOneAndUpdate(
-            { phone }, 
-            { isPhoneVerified: true }, 
-            { new: true }
-        );
-
-        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
-
-        const token = doctor.token || generateToken(doctor._id, doctor.role);
-
-        res.json({ 
-            success: true, 
-            message: 'Phone Verified Successfully', 
-            token, 
-            profileStatus: doctor.profileStatus 
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-// --- 3. UPLOAD DOCUMENTS ---
+// ==========================================
+// 2. UPLOAD DOCUMENTS (Step 2 of Onboarding)
+// Endpoint: PUT /api/auth/doctor/upload-docs
+// ==========================================
 const uploadDocuments = async (req, res) => {
     try {
-        const doctorId = req.user.id; // Middleware se aayega
+        const doctorId = req.user.id;
         const { qualification, councilNumber, councilName, licenseNumber, speciality } = req.body;
 
         const updateData = {
@@ -96,49 +104,49 @@ const uploadDocuments = async (req, res) => {
             councilName,
             licenseNumber, 
             speciality,
-            profileStatus: 'Pending' 
+            profileStatus: 'Pending', // Review status
+            rejectionReason: null
         };
 
-        if (req.files?.profileImage) {
-            updateData.profileImage = req.files.profileImage[0].path;
+        if (req.files?.profileImage && req.files.profileImage[0]) {
+            updateData.profileImage = req.files.profileImage[0].path.replace(/\\/g, "/");
         }
         if (req.files?.certificates) {
-            updateData.documents = req.files.certificates.map(f => f.path);
+            updateData.documents = req.files.certificates.map(f => f.path.replace(/\\/g, "/"));
         }
 
-        const updated = await Doctor.findByIdAndUpdate(doctorId, updateData, { new: true });
+        const updated = await Doctor.findByIdAndUpdate(doctorId, { $set: updateData }, { new: true });
         
         res.json({ 
             success: true, 
-            message: 'Documents submitted for approval.', 
-            profileStatus: 'Pending', // Frontend ko status sync karne ke liye
+            message: 'Documents submitted successfully. Profile is under Admin review.', 
+            profileStatus: 'Pending',
             data: updated 
         });
     } catch (error) {
-        // Yahan success: false add kiya hai consistency ke liye
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 4. LOGIN DOCTOR (Unified Logic) ---
+// ==========================================
+// 3. LOGIN DOCTOR
 // Endpoint: POST /api/auth/doctor/login
-// 1. UPDATED LOGIN DOCTOR (With Inactive check)
+// ==========================================
 const loginDoctor = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
         
-        let query = email ? { email: email.toLowerCase() } : { phone };
+        let query = email ? { email: email.toLowerCase().trim() } : { phone: phone ? phone.trim() : null };
         const doctor = await Doctor.findOne(query).select('+password');
 
         if (!doctor || !(await bcrypt.compare(String(password), doctor.password))) {
-            return res.status(400).json({ message: 'Invalid Credentials' });
+            return res.status(400).json({ success: false, message: 'Invalid Credentials' });
         }
 
-        // 🚨 SECURITY LOCK: Block login if Doctor account is inactive/disabled by Admin
         if (doctor.isActive === false) {
             return res.status(403).json({ 
                 success: false, 
-                message: "Access Denied: Your account is inactive. Please contact support/administrator." 
+                message: "Access Denied: Your account is deactivated. Please contact support." 
             });
         }
 
@@ -148,7 +156,7 @@ const loginDoctor = async (req, res) => {
                 fullAccess: false,
                 role: doctor.role, 
                 profileStatus: 'Pending',
-                message: 'Profile under review. No dashboard access yet.' 
+                message: 'Profile under review. Please wait for Admin approval.' 
             });
         }
 
@@ -175,7 +183,7 @@ const loginDoctor = async (req, res) => {
                 role: doctor.role,
                 profileStatus: 'Rejected',
                 rejectionReason: doctor.rejectionReason,
-                message: `Rejected: ${doctor.rejectionReason}. Re-upload required.` 
+                message: `Application Rejected: ${doctor.rejectionReason || "Please re-upload documents."}` 
             });
         }
 
@@ -204,11 +212,13 @@ const loginDoctor = async (req, res) => {
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 2. NEW DOCTOR STATUS TOGGLE API
+// ==========================================
+// 4. TOGGLE ONLINE STATUS
+// ==========================================
 const toggleDoctorOnlineStatus = async (req, res) => {
     try {
         const { isOnline } = req.body;
@@ -224,10 +234,6 @@ const toggleDoctorOnlineStatus = async (req, res) => {
             { new: true }
         ).select('-password');
 
-        if (!updatedDoctor) {
-            return res.status(404).json({ success: false, message: "Doctor profile not found." });
-        }
-
         res.json({
             success: true,
             message: `Your status has been updated to ${isOnline ? 'Online' : 'Offline'}.`,
@@ -238,12 +244,9 @@ const toggleDoctorOnlineStatus = async (req, res) => {
     }
 };
 
-
-
-// --- 5. UPDATE PROFILE (Bio, Fees, Availability, etc.) ---
-
-// Endpoint: PUT /api/auth/doctor/update-profile
-
+// ==========================================
+// 5. UPDATE PROFILE (Staged)
+// ==========================================
 const updateDoctorProfile = async (req, res) => {
     try {
         const doctorId = req.user.id;
@@ -254,7 +257,6 @@ const updateDoctorProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Doctor not found' });
         }
  
-        // 🚨 SECURITY LOCKS: Protect sensitive fields from direct modifications
         delete updates.email;
         delete updates.phone;
         delete updates.password;
@@ -263,7 +265,6 @@ const updateDoctorProfile = async (req, res) => {
         delete updates.rejectionReason;
         delete updates.documents;
  
-        // Parse multipart JSON strings
         const arrayFields = ['availability', 'languages', 'fees', 'consultationStatus', 'treatedConditions', 'competencies'];
         arrayFields.forEach(field => {
             if (updates[field]) {
@@ -275,15 +276,13 @@ const updateDoctorProfile = async (req, res) => {
             }
         });
  
-        // Process new files
-        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+        if (req.files?.profileImage && req.files.profileImage[0]) {
             updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
         }
-        if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
+        if (req.files?.signatureImage && req.files.signatureImage[0]) {
             updates.signatureImage = `/uploads/doctors/${req.files.signatureImage[0].filename}`;
         }
 
-        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
         const existingPending = await ProfileUpdateRequest.findOne({ vendorId: doctorId, vendorModel: 'Doctor', status: 'Pending' });
         if (existingPending) {
             if (updates.profileImage && existingPending.updatedFields?.profileImage) {
@@ -295,7 +294,6 @@ const updateDoctorProfile = async (req, res) => {
             await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
 
-        // Save staged update request
         const request = await ProfileUpdateRequest.create({
             vendorId: doctorId,
             vendorModel: 'Doctor',
@@ -310,49 +308,33 @@ const updateDoctorProfile = async (req, res) => {
         });
  
     } catch (error) {
-        console.error("Profile update error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
- 
- 
 
-// --- 6. GET DOCTOR PROFILE (Self) ---
-// Endpoint: GET /api/auth/doctor/profile
+// ==========================================
+// 6. GET PROFILES
+// ==========================================
 const getDoctorProfile = async (req, res) => {
     try {
-        // req.user.id protect middleware se aata hai
         const doctor = await Doctor.findById(req.user.id).populate('hospitalId', 'name address');
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
-        if (!doctor) {
-            return res.status(404).json({ success: false, message: 'Doctor not found' });
-        }
-
-        res.status(200).json({
-            success: true,
-            data: doctor
-        });
+        res.status(200).json({ success: true, data: doctor });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 7. GET DOCTOR BY ID (Public/Admin/Patient view) ---
-// Endpoint: GET /api/auth/doctor/:id
 const getDoctorById = async (req, res) => {
     try {
         const doctor = await Doctor.findById(req.params.id)
-            .select('-password -token -resetOTP') // Sensitive data hide karein
+            .select('-password -token -resetOTP')
             .populate('hospitalId', 'name address');
 
-        if (!doctor) {
-            return res.status(404).json({ success: false, message: 'Doctor not found' });
-        }
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
-        res.status(200).json({
-            success: true,
-            data: doctor
-        });
+        res.status(200).json({ success: true, data: doctor });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -363,9 +345,7 @@ const getLatestDoctorProfileRequest = async (req, res) => {
         const latestRequest = await ProfileUpdateRequest.findOne({
             vendorId: req.user.id,
             vendorModel: 'Doctor'
-        })
-        .sort({ createdAt: -1 })
-        .lean();
+        }).sort({ createdAt: -1 }).lean();
 
         res.json({ success: true, data: latestRequest || null });
     } catch (error) {
@@ -373,8 +353,6 @@ const getLatestDoctorProfileRequest = async (req, res) => {
     }
 };
 
-// PATCH: Change Doctor Password
-// Endpoint: PATCH /api/auth/doctor/change-password
 const changeDoctorPassword = async (req, res) => {
     try {
         const { oldPassword, newPassword } = req.body;
@@ -383,7 +361,6 @@ const changeDoctorPassword = async (req, res) => {
             return res.status(400).json({ success: false, message: "Old password and new password are required." });
         }
 
-        // Explicitly select password since it is hidden by default in Mongoose schema
         const doctor = await Doctor.findById(req.user.id).select('+password');
         if (!doctor) return res.status(404).json({ success: false, message: "Doctor not found." });
 
@@ -401,5 +378,14 @@ const changeDoctorPassword = async (req, res) => {
     }
 };
 
-
-module.exports = { registerDoctor, verifyOTP, uploadDocuments, loginDoctor,toggleDoctorOnlineStatus, updateDoctorProfile ,getDoctorProfile, getDoctorById, getLatestDoctorProfileRequest,changeDoctorPassword };
+module.exports = { 
+    registerDoctor, 
+    uploadDocuments, 
+    loginDoctor, 
+    toggleDoctorOnlineStatus, 
+    updateDoctorProfile, 
+    getDoctorProfile, 
+    getDoctorById, 
+    getLatestDoctorProfileRequest, 
+    changeDoctorPassword 
+};
