@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
 const { labDocUploads, pharmacyDocUploads, nurseDocUploads } = require('../../middleware/multer'); // Multer import
 const { 
-    registerProvider, 
+    registerProvider, checkProviderExists,
     loginProvider, toggleProviderOnlineStatus,
     uploadLabDocs, uploadPharmacyDocs, uploadNurseDocs,
     forgotPasswordProvider, resetPasswordProvider ,getProviderProfile
@@ -13,6 +13,7 @@ const {
 
 // 1. Step 1: Register (Basic Info)
 router.post('/register', registerProvider);
+router.post('/check-exists', checkProviderExists);
 
 // 2. Step 2: Login (Get Token & check profileStatus)
 router.post('/login', loginProvider);

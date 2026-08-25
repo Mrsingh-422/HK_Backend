@@ -611,7 +611,7 @@ const getProviderProfile = async (req, res) => {
 };
 
 module.exports = { 
-    registerProvider, 
+    registerProvider, checkProviderExists,
     loginProvider, toggleProviderOnlineStatus,
     uploadLabDocs, 
     uploadPharmacyDocs, 
