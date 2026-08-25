@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Provider Registration (Lab/Pharmacy/Nurse)</title>
+    <title>Health Kangaroo | Patient Registration</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome Icons -->
@@ -17,245 +17,135 @@
 
     <style>
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
-        .cat-btn.active { @apply bg-green-600 text-white border-green-600 shadow-md shadow-green-100; }
-        .cat-btn { @apply border-2 border-slate-200 px-6 py-3 rounded-2xl font-black text-slate-500 transition-all flex items-center justify-center gap-2; }
-        .step-bubble.active { @apply bg-green-600 text-white shadow-lg shadow-green-200 border-green-600; }
-        .step-bubble.completed { @apply bg-slate-900 text-white border-slate-900; }
-        .step-bubble { @apply w-10 h-10 rounded-2xl flex items-center justify-center font-black border-2 border-slate-200 text-slate-400 transition-all; }
+        .hk-input-box { @apply flex items-center gap-3 border border-gray-200 bg-white rounded-2xl px-5 py-4 transition-all focus-within:border-emerald-600 focus-within:ring-2 focus-within:ring-emerald-100; }
+        .hk-input { @apply w-full bg-transparent font-medium text-slate-800 outline-none text-sm placeholder-gray-400; }
     </style>
 </head>
-<body class="min-h-screen flex items-center justify-center p-6">
+<body class="min-h-screen flex items-center justify-center p-4">
 
     <!-- Invisible Firebase Recaptcha Container -->
     <div id="recaptcha-container"></div>
 
-    <div class="w-full max-w-2xl bg-white p-10 rounded-[2.5rem] shadow-2xl border border-slate-100 space-y-8 my-8">
+    <div class="w-full max-w-md bg-white p-8 sm:p-10 rounded-[2.5rem] shadow-2xl border border-slate-100 space-y-6 my-6">
         
-        <!-- Header -->
+        <!-- Header & Logo -->
         <div class="text-center space-y-2">
-            <div class="inline-flex items-center justify-center w-16 h-16 bg-green-50 text-green-600 rounded-3xl text-2xl shadow-inner mb-2">
-                <i class="fas fa-hand-holding-medical"></i>
+            <div class="inline-flex items-center justify-center w-20 h-20 bg-emerald-50 text-emerald-600 rounded-3xl text-3xl mb-1 shadow-inner">
+                <i class="fas fa-shield-heart"></i>
             </div>
-            <h2 class="text-3xl font-black text-slate-800 tracking-tight">Provider Onboarding</h2>
-            <p class="text-xs text-slate-400 font-medium">Join as Pathology Lab, Pharmacy, or Home Care Nurse</p>
+            <h2 class="text-2xl font-black text-slate-800 tracking-tight">Health Kangaroo</h2>
+            <p class="text-xs text-slate-400 font-semibold uppercase tracking-wider">One-Stop Healthcare Solution</p>
         </div>
 
-        <!-- 3-Step Stepper -->
-        <div class="flex items-center justify-between px-4">
-            <div class="flex flex-col items-center gap-1.5">
-                <div id="bubble1" class="step-bubble active">1</div>
-                <span class="text-[10px] font-black uppercase text-slate-500">Partner Info</span>
-            </div>
-            <div id="line1" class="h-1 flex-grow bg-slate-100 mx-3 rounded-full"></div>
-            <div class="flex flex-col items-center gap-1.5">
-                <div id="bubble2" class="step-bubble">2</div>
-                <span class="text-[10px] font-black uppercase text-slate-500">Firebase OTP</span>
-            </div>
-            <div id="line2" class="h-1 flex-grow bg-slate-100 mx-3 rounded-full"></div>
-            <div class="flex flex-col items-center gap-1.5">
-                <div id="bubble3" class="step-bubble">3</div>
-                <span class="text-[10px] font-black uppercase text-slate-500">KYC Documents</span>
-            </div>
-        </div>
-
-        <!-- Alert Notification -->
+        <!-- Alert Notification Box -->
         <div id="alertBox" class="hidden p-4 rounded-2xl text-xs font-bold transition-all"></div>
 
-        <!-- ========================================== -->
-        <!-- 🩺 STEP 1: CATEGORY + BASIC INFO -->
-        <!-- ========================================== -->
-        <div id="step1Container" class="space-y-6">
-            <div>
-                <label class="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">Register As *</label>
-                <div class="grid grid-cols-3 gap-3">
-                    <button type="button" onclick="selectCategory('Lab')" class="cat-btn active" id="catBtnLab"><i class="fas fa-flask"></i> Lab</button>
-                    <button type="button" onclick="selectCategory('Pharmacy')" class="cat-btn" id="catBtnPharmacy"><i class="fas fa-pills"></i> Pharmacy</button>
-                    <button type="button" onclick="selectCategory('Nurse')" class="cat-btn" id="catBtnNurse"><i class="fas fa-user-nurse"></i> Nurse</button>
+        <!-- FORM CONTAINER -->
+        <div class="space-y-4">
+            
+            <!-- 1. Full Name -->
+            <div class="hk-input-box">
+                <i class="far fa-user text-gray-400 text-lg"></i>
+                <input id="userName" type="text" placeholder="Pankaj Kumar" class="hk-input">
+            </div>
+
+            <!-- 2. Email Address -->
+            <div class="hk-input-box">
+                <i class="far fa-envelope text-gray-400 text-lg"></i>
+                <input id="userEmail" type="email" placeholder="omninos@gmail.com" class="hk-input">
+            </div>
+
+            <!-- 3. Phone Number with Verified Badge / Send OTP Button -->
+            <div class="hk-input-box relative">
+                <i class="fas fa-phone-alt text-gray-400 text-sm"></i>
+                <input id="userPhone" type="tel" placeholder="+91 0000000000" class="hk-input font-bold text-slate-700">
+                
+                <!-- Unverified State: Send OTP Button -->
+                <button id="sendOtpBtn" onclick="handleSendOtp()" type="button" class="text-xs font-bold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-1.5 rounded-xl whitespace-nowrap transition flex items-center gap-1.5">
+                    <span>Verify</span>
+                </button>
+
+                <!-- Verified State: Figma Green Badge (Hidden initially) -->
+                <span id="verifiedBadge" class="hidden text-xs font-bold text-emerald-600 bg-emerald-50 px-3.5 py-1.5 rounded-xl whitespace-nowrap">
+                    | Verified
+                </span>
+            </div>
+
+            <!-- OTP Input Box (Revealed when OTP is sent) -->
+            <div id="otpBox" class="hidden space-y-2 p-4 bg-emerald-50/50 rounded-2xl border border-emerald-200">
+                <p class="text-[11px] font-bold text-emerald-800 uppercase tracking-wide">Enter Firebase SMS OTP</p>
+                <div class="flex gap-2">
+                    <input id="userOtp" type="text" maxlength="6" placeholder="• • • • • •" class="w-full bg-white border border-emerald-300 rounded-xl px-4 py-2.5 font-black text-center text-lg tracking-widest outline-none text-slate-800">
+                    <button id="confirmOtpBtn" onclick="handleConfirmOtp()" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl whitespace-nowrap shadow-md transition">
+                        Confirm
+                    </button>
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-4">
-                <div>
-                    <label id="nameLabel" class="text-xs font-bold text-slate-400 uppercase">Lab / Business Name *</label>
-                    <input id="providerName" type="text" placeholder="e.g. Apollo Diagnostics" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                </div>
-                <div>
-                    <label class="text-xs font-bold text-slate-400 uppercase">Email Address</label>
-                    <input id="providerEmail" type="email" placeholder="partner@example.com" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                </div>
+            <!-- 4. Country Dropdown -->
+            <div class="hk-input-box">
+                <span class="text-base">🇮🇳</span>
+                <select id="userCountry" class="hk-input font-bold text-slate-700">
+                    <option value="India">India</option>
+                </select>
             </div>
 
-            <div class="grid grid-cols-3 gap-4">
-                <div>
-                    <label class="text-xs font-bold text-slate-400 uppercase">Country Code</label>
-                    <input id="providerCountryCode" type="text" value="+91" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none text-center">
-                </div>
-                <div class="col-span-2">
-                    <label class="text-xs font-bold text-slate-400 uppercase">Mobile Number *</label>
-                    <input id="providerPhone" type="tel" placeholder="9876543210" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                </div>
+            <!-- 5. State Dropdown -->
+            <div class="hk-input-box">
+                <i class="far fa-building text-gray-400 text-base"></i>
+                <select id="userState" class="hk-input font-bold text-slate-700">
+                    <option value="Punjab">Punjab</option>
+                    <option value="Delhi">Delhi</option>
+                    <option value="Haryana">Haryana</option>
+                </select>
             </div>
 
-            <div class="grid grid-cols-3 gap-4">
-                <div>
-                    <label class="text-xs font-bold text-slate-400 uppercase">City</label>
-                    <input id="providerCity" type="text" placeholder="Mohali" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                </div>
-                <div>
-                    <label class="text-xs font-bold text-slate-400 uppercase">State</label>
-                    <input id="providerState" type="text" placeholder="Punjab" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                </div>
-                <div>
-                    <label class="text-xs font-bold text-slate-400 uppercase">Country</label>
-                    <input id="providerCountry" type="text" value="India" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                </div>
+            <!-- 6. City Dropdown -->
+            <div class="hk-input-box">
+                <i class="far fa-city text-gray-400 text-base"></i>
+                <select id="userCity" class="hk-input font-bold text-slate-700">
+                    <option value="Mohali">Mohali</option>
+                    <option value="Chandigarh">Chandigarh</option>
+                    <option value="Panchkula">Panchkula</option>
+                </select>
             </div>
 
-            <div>
-                <label class="text-xs font-bold text-slate-400 uppercase">Password *</label>
-                <input id="providerPassword" type="password" placeholder="Create strong password" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
+            <!-- 7. Password -->
+            <div class="hk-input-box">
+                <i class="fas fa-lock text-gray-400 text-base"></i>
+                <input id="userPassword" type="password" placeholder="Create Password" class="hk-input">
             </div>
 
-            <button id="sendOtpBtn" onclick="handleSendOtp()" class="w-full bg-green-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-green-100 hover:bg-green-700 transition-all flex items-center justify-center gap-3">
-                <i class="fas fa-paper-plane"></i> Send Firebase SMS OTP
+            <!-- Terms and Conditions Checkbox -->
+            <div class="flex items-start gap-3 pt-2">
+                <input id="termsCheckbox" type="checkbox" checked class="mt-1 w-4 h-4 text-emerald-600 rounded border-gray-300 focus:ring-emerald-500">
+                <label for="termsCheckbox" class="text-xs text-slate-500 font-medium leading-relaxed">
+                    I accept the Health Kangaroo <a href="#" class="text-emerald-600 font-bold underline">Term of use</a> & <a href="#" class="text-emerald-600 font-bold underline">Privacy Policy</a>.
+                </label>
+            </div>
+
+            <!-- Submit Button (Figma: CREATE PASSWORD) -->
+            <button id="registerBtn" onclick="handleUserRegistration()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-2xl shadow-xl shadow-emerald-200 transition-all uppercase tracking-wide text-sm flex items-center justify-center gap-2 mt-4">
+                <i class="fas fa-user-plus"></i> Create Account
             </button>
-        </div>
 
-        <!-- ========================================== -->
-        <!-- 🔢 STEP 2: VERIFY OTP & REGISTER -->
-        <!-- ========================================== -->
-        <div id="step2Container" class="hidden space-y-6">
-            <div class="text-center p-4 bg-slate-50 rounded-2xl">
-                <p class="text-xs text-slate-500 font-medium">6-digit verification code sent to</p>
-                <p id="displayTargetPhone" class="text-sm font-black text-slate-800 font-mono mt-1">+91 XXXXXXXXXX</p>
-            </div>
-
-            <div>
-                <label class="text-xs font-bold text-slate-400 uppercase">Enter SMS OTP</label>
-                <input id="otpInput" type="text" maxlength="6" placeholder="• • • • • •" class="w-full mt-2 bg-slate-50 border border-slate-200 rounded-2xl p-4 font-black text-center text-2xl tracking-[0.5em] text-slate-800 outline-none">
-            </div>
-
-            <button id="verifyBtn" onclick="handleVerifyAndRegister()" class="w-full bg-green-600 text-white font-black py-5 rounded-[2rem] shadow-xl shadow-green-100 hover:bg-green-700 transition-all flex items-center justify-center gap-3">
-                <i class="fas fa-shield-check"></i> Verify OTP & Register Partner
-            </button>
-
-            <button onclick="goToStep(1)" class="w-full text-slate-400 text-xs font-bold hover:text-slate-600 transition">
-                <i class="fas fa-arrow-left"></i> Edit Details
-            </button>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- 📑 STEP 3: UPLOAD DOCUMENTS (DYNAMIC UI) -->
-        <!-- ========================================== -->
-        <div id="step3Container" class="hidden space-y-6">
-            <div class="border-b border-slate-100 pb-3 flex items-center justify-between">
-                <div>
-                    <h3 class="text-sm font-black text-slate-800 uppercase tracking-wider">Step 2: Upload Compliance Documents</h3>
-                    <p id="docSubTitle" class="text-xs text-slate-400 mt-0.5">Submit legal licenses for Admin approval</p>
-                </div>
-                <span class="bg-orange-100 text-orange-600 text-[10px] font-black uppercase px-3 py-1 rounded-full">Status: Incomplete</span>
-            </div>
-
-            <!-- LAB SPECIFIC FIELDS -->
-            <div id="labFields" class="space-y-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="text-xs font-bold text-slate-400 uppercase">Issuing Authority</label>
-                        <input id="labAuthority" type="text" placeholder="e.g. State Health Dept" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                    </div>
-                    <div>
-                        <label class="text-xs font-bold text-slate-400 uppercase">GST Number</label>
-                        <input id="labGst" type="text" placeholder="GSTIN Number" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                    </div>
-                </div>
-                <div>
-                    <label class="text-xs font-bold text-slate-400 uppercase">Lab Licenses / Certificates (PDF/Images)</label>
-                    <input id="labLicenses" type="file" multiple class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-3 text-xs">
-                </div>
-            </div>
-
-            <!-- PHARMACY SPECIFIC FIELDS -->
-            <div id="pharmacyFields" class="hidden space-y-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="text-xs font-bold text-slate-400 uppercase">CIN Number * (Compulsory)</label>
-                        <input id="pharmaCin" type="text" placeholder="U74999DL2026PTC123456" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                    </div>
-                    <div>
-                        <label class="text-xs font-bold text-slate-400 uppercase">GST Number</label>
-                        <input id="pharmaGst" type="text" placeholder="GSTIN Number" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                    </div>
-                </div>
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="text-xs font-bold text-slate-400 uppercase">Drug License Number</label>
-                        <input id="pharmaDrugLic" type="text" placeholder="e.g. 27192-195" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                    </div>
-                    <div>
-                        <label class="text-xs font-bold text-slate-400 uppercase">Drug License Type</label>
-                        <select id="pharmaLicType" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                            <option value="Retail">Retail</option>
-                            <option value="Wholesale">Wholesale</option>
-                        </select>
-                    </div>
-                </div>
-                <div>
-                    <label class="text-xs font-bold text-slate-400 uppercase">Pharmacy Licenses / Certificates</label>
-                    <input id="pharmaLicenses" type="file" multiple class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-3 text-xs">
-                </div>
-            </div>
-
-            <!-- NURSE SPECIFIC FIELDS -->
-            <div id="nurseFields" class="hidden space-y-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="text-xs font-bold text-slate-400 uppercase">Speciality</label>
-                        <input id="nurseSpeciality" type="text" placeholder="e.g. ICU / Critical Care" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                    </div>
-                    <div>
-                        <label class="text-xs font-bold text-slate-400 uppercase">Experience (Years)</label>
-                        <input id="nurseExperience" type="number" value="3" class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-4 font-bold text-slate-700 outline-none">
-                    </div>
-                </div>
-                <div>
-                    <label class="text-xs font-bold text-slate-400 uppercase">Nursing Certificates & Awards</label>
-                    <input id="nurseCertificates" type="file" multiple class="w-full mt-2 bg-slate-50 border-none rounded-2xl p-3 text-xs">
-                </div>
-            </div>
-
-            <button id="uploadDocsBtn" onclick="handleUploadDocs()" class="w-full bg-slate-900 text-white font-black py-5 rounded-[2rem] shadow-xl hover:bg-black transition-all flex items-center justify-center gap-3">
-                <i class="fas fa-file-shield"></i> Submit Documents for Admin Approval
-            </button>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- 🎉 FINAL SUCCESS SCREEN -->
-        <!-- ========================================== -->
-        <div id="finalSuccessContainer" class="hidden text-center space-y-6 py-6">
-            <div class="inline-flex items-center justify-center w-20 h-20 bg-green-50 text-green-600 rounded-full text-4xl shadow-inner">
-                <i class="fas fa-badge-check"></i>
-            </div>
-            <div class="space-y-2">
-                <h3 class="text-2xl font-black text-slate-800">Application Under Review!</h3>
-                <p class="text-xs text-slate-500 max-w-md mx-auto">
-                    Your mobile number is verified, and your documents have been submitted to the Admin team. Status is now <span class="font-bold text-orange-600">Pending</span>.
-                </p>
-            </div>
-            <button onclick="window.location.reload()" class="px-8 py-4 bg-green-600 text-white text-xs font-bold rounded-2xl">
-                Register Another Provider
-            </button>
+            <!-- Footer Link -->
+            <p class="text-center text-xs text-slate-500 font-medium pt-2">
+                Have an account? <a href="#" class="text-emerald-600 font-bold underline">Login</a>
+            </p>
         </div>
 
     </div>
 
-    <!-- JAVASCRIPT LOGIC -->
+    <!-- SCRIPT LOGIC -->
     <script>
         const baseUrl = "http://localhost:5002";
 
         // =========================================================================
         // 🚨 1. PASTE YOUR FIREBASE WEB CONFIG HERE
+        // (Firebase Console -> Project Settings -> General -> Web App)
         // =========================================================================
-        const firebaseConfig = {
+         const firebaseConfig = {
   apiKey: "AIzaSyA4Jszsbc3SUkdWl6kK0WDQLgmwY7s7u3g",
   authDomain: "hk-frontend-5b02d.firebaseapp.com",
   projectId: "hk-frontend-5b02d",
@@ -269,130 +159,159 @@
             firebase.initializeApp(firebaseConfig);
         }
 
-        // Global State
-        let selectedCategory = 'Lab';
+        // State
         let confirmationResult = null;
-        let providerSessionToken = null;
+        let verifiedIdToken = null;
         let appVerifier = null;
-        let cachedFormData = {};
-
-        function selectCategory(cat) {
-            selectedCategory = cat;
-            document.querySelectorAll('.cat-btn').forEach(btn => btn.classList.remove('active'));
-            document.getElementById(`catBtn${cat}`).classList.add('active');
-
-            const label = document.getElementById('nameLabel');
-            if (cat === 'Nurse') label.innerText = "Nurse Full Name *";
-            else if (cat === 'Pharmacy') label.innerText = "Pharmacy / Chemist Name *";
-            else label.innerText = "Lab / Diagnostic Center Name *";
-        }
 
         function showAlert(msg, isError = false) {
             const box = document.getElementById('alertBox');
-            box.classList.remove('hidden', 'bg-red-50', 'text-red-600', 'bg-green-50', 'text-green-600');
-            box.classList.add(isError ? 'bg-red-50' : 'bg-green-50', isError ? 'text-red-600' : 'text-green-600');
+            box.classList.remove('hidden', 'bg-red-50', 'text-red-600', 'bg-emerald-50', 'text-emerald-600');
+            box.classList.add(isError ? 'bg-red-50' : 'bg-emerald-50', isError ? 'text-red-600' : 'text-emerald-600');
             box.innerHTML = `<i class="fas ${isError ? 'fa-circle-exclamation' : 'fa-check-circle'} mr-2"></i> ${msg}`;
         }
 
-        function goToStep(step) {
-            document.getElementById('step1Container').classList.toggle('hidden', step !== 1);
-            document.getElementById('step2Container').classList.toggle('hidden', step !== 2);
-            document.getElementById('step3Container').classList.toggle('hidden', step !== 3);
-            document.getElementById('finalSuccessContainer').classList.toggle('hidden', step !== 4);
-
-            const b1 = document.getElementById('bubble1');
-            const b2 = document.getElementById('bubble2');
-            const b3 = document.getElementById('bubble3');
-            const l1 = document.getElementById('line1');
-            const l2 = document.getElementById('line2');
-
-            b1.className = step > 1 ? 'step-bubble completed' : 'step-bubble active';
-            b2.className = step === 2 ? 'step-bubble active' : (step > 2 ? 'step-bubble completed' : 'step-bubble');
-            b3.className = step === 3 ? 'step-bubble active' : (step === 4 ? 'step-bubble completed' : 'step-bubble');
-
-            l1.className = step > 1 ? 'h-1 flex-grow bg-green-500 mx-3 rounded-full' : 'h-1 flex-grow bg-slate-100 mx-3 rounded-full';
-            l2.className = step > 2 ? 'h-1 flex-grow bg-green-500 mx-3 rounded-full' : 'h-1 flex-grow bg-slate-100 mx-3 rounded-full';
-
-            if (step === 3) {
-                document.getElementById('labFields').classList.toggle('hidden', selectedCategory !== 'Lab');
-                document.getElementById('pharmacyFields').classList.toggle('hidden', selectedCategory !== 'Pharmacy');
-                document.getElementById('nurseFields').classList.toggle('hidden', selectedCategory !== 'Nurse');
-            }
-        }
-
         // =========================================================================
-        // 🚀 STEP 1: SEND OTP VIA FIREBASE
+        // 📱 1. PRE-CHECK IN DB + SEND REAL SMS OTP VIA FIREBASE
         // =========================================================================
         async function handleSendOtp() {
-            const name = document.getElementById('providerName').value.trim();
-            const email = document.getElementById('providerEmail').value.trim();
-            const countryCode = document.getElementById('providerCountryCode').value.trim();
-            const phone = document.getElementById('providerPhone').value.trim();
-            const password = document.getElementById('providerPassword').value;
-            const city = document.getElementById('providerCity').value.trim();
-            const state = document.getElementById('providerState').value.trim();
-            const country = document.getElementById('providerCountry').value.trim();
+            let phone = document.getElementById('userPhone').value.trim();
+            let email = document.getElementById('userEmail').value.trim();
+            const btn = document.getElementById('sendOtpBtn');
 
-            if (!name || !phone || !password) {
-                showAlert("Please enter Partner Name, Mobile Number, and Password!", true);
+            if (!phone || phone.replace(/\D/g, "").length < 10) {
+                showAlert("Please enter a valid 10-digit mobile number.", true);
                 return;
             }
 
-            cachedFormData = { name, email, countryCode, phone, password, category: selectedCategory, city, state, country };
+            const cleanDigits = phone.replace(/\D/g, "").slice(-10);
+            const fullPhone = `+91${cleanDigits}`;
 
-            const btn = document.getElementById('sendOtpBtn');
             btn.disabled = true;
-            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Triggering Firebase SMS OTP...`;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Checking...`;
 
             try {
+                // 🚨 1. PEHLE BACKEND CHECK KAREGA (Kya number already exist karta hai?)
+                const checkRes = await fetch(`${baseUrl}/api/auth/user/check-exists`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone: cleanDigits, email: email || undefined })
+                });
+
+                const checkData = await checkRes.json();
+
+                // Agar number pehle se exist karta hai, toh yahin rok do! (OTP nahi jayega)
+                if (checkData.exists) {
+                    showAlert(checkData.message, true);
+                    btn.disabled = false;
+                    btn.innerText = "Verify";
+                    return;
+                }
+
+                // 🚨 2. AGAR NUMBER NEW HAI, TABHI FIREBASE SMS OTP BHEJO
+                btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Sending OTP...`;
+
                 if (!appVerifier) {
                     appVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', { size: 'invisible' });
                 }
 
-                const fullPhone = `${countryCode}${phone}`;
                 confirmationResult = await firebase.auth().signInWithPhoneNumber(fullPhone, appVerifier);
-
-                document.getElementById('displayTargetPhone').innerText = fullPhone;
-                showAlert("Firebase SMS OTP sent successfully to " + fullPhone);
-                goToStep(2);
+                
+                showAlert("SMS OTP sent to " + fullPhone);
+                document.getElementById('otpBox').classList.remove('hidden');
 
             } catch (err) {
-                console.error("Firebase SMS Error:", err);
-                showAlert(err.message || "Failed to send SMS OTP.", true);
+                console.error("Error:", err);
+                showAlert(err.message || "Failed to process request.", true);
                 if (appVerifier) appVerifier.render().then(id => grecaptcha.reset(id));
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = `<i class="fas fa-paper-plane"></i> Send Firebase SMS OTP`;
+                btn.innerText = "Resend";
             }
         }
 
         // =========================================================================
-        // 🚀 STEP 2: VERIFY OTP & CALL BACKEND REGISTER API
+        // 🔢 2. CONFIRM OTP & SHOW FIGMA VERIFIED BADGE
         // =========================================================================
-        async function handleVerifyAndRegister() {
-            const otp = document.getElementById('otpInput').value.trim();
-            const btn = document.getElementById('verifyBtn');
+        async function handleConfirmOtp() {
+            const otp = document.getElementById('userOtp').value.trim();
+            const confirmBtn = document.getElementById('confirmOtpBtn');
 
             if (!otp || otp.length !== 6) {
                 showAlert("Please enter a valid 6-digit OTP code.", true);
                 return;
             }
 
-            btn.disabled = true;
-            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Verifying & Registering...`;
+            confirmBtn.disabled = true;
+            confirmBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
 
             try {
-                // 1. Confirm OTP with Firebase
                 const userCredential = await confirmationResult.confirm(otp);
-                const idToken = await userCredential.user.getIdToken();
+                verifiedIdToken = await userCredential.user.getIdToken();
 
-                // 2. Call Backend Register API
+                // Hide OTP box & Send button, Show Figma green badge!
+                document.getElementById('otpBox').classList.add('hidden');
+                document.getElementById('sendOtpBtn').classList.add('hidden');
+                document.getElementById('verifiedBadge').classList.remove('hidden');
+                document.getElementById('userPhone').readOnly = true;
+
+                showAlert("Phone number verified successfully!");
+
+            } catch (err) {
+                console.error("OTP Error:", err);
+                showAlert(err.message || "Invalid or Expired OTP.", true);
+            } finally {
+                confirmBtn.disabled = false;
+                confirmBtn.innerText = "Confirm";
+            }
+        }
+
+        // =========================================================================
+        // 🚀 3. REGISTER USER (CALL BACKEND API)
+        // =========================================================================
+        async function handleUserRegistration() {
+            const name = document.getElementById('userName').value.trim();
+            const email = document.getElementById('userEmail').value.trim();
+            const phone = document.getElementById('userPhone').value.trim().replace(/\D/g, "").slice(-10);
+            const country = document.getElementById('userCountry').value;
+            const state = document.getElementById('userState').value;
+            const city = document.getElementById('userCity').value;
+            const password = document.getElementById('userPassword').value;
+            const termsAccepted = document.getElementById('termsCheckbox').checked;
+
+            if (!name || !phone || !password) {
+                showAlert("Please fill Full Name, Mobile Number, and Password!", true);
+                return;
+            }
+
+            if (password.length < 6) {
+                showAlert("Password must be at least 6 characters long.", true);
+                return;
+            }
+
+            if (!termsAccepted) {
+                showAlert("Please accept the Terms & Privacy Policy.", true);
+                return;
+            }
+
+            const regBtn = document.getElementById('registerBtn');
+            regBtn.disabled = true;
+            regBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Creating Account...`;
+
+            try {
                 const payload = {
-                    ...cachedFormData,
-                    idToken: idToken // Verified Firebase Token
+                    name,
+                    email: email || undefined,
+                    phone,
+                    countryCode: "+91",
+                    country,
+                    state,
+                    city,
+                    password,
+                    idToken: verifiedIdToken // 👈 Verified Firebase token sent to backend
                 };
 
-                const res = await fetch(`${baseUrl}/api/auth/provider/register`, {
+                const res = await fetch(`${baseUrl}/api/auth/user/register`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -401,88 +320,21 @@
                 const data = await res.json();
 
                 if (!res.ok || !data.success) {
-                    throw new Error(data.message || "Provider registration failed.");
+                    throw new Error(data.message || "Registration failed.");
                 }
 
-                providerSessionToken = data.token;
-                showAlert("Step 1 Complete! Phone verified and partner account created.");
-                goToStep(3);
+                showAlert("Account Created Successfully! Welcome to Health Kangaroo.");
+                setTimeout(() => {
+                    alert(`Registration Complete!\nWelcome, ${data.user.name}\nLocation: ${data.user.location}\nToken: ${data.token.substring(0, 25)}...`);
+                    window.location.reload();
+                }, 1500);
 
             } catch (err) {
-                console.error("Registration Error:", err);
-                showAlert(err.message || "Invalid OTP or Registration Failed.", true);
+                console.error("Register Error:", err);
+                showAlert(err.message || "Registration failed.", true);
             } finally {
-                btn.disabled = false;
-                btn.innerHTML = `<i class="fas fa-shield-check"></i> Verify OTP & Register Partner`;
-            }
-        }
-
-        // =========================================================================
-        // 🚀 STEP 3: UPLOAD KYC DOCUMENTS
-        // =========================================================================
-        async function handleUploadDocs() {
-            if (!providerSessionToken) {
-                showAlert("Session expired. Please restart registration.", true);
-                return;
-            }
-
-            const formData = new FormData();
-            let uploadUrl = "";
-
-            if (selectedCategory === 'Lab') {
-                uploadUrl = `${baseUrl}/api/auth/provider/upload-docs/lab`;
-                formData.append('issuingAuthority', document.getElementById('labAuthority').value.trim());
-                formData.append('gstNumber', document.getElementById('labGst').value.trim());
-                const files = document.getElementById('labLicenses').files;
-                for (let i = 0; i < files.length; i++) formData.append('labLicenses', files[i]);
-            } 
-            else if (selectedCategory === 'Pharmacy') {
-                const cin = document.getElementById('pharmaCin').value.trim();
-                if (!cin) {
-                    showAlert("CIN Number is Compulsory for Pharmacy!", true);
-                    return;
-                }
-                uploadUrl = `${baseUrl}/api/auth/provider/upload-docs/pharmacy`;
-                formData.append('cinNumber', cin);
-                formData.append('gstNumber', document.getElementById('pharmaGst').value.trim());
-                formData.append('drugLicenseNumber', document.getElementById('pharmaDrugLic').value.trim());
-                formData.append('drugLicenseType', document.getElementById('pharmaLicType').value);
-                const files = document.getElementById('pharmaLicenses').files;
-                for (let i = 0; i < files.length; i++) formData.append('pharmacyLicenses', files[i]);
-            } 
-            else if (selectedCategory === 'Nurse') {
-                uploadUrl = `${baseUrl}/api/auth/provider/upload-docs/nurse`;
-                formData.append('speciality', document.getElementById('nurseSpeciality').value.trim());
-                formData.append('experienceYears', document.getElementById('nurseExperience').value);
-                const files = document.getElementById('nurseCertificates').files;
-                for (let i = 0; i < files.length; i++) formData.append('nursingCertificates', files[i]);
-            }
-
-            const btn = document.getElementById('uploadDocsBtn');
-            btn.disabled = true;
-            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Submitting Documents...`;
-
-            try {
-                const res = await fetch(uploadUrl, {
-                    method: 'PUT',
-                    headers: { 'Authorization': `Bearer ${providerSessionToken}` },
-                    body: formData
-                });
-
-                const data = await res.json();
-                if (!res.ok || !data.success) {
-                    throw new Error(data.message || "Document upload failed.");
-                }
-
-                showAlert("Documents submitted successfully for Admin review!");
-                goToStep(4);
-
-            } catch (err) {
-                console.error("Upload Error:", err);
-                showAlert(err.message || "Failed to upload documents.", true);
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = `<i class="fas fa-file-shield"></i> Submit Documents for Admin Approval`;
+                regBtn.disabled = false;
+                regBtn.innerHTML = `<i class="fas fa-user-plus mr-2"></i> Create Account`;
             }
         }
     </script>

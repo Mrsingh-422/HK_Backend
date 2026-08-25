@@ -34,6 +34,7 @@ const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/
 const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
+const PharmacyreturnConfig = require('../../../models/PharmacyReturnConfig');
 
 
 // 🔢 Helper: Indian Currency Number to Words Converter
@@ -2094,19 +2095,18 @@ const trackOrder = async (req, res) => {
             userId
         })
         .select('-paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
-        // 🚨 1. FULL COMPLIANCE POPULATE: CIN, GST, TAN, PAN, DL, FSSAI, Signature
         .populate({
             path: 'pharmacyId',
             select: 'name address city state country phone email documents.cinNumber documents.gstNumber documents.tanNumber documents.panNumber documents.drugLicenseNumber documents.foodLicenseNumber documents.signatureImage'
         })
         .populate('driverId', 'name phone vehicleNumber profilePic')
+        .populate('items.medicineId')
         .lean();
 
         if (!order) {
             return res.status(404).json({ success: false, message: "Order not found." });
         }
 
-        // Extract 2-digit State Code from GSTIN if available
         const gst = order.pharmacyId?.documents?.gstNumber || "";
         if (order.pharmacyId) {
             order.pharmacyId.stateCode = gst.length >= 2 ? gst.substring(0, 2) : "N/A";
@@ -2117,7 +2117,6 @@ const trackOrder = async (req, res) => {
         let calculatedSgstTotal = 0;
         const gstSlabBreakdown = {};
 
-        // Enrich items with Batch, Expiry, Packaging & GST splits
         const enrichedItems = await Promise.all(order.items.map(async (item) => {
             const itemQty = Number(item.quantity || 1);
             const itemTotalPrice = Number(item.price || 0) * itemQty;
@@ -2130,7 +2129,7 @@ const trackOrder = async (req, res) => {
             if (item.medicineId && (batchNo === "N/A" || expDate === "N/A")) {
                 const inv = await MedicineInventory.findOne({
                     pharmacyId: order.pharmacyId?._id || order.pharmacyId,
-                    medicineId: item.medicineId
+                    medicineId: item.medicineId._id || item.medicineId
                 }).sort({ expiry_date: 1 }).lean();
 
                 if (inv) {
@@ -2192,6 +2191,55 @@ const trackOrder = async (req, res) => {
         order.billSummary.amountInWords = numberToWordsIndian(order.billSummary.totalAmount);
         order.billSummary.gstClassBreakdown = Object.values(gstSlabBreakdown);
 
+        // =========================================================================
+        // 🚨 DYNAMIC RETURN & REPLACEMENT ELIGIBILITY ENGINE
+        // =========================================================================
+        let canReturn = false;
+        let canReplace = false;
+        let daysRemaining = 0;
+        let notEligibleReason = "";
+
+        if (order.status === 'Delivered' || order.deliveryStatus === 'Delivered') {
+            let config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
+            if (!config) config = { returnWindowDays: 3, isReturnEnabled: true, isReplacementEnabled: true };
+
+            // Check if non-prescription medical device / product exists in order
+            const hasReturnableProduct = order.items.some(item => {
+                const med = item.medicineId;
+                const isRx = med?.prescription_required?.toUpperCase() === 'YES';
+                return !isRx || (med?.bread_crumb && (
+                    med.bread_crumb.toLowerCase().includes('device') ||
+                    med.bread_crumb.toLowerCase().includes('care') ||
+                    med.bread_crumb.toLowerCase().includes('equipment')
+                ));
+            });
+
+            const deliveryDate = order.deliveredAt || order.updatedAt || order.createdAt;
+            const daysPassed = moment().diff(moment(deliveryDate), 'days');
+            daysRemaining = Math.max(0, config.returnWindowDays - daysPassed);
+
+            if (!hasReturnableProduct) {
+                notEligibleReason = "Non-returnable: Ingestible medicines cannot be returned as per health safety regulations.";
+            } else if (daysPassed > config.returnWindowDays) {
+                notEligibleReason = `Return window closed: Return/Replacement was only allowed within ${config.returnWindowDays} days.`;
+            } else if (order.returnDetails && order.returnDetails.status !== 'None') {
+                notEligibleReason = `Return request is already ${order.returnDetails.status}.`;
+            } else {
+                canReturn = config.isReturnEnabled;
+                canReplace = config.isReplacementEnabled;
+            }
+        } else {
+            notEligibleReason = "Return option will be available once the order is delivered.";
+        }
+
+        order.returnEligibility = {
+            canReturn,
+            canReplace,
+            daysRemaining,
+            returnWindowDays: 3,
+            reasonIfNotEligible: notEligibleReason
+        };
+
         res.json({
             success: true,
             data: order
@@ -2200,6 +2248,7 @@ const trackOrder = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 
@@ -3439,6 +3488,115 @@ const getSimilarInStockMedicines = async (req, res) => {
     }
 };
 
+// returnReplacement: 'Return' | 'Replacement'
+// SUBMIT RETURN / REPLACEMENT REQUEST (User App)
+// Endpoint: POST /user/pharmacy/orders/return-request/:orderId
+const requestPharmacyOrderReturn = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { requestType, reason, userComments, returnedMedicineId } = req.body; 
+        const userId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            userId
+        }).populate('items.medicineId');
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order not found." });
+        }
+
+        // 🚨 1. Check if order is Delivered
+        if (order.status !== 'Delivered' && order.deliveryStatus !== 'Delivered') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Return or replacement can only be requested for successfully delivered orders." 
+            });
+        }
+
+        // 🚨 2. PRODUCT VS MEDICINE COMPLIANCE CHECK
+        // Ingestible Prescription medicines cannot be returned/replaced as per medical regulations
+        const nonReturnableItems = [];
+        const returnableItems = [];
+
+        order.items.forEach(item => {
+            const med = item.medicineId;
+            const isPrescriptionDrug = med?.prescription_required?.toUpperCase() === 'YES';
+            const isDeviceOrOTC = !isPrescriptionDrug || (med?.bread_crumb && (
+                med.bread_crumb.toLowerCase().includes('device') ||
+                med.bread_crumb.toLowerCase().includes('care') ||
+                med.bread_crumb.toLowerCase().includes('equipment')
+            ));
+
+            if (isDeviceOrOTC) {
+                returnableItems.push(item);
+            } else {
+                nonReturnableItems.push(item.name);
+            }
+        });
+
+        // If order contains ONLY pure prescription medicines, block return immediately
+        if (returnableItems.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Compliance Blocked: As per Health & Drug safety regulations, ingestible prescription medicines cannot be returned or replaced once delivered. Return/replacement is strictly applicable only on medical devices, health monitors, and OTC health products."
+            });
+        }
+
+        // 🚨 3. Admin Return Policy Days Validation
+        let config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
+        if (!config) config = { returnWindowDays: 3, isReturnEnabled: true, isReplacementEnabled: true };
+
+        if (requestType === 'Return' && !config.isReturnEnabled) {
+            return res.status(400).json({ success: false, message: "Return requests are currently disabled by platform admin." });
+        }
+        if (requestType === 'Replacement' && !config.isReplacementEnabled) {
+            return res.status(400).json({ success: false, message: "Replacement requests are currently disabled by platform admin." });
+        }
+
+        const deliveryDate = order.updatedAt || order.createdAt;
+        const daysSinceDelivery = moment().diff(moment(deliveryDate), 'days');
+
+        if (daysSinceDelivery > config.returnWindowDays) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Return window expired: Returns/Replacements are only allowed within ${config.returnWindowDays} days of delivery. (Delivered ${daysSinceDelivery} days ago).` 
+            });
+        }
+
+        if (order.returnDetails && order.returnDetails.status === 'Requested') {
+            return res.status(400).json({ success: false, message: "A return/replacement request is already pending for this order." });
+        }
+
+        // Capture uploaded proof photos
+        let uploadedProofs = [];
+        if (req.files && req.files.proofImages) {
+            uploadedProofs = req.files.proofImages.map(f => f.path.replace(/\\/g, "/"));
+        }
+
+        order.returnDetails = {
+            requestType: requestType || 'Replacement',
+            reason: reason || "Defective/Damaged product delivered",
+            userComments: userComments || "",
+            proofImages: uploadedProofs,
+            status: 'Requested',
+            requestedAt: new Date(),
+            rejectionReason: null,
+            refundAmount: order.billSummary.totalAmount
+        };
+
+        await order.save();
+
+        res.json({
+            success: true,
+            message: `${requestType} request for product submitted successfully! The pharmacy store will review your request.`,
+            data: order.returnDetails
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 module.exports = {scanPrescription,getMedicineSuggestions,getMedicineFullDetails,getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,searchAlternateBrand,getTrendingMedicinesNearUser, getStandardMedicineCatalog,getMedicineVendors,
@@ -3447,5 +3605,6 @@ getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines
 
 createPrescriptionRequest, payAndConfirmOrder,verifyPrescriptionRequestPayment,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices,
 ratePharmacyOrder,getGlobalActiveComboOffers,getComboOfferDetails,
-getSimilarInStockMedicines
+getSimilarInStockMedicines,
+requestPharmacyOrderReturn
 };

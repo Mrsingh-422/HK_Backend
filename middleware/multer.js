@@ -337,19 +337,27 @@ const insuranceUpload = multer({
 });
 
 // ==========================================
-// 18. PHARMACY PRESCRIPTION CONFIGURATION
+// 18. PHARMACY PRESCRIPTIONS & RETURN PROOF UPLOADS
 // ==========================================
 const pharmaPrescriptionDir = 'public/uploads/pharmacy_prescriptions';
 ensureDir(pharmaPrescriptionDir);
 
-const pharmacyPrescriptionUploads = multer({
-    storage: multer.diskStorage({
-        destination: (req, file, cb) => cb(null, pharmaPrescriptionDir),
-        filename: (req, file, cb) => cb(null, `pharma-rx-${Date.now()}${path.extname(file.originalname)}`)
-    }),
-    fileFilter: docFileFilter, // Images and PDF allowed
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+const pharmaStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, pharmaPrescriptionDir),
+    filename: (req, file, cb) => cb(null, `pharma-proof-${Date.now()}${path.extname(file.originalname)}`)
 });
+
+// Base instance
+const pharmacyPrescriptionUploads = multer({
+    storage: pharmaStorage,
+    fileFilter: docFileFilter, // PDF and Images (JPG, PNG) allowed
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB Limit
+});
+
+// 🚨 DEDICATED EXPORT: For Damaged/Wrong Product Return Proof Photos
+const pharmacyReturnProofUploads = pharmacyPrescriptionUploads.fields([
+    { name: 'proofImages', maxCount: 5 } // Allows up to 5 proof photos
+]);
 
 // ==========================================
 // 19. FIRE HQ CONFIGURATION
@@ -934,7 +942,7 @@ module.exports = {
     userProfileUpload,
     insuranceUpload,
     lockerUpload,
-    pharmacyPrescriptionUploads,
+    pharmacyPrescriptionUploads,pharmacyReturnProofUploads,
     uploadExcel,
 
     fireHQUploads,

@@ -40,16 +40,14 @@ const numberToWordsIndian = (num) => {
 // Endpoint: GET /provider/pharmacy/orders/dashboard-stats
 const getPharmacyDashboardStats = async (req, res) => {
     try {
-        const pharmacyId = req.user.id; // Logged-in pharmacy ID
+        const pharmacyId = req.user.id;
 
-        // Single Mongo Query to aggregate all metrics for performance
         const stats = await PharmacyBooking.aggregate([
             { $match: { pharmacyId: new mongoose.Types.ObjectId(pharmacyId) } },
             {
                 $group: {
                     _id: null,
                     pendingRequests: { $sum: { $cond: [{ $in: ["$status", ["Placed", "Pending"]] }, 1, 0] } },
-                    // 🚀 Priority Count: Pending orders where rapid delivery charge is applied
                     priorityRequests: { 
                         $sum: { 
                             $cond: [
@@ -66,12 +64,14 @@ const getPharmacyDashboardStats = async (req, res) => {
                     },
                     activeOrders: { $sum: { $cond: [{ $in: ["$status", ["Packed", "Shipped", "Accepted", "OutForDelivery"]] }, 1, 0] } },
                     completedOrders: { $sum: { $cond: [{ $in: ["$status", ["Delivered", "Completed"]] }, 1, 0] } },
-                    totalEarnings: { $sum: { $cond: [{ $in: ["$status", ["Delivered", "Completed"]] }, "$billSummary.totalAmount", 0] } }
+                    totalEarnings: { $sum: { $cond: [{ $in: ["$status", ["Delivered", "Completed"]] }, "$billSummary.totalAmount", 0] } },
+                    
+                    // 🚨 2. NEW: Pending Returns Badge Counter
+                    pendingReturns: { $sum: { $cond: [{ $eq: ["$returnDetails.status", "Requested"] }, 1, 0] } }
                 }
             }
         ]);
 
-        // Fallback wallet query for verification of active balance
         const wallet = await Wallet.findOne({ vendorId: pharmacyId });
 
         const result = stats[0] || {
@@ -79,18 +79,20 @@ const getPharmacyDashboardStats = async (req, res) => {
             priorityRequests: 0,
             activeOrders: 0,
             completedOrders: 0,
-            totalEarnings: 0
+            totalEarnings: 0,
+            pendingReturns: 0
         };
 
         res.json({
             success: true,
             data: {
                 pendingRequests: result.pendingRequests,
-                priorityRequests: result.priorityRequests, // Dashboard Priority Tab Badge Counter
+                priorityRequests: result.priorityRequests,
                 activeOrders: result.activeOrders,
                 completedOrders: result.completedOrders,
                 totalEarnings: result.totalEarnings,
-                walletBalance: wallet?.balance || 0
+                walletBalance: wallet?.balance || 0,
+                pendingReturns: result.pendingReturns // 👈 Returns Tab Badge Counter
             }
         });
 
@@ -100,11 +102,11 @@ const getPharmacyDashboardStats = async (req, res) => {
 };
 
 
-
 // Endpoint: GET /provider/pharmacy/orders/list
+// Endpoint: GET /provider/pharmacy/orders/list?returnStatus=Requested
 const getPharmacyOrders = async (req, res) => {
     try {
-        const { orderType, status, isPriority } = req.query; 
+        const { orderType, status, isPriority, returnStatus } = req.query; 
         let query = { pharmacyId: req.user.id };
         
         if (orderType) query.orderType = orderType;
@@ -116,14 +118,23 @@ const getPharmacyOrders = async (req, res) => {
             query['billSummary.rapidDeliveryCharge'] = 0;
         }
 
+        // 🚨 1. NEW: RETURN / REPLACEMENT FILTER
+        // returnStatus = 'Requested' (Pending returns), 'Approved', 'Rejected', ya 'All'
+        if (returnStatus) {
+            if (returnStatus === 'All') {
+                query['returnDetails.status'] = { $ne: 'None' }; // Sabhi return wale orders
+            } else {
+                query['returnDetails.status'] = returnStatus; // e.g. 'Requested'
+            }
+        }
+
         const orders = await PharmacyBooking.find(query)
             .select('-deliveryOTP -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
             .populate('userId', 'name phone')
             .populate('driverId', 'name phone profilePic vehicleNumber')
-            // 🚨 4. POPULATE PHARMACY CORPORATE & TAX CREDENTIALS IN DASHBOARD
             .populate({
                 path: 'pharmacyId',
-                select: 'name documents.cinNumber documents.gstNumber documents.tanNumber documents.panNumber documents.drugLicenseNumber documents.signatureImage'
+                select: 'name documents.cinNumber documents.gstNumber documents.drugLicenseNumber documents.signatureImage'
             })
             .populate({
                 path: 'items.comboOfferId',
@@ -132,11 +143,15 @@ const getPharmacyOrders = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
+        // Add root-level helper flags for frontend badge rendering
         const enrichedOrders = orders.map(order => {
             const hasComboApplied = order.items.some(item => item.isComboApplied === true);
+            const isReturnRequested = order.returnDetails && order.returnDetails.status === 'Requested';
+            
             return {
                 ...order,
-                hasComboApplied
+                hasComboApplied,
+                isReturnRequested // 👈 Helper: True if pending return action required
             };
         });
 
@@ -726,8 +741,77 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
 };
 
 
+// pharmacy returns and refunds can be handled in a separate controller for clarity and maintainability.
+// REVIEW RETURN / REPLACEMENT REQUEST (Pharmacist Action)
+// Endpoint: PUT /provider/pharmacy/orders/return-action/:orderId
+const handleReturnRequestAction = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { action, rejectionReason } = req.body; // action: 'Approved' | 'Rejected'
+        const pharmacyId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            pharmacyId
+        });
+
+        if (!order || !order.returnDetails || order.returnDetails.status !== 'Requested') {
+            return res.status(400).json({ success: false, message: "No active pending return request found for this order." });
+        }
+
+        if (action === 'Approved') {
+            // 🚨 STOCK RESTORATION: Agar Return approve hua toh medicines stock me wapas jud jayengi
+            for (const item of order.items) {
+                if (!item.medicineId) continue;
+                let inventory = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId });
+                if (inventory) {
+                    inventory.stock_quantity += Number(item.quantity || 1);
+                    inventory.is_available = true;
+                    await inventory.save();
+                }
+            }
+
+            order.returnDetails.status = 'Approved';
+            order.returnDetails.resolvedAt = new Date();
+            order.status = order.returnDetails.requestType === 'Return' ? 'Cancelled' : 'Shipped'; // If replacement, new shipment triggers
+            order.paymentStatus = order.returnDetails.requestType === 'Return' ? 'Refund-Initiated' : order.paymentStatus;
+            await order.save();
+
+            return res.json({
+                success: true,
+                message: `Return request approved successfully. Stock restored to your inventory.`,
+                data: order.returnDetails
+            });
+        } 
+        
+        if (action === 'Rejected') {
+            if (!rejectionReason) {
+                return res.status(400).json({ success: false, message: "Rejection reason is required." });
+            }
+
+            order.returnDetails.status = 'Rejected';
+            order.returnDetails.rejectionReason = rejectionReason;
+            order.returnDetails.resolvedAt = new Date();
+            await order.save();
+
+            return res.json({
+                success: true,
+                message: "Return request rejected.",
+                data: order.returnDetails
+            });
+        }
+
+        return res.status(400).json({ success: false, message: "Invalid action. Choose 'Approved' or 'Rejected'." });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
 
 module.exports = { getPharmacyDashboardStats, getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
 
-    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers, getPharmacyOrderInvoiceDetails
+    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers, getPharmacyOrderInvoiceDetails, handleReturnRequestAction
  };

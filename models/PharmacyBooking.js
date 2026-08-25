@@ -145,6 +145,25 @@ const pharmacyBookingSchema = new mongoose.Schema({
             type: String
         },
         paidAt: { type: Date, default: null }
+    },
+    returnDetails: {
+        requestType: {
+            type: String,
+            enum: ['Return', 'Replacement'],
+            default: null
+        },
+        reason: { type: String, default: null },
+        userComments: { type: String, default: "" },
+        proofImages: [{ type: String }], // Damaged product photos
+        status: {
+            type: String,
+            enum: ['None', 'Requested', 'Approved', 'Rejected', 'Completed'],
+            default: 'None'
+        },
+        requestedAt: { type: Date, default: null },
+        resolvedAt: { type: Date, default: null },
+        rejectionReason: { type: String, default: null },
+        refundAmount: { type: Number, default: 0 }
     }
 
 

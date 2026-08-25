@@ -11,34 +11,88 @@ const generateToken = (id, role) => {
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
+
+// 1. DOCTOR PRE-CHECK (Check if already registered)
+// Endpoint: POST /api/auth/doctor/check-exists
+const checkDoctorExists = async (req, res) => {
+    try {
+        const { phone, email } = req.body;
+
+        if (!phone && !email) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Phone number or Email is required." 
+            });
+        }
+
+        const cleanPhone = phone ? phone.trim().replace(/\D/g, "").slice(-10) : null;
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+
+        const query = [];
+        if (cleanPhone) query.push({ phone: cleanPhone });
+        if (normalizedEmail) query.push({ email: normalizedEmail });
+
+        const exists = await Doctor.findOne({ $or: query });
+
+        if (exists) {
+            const isPhoneMatch = exists.phone === cleanPhone;
+            return res.status(200).json({ 
+                success: false, 
+                exists: true, 
+                message: isPhoneMatch 
+                    ? "This mobile number is already registered as a Doctor. Please Login." 
+                    : "This email address is already registered as a Doctor. Please Login."
+            });
+        }
+
+        // Available for registration
+        res.status(200).json({ 
+            success: true, 
+            exists: false, 
+            message: "Mobile number and email are available for Doctor registration." 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // ==========================================
 // 1. REGISTER DOCTOR (With Real Firebase OTP Verification)
 // Endpoint: POST /api/auth/doctor/register
 // ==========================================
 const registerDoctor = async (req, res) => {
     try {
-        const { name, email, phone, countryCode, country, state, city, password, idToken } = req.body;
+        const { 
+            name, email, phone, countryCode, 
+            country, state, city, 
+            password, idToken 
+        } = req.body;
 
-        // 1. Basic Validations
+        // 1. Validations
         if (!name || !phone || !password) {
-            return res.status(400).json({ success: false, message: "Name, Phone and Password are required." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Name, Phone, and Password are required." 
+            });
         }
 
+        const cleanPhone = phone.trim().replace(/\D/g, "").slice(-10);
         const normalizedEmail = email ? email.toLowerCase().trim() : null;
-        const cleanPhone = phone.trim();
 
-        // 2. Duplicate check
-        const query = [];
+        // 2. Duplicate Check
+        const query = [{ phone: cleanPhone }];
         if (normalizedEmail) query.push({ email: normalizedEmail });
-        if (cleanPhone) query.push({ phone: cleanPhone });
 
         const exists = await Doctor.findOne({ $or: query });
         if (exists) {
-            return res.status(400).json({ success: false, message: 'Email or Phone already exists with another Doctor account.' });
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Doctor already exists with this Email or Phone number.' 
+            });
         }
 
         // 3. 🚨 Firebase Phone Verification Check
-        // Production me idToken compulsory hai, Dev/Local testing me optional
         if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
             if (!idToken) {
                 return res.status(400).json({ 
@@ -47,16 +101,21 @@ const registerDoctor = async (req, res) => {
                 });
             }
 
-            const verification = await verifyFirebasePhoneToken(idToken, cleanPhone);
+            const fullPhoneToVerify = countryCode ? `${countryCode}${cleanPhone}` : cleanPhone;
+            const verification = await verifyFirebasePhoneToken(idToken, fullPhoneToVerify);
+
             if (!verification.success) {
-                return res.status(400).json({ success: false, message: verification.message });
+                return res.status(400).json({ 
+                    success: false, 
+                    message: verification.message 
+                });
             }
         }
 
         // 4. Hash Password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // 5. Create Doctor in DB (Directly Phone Verified)
+        // 5. Create Doctor (Phone Verified, Status Incomplete)
         const doctor = await Doctor.create({
             name,
             email: normalizedEmail || undefined,
@@ -67,18 +126,18 @@ const registerDoctor = async (req, res) => {
             city: city || null,
             password: hashedPassword,
             role: 'doctor',
-            isPhoneVerified: true, // Firebase se verified ho chuka hai
-            profileStatus: 'Incomplete'
+            isPhoneVerified: true, // Phone verified via Firebase
+            profileStatus: 'Incomplete' // Step 2 me documents upload karne honge
         });
 
-        // 6. Generate Session Token (Step 2 document upload ke liye)
-        const token = generateToken(doctor._id, doctor.role);
+        // 6. Generate Session Token for Step 2 Document Upload
+        const token = generateToken(doctor._id, 'doctor');
         doctor.token = token;
         await doctor.save();
 
-        res.status(201).json({
-            success: true,
-            message: "Doctor registered & Phone verified successfully. Please upload documents to complete profile.",
+        res.status(201).json({ 
+            success: true, 
+            message: "Doctor registered & Phone verified successfully. Please upload documents.", 
             token,
             doctorId: doctor._id,
             profileStatus: doctor.profileStatus
@@ -88,6 +147,7 @@ const registerDoctor = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 2. UPLOAD DOCUMENTS (Step 2 of Onboarding)
@@ -379,7 +439,7 @@ const changeDoctorPassword = async (req, res) => {
 };
 
 module.exports = { 
-    registerDoctor, 
+    registerDoctor, checkDoctorExists,
     uploadDocuments, 
     loginDoctor, 
     toggleDoctorOnlineStatus, 

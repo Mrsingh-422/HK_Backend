@@ -270,6 +270,7 @@ app.use('/api/admin/profile-update', require('./routes/admin/others/ProfileUpdat
 app.use('/api/admin/refunds', require('./routes/admin/others/RefundsRoute')); // Refunds Management Route
 // --- Admin pharmacy Routes ---
 app.use('/admin/pharmacy/tax-config', require('./routes/admin/Pharmacy/TaxConfigRoute'));
+app.use('/admin/pharmacy/return-policy', require('./routes/admin/Pharmacy/ReturnPolicyRoute')); // Pharmacy Return Policy Management Route
 app.use('/admin/pharmacy', require('./routes/admin/Pharmacy/PharmacyAdminRoute')); // Pharmacy Management Route
 app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUploadRoute')); // Medicine Upload Route
 // --- Admin Lab Routes ---

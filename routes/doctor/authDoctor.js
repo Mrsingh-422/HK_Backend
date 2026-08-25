@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
 const { doctorDocUploads } = require('../../middleware/multer');
 const { 
-    registerDoctor, 
+    registerDoctor, checkDoctorExists,
     uploadDocuments, 
     loginDoctor,
     toggleDoctorOnlineStatus,
@@ -18,6 +18,7 @@ const {
 
 // 1. Step 1: Register (Basic Info + Firebase Phone Verification)
 router.post('/register', registerDoctor);
+router.post('/check-exists', checkDoctorExists);
 
 // 2. Step 2: Document Upload (Protected via Token received in Step 1)
 router.put('/upload-docs', protect('doctor'), doctorDocUploads, uploadDocuments);

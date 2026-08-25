@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { pharmacyPrescriptionUploads } = require('../../../middleware/multer');
+const { pharmacyPrescriptionUploads,pharmacyReturnProofUploads } = require('../../../middleware/multer');
 const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,searchAlternateBrand,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
     getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory,trackOrder,
 getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
@@ -10,7 +10,8 @@ createPrescriptionRequest,payAndConfirmOrder,verifyPrescriptionRequestPayment,
  getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices,
 
 getActiveStoreComboOffers,getGlobalActiveComboOffers,getComboOfferDetails,ratePharmacyOrder,
-getSimilarInStockMedicines
+getSimilarInStockMedicines,
+requestPharmacyOrderReturn
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
@@ -127,4 +128,10 @@ router.get(
     getSimilarInStockMedicines
 );
 
+router.post(
+    '/orders/return-request/:orderId', 
+    protect('user'), 
+    pharmacyReturnProofUploads, 
+    requestPharmacyOrderReturn
+);
 module.exports = router;
