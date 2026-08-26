@@ -268,33 +268,42 @@ const resetPasswordPhone = async (req, res) => {
 const forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
-        if (!email) return res.status(400).json({ message: "Email is required" });
+        if (!email) return res.status(400).json({ success: false, message: "Email is required" });
 
         const result = await findAccountByEmail(email);
         if (!result) {
-            return res.status(404).json({ message: "Account not found with this email" });
+            return res.status(404).json({ success: false, message: "Account not found with this email" });
         }
 
         const { account } = result;
-        const isProduction = process.env.NODE_ENV === 'production';
-        const otp = isProduction ? Math.floor(100000 + Math.random() * 900000).toString() : "111111";
+
+        // 🎲 Hamesha Real Random 6-Digit OTP generate karega
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
         account.resetPasswordOtp = otp;
-        account.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 mins
+        account.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 Minutes validity
         await account.save();
 
-        if (isProduction) {
-            await sendEmailOTP(email, otp);
+        console.log(`\n📧 [EMAIL OTP TRIGGERED] Sending OTP to ${email}: ${otp}\n`);
+
+        // 🚀 Real Email Send karega (Resend / Brevo API call)
+        const emailSent = await sendEmailOTP(email, otp);
+
+        if (!emailSent) {
+            return res.status(500).json({ 
+                success: false, 
+                message: "Failed to send email. Check API key in .env or try again." 
+            });
         }
 
         res.json({ 
             success: true, 
-            message: isProduction ? "OTP sent to your email." : "Dev Mode: OTP sent (Use 111111)",
-            testOtp: isProduction ? undefined : otp 
+            message: "OTP sent successfully to your email address."
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Forgot Password Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

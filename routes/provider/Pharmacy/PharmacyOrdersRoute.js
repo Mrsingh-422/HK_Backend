@@ -7,7 +7,7 @@ const {
     getAvailableDrivers, 
     assignDriverManual , reassignDriverManual,updateOrderStatus,
     submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers,
-    getPharmacyOrderInvoiceDetails,handleReturnRequestAction
+    getPharmacyOrderInvoiceDetails,handleReturnRequestAction,approveReturnAndAssignDriver, rejectReturnRequest,confirmStoreReturnReceipt
 } = require('../../../controllers/provider/Pharmacy/PharmacyOrders');
 
 // Base: /provider/pharmacy/orders
@@ -50,5 +50,10 @@ router.post(
 
 router.get('/track-drivers', protect('pharmacy'), trackPharmacyDrivers);
 router.get('/invoice/:orderId', protect('pharmacy'), getPharmacyOrderInvoiceDetails);
+
+// order return and refund flow
 router.put('/orders/return-action/:orderId', protect('pharmacy'), handleReturnRequestAction);
+router.post('/orders/return/assign-driver', protect('pharmacy'), approveReturnAndAssignDriver);
+router.post('/orders/return/reject', protect('pharmacy'), rejectReturnRequest);
+router.post('/orders/return/confirm-store-receipt', protect('pharmacy'), confirmStoreReturnReceipt); 
 module.exports = router;

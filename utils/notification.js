@@ -1,4 +1,4 @@
-// utils/notification.js
+// utils/notification.js (DRIVER PUSH NOTIFICATION BUG FIXED)
 const admin = require('firebase-admin'); 
 
 // Schema imports
@@ -10,12 +10,12 @@ const Hospital = require('../models/Hospital');
 const Lab = require('../models/Lab');
 const Nurse = require('../models/Nurse');
 const Pharmacy = require('../models/Pharmacy');
+const Driver = require('../models/Driver'); // 👈 Imported Driver Model
 
 const sendPushNotification = async (targetId, targetType, title, body, data = {}) => {
     try {
         let recipient;
 
-        // 🚨 Strictly querying 'fcmToken' instead of auth JWT 'token'
         switch (targetType) {
             case 'user':
                 recipient = await User.findById(targetId).select('fcmToken');
@@ -39,8 +39,11 @@ const sendPushNotification = async (targetId, targetType, title, body, data = {}
                 recipient = await Pharmacy.findById(targetId).select('fcmToken');
                 break;
             case 'ambulance':
-            case 'driver':
                 recipient = await Ambulance.findById(targetId).select('fcmToken');
+                break;
+            // 🚨 FIXED: Dedicated Driver FCM Token Lookup
+            case 'driver':
+                recipient = await Driver.findById(targetId).select('fcmToken');
                 break;
             default:
                 console.error("FCM Push Error: Invalid targetType provided -", targetType);
@@ -67,10 +70,8 @@ const sendPushNotification = async (targetId, targetType, title, body, data = {}
 
 const notifyAdminsAndVendor = async (vendorId, vendorType, title, body, data = {}) => {
     try {
-        // 1. Notify the Specific Vendor
         await sendPushNotification(vendorId, vendorType, title, body, data);
 
-        // 2. Fetch all active platform Admins and notify them
         const admins = await Admin.find({ isActive: true }).select('_id');
         const adminPromises = admins.map(adminUser => 
             sendPushNotification(adminUser._id, 'admin', title, body, data)

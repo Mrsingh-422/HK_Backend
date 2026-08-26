@@ -1,8 +1,9 @@
+// controllers/admin/others/Refunds.js (PHARMACY RETURN & CANCELLATION COMPATIBLE)
 const Appointment = require('../../../models/Appointment');
 const LabBooking = require('../../../models/LabBooking');
 const NurseBooking = require('../../../models/NurseBooking');
 const PharmacyBooking = require('../../../models/PharmacyBooking');
-const AmbulanceBooking = require('../../../models/AmbulanceBooking'); // 👈 Imported
+const AmbulanceBooking = require('../../../models/AmbulanceBooking');
 const { refundRazorpayPayment } = require('../../../utils/razorpay');
 const moment = require('moment');
 const mongoose = require('mongoose');
@@ -14,7 +15,7 @@ const modelMap = {
     'Lab': LabBooking,
     'Nurse': NurseBooking,
     'Pharmacy': PharmacyBooking,
-    'Ambulance': AmbulanceBooking // 👈 Added
+    'Ambulance': AmbulanceBooking
 };
 
 // 1. GET: Fetch all active refund requests across all 5 models (Paginated)
@@ -32,13 +33,13 @@ const getRefundInitiatedList = async (req, res) => {
             Appointment.find(refundQuery).populate('userId', 'name phone email').lean(),
             LabBooking.find(refundQuery).populate('userId', 'name phone email').lean(),
             NurseBooking.find(refundQuery).populate('userId', 'name phone email').lean(),
-            PharmacyBooking.find(refundQuery).populate('userId', 'name phone email').lean(),
+            PharmacyBooking.find(refundQuery).populate('userId', 'name phone email').populate('pharmacyId', 'name city').lean(),
             AmbulanceBooking.find(refundQuery).populate('userId', 'name phone email').lean()
         ]);
 
         const unifiedList = [];
 
-        // Map Doctor & Hospital Admissions
+        // 1. Map Doctor & Hospital Admissions
         doctorAndHospital.forEach(item => {
             const modelName = item.bookingType === 'Admission' ? 'Hospital' : 'Doctor';
             const penalty = item.pricingBreakdown?.cancellationFeeApplied || item.pricingBreakdown?.noShowFeeApplied || 0;
@@ -50,18 +51,20 @@ const getRefundInitiatedList = async (req, res) => {
                 vendorModel: modelName,
                 customer: {
                     name: item.userId?.name || "Patient",
-                    phone: item.userId?.phone || "N/A"
+                    phone: item.userId?.phone || "N/A",
+                    email: item.userId?.email || "N/A"
                 },
                 paymentMethod: item.paymentMethod,
                 totalPaid: item.totalAmount,
                 penaltyApplied: penalty,
                 refundAmountCalculated: Math.max(0, refundValue),
                 reason: item.cancellationDetails?.reason || item.cancelReason || "Late cancellation",
+                refundType: "Cancellation",
                 createdAt: item.createdAt
             });
         });
 
-        // Map Lab Bookings
+        // 2. Map Lab Bookings
         labs.forEach(item => {
             const penalty = item.billSummary?.cancellationFeeApplied || item.billSummary?.noShowFeeApplied || 0;
             const refundValue = (item.billSummary?.totalAmount || item.totalPrice || 0) - penalty;
@@ -72,18 +75,20 @@ const getRefundInitiatedList = async (req, res) => {
                 vendorModel: 'Lab',
                 customer: {
                     name: item.userId?.name || "Patient",
-                    phone: item.userId?.phone || "N/A"
+                    phone: item.userId?.phone || "N/A",
+                    email: item.userId?.email || "N/A"
                 },
                 paymentMethod: item.paymentMethod,
                 totalPaid: item.billSummary?.totalAmount || item.totalPrice || 0,
                 penaltyApplied: penalty,
                 refundAmountCalculated: Math.max(0, refundValue),
                 reason: item.cancelReason || "Late cancellation",
+                refundType: "Cancellation",
                 createdAt: item.createdAt
             });
         });
 
-        // Map Nurse Bookings
+        // 3. Map Nurse Bookings
         nurses.forEach(item => {
             const penalty = item.priceBreakdown?.cancellationFeeApplied || item.priceBreakdown?.noShowFeeApplied || 0;
             const refundValue = (item.priceBreakdown?.totalPrice || 0) - penalty;
@@ -94,40 +99,54 @@ const getRefundInitiatedList = async (req, res) => {
                 vendorModel: 'Nurse',
                 customer: {
                     name: item.userId?.name || "Patient",
-                    phone: item.userId?.phone || "N/A"
+                    phone: item.userId?.phone || "N/A",
+                    email: item.userId?.email || "N/A"
                 },
                 paymentMethod: item.paymentMethod,
                 totalPaid: item.priceBreakdown?.totalPrice || 0,
                 penaltyApplied: penalty,
                 refundAmountCalculated: Math.max(0, refundValue),
                 reason: item.cancelReason || "Late cancellation",
+                refundType: "Cancellation",
                 createdAt: item.createdAt
             });
         });
 
-        // Map Pharmacy Bookings
+        // 🚨 4. Map Pharmacy Bookings (Supports both Order Cancellation & Product Return)
         pharmacies.forEach(item => {
+            const isReturn = item.returnDetails && item.returnDetails.status === 'Approved';
             const penalty = item.billSummary?.cancellationFeeApplied || item.billSummary?.noShowFeeApplied || 0;
-            const refundValue = (item.billSummary?.totalAmount || 0) - penalty;
+            
+            // Refund calculation
+            let refundValue = (item.billSummary?.totalAmount || 0) - penalty;
+            let refundReason = item.cancelReason || "Order cancellation";
+
+            if (isReturn) {
+                refundValue = item.returnDetails.refundAmount || item.billSummary?.totalAmount || 0;
+                refundReason = `Product Return Approved: ${item.returnDetails.reason}`;
+            }
 
             unifiedList.push({
                 bookingMongoId: item._id,
-                bookingId: item.orderId,
+                bookingId: item.orderId, // 👈 Correct Pharmacy Order ID
                 vendorModel: 'Pharmacy',
+                pharmacyName: item.pharmacyId?.name || "Store",
                 customer: {
-                    name: item.userId?.name || "Customer",
-                    phone: item.userId?.phone || "N/A"
+                    name: item.userId?.name || item.address?.name || "Customer",
+                    phone: item.userId?.phone || item.address?.phone || "N/A",
+                    email: item.userId?.email || "N/A"
                 },
                 paymentMethod: item.paymentMethod,
                 totalPaid: item.billSummary?.totalAmount || 0,
-                penaltyApplied: penalty,
+                penaltyApplied: isReturn ? 0 : penalty,
                 refundAmountCalculated: Math.max(0, refundValue),
-                reason: item.cancelReason || "Late cancellation",
+                reason: refundReason,
+                refundType: isReturn ? "Product Return" : "Order Cancellation", // 👈 Distinct badge for Admin
                 createdAt: item.createdAt
             });
         });
 
-        // Map Ambulance Bookings
+        // 5. Map Ambulance Bookings
         ambulances.forEach(item => {
             const penalty = item.pricing?.cancellationFeeApplied || item.pricing?.noShowFeeApplied || 0;
             const refundValue = (item.pricing?.total || 0) - penalty;
@@ -138,21 +157,22 @@ const getRefundInitiatedList = async (req, res) => {
                 vendorModel: 'Ambulance',
                 customer: {
                     name: item.userId?.name || "Patient",
-                    phone: item.userId?.phone || "N/A"
+                    phone: item.userId?.phone || "N/A",
+                    email: item.userId?.email || "N/A"
                 },
                 paymentMethod: item.paymentMethod,
                 totalPaid: item.pricing?.total || 0,
                 penaltyApplied: penalty,
                 refundAmountCalculated: Math.max(0, refundValue),
                 reason: item.cancellationReason || "Late cancellation",
+                refundType: "Cancellation",
                 createdAt: item.createdAt
             });
         });
 
-        // Sort unified array by latest date first
+        // Sort by latest date first
         unifiedList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-        // Apply pagination offsets in memory
         const paginatedList = unifiedList.slice(skip, skip + limit);
 
         res.json({
@@ -169,11 +189,11 @@ const getRefundInitiatedList = async (req, res) => {
     }
 };
 
-// 2. POST: Execute refund for a booking (With Ambulance integration added)
+// 2. POST: Execute refund for a booking (With Pharmacy Return & Identifier Fix)
 // Endpoint: POST /api/admin/refunds/process
 const processAdminRefund = async (req, res) => {
     try {
-        const { bookingId, vendorModel } = req.body; // vendorModel: 'Doctor' | 'Hospital' | 'Lab' | 'Nurse' | 'Pharmacy' | 'Ambulance'
+        const { bookingId, vendorModel } = req.body; 
 
         const TargetModel = modelMap[vendorModel];
         if (!TargetModel) {
@@ -189,7 +209,6 @@ const processAdminRefund = async (req, res) => {
             return res.status(400).json({ success: false, message: "This booking is not flagged for a refund." });
         }
 
-        // Extract transaction tokens and calculated refund snapshots
         let paymentId = booking.paymentDetails?.razorpayPaymentId || booking.transactionId;
         let refundAmount = 0;
 
@@ -199,7 +218,12 @@ const processAdminRefund = async (req, res) => {
         } else if (vendorModel === 'Nurse') {
             refundAmount = booking.priceBreakdown?.totalPrice - (booking.priceBreakdown?.cancellationFeeApplied || booking.priceBreakdown?.noShowFeeApplied || 0);
         } else if (vendorModel === 'Pharmacy') {
-            refundAmount = booking.billSummary?.totalAmount - (booking.billSummary?.cancellationFeeApplied || booking.billSummary?.noShowFeeApplied || 0);
+            // 🚨 Check if it's a product return or cancellation
+            if (booking.returnDetails && booking.returnDetails.status === 'Approved') {
+                refundAmount = booking.returnDetails.refundAmount || booking.billSummary?.totalAmount || 0;
+            } else {
+                refundAmount = booking.billSummary?.totalAmount - (booking.billSummary?.cancellationFeeApplied || booking.billSummary?.noShowFeeApplied || 0);
+            }
         } else if (vendorModel === 'Lab') {
             refundAmount = booking.billSummary?.totalAmount - (booking.billSummary?.cancellationFeeApplied || booking.billSummary?.noShowFeeApplied || 0);
         } else if (vendorModel === 'Ambulance') {
@@ -210,20 +234,26 @@ const processAdminRefund = async (req, res) => {
             return res.status(400).json({ success: false, message: "Refund amount must be greater than 0." });
         }
 
+        // For COD or Free bookings
         if (!paymentId || paymentId.startsWith('FREE-') || booking.paymentMethod === 'COD') {
-            // For COD bookings or free subscription bookings, mark as resolved without calling Razorpay
             booking.paymentStatus = 'Refunded';
+            if (booking.returnDetails && booking.returnDetails.status === 'Approved') {
+                booking.returnDetails.status = 'Completed';
+            }
             await booking.save();
             return res.json({ success: true, message: "COD/Free booking marked as refunded locally." });
         }
 
-        // Trigger Razorpay Payout Refund API
-        const refundResponse = await refundRazorpayPayment(paymentId, refundAmount, booking.bookingId);
+        // 🚨 FIXED: Passes either booking.orderId (Pharmacy) or booking.bookingId
+        const trackingReference = booking.orderId || booking.bookingId;
+        const refundResponse = await refundRazorpayPayment(paymentId, refundAmount, trackingReference);
 
-        // Update database status
         booking.paymentStatus = 'Refunded';
         
-        // Save Razorpay refund ID reference
+        if (booking.returnDetails && booking.returnDetails.status === 'Approved') {
+            booking.returnDetails.status = 'Completed';
+        }
+
         if (booking.paymentDetails) {
             booking.paymentDetails.refundId = refundResponse.id;
         }

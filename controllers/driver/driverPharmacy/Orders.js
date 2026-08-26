@@ -1,3 +1,4 @@
+// controllers/driver/driverPharmacy/Orders.js
 const PharmacyBooking = require('../../../models/PharmacyBooking');
 const Driver = require('../../../models/Driver');
 const bcrypt = require('bcryptjs');
@@ -241,7 +242,8 @@ const arriveAtLocation = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Confirm OTP & Upload Proof photo to Deliver (Figma Screen 14, 15)
+// CONFIRM OTP & DELIVER NORMAL ORDER (Multiple Photos Support)
+// Endpoint: POST /driver/pharmacy/orders/verify-otp
 const verifyOtpAndDeliver = async (req, res) => {
     try {
         const { orderId, otp } = req.body;
@@ -251,27 +253,44 @@ const verifyOtpAndDeliver = async (req, res) => {
         if (!order) return res.status(404).json({ message: "Order not found" });
 
         if (!order.driverId || order.driverId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized" });
+            return res.status(403).json({ message: "Unauthorized operation" });
         }
 
         if (otp !== '1111' && order.deliveryOTP !== otp) {
-            return res.status(400).json({ success: false, message: "Invalid OTP" });
+            return res.status(400).json({ success: false, message: "Invalid Delivery OTP." });
         }
 
-        // Apply Delivery Proof Photo
-        if (req.files && req.files.deliveryPic) {
-            order.deliveryProofPic = req.files.deliveryPic[0].path;
+        // 🚨 Multiple Delivery Proof Photos capture
+        let deliveryProofs = [];
+        if (req.files) {
+            if (req.files.deliveryPic && req.files.deliveryPic.length > 0) {
+                deliveryProofs = req.files.deliveryPic.map(f => f.path.replace(/\\/g, "/"));
+            } else if (req.files.pickupPhotos && req.files.pickupPhotos.length > 0) {
+                deliveryProofs = req.files.pickupPhotos.map(f => f.path.replace(/\\/g, "/"));
+            }
+        }
+
+        if (deliveryProofs.length > 0) {
+            order.deliveryProofPic = deliveryProofs[0]; // For backward compatibility
+            order.deliveryProofPics = deliveryProofs;  // Array of all captured angles
         }
 
         order.deliveryStatus = 'Delivered';
         order.status = 'Delivered';
+        order.deliveredAt = new Date();
         await order.save();
 
         // Release driver back to Available
         await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
 
-        res.json({ success: true, message: "Order Delivered Successfully!", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            message: "Order Delivered Successfully!", 
+            data: order 
+        });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // Return Order with Reason Form Submission (Figma Screen 13 "Return" Option)
@@ -480,6 +499,163 @@ const reportPharmacyNoShow = async (req, res) => {
     }
 };
 
+// =========================================================================
+// =============================== RETURN PICKUP TASKS ==============================
+// =========================================================================
+// 1. GET DRIVER'S ASSIGNED RETURN TASKS
+// Endpoint: GET /driver/pharmacy/return-pickups/my-tasks
+const getMyReturnPickups = async (req, res) => {
+    try {
+        const driverId = req.user.id;
+
+        const tasks = await PharmacyBooking.find({
+            'returnDetails.pickupDriverId': driverId,
+            'returnDetails.pickupStatus': { $in: ['Assigned', 'OutForPickup', 'ReachedLocation'] }
+        })
+        .populate('pharmacyId', 'name address phone')
+        .populate('userId', 'name phone')
+        .select('orderId address returnDetails items createdAt')
+        .lean();
+
+        res.json({
+            success: true,
+            count: tasks.length,
+            data: tasks
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. UPDATE PICKUP TRIP STATUS (OutForPickup / ReachedLocation)
+// Endpoint: PATCH /driver/pharmacy/return-pickups/status/:orderId
+const updateReturnPickupStatus = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { pickupStatus } = req.body; // 'OutForPickup' | 'ReachedLocation'
+        const driverId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            'returnDetails.pickupDriverId': driverId
+        });
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Pickup task not found or unauthorized." });
+        }
+
+        order.returnDetails.pickupStatus = pickupStatus;
+        await order.save();
+
+        res.json({
+            success: true,
+            message: `Pickup status updated to ${pickupStatus}`,
+            data: order.returnDetails
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3. VERIFY CUSTOMER RETURN OTP & COMPLETE PICKUP (Stock Restored & Refund Queued)
+// Endpoint: POST /driver/pharmacy/return-pickups/verify-pickup
+const verifyAndCompleteReturnPickup = async (req, res) => {
+    try {
+        const { orderId, returnOTP } = req.body;
+        const driverId = req.user.id;
+
+        if (!returnOTP) {
+            return res.status(400).json({ success: false, message: "Customer Return OTP is required." });
+        }
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            'returnDetails.pickupDriverId': driverId
+        });
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Pickup task not found or unauthorized." });
+        }
+
+        // Verify Customer OTP
+        if (order.returnDetails.returnOTP !== String(returnOTP).trim()) {
+            return res.status(400).json({ success: false, message: "Invalid Return OTP. Please collect correct OTP from patient." });
+        }
+
+        // Capture multiple proof photos of collected item
+        let collectedPhotos = [];
+        if (req.files) {
+            if (req.files.pickupPhotos && req.files.pickupPhotos.length > 0) {
+                collectedPhotos = req.files.pickupPhotos.map(f => f.path.replace(/\\/g, "/"));
+            } else if (req.files.deliveryPic && req.files.deliveryPic.length > 0) {
+                collectedPhotos = req.files.deliveryPic.map(f => f.path.replace(/\\/g, "/"));
+            }
+        }
+
+        order.returnDetails.pickupStatus = 'PickedUp';
+        order.returnDetails.status = 'CollectedByDriver';
+        order.returnDetails.driverCollectedPics = collectedPhotos;
+        order.returnDetails.collectedAt = new Date();
+        await order.save();
+
+        // Release driver back to Available
+        await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
+
+        res.json({
+            success: true,
+            message: "Return package collected successfully with proof photos! Please handover the parcel to the pharmacy store.",
+            data: {
+                orderId: order.orderId,
+                status: order.returnDetails.status,
+                totalPhotosCaptured: order.returnDetails.driverCollectedPics.length,
+                driverCollectedPics: order.returnDetails.driverCollectedPics
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// 3. 🚨 NEW: REPORT FAILED RETURN PICKUP (Doorstep Refusal / Customer Absent)
+// Endpoint: POST /driver/pharmacy/return-pickups/report-failed
+const reportFailedReturnPickup = async (req, res) => {
+    try {
+        const { orderId, reason } = req.body;
+        const driverId = req.user.id;
+
+        if (!reason || reason.trim() === "") {
+            return res.status(400).json({ success: false, message: "Failure reason is required (e.g. Customer unavailable)." });
+        }
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            'returnDetails.pickupDriverId': driverId
+        });
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Pickup task not found or unauthorized." });
+        }
+
+        order.returnDetails.pickupStatus = 'Cancelled';
+        order.returnDetails.status = 'Requested'; // Reset back for re-assignment
+        order.returnDetails.pickupDriverId = null;
+        order.returnDetails.rejectionReason = `Pickup Failed by Driver: ${reason.trim()}`;
+        await order.save();
+
+        // 🚨 Free driver back to Available
+        await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
+
+        res.json({
+            success: true,
+            message: "Pickup task released and reported. Driver is now Available.",
+            data: order.returnDetails
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 module.exports = { 
     forgotPassword,
@@ -501,5 +677,10 @@ module.exports = {
     getDriverHistory,
     getTermsAndConditions,
     getAboutContent,
-    reportPharmacyNoShow
+    reportPharmacyNoShow,
+
+    getMyReturnPickups,
+    updateReturnPickupStatus,
+    verifyAndCompleteReturnPickup,
+    reportFailedReturnPickup
 };

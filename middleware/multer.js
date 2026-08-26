@@ -768,7 +768,7 @@ const nurseProgressUpload = multer({
 ]);
 
 // ==========================================
-// 40. PHARMACY DELIVERY DRIVER UPLOADS (Figma Screen 13, 14, 21)
+// 40. PHARMACY DELIVERY DRIVER UPLOADS (Multiple Photos Support)
 // ==========================================
 const pharmaDeliveryDir = 'public/uploads/pharmacy_deliveries';
 ensureDir(pharmaDeliveryDir);
@@ -776,13 +776,14 @@ ensureDir(pharmaDeliveryDir);
 const pharmacyDeliveryUpload = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, pharmaDeliveryDir),
-        filename: (req, file, cb) => cb(null, `delivery-${Date.now()}${path.extname(file.originalname)}`)
+        filename: (req, file, cb) => cb(null, `delivery-${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(file.originalname)}`)
     }),
     fileFilter: docFileFilter,
-    limits: { fileSize: 10 * 1024 * 1024 } // Max 10MB limit
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB per file limit
 }).fields([
-    { name: 'profilePic', maxCount: 1 },        // Screen 21: Edit Profile Image
-    { name: 'deliveryPic', maxCount: 1 }        // Screen 14: Delivered order proof photo
+    { name: 'profilePic', maxCount: 1 },        // Driver Profile Pic
+    { name: 'deliveryPic', maxCount: 5 },       // 🚨 UPDATED: Normal Delivery Proof (Up to 5 photos)
+    { name: 'pickupPhotos', maxCount: 5 }       // 🚨 UPDATED: Return/Replacement Collection Proofs (Up to 5 photos)
 ]);
 
 // ==========================================

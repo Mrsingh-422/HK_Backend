@@ -5,7 +5,7 @@ const { getReturnPolicyConfig, updateReturnPolicyConfig } = require('../../../co
 
 // Base: /admin/pharmacy/return-policy
 
-router.get('/return-policy', protect('admin'), getReturnPolicyConfig);
-router.put('/return-policy/update', protect('admin'), updateReturnPolicyConfig);
+router.get('/', protect('admin'), getReturnPolicyConfig);
+router.put('/update', protect('admin'), updateReturnPolicyConfig);
 
 module.exports = router;

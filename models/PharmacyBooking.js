@@ -147,24 +147,33 @@ const pharmacyBookingSchema = new mongoose.Schema({
         paidAt: { type: Date, default: null }
     },
     returnDetails: {
-        requestType: {
-            type: String,
-            enum: ['Return', 'Replacement'],
-            default: null
-        },
-        reason: { type: String, default: null },
-        userComments: { type: String, default: "" },
-        proofImages: [{ type: String }], // Damaged product photos
-        status: {
-            type: String,
-            enum: ['None', 'Requested', 'Approved', 'Rejected', 'Completed'],
-            default: 'None'
-        },
-        requestedAt: { type: Date, default: null },
-        resolvedAt: { type: Date, default: null },
-        rejectionReason: { type: String, default: null },
-        refundAmount: { type: Number, default: 0 }
-    }
+    requestType: { type: String, enum: ['Return', 'Replacement'], default: null },
+    reason: { type: String, default: null },
+    userComments: { type: String, default: "" },
+    proofImages: [{ type: String }], // User ki uploaded photos
+    status: { 
+        type: String, 
+        enum: ['None', 'Requested', 'Approved', 'CollectedByDriver', 'ReceivedAtStore', 'Rejected', 'Completed'], 
+        default: 'None' 
+    },
+    pickupDriverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
+    pickupStatus: { 
+        type: String, 
+        enum: ['PendingAssignment', 'Assigned', 'OutForPickup', 'ReachedLocation', 'PickedUp', 'DeliveredToStore'], 
+        default: 'PendingAssignment' 
+    },
+    returnOTP: { type: String, default: null },
+    
+    // 🚨 MULTIPLE DRIVER PROOF PHOTOS ARRAY:
+    driverCollectedPics: [{ type: String }], // 👈 Array of photos (Barcode, Damage angle, Box)
+    vendorVerificationNote: { type: String, default: "" },
+    
+    requestedAt: { type: Date, default: null },
+    collectedAt: { type: Date, default: null },
+    storeReceivedAt: { type: Date, default: null },
+    rejectionReason: { type: String, default: null },
+    refundAmount: { type: Number, default: 0 }
+}
 
 
 }, { timestamps: true });

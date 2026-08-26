@@ -22,7 +22,12 @@ const {
     reassignOrderDueToEmergency,
     getDriverHistory,
     getTermsAndConditions,
-    getAboutContent, reportPharmacyNoShow
+    getAboutContent, reportPharmacyNoShow,
+
+    getMyReturnPickups,
+    updateReturnPickupStatus,
+    verifyAndCompleteReturnPickup,
+    reportFailedReturnPickup
 } = require('../../../controllers/driver/driverPharmacy/Orders');
 
 // Base URL: /driver/pharmacy
@@ -65,5 +70,14 @@ router.get('/about', protect('driver'), getAboutContent); // About page
 
 
 router.post('/orders/no-show', protect('driver'), reportPharmacyNoShow);
+
+// ==========================================
+// 4. RETURN PICKUP FLOW
+// ==========================================
+router.get('/return-pickups/my-tasks', protect('driver'), getMyReturnPickups);
+router.patch('/return-pickups/status/:orderId', protect('driver'), updateReturnPickupStatus);
+router.post('/return-pickups/verify-pickup', protect('driver'), pharmacyDeliveryUpload, verifyAndCompleteReturnPickup);
+router.post('/return-pickups/report-failed', protect('driver'), reportFailedReturnPickup); 
+
 
 module.exports = router;

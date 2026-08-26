@@ -241,14 +241,39 @@ const triggerAutoAssignment = async (orderId) => {
 // Endpoint: POST /provider/pharmacy/orders/reassign
 const reassignDriverManual = async (req, res) => {
     try {
-        const { orderId, newDriverId } = req.body;
+        const { orderId, newDriverId, isReturnReassignment = false } = req.body;
         const pharmacyId = req.user.id;
 
-        // 1. Order find karein
         const order = await PharmacyBooking.findById(orderId);
         if (!order) return res.status(404).json({ message: "Order not found" });
 
-        // 2. Logic: Sirf tabhi reassign hoga jab tak driver ne Accept na kiya ho
+        const newDriver = await Driver.findById(newDriverId);
+        if (!newDriver || newDriver.status !== 'Available') {
+            return res.status(400).json({ message: "New driver is not available" });
+        }
+
+        // --- CASE A: REASSIGN FOR RETURN PICKUP ---
+        if (isReturnReassignment || (order.returnDetails && order.returnDetails.status === 'Approved')) {
+            if (order.returnDetails.pickupStatus === 'PickedUp' || order.returnDetails.pickupStatus === 'DeliveredToStore') {
+                return res.status(400).json({ message: "Cannot reassign. Parcel is already collected by current driver." });
+            }
+
+            if (order.returnDetails.pickupDriverId) {
+                await Driver.findByIdAndUpdate(order.returnDetails.pickupDriverId, { status: 'Available' });
+            }
+
+            order.returnDetails.pickupDriverId = newDriverId;
+            order.returnDetails.pickupStatus = 'Assigned';
+            await order.save();
+
+            await Driver.findByIdAndUpdate(newDriverId, { status: 'Busy' });
+
+            await sendPushNotification(newDriverId, 'driver', "Reassigned Return Pickup!", `You are now assigned to collect return for Order #${order.orderId}.`);
+
+            return res.json({ success: true, message: "Return pickup reassigned to new driver successfully!", data: order });
+        }
+
+        // --- CASE B: REASSIGN FOR NORMAL DELIVERY ---
         const restrictedStatuses = ['Accepted', 'PickedUp', 'OutForDelivery', 'Delivered'];
         if (restrictedStatuses.includes(order.deliveryStatus)) {
             return res.status(400).json({ 
@@ -256,28 +281,18 @@ const reassignDriverManual = async (req, res) => {
             });
         }
 
-        // 3. Purane driver ko wapas free karein (Available)
         if (order.driverId) {
             await Driver.findByIdAndUpdate(order.driverId, { status: 'Available' });
-            // Purane driver ko rejectedBy mein daal dein taaki auto-assign wapas uske paas na jaye
             if (!order.rejectedBy.includes(order.driverId)) {
                 order.rejectedBy.push(order.driverId);
             }
         }
 
-        // 4. Naya driver check karein
-        const newDriver = await Driver.findById(newDriverId);
-        if (!newDriver || newDriver.status !== 'Available') {
-            return res.status(400).json({ message: "New driver is not available" });
-        }
-
-        // 5. Order update karein
         order.driverId = newDriverId;
         order.deliveryStatus = 'Assigned';
         order.assignedAt = new Date();
         await order.save();
 
-        // 6. Naye driver ko Busy mark karein
         await Driver.findByIdAndUpdate(newDriverId, { status: 'Busy' });
 
         res.json({ 
@@ -741,7 +756,10 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
 };
 
 
-// pharmacy returns and refunds can be handled in a separate controller for clarity and maintainability.
+
+// =====================================================================================
+// ================ pharmacy returns and replacements ====================================
+// =====================================================================================
 // REVIEW RETURN / REPLACEMENT REQUEST (Pharmacist Action)
 // Endpoint: PUT /provider/pharmacy/orders/return-action/:orderId
 const handleReturnRequestAction = async (req, res) => {
@@ -808,10 +826,241 @@ const handleReturnRequestAction = async (req, res) => {
     }
 };
 
+// 1. APPROVE RETURN & ASSIGN PICKUP DRIVER (In One Step)
+// Endpoint: POST /provider/pharmacy/orders/return/assign-driver
+const approveReturnAndAssignDriver = async (req, res) => {
+    try {
+        const { orderId, driverId } = req.body;
+        const pharmacyId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            pharmacyId
+        });
+
+        if (!order || !order.returnDetails || order.returnDetails.status !== 'Requested') {
+            return res.status(400).json({ success: false, message: "No active pending return request found." });
+        }
+
+        const driver = await Driver.findById(driverId);
+        if (!driver || driver.status !== 'Available') {
+            return res.status(400).json({ success: false, message: "Selected driver is not available." });
+        }
+
+        const generatedReturnOTP = Math.floor(1000 + Math.random() * 9000).toString();
+
+        order.returnDetails.status = 'Approved';
+        order.returnDetails.pickupDriverId = driverId;
+        order.returnDetails.pickupStatus = 'Assigned';
+        order.returnDetails.returnOTP = generatedReturnOTP;
+        order.returnDetails.resolvedAt = new Date();
+        await order.save();
+
+        await Driver.findByIdAndUpdate(driverId, { status: 'Busy' });
+
+        // 🚨 1. Notify Driver
+        await sendPushNotification(
+            driverId,
+            'driver',
+            "New Return Pickup Task Assigned!",
+            `You have been assigned to pick up return package for Order #${order.orderId}.`,
+            { orderId: order._id.toString(), type: 'return_pickup_task' }
+        );
+
+        // 🚨 2. Notify Patient with Return OTP
+        await sendPushNotification(
+            order.userId,
+            'user',
+            "Return Request Approved!",
+            `Your return request is approved. Pickup driver ${driver.name} is on the way. Share OTP ${generatedReturnOTP} upon collection.`,
+            { orderId: order._id.toString(), returnOTP: generatedReturnOTP, type: 'return_approved' }
+        );
+
+        res.json({
+            success: true,
+            message: "Return request approved, pickup driver assigned, and OTP sent to customer!",
+            data: {
+                orderId: order.orderId,
+                returnStatus: order.returnDetails.status,
+                pickupStatus: order.returnDetails.pickupStatus,
+                assignedDriver: { id: driver._id, name: driver.name, phone: driver.phone }
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. REJECT RETURN REQUEST
+// Endpoint: POST /provider/pharmacy/orders/return/reject
+const rejectReturnRequest = async (req, res) => {
+    try {
+        const { orderId, rejectionReason } = req.body;
+        const pharmacyId = req.user.id;
+
+        if (!rejectionReason || rejectionReason.trim() === "") {
+            return res.status(400).json({ success: false, message: "Rejection reason is required." });
+        }
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            pharmacyId
+        });
+
+        if (!order || !order.returnDetails || order.returnDetails.status !== 'Requested') {
+            return res.status(400).json({ success: false, message: "No active pending return request found." });
+        }
+
+        order.returnDetails.status = 'Rejected';
+        order.returnDetails.rejectionReason = rejectionReason.trim();
+        order.returnDetails.resolvedAt = new Date();
+        await order.save();
+
+        res.json({
+            success: true,
+            message: "Return request rejected.",
+            data: order.returnDetails
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// FINAL PHARMACIST STORE VERIFICATION & RESTOCK ACTION
+// Endpoint: POST /provider/pharmacy/orders/return/confirm-store-receipt
+const confirmStoreReturnReceipt = async (req, res) => {
+    try {
+        const { orderId, decision, remarks, rejectionReason } = req.body; 
+        const pharmacyId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            pharmacyId
+        });
+
+        if (!order || !order.returnDetails || order.returnDetails.status !== 'CollectedByDriver') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Order parcel must be physically collected by driver before final store verification." 
+            });
+        }
+
+        // =========================================================================
+        // CASE 1: RETURN APPROVED (Restores stock & queues Admin Refund)
+        // =========================================================================
+        if (decision === 'Approve_And_Restock') {
+            for (const item of order.items) {
+                if (!item.medicineId) continue;
+                let inv = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId });
+                if (inv) {
+                    inv.stock_quantity += Number(item.quantity || 1);
+                    inv.is_available = true;
+                    await inv.save();
+                }
+            }
+
+            order.returnDetails.status = 'Completed';
+            order.returnDetails.pickupStatus = 'DeliveredToStore';
+            order.returnDetails.vendorVerificationNote = remarks || "Package verified and accepted at store.";
+            order.returnDetails.storeReceivedAt = new Date();
+            order.status = 'Cancelled';
+            
+            // Queue for Admin Razorpay Payout
+            order.paymentStatus = order.paymentMethod === 'Online' ? 'Refund-Initiated' : 'Refunded';
+            await order.save();
+
+            return res.json({
+                success: true,
+                message: "Return confirmed! Stock restored to inventory and refund sent to Admin queue.",
+                data: order
+            });
+        }
+
+        // =========================================================================
+        // CASE 2: REPLACEMENT APPROVED (Generates Fresh Delivery OTP for Customer)
+        // =========================================================================
+        if (decision === 'Approve_And_Replace') {
+            for (const item of order.items) {
+                if (!item.medicineId) continue;
+                let inv = await MedicineInventory.findOne({ 
+                    pharmacyId, 
+                    medicineId: item.medicineId,
+                    is_available: true,
+                    stock_quantity: { $gte: Number(item.quantity || 1) }
+                });
+
+                if (!inv) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Cannot process Replacement: '${item.name}' is OUT OF STOCK. Please choose 'Approve_And_Restock' (Return & Refund) instead.`
+                    });
+                }
+            }
+
+            // Deduct replacement piece from inventory
+            for (const item of order.items) {
+                if (!item.medicineId) continue;
+                await deductPharmacyStockFEFO(pharmacyId, item.medicineId, item.quantity || 1);
+            }
+
+            // 🚨 FRESH DELIVERY OTP for Customer to receive replacement parcel
+            const freshDeliveryOTP = Math.floor(1000 + Math.random() * 9000).toString();
+
+            order.returnDetails.status = 'Completed';
+            order.returnDetails.pickupStatus = 'DeliveredToStore';
+            order.returnDetails.vendorVerificationNote = remarks || "Replacement product packed and ready for dispatch.";
+            order.returnDetails.storeReceivedAt = new Date();
+            
+            order.status = 'Packed'; 
+            order.deliveryStatus = 'PendingAssignment';
+            order.deliveryOTP = freshDeliveryOTP; // 👈 Fresh OTP generated
+            order.driverId = null; 
+            await order.save();
+
+            return res.json({
+                success: true,
+                message: "Replacement confirmed & stock deducted! Fresh Delivery OTP generated. Please assign a driver to deliver the replacement parcel.",
+                data: {
+                    orderId: order.orderId,
+                    status: order.status,
+                    deliveryStatus: order.deliveryStatus,
+                    newDeliveryOTP: order.deliveryOTP
+                }
+            });
+        }
+
+        // =========================================================================
+        // CASE 3: STORE REJECTION
+        // =========================================================================
+        if (decision === 'Reject_Damaged') {
+            if (!rejectionReason) {
+                return res.status(400).json({ success: false, message: "Rejection reason is required." });
+            }
+
+            order.returnDetails.status = 'Rejected';
+            order.returnDetails.rejectionReason = rejectionReason;
+            order.returnDetails.storeReceivedAt = new Date();
+            await order.save();
+
+            return res.json({
+                success: true,
+                message: "Return parcel rejected at store desk.",
+                data: order
+            });
+        }
+
+        return res.status(400).json({ success: false, message: "Invalid decision option." });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 
 module.exports = { getPharmacyDashboardStats, getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
 
-    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers, getPharmacyOrderInvoiceDetails, handleReturnRequestAction
+    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers, getPharmacyOrderInvoiceDetails,
+     handleReturnRequestAction,approveReturnAndAssignDriver, rejectReturnRequest,confirmStoreReturnReceipt
  };

@@ -32,9 +32,11 @@ const HsnMaster = require('../../../models/HsnMaster'); // Import HSN Master mod
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
 const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
-const { processCancellationRefund } = require('../../../utils/policyHelper');
+const { processCancellationRefund,creditVendorCompensation } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
-const PharmacyreturnConfig = require('../../../models/PharmacyReturnConfig');
+const PharmacyReturnConfig = require('../../../models/PharmacyReturnConfig');
+
+
 
 
 // 🔢 Helper: Indian Currency Number to Words Converter
@@ -1989,34 +1991,36 @@ const cancelMedicineOrder = async (req, res) => {
 
         const terminalStates = ['OutForDelivery', 'ReachedLocation', 'Delivered', 'Cancelled', 'No-Show'];
         if (terminalStates.includes(order.status) || terminalStates.includes(order.deliveryStatus)) {
-            return res.status(400).json({ success: false, message: "Cannot cancel order in its current state." });
+            return res.status(400).json({ success: false, message: "Cannot cancel order once it is out for delivery or delivered." });
         }
 
-        // DYNAMIC POLICY EVALUATION
+        // 🚨 Dynamic Policy Evaluation (Now accurately calculates totalPaid from billSummary)
         const policyResult = await processCancellationRefund(order, 'Pharmacy');
 
-        // STOCK RESTORATION: Return canceled items back to Pharmacy Inventory [cite: 1.1.2]
+        // 1. Stock Restoration (FEFO)
         for (const item of order.items) {
             if (!item.medicineId) continue;
-
             let inventory = await MedicineInventory.findOne({ 
                 pharmacyId: order.pharmacyId, 
-                medicineId: item.medicineId,
-                is_available: true
+                medicineId: item.medicineId
             });
 
-            if (!inventory) {
-                inventory = await MedicineInventory.findOne({ 
-                    pharmacyId: order.pharmacyId, 
-                    medicineId: item.medicineId
-                });
-            }
-
             if (inventory) {
-                inventory.stock_quantity += item.quantity; // Put stocks back [cite: 1.1.2]
-                inventory.is_available = true; // Ensure marked active [cite: 1.1.2]
+                inventory.stock_quantity += Number(item.quantity || 1);
+                inventory.is_available = true;
                 await inventory.save();
             }
+        }
+
+        // 🚨 2. Credit Vendor Compensation if penalty was applied
+        if (policyResult.cancellationFee > 0) {
+            await creditVendorCompensation(
+                order.pharmacyId,
+                'Pharmacy',
+                policyResult.cancellationFee,
+                order.orderId,
+                'Cancellation Fee'
+            );
         }
 
         order.status = 'Cancelled';
@@ -2024,10 +2028,13 @@ const cancelMedicineOrder = async (req, res) => {
         order.cancelReason = reason || "Cancelled by User";
         
         order.billSummary.cancellationFeeApplied = policyResult.cancellationFee;
-        order.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        order.paymentStatus = (order.paymentMethod === 'Online' && policyResult.refundAmount > 0) 
+            ? 'Refund-Initiated' 
+            : 'Refunded';
 
         await order.save();
 
+        // Release free subscription delivery count if applicable
         if (order.billSummary?.deliveryCharge === 0 && (order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection')) {
             await refundBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
         }
@@ -2035,8 +2042,8 @@ const cancelMedicineOrder = async (req, res) => {
         res.json({ 
             success: true, 
             message: policyResult.cancellationFee > 0
-                ? `Order cancelled. A cancellation fee of ₹${policyResult.cancellationFee} was applied and stock restored.`
-                : "Order cancelled successfully and stock restored.",
+                ? `Order cancelled. A cancellation penalty of ₹${policyResult.cancellationFee} was applied and credited to the pharmacy. Refund of ₹${policyResult.refundAmount} has been initiated.`
+                : "Order cancelled successfully. Full refund initiated and stock restored.",
             data: {
                 cancellationFee: policyResult.cancellationFee,
                 refundAmount: policyResult.refundAmount,
@@ -3494,7 +3501,7 @@ const getSimilarInStockMedicines = async (req, res) => {
 const requestPharmacyOrderReturn = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { requestType, reason, userComments, returnedMedicineId } = req.body; 
+        const { requestType, reason, userComments } = req.body; // 'Return' | 'Replacement'
         const userId = req.user.id;
 
         const order = await PharmacyBooking.findOne({
@@ -3506,7 +3513,6 @@ const requestPharmacyOrderReturn = async (req, res) => {
             return res.status(404).json({ success: false, message: "Order not found." });
         }
 
-        // 🚨 1. Check if order is Delivered
         if (order.status !== 'Delivered' && order.deliveryStatus !== 'Delivered') {
             return res.status(400).json({ 
                 success: false, 
@@ -3514,9 +3520,8 @@ const requestPharmacyOrderReturn = async (req, res) => {
             });
         }
 
-        // 🚨 2. PRODUCT VS MEDICINE COMPLIANCE CHECK
-        // Ingestible Prescription medicines cannot be returned/replaced as per medical regulations
-        const nonReturnableItems = [];
+        // 🚨 1. SEPARATE RETURNABLE PRODUCTS (DEVICES/OTC) VS INGESTIBLE DRUGS
+        let returnableItemSubtotal = 0;
         const returnableItems = [];
 
         order.items.forEach(item => {
@@ -3530,31 +3535,23 @@ const requestPharmacyOrderReturn = async (req, res) => {
 
             if (isDeviceOrOTC) {
                 returnableItems.push(item);
-            } else {
-                nonReturnableItems.push(item.name);
+                // Calculate only the item's cost (Excluding medicines and delivery fees)
+                returnableItemSubtotal += (Number(item.price || 0) * Number(item.quantity || 1));
             }
         });
 
-        // If order contains ONLY pure prescription medicines, block return immediately
         if (returnableItems.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: "Compliance Blocked: As per Health & Drug safety regulations, ingestible prescription medicines cannot be returned or replaced once delivered. Return/replacement is strictly applicable only on medical devices, health monitors, and OTC health products."
+                message: "Compliance Blocked: As per Drug safety regulations, ingestible prescription medicines cannot be returned or replaced once delivered. Return/replacement is only permitted on medical devices and OTC health products."
             });
         }
 
-        // 🚨 3. Admin Return Policy Days Validation
+        // 2. Admin Policy Check
         let config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
         if (!config) config = { returnWindowDays: 3, isReturnEnabled: true, isReplacementEnabled: true };
 
-        if (requestType === 'Return' && !config.isReturnEnabled) {
-            return res.status(400).json({ success: false, message: "Return requests are currently disabled by platform admin." });
-        }
-        if (requestType === 'Replacement' && !config.isReplacementEnabled) {
-            return res.status(400).json({ success: false, message: "Replacement requests are currently disabled by platform admin." });
-        }
-
-        const deliveryDate = order.updatedAt || order.createdAt;
+        const deliveryDate = order.deliveredAt || order.updatedAt || order.createdAt;
         const daysSinceDelivery = moment().diff(moment(deliveryDate), 'days');
 
         if (daysSinceDelivery > config.returnWindowDays) {
@@ -3568,29 +3565,72 @@ const requestPharmacyOrderReturn = async (req, res) => {
             return res.status(400).json({ success: false, message: "A return/replacement request is already pending for this order." });
         }
 
-        // Capture uploaded proof photos
         let uploadedProofs = [];
         if (req.files && req.files.proofImages) {
             uploadedProofs = req.files.proofImages.map(f => f.path.replace(/\\/g, "/"));
         }
 
         order.returnDetails = {
-            requestType: requestType || 'Replacement',
+            requestType: requestType || 'Return',
             reason: reason || "Defective/Damaged product delivered",
             userComments: userComments || "",
             proofImages: uploadedProofs,
             status: 'Requested',
             requestedAt: new Date(),
             rejectionReason: null,
-            refundAmount: order.billSummary.totalAmount
+            // 🚨 FIXED: Exactly refunds the subtotal of returnable products (₹2000 for BP machine)
+            refundAmount: Number(returnableItemSubtotal.toFixed(2))
         };
 
         await order.save();
 
         res.json({
             success: true,
-            message: `${requestType} request for product submitted successfully! The pharmacy store will review your request.`,
+            message: `${requestType} request submitted successfully! The pharmacy store will review your request.`,
             data: order.returnDetails
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// CANCEL RETURN REQUEST (By Patient before driver collection)
+// Endpoint: POST /user/pharmacy/orders/return-request/cancel/:orderId
+const cancelReturnRequestByCustomer = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const userId = req.user.id;
+
+        const order = await PharmacyBooking.findOne({
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            userId
+        });
+
+        if (!order || !order.returnDetails || order.returnDetails.status === 'None') {
+            return res.status(400).json({ success: false, message: "No active return request found on this order." });
+        }
+
+        // Agar driver already pickup kar chuka hai toh cancel nahi ho sakta
+        if (order.returnDetails.pickupStatus === 'PickedUp' || order.returnDetails.status === 'CollectedByDriver') {
+            return res.status(400).json({ success: false, message: "Cannot cancel: Package has already been collected by driver." });
+        }
+
+        // Free assigned driver if any
+        if (order.returnDetails.pickupDriverId) {
+            await Driver.findByIdAndUpdate(order.returnDetails.pickupDriverId, { status: 'Available' });
+        }
+
+        order.returnDetails.status = 'None';
+        order.returnDetails.pickupStatus = 'PendingAssignment';
+        order.returnDetails.pickupDriverId = null;
+        order.returnDetails.returnOTP = null;
+        order.returnDetails.rejectionReason = "Return request cancelled by customer.";
+        await order.save();
+
+        res.json({
+            success: true,
+            message: "Return request cancelled successfully. Your order remains Delivered.",
+            data: order
         });
 
     } catch (error) {
@@ -3606,5 +3646,6 @@ getLatestAddedMedicines ,getNonPrescriptionMedicines,getHighestDiscountMedicines
 createPrescriptionRequest, payAndConfirmOrder,verifyPrescriptionRequestPayment,getUserPrescriptionRequests,getUserPrescriptionRequestDetails,estimateRxPrices,
 ratePharmacyOrder,getGlobalActiveComboOffers,getComboOfferDetails,
 getSimilarInStockMedicines,
-requestPharmacyOrderReturn
+requestPharmacyOrderReturn,
+cancelReturnRequestByCustomer
 };

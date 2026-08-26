@@ -11,7 +11,7 @@ createPrescriptionRequest,payAndConfirmOrder,verifyPrescriptionRequestPayment,
 
 getActiveStoreComboOffers,getGlobalActiveComboOffers,getComboOfferDetails,ratePharmacyOrder,
 getSimilarInStockMedicines,
-requestPharmacyOrderReturn
+requestPharmacyOrderReturn,cancelReturnRequestByCustomer
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
@@ -134,4 +134,6 @@ router.post(
     pharmacyReturnProofUploads, 
     requestPharmacyOrderReturn
 );
+router.post('/orders/return-request/cancel/:orderId', protect('user'), cancelReturnRequestByCustomer);
+
 module.exports = router;
