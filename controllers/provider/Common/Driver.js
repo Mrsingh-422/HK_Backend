@@ -82,29 +82,29 @@ const registerDriver = async (req, res) => {
     }
 };
 
-// // LOGIN DRIVER (Username ya Phone dono se login possible hai)
-// endpoint: POST /provider/driver/login
+// LOGIN DRIVER (Username ya Phone + fcmToken capture)
+// Endpoint: POST /provider/driver/login
 const loginDriver = async (req, res) => {
     try {
-        const { identifier, password } = req.body; // 'identifier' holds username or phone
+        const { identifier, password, fcmToken } = req.body;
 
         if (!identifier || !password) {
-            return res.status(400).json({ message: "Username/Phone and Password are required" });
+            return res.status(400).json({ success: false, message: "Username/Phone and Password are required" });
         }
 
         // Find by Username or Phone
         const driver = await Driver.findOne({
             $or: [
-                { username: identifier },
-                { phone: identifier }
+                { username: identifier.trim() },
+                { phone: identifier.trim().replace(/\D/g, "").slice(-10) }
             ]
         }).select('+password');
 
         if (!driver || !(await bcrypt.compare(String(password), driver.password))) {
-            return res.status(400).json({ message: "Invalid credentials" });
+            return res.status(400).json({ success: false, message: "Invalid credentials" });
         }
 
-        // 🚨 STRICT EXPLICIT CHECK: Block login if Driver is disabled/inactive
+        // 🚨 Block login if Driver is suspended/inactive
         if (driver.isActive === false) {
             return res.status(403).json({ 
                 success: false, 
@@ -112,7 +112,7 @@ const loginDriver = async (req, res) => {
             });
         }
 
-        // Token logic
+        // Generate Token
         let token = null;
         if (process.env.NODE_ENV === 'development' && driver.token) {
             try {
@@ -124,20 +124,25 @@ const loginDriver = async (req, res) => {
         if (!token) {
             token = generateToken(driver._id, 'driver');
             driver.token = token;
-            await driver.save();
         }
+
+        // 🚨 CRITICAL FIX: Save mobile device FCM Token for real-time order alerts
+        if (fcmToken) {
+            driver.fcmToken = fcmToken;
+        }
+        await driver.save();
 
         driver.password = undefined;
 
-        // Response with vendorType key
         res.json({ 
             success: true, 
+            message: "Driver logged in successfully",
             token, 
-            vendorType: driver.vendorType, // Dynamic platform navigation helper
+            vendorType: driver.vendorType, 
             data: driver 
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

@@ -205,7 +205,8 @@ const startDelivery = async (req, res) => {
         const { orderId } = req.params;
         const driverId = req.user.id;
 
-        const order = await PharmacyBooking.findById(orderId);
+        const driver = await Driver.findById(driverId);
+        const order = await PharmacyBooking.findById(orderId).populate('userId', 'fcmToken name');
         if (!order) return res.status(404).json({ message: "Order not found" });
 
         if (!order.driverId || order.driverId.toString() !== driverId) {
@@ -213,12 +214,27 @@ const startDelivery = async (req, res) => {
         }
 
         order.deliveryStatus = 'OutForDelivery';
+        order.status = 'Shipped';
         order.startedAt = new Date();
         await order.save();
 
+        // 🚨 PATIENT ALERT: Order is on the way!
+        if (order.userId) {
+            await sendPushNotification(
+                order.userId._id,
+                'user',
+                "Order Out for Delivery! 🚚",
+                `Delivery partner ${driver?.name || ''} is on the way with your medicine parcel.`,
+                { orderId: order._id.toString(), type: 'order_out_for_delivery' }
+            );
+        }
+
         res.json({ success: true, message: "Delivery route started!", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 
 // Arrived at Patient Location (Figma Screen 15 "Arrived" Button Action)
 const arriveAtLocation = async (req, res) => {
@@ -226,29 +242,55 @@ const arriveAtLocation = async (req, res) => {
         const { orderId } = req.params;
         const driverId = req.user.id;
 
-        const order = await PharmacyBooking.findById(orderId);
-        if (!order) return res.status(404).json({ message: "Order not found" });
+        const driver = await Driver.findById(driverId);
+        const order = await PharmacyBooking.findById(orderId).populate('userId', 'fcmToken name');
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         if (!order.driverId || order.driverId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized operation" });
+            return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
+        // 🎲 Dynamic 4-Digit Delivery OTP
+        const dynamicDeliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
+
         order.deliveryStatus = 'ReachedLocation';
-        order.deliveryOTP = '1111'; // Set static OTP
+        order.deliveryOTP = dynamicDeliveryOtp;
         order.arrivedAt = new Date();
         await order.save();
 
-        res.json({ success: true, message: "Arrived at location. Static OTP sent to customer.", debugOtp: '1111' });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 🚨 Push notification to patient with Delivery OTP
+        if (order.userId) {
+            await sendPushNotification(
+                order.userId._id,
+                'user',
+                "Medicine Delivery Partner Arrived!",
+                `Delivery partner ${driver?.name || ''} has arrived. Share Delivery OTP: ${dynamicDeliveryOtp} upon receiving medicine parcel.`,
+                { orderId: order._id.toString(), otp: dynamicDeliveryOtp, type: 'pharmacy_delivery_otp' }
+            );
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Arrived at destination. Delivery OTP sent to customer.", 
+            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicDeliveryOtp 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// CONFIRM OTP & DELIVER NORMAL ORDER (Multiple Photos Support)
+
+// 2. VERIFY OTP & DELIVER (Fixed COD Payment Status auto-marking 'Paid')
 // Endpoint: POST /driver/pharmacy/orders/verify-otp
 const verifyOtpAndDeliver = async (req, res) => {
     try {
         const { orderId, otp } = req.body;
         const driverId = req.user.id;
 
+        if (!otp) {
+            return res.status(400).json({ success: false, message: "Delivery OTP is required." });
+        }
+
         const order = await PharmacyBooking.findById(orderId);
         if (!order) return res.status(404).json({ message: "Order not found" });
 
@@ -256,28 +298,37 @@ const verifyOtpAndDeliver = async (req, res) => {
             return res.status(403).json({ message: "Unauthorized operation" });
         }
 
-        if (otp !== '1111' && order.deliveryOTP !== otp) {
-            return res.status(400).json({ success: false, message: "Invalid Delivery OTP." });
+        // Strict OTP verification
+        if (order.deliveryOTP !== String(otp).trim()) {
+            return res.status(400).json({ success: false, message: "Invalid Delivery OTP. Please collect valid OTP from customer." });
         }
 
-        // 🚨 Multiple Delivery Proof Photos capture
         let deliveryProofs = [];
-        if (req.files) {
-            if (req.files.deliveryPic && req.files.deliveryPic.length > 0) {
-                deliveryProofs = req.files.deliveryPic.map(f => f.path.replace(/\\/g, "/"));
-            } else if (req.files.pickupPhotos && req.files.pickupPhotos.length > 0) {
-                deliveryProofs = req.files.pickupPhotos.map(f => f.path.replace(/\\/g, "/"));
-            }
+        if (req.files?.deliveryPic && req.files.deliveryPic.length > 0) {
+            deliveryProofs = req.files.deliveryPic.map(f => f.path.replace(/\\/g, "/"));
+        } else if (req.files?.pickupPhotos && req.files.pickupPhotos.length > 0) {
+            deliveryProofs = req.files.pickupPhotos.map(f => f.path.replace(/\\/g, "/"));
         }
 
         if (deliveryProofs.length > 0) {
-            order.deliveryProofPic = deliveryProofs[0]; // For backward compatibility
-            order.deliveryProofPics = deliveryProofs;  // Array of all captured angles
+            order.deliveryProofPic = deliveryProofs[0];
+            order.deliveryProofPics = deliveryProofs;
         }
 
         order.deliveryStatus = 'Delivered';
         order.status = 'Delivered';
         order.deliveredAt = new Date();
+        order.deliveryOTP = null;
+
+        // 🚨 CRITICAL FIX: If COD, mark payment as Paid upon successful delivery!
+        if (order.paymentMethod === 'COD') {
+            order.paymentStatus = 'Paid';
+            if (!order.paymentDetails) order.paymentDetails = {};
+            order.paymentDetails.status = 'captured';
+            order.paymentDetails.paidAt = new Date();
+            order.paymentDetails.method = 'COD';
+        }
+
         await order.save();
 
         // Release driver back to Available
@@ -285,7 +336,7 @@ const verifyOtpAndDeliver = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Order Delivered Successfully!", 
+            message: "Medicine parcel delivered successfully & payment logged!", 
             data: order 
         });
     } catch (error) { 
@@ -330,18 +381,22 @@ const getAdminContact = async (req, res) => {
     });
 };
 
-// Reassign Order Due to Emergency (Figma Reassignment)
+// REASSIGN PHARMACY ORDER DUE TO EMERGENCY (With Pharmacy Vendor Push Alert)
+// Endpoint: POST /driver/pharmacy/reassign-emergency
 const reassignOrderDueToEmergency = async (req, res) => {
     try {
         const { orderId, reason } = req.body;
         const driverId = req.user.id;
 
+        const driver = await Driver.findById(driverId);
         const order = await PharmacyBooking.findById(orderId);
         if (!order) return res.status(404).json({ message: "Order not found" });
 
         if (!order.driverId || order.driverId.toString() !== driverId) {
             return res.status(403).json({ message: "Unauthorized." });
         }
+
+        const pharmacyId = order.pharmacyId;
 
         order.driverId = null;
         order.deliveryStatus = 'PendingAssignment';
@@ -351,8 +406,21 @@ const reassignOrderDueToEmergency = async (req, res) => {
 
         await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
 
-        res.json({ success: true, message: "Emergency reported. Delivery order released back to pool.", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 🚨 CRITICAL FIX: Alert Pharmacy Store that courier dropped parcel
+        if (pharmacyId) {
+            await sendPushNotification(
+                pharmacyId,
+                'pharmacy',
+                "⚠️ Delivery Courier Emergency!",
+                `Delivery partner ${driver?.name || ''} released Order #${order.orderId} due to emergency: "${reason || 'N/A'}". Please re-assign another driver.`,
+                { orderId: order._id.toString(), type: 'courier_emergency_dropped' }
+            );
+        }
+
+        res.json({ success: true, message: "Emergency reported. Order released and Pharmacy notified.", data: order });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // ==========================================
@@ -454,9 +522,18 @@ const reportPharmacyNoShow = async (req, res) => {
         const { orderId, comments } = req.body;
         const courierId = req.user.id;
 
-        const order = await PharmacyBooking.findOne({ _id: orderId, driverId: courierId, status: 'Placed' });
+        // 🚨 FIXED: Compatible with both Placed and Shipped active orders
+        const order = await PharmacyBooking.findOne({ 
+            _id: orderId, 
+            driverId: courierId, 
+            status: { $in: ['Placed', 'Shipped', 'Packed'] } 
+        });
+
         if (!order) {
-            return res.status(404).json({ success: false, message: "Order must be in active transit (Placed) state to report No-Show." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Active delivery order not found for this driver." 
+            });
         }
 
         const totalPaid = order.billSummary?.totalAmount || 0;
@@ -475,12 +552,14 @@ const reportPharmacyNoShow = async (req, res) => {
         order.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
         order.cancelReason = comments || "Customer unreachable at delivery destination.";
 
-        // Return the reserved medicines back to pharmacy inventory stock
+        // Return reserved medicines back to pharmacy inventory
         for (const item of order.items) {
-            await MedicineInventory.findOneAndUpdate(
-                { pharmacyId: order.pharmacyId, medicineId: item.medicineId },
-                { $inc: { stock_quantity: item.quantity }, $set: { is_available: true } }
-            );
+            if (item.medicineId) {
+                await MedicineInventory.findOneAndUpdate(
+                    { pharmacyId: order.pharmacyId, medicineId: item.medicineId },
+                    { $inc: { stock_quantity: item.quantity || 1 }, $set: { is_available: true } }
+                );
+            }
         }
 
         // Release driver back to Available

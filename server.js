@@ -389,6 +389,7 @@ app.use('/provider/nurse/package', require('./routes/provider/Nurse/NursePackage
 app.use('/provider/nurse/prescription', require('./routes/provider/Nurse/NursePrescriptionRoute'));
 
 ////////////////////// Driver Routes /////////////////////
+app.use('/driver/common', require('./routes/driver/common/DriverCommonRoute'));
 app.use('/driver/pharmacy', require('./routes/driver/driverPharmacy/OrdersRoute'));  
 app.use('/driver/lab', require('./routes/driver/driverLab/driverLabOrdersRoute')); 
 app.use('/driver/nurse', require('./routes/driver/driverNurse/NurseDriverOrdersRoute'));

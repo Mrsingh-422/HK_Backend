@@ -113,37 +113,27 @@ const assignStaff = async (req, res) => {
         if (!phlebotomistId || !orderId) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Phlebotomist ID and Order ID are required to assign staff." 
+                message: "Phlebotomist ID and Order ID are required." 
             });
         }
 
-        // 1. Explicitly cast values to ObjectId to prevent dynamic refPath mismatch in queries
         const phlebotomistObjectId = new mongoose.Types.ObjectId(phlebotomistId);
         const labObjectId = new mongoose.Types.ObjectId(labId);
         const orderObjectId = new mongoose.Types.ObjectId(orderId);
 
-        // 2. Verify karein ki driver exist karta hai, is lab ka part hai aur online hai
         const driver = await Driver.findOne({ 
             _id: phlebotomistObjectId, 
             vendorId: labObjectId,
             vendorType: 'Lab'
         });
 
-        if (!driver) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Phlebotomist not found or unauthorized for this lab." 
-            });
-        }
-
-        if (driver.status === 'Offline') {
+        if (!driver || driver.status === 'Offline') {
             return res.status(400).json({ 
                 success: false, 
-                message: "Cannot assign an offline phlebotomist." 
+                message: "Phlebotomist not found or is currently Offline." 
             });
         }
 
-        // 3. Booking update karein database me
         const booking = await LabBooking.findOneAndUpdate(
             { _id: orderObjectId, labId: labObjectId },
             { 
@@ -155,28 +145,26 @@ const assignStaff = async (req, res) => {
             { new: true }
         );
 
-        if (!booking) {
-            return res.status(404).json({ success: false, message: "Order not found" });
-        }
+        if (!booking) return res.status(404).json({ success: false, message: "Order not found" });
 
-        // 4. Update the driver status directly to 'Busy' using findByIdAndUpdate
-        const updatedDriver = await Driver.findByIdAndUpdate(
-            phlebotomistObjectId,
-            { $set: { status: 'Busy' } },
-            { new: true, runValidators: false }
+        await Driver.findByIdAndUpdate(phlebotomistObjectId, { $set: { status: 'Busy' } });
+
+        // 🚨 FCM PUSH NOTIFICATION: Alert Driver on New Task
+        await sendPushNotification(
+            phlebotomistId,
+            'driver',
+            "New Lab Sample Collection Assigned!",
+            `You have been assigned order #${booking.bookingId}. Tap to view details.`,
+            { orderId: booking._id.toString(), type: 'lab_collection_task' }
         );
-
-        console.log(`[Sync Completed]: Phlebotomist status set to ->`, updatedDriver?.status);
 
         res.json({ 
             success: true, 
             message: "Phlebotomist assigned successfully", 
-            driverStatus: updatedDriver ? updatedDriver.status : "Busy",
             data: booking 
         });
 
     } catch (error) { 
-        console.error("Assign Staff Operation Failed:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

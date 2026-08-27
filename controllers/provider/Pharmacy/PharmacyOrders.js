@@ -952,12 +952,10 @@ const confirmStoreReturnReceipt = async (req, res) => {
         if (decision === 'Approve_And_Restock') {
             for (const item of order.items) {
                 if (!item.medicineId) continue;
-                let inv = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId });
-                if (inv) {
-                    inv.stock_quantity += Number(item.quantity || 1);
-                    inv.is_available = true;
-                    await inv.save();
-                }
+                await MedicineInventory.findOneAndUpdate(
+                    { pharmacyId, medicineId: item.medicineId },
+                    { $inc: { stock_quantity: Number(item.quantity || 1) }, $set: { is_available: true } }
+                );
             }
 
             order.returnDetails.status = 'Completed';
@@ -978,12 +976,12 @@ const confirmStoreReturnReceipt = async (req, res) => {
         }
 
         // =========================================================================
-        // CASE 2: REPLACEMENT APPROVED (Generates Fresh Delivery OTP for Customer)
+        // CASE 2: REPLACEMENT APPROVED (🚨 FIXED: Native Stock Deduct without undefined helper crash)
         // =========================================================================
         if (decision === 'Approve_And_Replace') {
             for (const item of order.items) {
                 if (!item.medicineId) continue;
-                let inv = await MedicineInventory.findOne({ 
+                const inv = await MedicineInventory.findOne({ 
                     pharmacyId, 
                     medicineId: item.medicineId,
                     is_available: true,
@@ -998,13 +996,15 @@ const confirmStoreReturnReceipt = async (req, res) => {
                 }
             }
 
-            // Deduct replacement piece from inventory
+            // Deduct replacement stock atomically
             for (const item of order.items) {
                 if (!item.medicineId) continue;
-                await deductPharmacyStockFEFO(pharmacyId, item.medicineId, item.quantity || 1);
+                await MedicineInventory.findOneAndUpdate(
+                    { pharmacyId, medicineId: item.medicineId },
+                    { $inc: { stock_quantity: -Number(item.quantity || 1) } }
+                );
             }
 
-            // 🚨 FRESH DELIVERY OTP for Customer to receive replacement parcel
             const freshDeliveryOTP = Math.floor(1000 + Math.random() * 9000).toString();
 
             order.returnDetails.status = 'Completed';
@@ -1014,13 +1014,13 @@ const confirmStoreReturnReceipt = async (req, res) => {
             
             order.status = 'Packed'; 
             order.deliveryStatus = 'PendingAssignment';
-            order.deliveryOTP = freshDeliveryOTP; // 👈 Fresh OTP generated
+            order.deliveryOTP = freshDeliveryOTP;
             order.driverId = null; 
             await order.save();
 
             return res.json({
                 success: true,
-                message: "Replacement confirmed & stock deducted! Fresh Delivery OTP generated. Please assign a driver to deliver the replacement parcel.",
+                message: "Replacement confirmed & stock deducted! Fresh Delivery OTP generated. Please assign a driver.",
                 data: {
                     orderId: order.orderId,
                     status: order.status,

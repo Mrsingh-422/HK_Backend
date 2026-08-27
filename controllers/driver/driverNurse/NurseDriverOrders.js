@@ -296,19 +296,41 @@ const arriveAtLocation = async (req, res) => {
         const { bookingId } = req.params;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findById(bookingId);
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        const staff = await Driver.findById(staffId);
+        const booking = await NurseBooking.findById(bookingId).populate('userId', 'fcmToken name');
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
-        if (booking.assignedStaffId.toString() !== staffId) {
-            return res.status(403).json({ message: "Unauthorized operation" });
+        if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
+            return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
+        // 🎲 Dynamic 4-Digit Service Start OTP
+        const dynamicStartOtp = Math.floor(1000 + Math.random() * 9000).toString();
+
         booking.status = 'Arrived';
-        booking.serviceOTP = '1111'; // Static OTP
+        booking.serviceOTP = dynamicStartOtp;
+        booking.arrivedAt = new Date();
         await booking.save();
 
-        res.json({ success: true, message: "Arrived at location. Verification OTP generated.", otpSent: true, debugOtp: '1111' });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 🚨 Push notification to patient with Start OTP
+        if (booking.userId) {
+            await sendPushNotification(
+                booking.userId._id,
+                'user',
+                "Nurse Arrived at Your Location!",
+                `Nurse ${staff?.name || ''} has arrived. Share Start OTP: ${dynamicStartOtp} to begin care session.`,
+                { bookingId: booking._id.toString(), otp: dynamicStartOtp, type: 'nurse_start_otp' }
+            );
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Arrived at location. Start OTP sent to patient.", 
+            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicStartOtp 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Confirm Start OTP (Figma Screen 8)
@@ -317,23 +339,31 @@ const verifyOtpAndStartService = async (req, res) => {
         const { bookingId, otp } = req.body;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findById(bookingId);
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
-
-        if (booking.assignedStaffId.toString() !== staffId) {
-            return res.status(403).json({ message: "Unauthorized operation" });
+        if (!otp) {
+            return res.status(400).json({ success: false, message: "Start OTP is required." });
         }
 
-        if (otp !== '1111' && booking.serviceOTP !== otp) {
-            return res.status(400).json({ success: false, message: "Invalid OTP" });
+        const booking = await NurseBooking.findById(bookingId);
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+
+        if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
+            return res.status(403).json({ success: false, message: "Unauthorized operation" });
+        }
+
+        // Strict OTP check (Static '1111' removed)
+        if (booking.serviceOTP !== String(otp).trim()) {
+            return res.status(400).json({ success: false, message: "Invalid OTP. Please collect valid OTP from patient." });
         }
 
         booking.status = 'Service-Started';
-        booking.startedAt = new Date(); // Start service duration timer
+        booking.startedAt = new Date();
+        booking.serviceOTP = null; // Clear OTP
         await booking.save();
 
-        res.json({ success: true, message: "Service started successfully!", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, message: "Service timer started successfully!", data: booking });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Live Service Progress Operations (Figma Screen 23 - Notes / Photos)
@@ -368,21 +398,20 @@ const submitServiceCompletion = async (req, res) => {
         const { 
             serviceNotes, 
             usedConsumable, 
-            consumablesSelected, // Array format: [{"name":"Gloves", "price":200}]
+            consumablesSelected, 
             totalConsumableCharges, 
             earlyCompleteNotes, 
             extraServicePayment 
         } = req.body;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findById(bookingId);
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        const booking = await NurseBooking.findById(bookingId).populate('userId', 'fcmToken name');
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
-        if (booking.assignedStaffId.toString() !== staffId) {
-            return res.status(403).json({ message: "Unauthorized" });
+        if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
-        // Apply completion inputs
         booking.serviceNotes = serviceNotes;
         booking.usedConsumable = usedConsumable === 'true' || usedConsumable === true;
         booking.totalConsumableCharges = Number(totalConsumableCharges || 0);
@@ -395,16 +424,34 @@ const submitServiceCompletion = async (req, res) => {
                 : consumablesSelected;
         }
 
-        if (req.files && req.files.handmadeInvoice) {
-            booking.handmadeInvoice = req.files.handmadeInvoice[0].path;
+        if (req.files?.handmadeInvoice && req.files.handmadeInvoice[0]) {
+            booking.handmadeInvoice = req.files.handmadeInvoice[0].path.replace(/\\/g, "/");
         }
 
-        // Trigger safe static completion OTP '1111'
-        booking.completionOTP = '1111';
+        // 🎲 Dynamic 4-Digit Completion OTP
+        const dynamicCompleteOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        booking.completionOTP = dynamicCompleteOtp;
         await booking.save();
 
-        res.json({ success: true, message: "Service data compiled. Please verify OTP to complete.", debugOtp: "1111" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 🚨 Alert patient with Completion OTP
+        if (booking.userId) {
+            await sendPushNotification(
+                booking.userId._id,
+                'user',
+                "Nursing Session Finished!",
+                `Session completed. Share Completion OTP: ${dynamicCompleteOtp} with nurse to finalize.`,
+                { bookingId: booking._id.toString(), otp: dynamicCompleteOtp, type: 'nurse_completion_otp' }
+            );
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Session summary compiled. Completion OTP sent to patient.", 
+            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicCompleteOtp 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Confirm Complete OTP (Figma Screen 2, 8)
@@ -413,41 +460,44 @@ const verifyCompleteOtp = async (req, res) => {
         const { bookingId, otp } = req.body;
         const staffId = req.user.id;
 
+        if (!otp) {
+            return res.status(400).json({ success: false, message: "Completion OTP is required." });
+        }
+
         const booking = await NurseBooking.findById(bookingId);
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
-        if (booking.assignedStaffId.toString() !== staffId) {
-            return res.status(403).json({ message: "Unauthorized" });
+        if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
-        if (otp !== '1111' && booking.completionOTP !== otp) {
-            return res.status(400).json({ success: false, message: "Invalid OTP" });
+        // Strict Check
+        if (booking.completionOTP !== String(otp).trim()) {
+            return res.status(400).json({ success: false, message: "Invalid Completion OTP." });
         }
 
-        // Multi-day checking
         const today = new Date();
-        const endDate = new Date(booking.schedule.endDate);
-        const todayDateOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-        const endDateOnly = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+        const hasMultipleDays = booking.schedule?.duration === 'For Multiple Days' && booking.schedule?.endDate;
+        const isMultiDayActive = hasMultipleDays && new Date(today.setHours(0,0,0,0)) < new Date(new Date(booking.schedule.endDate).setHours(0,0,0,0));
 
-        if (booking.schedule.duration === 'For Multiple Days' && todayDateOnly < endDateOnly) {
+        if (isMultiDayActive) {
             booking.status = 'Assigned'; // Next shift scheduled
-            booking.serviceOTP = null;
-            booking.completionOTP = null;
         } else {
             booking.status = 'Completed';
             booking.completedAt = new Date();
-            booking.serviceOTP = null;
-            booking.completionOTP = null;
         }
 
+        booking.serviceOTP = null;
+        booking.completionOTP = null;
         await booking.save();
 
-        // Release nurse staff to Available
+        // Release nurse staff back to Available
         await Driver.findByIdAndUpdate(staffId, { status: 'Available' });
 
         res.json({ success: true, message: "Service completion verified successfully!", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Support/Contact Admin Config (Figma Screen 9)

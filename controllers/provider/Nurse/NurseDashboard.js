@@ -8,6 +8,7 @@ const moment = require('moment');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
+const { sendPushNotification } = require('../../../utils/notification');
 
 // ==========================================
 // 1. PROFILE & DASHBOARD (Updated with Priority Count)
@@ -290,46 +291,90 @@ const getAvailableStaff = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// 1. ASSIGN STAFF TO BOOKING (With Real-Time Driver Push Notification)
+// Endpoint: POST /provider/nurse/dash/staff/assign
 const assignStaffToBooking = async (req, res) => {
     try {
         const { bookingId, staffId } = req.body;
-        await NurseBooking.findByIdAndUpdate(bookingId, { assignedStaffId: staffId, status: 'Assigned' });
+        const nurseId = req.user.id;
+
+        const booking = await NurseBooking.findOne({ _id: bookingId, nurseId });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found or unauthorized." });
+        }
+
+        const staff = await Driver.findOne({ _id: staffId, vendorId: nurseId, vendorType: 'Nurse' });
+        if (!staff || staff.status === 'Offline') {
+            return res.status(400).json({ success: false, message: "Staff member is offline or not found." });
+        }
+
+        booking.assignedStaffId = staffId;
+        booking.status = 'Assigned';
+        await booking.save();
+
         await Driver.findByIdAndUpdate(staffId, { status: 'Busy' });
-        res.json({ success: true, message: "Staff Assigned Successfully" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        // 🚨 FCM PUSH NOTIFICATION: Alert Nurse Staff on New Assignment
+        await sendPushNotification(
+            staffId,
+            'driver',
+            "New Nursing Care Task Assigned!",
+            `You have been assigned booking #${booking.bookingId || booking._id}. Tap to view patient address.`,
+            { bookingId: booking._id.toString(), type: 'nurse_task_assigned' }
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Nurse Staff assigned successfully & alert sent.", 
+            data: booking 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+// 2. REASSIGN STAFF (With Real-Time Driver Push Notifications)
+// Endpoint: POST /provider/nurse/dash/staff/reassign
 const reassignStaffToBooking = async (req, res) => {
     try {
         const { bookingId, newStaffId } = req.body;
+        const nurseId = req.user.id;
 
         if (!bookingId || !newStaffId) {
             return res.status(400).json({ success: false, message: "Missing bookingId or newStaffId parameter." });
         }
 
-        const booking = await NurseBooking.findOne({ _id: bookingId, nurseId: req.user.id });
+        const booking = await NurseBooking.findOne({ _id: bookingId, nurseId });
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking not found or not assigned to your account." });
+            return res.status(404).json({ success: false, message: "Booking not found or unauthorized." });
         }
 
         const oldStaffId = booking.assignedStaffId;
 
-        // 1. Release the old staff member (make them Available)
+        // 1. Release old staff back to Available
         if (oldStaffId) {
             await Driver.findByIdAndUpdate(oldStaffId, { status: 'Available' });
-            console.log(`[Reassign Debug]: Released old staff ID: ${oldStaffId}`);
         }
 
-        // 2. Set the newly selected staff status to Busy
+        // 2. Set new staff to Busy
         await Driver.findByIdAndUpdate(newStaffId, { status: 'Busy' });
 
-        // 3. Update the booking with new staff details
+        // 3. Update booking
         booking.assignedStaffId = newStaffId;
         booking.status = 'Assigned';
         await booking.save();
 
+        // 🚨 FCM PUSH NOTIFICATION: Alert newly assigned staff
+        await sendPushNotification(
+            newStaffId,
+            'driver',
+            "Reassigned Nursing Task!",
+            `You have been assigned booking #${booking.bookingId || booking._id}.`,
+            { bookingId: booking._id.toString(), type: 'nurse_task_assigned' }
+        );
+
         res.json({ 
             success: true, 
-            message: "Staff reassigned successfully.", 
+            message: "Staff reassigned successfully & notified.", 
             data: {
                 bookingId: booking._id,
                 status: booking.status,

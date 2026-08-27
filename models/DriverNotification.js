@@ -1,13 +1,20 @@
+// models/DriverNotification.js
 const mongoose = require('mongoose');
 
 const driverNotificationSchema = new mongoose.Schema({
-    driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance', required: true },
-    title: { type: String, required: true }, // e.g., "New Emergency Case"
-    message: { type: String, required: true }, // e.g., "Prepare OR-1 immediately."
+    driverId: { type: mongoose.Schema.Types.ObjectId, required: true }, // Supports all driver models
+    title: { type: String, required: true },
+    message: { type: String, required: true },
     type: { 
         type: String, 
-        enum: ['New Emergency Case', 'Admission Request', 'System Maintenance', 'Discharge Approved', 'Referral Received'],
-        required: true 
+        enum: [
+            'New Task Assigned', 
+            'Emergency Case', 
+            'Order Reassigned', 
+            'Return Pickup Task', 
+            'System Alert'
+        ],
+        default: 'New Task Assigned'
     },
     isRead: { type: Boolean, default: false }
 }, { timestamps: true });

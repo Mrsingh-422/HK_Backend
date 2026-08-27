@@ -322,23 +322,46 @@ const arriveAtLocation = async (req, res) => {
         const { orderId } = req.params;
         const driverId = req.user.id;
 
-        const order = await LabBooking.findById(orderId);
-        if (!order) return res.status(404).json({ message: "Order not found" });
+        const driver = await Driver.findById(driverId);
+        const order = await LabBooking.findById(orderId).populate('userId', 'fcmToken name');
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized operation" });
+            return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
-        if (!order.tracking) {
-            order.tracking = {};
-        }
-        order.tracking.otp = '2468'; 
+        // 🎲 Dynamic Cryptographic 4-Digit OTP
+        const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
+
+        if (!order.tracking) order.tracking = {};
+        order.tracking.otp = dynamicOtp;
         order.arrivedAt = new Date();
+        order.status = 'Arrived';
         await order.save();
 
-        res.json({ success: true, message: "Arrived at location. Static OTP generated.", debugOtp: '2468' });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 🚨 SEND REAL-TIME PUSH NOTIFICATION TO PATIENT WITH OTP
+        if (order.userId) {
+            await sendPushNotification(
+                order.userId._id,
+                'user',
+                "Phlebotomist Arrived!",
+                `Phlebotomist ${driver?.name || ''} has arrived for sample collection. Share OTP: ${dynamicOtp} to start collection.`,
+                { bookingId: order._id.toString(), otp: dynamicOtp, type: 'sample_collection_otp' }
+            );
+        }
+
+        console.log(`[LAB OTP]: Generated Sample OTP for Order #${order.bookingId}: ${dynamicOtp}`);
+
+        res.json({ 
+            success: true, 
+            message: "Arrived at location. Verification OTP sent to patient.",
+            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicOtp 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 // Verify OTP and Collect Blood Sample
 const verifySampleCollection = async (req, res) => {
@@ -346,23 +369,35 @@ const verifySampleCollection = async (req, res) => {
         const { orderId, otp } = req.body;
         const driverId = req.user.id;
 
-        const order = await LabBooking.findById(orderId);
-        if (!order) return res.status(404).json({ message: "Order not found" });
-
-        if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized" });
+        if (!otp) {
+            return res.status(400).json({ success: false, message: "Sample collection OTP is required." });
         }
 
-        if (otp !== '2468' && order.tracking?.otp !== otp) {
-            return res.status(400).json({ success: false, message: "Invalid OTP" });
+        const order = await LabBooking.findById(orderId);
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+        if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        // Strict Dynamic OTP Check (Static '2468' bypass removed)
+        if (order.tracking?.otp !== String(otp).trim()) {
+            return res.status(400).json({ success: false, message: "Invalid OTP. Please collect correct OTP from patient." });
         }
 
         order.status = 'Sample Collected';
         order.collectedAt = new Date();
+        order.tracking.otp = null; // Invalidate OTP after use
         await order.save();
 
-        res.json({ success: true, message: "Sample collected successfully. Please proceed to HK Lab.", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ 
+            success: true, 
+            message: "Sample collected successfully. Please deposit at processing lab.", 
+            data: order 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Delivered Sample to Lab (Figma Screen 6 & 12)
@@ -399,6 +434,9 @@ const deliverSampleToLab = async (req, res) => {
 const createBookingAtHome = async (req, res) => {
     try {
         const phlebotomistId = req.user.id;
+        const driver = await Driver.findById(phlebotomistId);
+        if (!driver) return res.status(404).json({ success: false, message: "Phlebotomist profile not found" });
+
         const { 
             name, dob, phone, gender, address, city, pincode, 
             testsSelected, 
@@ -407,12 +445,14 @@ const createBookingAtHome = async (req, res) => {
 
         const bookingId = "ORD-" + Math.random().toString(36).substring(2, 10).toUpperCase();
 
+        // 🚨 FIXED: labId is driver's vendorId, not driver himself
         let newOrder = await LabBooking.create({
             bookingId,
-            userId: req.user.id, 
-            labId: req.user.id, 
+            userId: req.user.id, // Fallback link
+            labId: driver.vendorId, // 👈 Target Lab assigned
             bookingType: "Direct",
             patients: [{
+                patientId: "Self",
                 name,
                 age: dob ? new Date().getFullYear() - new Date(dob).getFullYear() : 30,
                 gender,
@@ -438,7 +478,9 @@ const createBookingAtHome = async (req, res) => {
         newOrder = await recalculateBookingPrice(newOrder._id);
 
         res.status(201).json({ success: true, message: "Diagnostic booking registered successfully!", data: newOrder });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Add Family Members to Existing Booking
@@ -498,18 +540,22 @@ const getAdminContact = async (req, res) => {
     });
 };
 
-// Reassign Order due to Emergency
+// REASSIGN LAB ORDER DUE TO EMERGENCY (With Vendor Push Alert)
+// Endpoint: POST /driver/lab/orders/reassign-emergency
 const reassignLabOrderDueToEmergency = async (req, res) => {
     try {
         const { bookingId, reason } = req.body;
         const driverId = req.user.id;
 
+        const driver = await Driver.findById(driverId);
         const order = await LabBooking.findById(bookingId);
         if (!order) return res.status(404).json({ message: "Order not found" });
 
         if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
             return res.status(403).json({ message: "Unauthorized." });
         }
+
+        const labId = order.labId; // Target Lab Vendor
 
         order.phlebotomistId = null;
         order.status = 'Confirmed'; 
@@ -519,8 +565,21 @@ const reassignLabOrderDueToEmergency = async (req, res) => {
 
         await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
 
-        res.json({ success: true, message: "Lab collection duty released for reassignment.", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 🚨 CRITICAL FIX: Alert Lab Vendor that duty has been dropped
+        if (labId) {
+            await sendPushNotification(
+                labId,
+                'lab',
+                "⚠️ Phlebotomist Emergency Reported!",
+                `Phlebotomist ${driver?.name || ''} dropped Order #${order.bookingId} due to emergency: "${reason || 'N/A'}". Please re-assign another staff immediately.`,
+                { orderId: order._id.toString(), type: 'driver_emergency_dropped' }
+            );
+        }
+
+        res.json({ success: true, message: "Lab collection duty released and Vendor notified.", data: order });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // ==========================================

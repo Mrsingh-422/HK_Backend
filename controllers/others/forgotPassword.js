@@ -262,9 +262,11 @@ const resetPasswordPhone = async (req, res) => {
 };
 
 // =========================================================================
-// ✉️ EMAIL FLOW (Brevo OTP - 6 Digits)
+// ✉️ EMAIL FLOW (Brevo OTP)
 // =========================================================================
 
+// 1. SEND 6-DIGIT EMAIL OTP
+// Endpoint: POST /api/password/forgot-password
 const forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
@@ -272,27 +274,27 @@ const forgotPassword = async (req, res) => {
 
         const result = await findAccountByEmail(email);
         if (!result) {
-            return res.status(404).json({ success: false, message: "Account not found with this email" });
+            return res.status(404).json({ success: false, message: "Account not found with this email address" });
         }
 
         const { account } = result;
 
-        // 🎲 Hamesha Real Random 6-Digit OTP generate karega
+        // 🎲 Generate Random 6-Digit OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
         account.resetPasswordOtp = otp;
-        account.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 Minutes validity
+        account.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 Minutes
         await account.save();
 
-        console.log(`\n📧 [EMAIL OTP TRIGGERED] Sending OTP to ${email}: ${otp}\n`);
+        console.log(`\n📧 [BREVO TRIGGER] Sending OTP to ${email}: ${otp}\n`);
 
-        // 🚀 Real Email Send karega (Resend / Brevo API call)
+        // Send Email via Brevo
         const emailSent = await sendEmailOTP(email, otp);
 
         if (!emailSent) {
             return res.status(500).json({ 
                 success: false, 
-                message: "Failed to send email. Check API key in .env or try again." 
+                message: "Failed to send email. Please check Brevo API credentials in .env file." 
             });
         }
 
@@ -307,10 +309,12 @@ const forgotPassword = async (req, res) => {
     }
 };
 
+// 2. VERIFY EMAIL OTP
+// Endpoint: POST /api/password/verify-otp
 const verifyOtp = async (req, res) => {
     try {
         const { email, otp } = req.body;
-        if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required" });
+        if (!email || !otp) return res.status(400).json({ success: false, message: "Email and OTP are required" });
 
         const cleanEmail = email.toLowerCase().trim();
         let account = null;
@@ -318,7 +322,7 @@ const verifyOtp = async (req, res) => {
         for (let item of modelsList) {
             const query = {
                 [item.emailKey]: cleanEmail,
-                resetPasswordOtp: otp,
+                resetPasswordOtp: String(otp).trim(),
                 resetPasswordExpires: { $gt: Date.now() }
             };
             account = await item.model.findOne(query);
@@ -326,42 +330,53 @@ const verifyOtp = async (req, res) => {
         }
 
         if (!account) {
-            return res.status(400).json({ message: "Invalid or Expired OTP" });
+            return res.status(400).json({ success: false, message: "Invalid or Expired OTP" });
         }
 
         res.json({ success: true, message: "OTP Verified Successfully" });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
+// 3. RESET PASSWORD VIA EMAIL
+// Endpoint: POST /api/password/reset-password
 const resetPassword = async (req, res) => {
     try {
         const { email, newPassword, confirmPassword } = req.body;
 
         if (!newPassword || newPassword !== confirmPassword) {
-            return res.status(400).json({ message: "Passwords do not match or missing" });
+            return res.status(400).json({ success: false, message: "Passwords do not match or missing" });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({ success: false, message: "Password must be at least 6 characters long" });
         }
 
         const result = await findAccountByEmail(email);
         if (!result) {
-            return res.status(404).json({ message: "User not found" });
+            return res.status(404).json({ success: false, message: "User not found" });
         }
 
         const { account } = result;
-        account.password = await bcrypt.hash(newPassword, 10);
-        account.token = null;
-        account.resetPasswordOtp = undefined;
+
+        account.password = await bcrypt.hash(String(newPassword), 10);
+        account.token = null; // 🚨 Invalidate all active JWT login sessions
+        account.resetPasswordOtp = undefined; // 🚨 Clean up OTP
         account.resetPasswordExpires = undefined;
         await account.save();
 
-        res.json({ success: true, message: "Password Reset Successfully. Please Login." });
+        res.json({ 
+            success: true, 
+            message: "Password Reset Successfully. Please Login with your new password." 
+        });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 module.exports = { 
     forgotPassword, verifyOtp, resetPassword,
