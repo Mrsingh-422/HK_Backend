@@ -265,6 +265,10 @@ const resetPasswordPhone = async (req, res) => {
 // ✉️ EMAIL FLOW (Brevo OTP)
 // =========================================================================
 
+// =========================================================================
+// ✉️ EMAIL FLOW (Universal Brevo OTP - Schema Bypassed)
+// =========================================================================
+
 // 1. SEND 6-DIGIT EMAIL OTP
 // Endpoint: POST /api/password/forgot-password
 const forgotPassword = async (req, res) => {
@@ -272,29 +276,39 @@ const forgotPassword = async (req, res) => {
         const { email } = req.body;
         if (!email) return res.status(400).json({ success: false, message: "Email is required" });
 
-        const result = await findAccountByEmail(email);
+        const cleanEmail = email.toLowerCase().trim();
+        const result = await findAccountByEmail(cleanEmail);
+
         if (!result) {
-            return res.status(404).json({ success: false, message: "Account not found with this email address" });
+            return res.status(404).json({ success: false, message: "Account not found with this email address." });
         }
 
-        const { account } = result;
+        const { account, Model } = result;
 
         // 🎲 Generate Random 6-Digit OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiryDate = new Date(Date.now() + 10 * 60 * 1000); // 10 Minutes
 
-        account.resetPasswordOtp = otp;
-        account.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 Minutes
-        await account.save();
+        // 🚨 CRITICAL FIX: Direct MongoDB write to bypass Mongoose Schema omissions!
+        await Model.collection.updateOne(
+            { _id: account._id },
+            { 
+                $set: { 
+                    resetPasswordOtp: String(otp).trim(),
+                    resetPasswordExpires: expiryDate 
+                } 
+            }
+        );
 
-        console.log(`\n📧 [BREVO TRIGGER] Sending OTP to ${email}: ${otp}\n`);
+        console.log(`\n📧 [BREVO TRIGGER] Sending OTP to ${cleanEmail}: ${otp} for Model: ${Model.modelName}\n`);
 
-        // Send Email via Brevo
-        const emailSent = await sendEmailOTP(email, otp);
+        // Send Real Email via Brevo
+        const emailSent = await sendEmailOTP(cleanEmail, otp);
 
         if (!emailSent) {
             return res.status(500).json({ 
                 success: false, 
-                message: "Failed to send email. Please check Brevo API credentials in .env file." 
+                message: "Failed to send email. Please check Brevo configuration." 
             });
         }
 
@@ -309,33 +323,45 @@ const forgotPassword = async (req, res) => {
     }
 };
 
-// 2. VERIFY EMAIL OTP
+// 2. VERIFY EMAIL OTP (Universal Direct Match)
 // Endpoint: POST /api/password/verify-otp
 const verifyOtp = async (req, res) => {
     try {
         const { email, otp } = req.body;
-        if (!email || !otp) return res.status(400).json({ success: false, message: "Email and OTP are required" });
+        if (!email || !otp) {
+            return res.status(400).json({ success: false, message: "Email and OTP are required" });
+        }
 
         const cleanEmail = email.toLowerCase().trim();
-        let account = null;
+        const cleanOtp = String(otp).trim();
+        let matchedAccount = null;
 
         for (let item of modelsList) {
             const query = {
-                [item.emailKey]: cleanEmail,
-                resetPasswordOtp: String(otp).trim(),
-                resetPasswordExpires: { $gt: Date.now() }
+                [item.emailKey]: { $regex: new RegExp(`^${cleanEmail}$`, 'i') },
+                resetPasswordOtp: cleanOtp
             };
-            account = await item.model.findOne(query);
-            if (account) break;
+            
+            const rawDoc = await item.model.collection.findOne(query);
+            
+            if (rawDoc) {
+                // Check if OTP is expired
+                const expiryTime = rawDoc.resetPasswordExpires ? new Date(rawDoc.resetPasswordExpires).getTime() : 0;
+                if (expiryTime >= Date.now()) {
+                    matchedAccount = rawDoc;
+                    break;
+                }
+            }
         }
 
-        if (!account) {
+        if (!matchedAccount) {
             return res.status(400).json({ success: false, message: "Invalid or Expired OTP" });
         }
 
         res.json({ success: true, message: "OTP Verified Successfully" });
 
     } catch (error) {
+        console.error("Verify OTP Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -354,18 +380,31 @@ const resetPassword = async (req, res) => {
             return res.status(400).json({ success: false, message: "Password must be at least 6 characters long" });
         }
 
-        const result = await findAccountByEmail(email);
+        const cleanEmail = email.toLowerCase().trim();
+        const result = await findAccountByEmail(cleanEmail);
+
         if (!result) {
             return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        const { account } = result;
+        const { account, Model } = result;
 
-        account.password = await bcrypt.hash(String(newPassword), 10);
-        account.token = null; // 🚨 Invalidate all active JWT login sessions
-        account.resetPasswordOtp = undefined; // 🚨 Clean up OTP
-        account.resetPasswordExpires = undefined;
-        await account.save();
+        const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+
+        // 🚨 Update password, revoke JWT session & delete temporary OTP fields
+        await Model.collection.updateOne(
+            { _id: account._id },
+            {
+                $set: { 
+                    password: hashedPassword,
+                    token: null 
+                },
+                $unset: { 
+                    resetPasswordOtp: "", 
+                    resetPasswordExpires: "" 
+                }
+            }
+        );
 
         res.json({ 
             success: true, 
@@ -373,9 +412,11 @@ const resetPassword = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("Reset Password Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 module.exports = { 
