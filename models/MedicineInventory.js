@@ -47,7 +47,15 @@ const medicineInventorySchema = new mongoose.Schema({
     is_available: {
         type: Boolean,
         default: true
-    }
+    },
+    isReturnAllowed: {
+    type: Boolean,
+    default: false // 👈 Vendor can toggle true/false per batch
+},
+isReplacementAllowed: {
+    type: Boolean,
+    default: false // 👈 Vendor can toggle true/false per batch
+}
 }, { timestamps: true });
 
 // Ensure ek pharmacy ek medicine ko ek hi baar list kare

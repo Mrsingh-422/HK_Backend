@@ -64,14 +64,17 @@ const getMasterMedicineById = async (req, res) => {
 
 const addToInventory = async (req, res) => {
     try {
-        const { medicineId, mrp, vendor_price, stock_quantity, expiry_date, batch_number, manufacturing_date, hsn_number, packaging } = req.body;
+        const { 
+            medicineId, mrp, vendor_price, stock_quantity, expiry_date, 
+            batch_number, manufacturing_date, hsn_number, packaging,
+            isReturnAllowed, isReplacementAllowed // 👈 Toggles received from Vendor form
+        } = req.body;
         const pharmacyId = req.user.id;
 
         if (!batch_number || batch_number.trim() === "") {
             return res.status(400).json({ success: false, message: "Batch number is required." });
         }
 
-        // 1. Verify if HSN exists in Admin's Master List (If HSN is provided)
         let validatedHsn = "";
         if (hsn_number && hsn_number.trim() !== "") {
             const hsnExists = await HsnMaster.findOne({ hsnCode: hsn_number.trim(), isActive: true });
@@ -84,7 +87,6 @@ const addToInventory = async (req, res) => {
             validatedHsn = hsnExists.hsnCode;
         }
 
-        // 2. Fetch master medicine for standard validation (No HSN check required here)
         const masterMed = await Medicine.findById(medicineId);
         if (!masterMed) {
             return res.status(404).json({ success: false, message: "Medicine not found in master catalog." });
@@ -94,7 +96,7 @@ const addToInventory = async (req, res) => {
         if (approvedMasterMrp > 0 && Number(mrp) > approvedMasterMrp) {
             return res.status(400).json({
                 success: false,
-                message: `Compliance Blocked: MRP exceeds approved catalog limit of ₹${approvedMasterMrp}.`
+                message: `MRP exceeds approved catalog limit of ₹${approvedMasterMrp}.`
             });
         }
 
@@ -110,13 +112,55 @@ const addToInventory = async (req, res) => {
                 expiry_date, 
                 packaging: finalPackaging, 
                 manufacturing_date: manufacturing_date ? new Date(manufacturing_date) : undefined, 
-                hsn_number: validatedHsn, // 👈 Directly saves the selected HSN from request body dropdown selection
+                hsn_number: validatedHsn,
+                // 🚨 Saved Vendor Return & Replace Permissions per Item
+                isReturnAllowed: isReturnAllowed === true || isReturnAllowed === 'true',
+                isReplacementAllowed: isReplacementAllowed === true || isReplacementAllowed === 'true',
                 is_available: qty > 0 
             },
             { upsert: true, new: true }
         );
 
-        res.status(201).json({ success: true, message: "Medicine batch added to your inventory successfully!", data: inventoryItem });
+        res.status(201).json({ success: true, message: "Medicine batch added with return/replace settings!", data: inventoryItem });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const updateInventoryItem = async (req, res) => {
+    try {
+        const { vendor_price, stock_quantity, manufacturing_date, hsn_number, batch_number, expiry_date, mrp, isReturnAllowed, isReplacementAllowed } = req.body;
+        const pharmacyId = req.user.id;
+
+        const existingItem = await MedicineInventory.findOne({ _id: req.params.id, pharmacyId });
+        if (!existingItem) {
+            return res.status(404).json({ success: false, message: "Medicine not found in your inventory or unauthorized." });
+        }
+
+        const updateData = {};
+        if (mrp !== undefined) updateData.mrp = Number(mrp);
+        if (vendor_price !== undefined) updateData.vendor_price = Number(vendor_price);
+        if (stock_quantity !== undefined) {
+            const qty = Number(stock_quantity);
+            updateData.stock_quantity = qty;
+            updateData.is_available = qty > 0; 
+        }
+        if (manufacturing_date !== undefined) updateData.manufacturing_date = manufacturing_date ? new Date(manufacturing_date) : null;
+        if (hsn_number !== undefined) updateData.hsn_number = hsn_number ? hsn_number.trim() : null;
+        if (batch_number !== undefined) updateData.batch_number = batch_number.trim();
+        if (expiry_date !== undefined) updateData.expiry_date = expiry_date ? new Date(expiry_date) : null;
+        
+        // 🚨 Update return/replace toggles
+        if (isReturnAllowed !== undefined) updateData.isReturnAllowed = Boolean(isReturnAllowed === true || isReturnAllowed === 'true');
+        if (isReplacementAllowed !== undefined) updateData.isReplacementAllowed = Boolean(isReplacementAllowed === true || isReplacementAllowed === 'true');
+
+        const updated = await MedicineInventory.findOneAndUpdate(
+            { _id: req.params.id, pharmacyId },
+            updateData,
+            { new: true, runValidators: true }
+        );
+
+        res.status(200).json({ success: true, message: "Item updated successfully", data: updated });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -189,8 +233,11 @@ const getMyNonPrescriptionInventory = async (req, res) => {
                     is_available: 1,
                     batch_number: 1, 
                     mrp: 1,
-                    manufacturing_date: 1, // 🚨 FIXED: Added to aggregate projection [3]
-                    hsn_number: 1,         // 🚨 FIXED: Added to aggregate projection [3]
+                    manufacturing_date: 1,
+                    hsn_number: 1,
+                    // 🚨 FIXED: Injected Vendor Return & Replace Permissions
+                    isReturnAllowed: { $ifNull: ["$isReturnAllowed", false] },
+                    isReplacementAllowed: { $ifNull: ["$isReplacementAllowed", false] },
                     createdAt: 1,
                     updatedAt: 1,
                     medicineId: {
@@ -211,91 +258,6 @@ const getMyNonPrescriptionInventory = async (req, res) => {
 
         res.status(200).json({ success: true, count: list.length, data: list });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-const updateInventoryItem = async (req, res) => {
-    try {
-        const { vendor_price, stock_quantity, manufacturing_date, hsn_number, batch_number, expiry_date, mrp } = req.body;
-        const pharmacyId = req.user.id; // Logged-in pharmacy id for security
-
-        // 1. Fetch existing inventory record first to securely verify medicineId and validate changes
-        const existingItem = await MedicineInventory.findOne({ _id: req.params.id, pharmacyId });
-        if (!existingItem) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Medicine not found in your inventory or unauthorized." 
-            });
-        }
-
-        const updateData = {};
-        
-        // 🚨 NEW: Safe Batch-level MRP update with dynamic anti-fraud master limit validation [cite: 1.1.2]
-        if (mrp !== undefined) {
-            const proposedMrp = Number(mrp);
-            if (isNaN(proposedMrp) || proposedMrp <= 0) {
-                return res.status(400).json({ success: false, message: "A valid batch-specific MRP is required." });
-            }
-
-            // Verify if the updated MRP does not exceed the master database approved ceiling [1]
-            const masterMed = await Medicine.findById(existingItem.medicineId);
-            if (masterMed) {
-                const approvedMasterMrp = Number(masterMed.mrp || 0);
-                if (approvedMasterMrp > 0 && proposedMrp > approvedMasterMrp) {
-                    return res.status(400).json({
-                        success: false,
-                        message: `Compliance Blocked: The updated batch MRP (₹${proposedMrp}) exceeds the approved master catalog MRP limit of ₹${approvedMasterMrp}. If the printed price has officially increased, please submit an 'MRP Increase Request' to the Admin for approval.`
-                    });
-                }
-            }
-            updateData.mrp = proposedMrp;
-        }
-
-        if (vendor_price !== undefined) {
-            updateData.vendor_price = Number(vendor_price);
-        }
-        
-        if (stock_quantity !== undefined) {
-            const qty = Number(stock_quantity);
-            updateData.stock_quantity = qty;
-            // Automatically sets true if > 0, false if <= 0 [1]
-            updateData.is_available = qty > 0; 
-        }
-
-        if (manufacturing_date !== undefined) {
-            updateData.manufacturing_date = manufacturing_date ? new Date(manufacturing_date) : null;
-        }
-        if (hsn_number !== undefined) {
-            updateData.hsn_number = hsn_number ? hsn_number.trim() : null;
-        }
-
-        if (batch_number !== undefined) {
-            if (batch_number.trim() === "") {
-                return res.status(400).json({ success: false, message: "Batch number cannot be empty." });
-            }
-            updateData.batch_number = batch_number.trim();
-        }
-        if (expiry_date !== undefined) {
-            updateData.expiry_date = expiry_date ? new Date(expiry_date) : null;
-        }
-
-        // Secure update: Pharmacy can only update its own inventory records
-        const updated = await MedicineInventory.findOneAndUpdate(
-            { _id: req.params.id, pharmacyId },
-            updateData,
-            { new: true, runValidators: true }
-        );
-
-        res.status(200).json({ success: true, data: updated });
-    } catch (error) {
-        // 🚨 DUPLICATION GUARD: Prevent crash if pharmacist edits to an already existing batch number
-        if (error.code === 11000) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Validation Error: An inventory record with this batch number already exists for this medicine in your store." 
-            });
-        }
         res.status(500).json({ success: false, message: error.message });
     }
 };

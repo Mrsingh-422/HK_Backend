@@ -98,11 +98,11 @@ const searchMedicinesUser = async (req, res) => {
 // 3. MEDICINE FULL DETAILS (Dynamic Alternate Brands Synced)
 const getMedicineFullDetails = async (req, res) => {
     try {
-        const { medicineId } = req.params;
+        const medicineId = req.params.id || req.params.medicineId;
         const medicine = await Medicine.findById(medicineId).lean();
         if (!medicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // 🚨 Dynamic Alternate Brands
+        // Dynamic Alternate Brands Lookup
         if (medicine.salt_composition) {
             const similarMeds = await Medicine.find({
                 salt_composition: medicine.salt_composition,
@@ -122,8 +122,10 @@ const getMedicineFullDetails = async (req, res) => {
             }
         }
 
+        // Fetch cheapest active store batch
         const bestOffer = await MedicineInventory.findOne({ medicineId: medicine._id, is_available: true, stock_quantity: { $gt: 0 } })
-            .sort({ vendor_price: 1 });
+            .sort({ vendor_price: 1 })
+            .lean();
 
         const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
         const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0);
@@ -134,16 +136,28 @@ const getMedicineFullDetails = async (req, res) => {
             if (batchMrp > 0) {
                 medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
             }
+            
+            // 🚨 1. PDP RETURN & REPLACEMENT BADGE ON CHEAPEST BATCH (Crash-Proof Default)
+            medicine.isReturnAllowed = Boolean(bestOffer.isReturnAllowed);
+            medicine.isReplacementAllowed = Boolean(bestOffer.isReplacementAllowed);
+            medicine.returnPolicyText = medicine.isReturnAllowed 
+                ? "3 Days Return/Replacement Available" 
+                : "Non-Returnable Product";
+        } else {
+            // 🚨 2. SAFE FALLBACK FOR UNSTOCKED/OLD DATA (Prevents Crashing)
+            medicine.isReturnAllowed = false;
+            medicine.isReplacementAllowed = false;
+            medicine.returnPolicyText = "Non-Returnable Product";
         }
 
         const substitutes = await Medicine.find({ 
             salt_composition: medicine.salt_composition, 
-            _id: { $ne: medicineId } 
+            _id: { $ne: medicine._id } 
         }).limit(3).lean();
 
         const frequentlyBought = await Medicine.find({ 
             bread_crumb: medicine.bread_crumb, 
-            _id: { $ne: medicineId } 
+            _id: { $ne: medicine._id } 
         }).limit(4).lean();
 
         res.json({
@@ -192,6 +206,8 @@ const getSellersForMedicine = async (req, res) => {
                     existingItem.discount = existingItem.mrp > item.vendor_price 
                         ? Math.round(((existingItem.mrp - item.vendor_price) / existingItem.mrp) * 100) 
                         : 0;
+                    existingItem.isReturnAllowed = item.isReturnAllowed === true;
+                    existingItem.isReplacementAllowed = item.isReplacementAllowed === true;
                 }
             } else {
                 pharmacyMap.set(pharmacyIdStr, availableInPharmacies.length);
@@ -219,6 +235,11 @@ const getSellersForMedicine = async (req, res) => {
                     isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
                     isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
                     inventoryId: item._id,
+                    
+                    // 🚨 Return Flags per Seller Option
+                    isReturnAllowed: item.isReturnAllowed === true,
+                    isReplacementAllowed: item.isReplacementAllowed === true,
+
                     comboOffer: activePromo ? {
                         offerId: activePromo._id,
                         campaignDisplayName: activePromo.campaignDisplayName,
@@ -261,7 +282,6 @@ const getPharmacySpecificMedicines = async (req, res) => {
         })
         .populate({
             path: 'medicineId',
-            // 🚨 FIXED: Changed 'salt' to 'salt_composition'
             select: 'name mrp packaging image_url prescription_required salt_composition'
         })
         .sort({ expiry_date: 1 })
@@ -293,7 +313,6 @@ const getPharmacySpecificMedicines = async (req, res) => {
                 inventoryId: item._id,
                 medicineId: med._id,
                 name: med.name,
-                // 🚨 FIXED: Correctly passes salt_composition as salt
                 salt: med.salt_composition || "N/A",
                 image: med.image_url && med.image_url.length > 0 ? med.image_url[0] : null,
                 mrp: item.mrp || Number(med.mrp || 0),
@@ -305,6 +324,11 @@ const getPharmacySpecificMedicines = async (req, res) => {
                 packaging: med.packaging,
                 prescriptionRequired: med.prescription_required,
                 isAvailable: item.is_available,
+                
+                // 🚨 FIXED: Return & Replace permissions returned to user store browse card
+                isReturnAllowed: item.isReturnAllowed === true,
+                isReplacementAllowed: item.isReplacementAllowed === true,
+
                 comboOffer: activePromo ? {
                     offerId: activePromo._id,
                     campaignDisplayName: activePromo.campaignDisplayName,
