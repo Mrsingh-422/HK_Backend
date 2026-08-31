@@ -11,9 +11,12 @@ const Lab = require('../models/Lab');
 const Nurse = require('../models/Nurse');
 const Pharmacy = require('../models/Pharmacy');
 const Driver = require('../models/Driver'); // 👈 Imported Driver Model
+const { getMessaging } = require('firebase-admin/messaging'); // 👈 Modular import
 
 const sendPushNotification = async (targetId, targetType, title, body, data = {}) => {
     try {
+        if (!targetId || !targetType) return;
+
         let recipient;
 
         switch (targetType) {
@@ -38,47 +41,55 @@ const sendPushNotification = async (targetId, targetType, title, body, data = {}
             case 'pharmacy':
                 recipient = await Pharmacy.findById(targetId).select('fcmToken');
                 break;
-            case 'ambulance':
-                recipient = await Ambulance.findById(targetId).select('fcmToken');
-                break;
-            // 🚨 FIXED: Dedicated Driver FCM Token Lookup
             case 'driver':
                 recipient = await Driver.findById(targetId).select('fcmToken');
                 break;
+            case 'ambulance':
+                recipient = await Ambulance.findById(targetId).select('fcmToken');
+                break;
             default:
-                console.error("FCM Push Error: Invalid targetType provided -", targetType);
                 return;
         }
 
         const deviceToken = recipient ? recipient.fcmToken : null;
 
         if (deviceToken) {
+            const stringifiedData = {};
+            for (const key in data) {
+                stringifiedData[key] = String(data[key]);
+            }
+
             const message = {
-                notification: { title, body },
-                data: { ...data, click_action: "FLUTTER_NOTIFICATION_CLICK" },
+                notification: { 
+                    title: String(title), 
+                    body: String(body) 
+                },
+                data: { 
+                    ...stringifiedData, 
+                    click_action: "FLUTTER_NOTIFICATION_CLICK" 
+                },
                 token: deviceToken
             };
-            await admin.messaging().send(message);
-            console.log(`FCM Push successfully sent to ${targetType} ID: ${targetId}`);
-        } else {
-            console.warn(`FCM Push Warning: No fcmToken found for ${targetType} ID: ${targetId}`);
+
+            // 🚀 FIXED: Using getMessaging() safely
+            await getMessaging().send(message);
+            console.log(`✅ FCM Push sent to ${targetType} ID: ${targetId}`);
         }
     } catch (error) {
-        console.error("FCM Push Error:", error.message);
+        console.error("❌ FCM Push Error:", error.message);
     }
 };
 
 const notifyAdminsAndVendor = async (vendorId, vendorType, title, body, data = {}) => {
     try {
         await sendPushNotification(vendorId, vendorType, title, body, data);
-
         const admins = await Admin.find({ isActive: true }).select('_id');
         const adminPromises = admins.map(adminUser => 
             sendPushNotification(adminUser._id, 'admin', title, body, data)
         );
         await Promise.all(adminPromises);
     } catch (error) {
-        console.error("Admins & Vendor Multicast Notification Error:", error.message);
+        console.error("Multicast Notification Error:", error.message);
     }
 };
 
