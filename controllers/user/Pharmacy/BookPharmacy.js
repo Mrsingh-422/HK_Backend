@@ -1111,7 +1111,7 @@ const getMedicineVendors = async (req, res) => {
     try {
         const { medicineId } = req.params;
         const today = new Date();
-
+        
         const filterLat = req?.body?.lat || req?.query?.lat || DEFAULT_LAT;
         const filterLng = req?.body?.lng || req?.query?.lng || DEFAULT_LNG;
 
@@ -1132,8 +1132,8 @@ const getMedicineVendors = async (req, res) => {
             if (similarMeds.length > 0) {
                 const formattedAlts = similarMeds.map(med => {
                     const price = med.best_price || med.mrp || "0";
-                    const discount = med.discont_percent && med.discont_percent !== "0%"
-                        ? `save ${med.discont_percent}`
+                    const discount = med.discont_percent && med.discont_percent !== "0%" 
+                        ? `save ${med.discont_percent}` 
                         : "same price";
                     return `${med.name} :: ${med.manufacturers || 'N/A'} :: ${price}/Tablet :: ${discount}`;
                 }).join(' | ');
@@ -1150,12 +1150,12 @@ const getMedicineVendors = async (req, res) => {
             stock_quantity: { $gt: 0 },
             is_available: true
         })
-            .populate({
-                path: 'pharmacyId',
-                match: { profileStatus: 'Approved', isActive: true },
-                select: 'name profileImage rating totalReviews location city state address isHomeDeliveryAvailable is24x7 profileStatus isActive'
-            })
-            .lean();
+        .populate({
+            path: 'pharmacyId',
+            match: { profileStatus: 'Approved', isActive: true },
+            select: 'name profileImage rating totalReviews location city state address isHomeDeliveryAvailable is24x7 profileStatus isActive'
+        })
+        .lean();
 
         const availableInPharmacies = [];
         const pharmacyMap = new Map();
@@ -1170,9 +1170,9 @@ const getMedicineVendors = async (req, res) => {
 
             if (pharmacy.location && typeof pharmacy.location.lat !== 'undefined') {
                 distance = await getDistance(
-                    parseFloat(filterLat),
-                    parseFloat(filterLng),
-                    parseFloat(pharmacy.location.lat),
+                    parseFloat(filterLat), 
+                    parseFloat(filterLng), 
+                    parseFloat(pharmacy.location.lat), 
                     parseFloat(pharmacy.location.lng)
                 );
             }
@@ -1185,22 +1185,25 @@ const getMedicineVendors = async (req, res) => {
                 if (pharmacyMap.has(pharmacyIdStr)) {
                     const existingIndex = pharmacyMap.get(pharmacyIdStr);
                     const existingItem = availableInPharmacies[existingIndex];
-
+                    
                     if (item.vendor_price < existingItem.price) {
                         existingItem.price = item.vendor_price;
                         existingItem.mrp = item.mrp || existingItem.mrp;
                         existingItem.inventoryId = item._id;
                         existingItem.stock = item.stock_quantity;
-                        existingItem.discount = existingItem.mrp > item.vendor_price ?
+                        existingItem.discount = existingItem.mrp > item.vendor_price ? 
                             Math.round(((existingItem.mrp - item.vendor_price) / existingItem.mrp) * 100) : 0;
-
-                        // Dates updates
+                        
                         existingItem.manufacturingDate = (item.manufacturing_date || item.mfg_date)
-                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY')
+                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
                             : "N/A";
-                        existingItem.expiryDate = item.expiry_date
-                            ? moment(item.expiry_date).format('MM/YYYY')
+                        existingItem.expiryDate = item.expiry_date 
+                            ? moment(item.expiry_date).format('MM/YYYY') 
                             : "N/A";
+
+                        // 🚨 Return Flags Update on Cheaper Batch
+                        existingItem.isReturnAllowed = Boolean(item.isReturnAllowed);
+                        existingItem.isReplacementAllowed = Boolean(item.isReplacementAllowed);
                     }
                 } else {
                     pharmacyMap.set(pharmacyIdStr, availableInPharmacies.length);
@@ -1225,20 +1228,22 @@ const getMedicineVendors = async (req, res) => {
                         distance: distance.toFixed(1),
                         price: item.vendor_price,
                         mrp: batchMrp,
-                        discount: batchMrp > item.vendor_price ?
+                        discount: batchMrp > item.vendor_price ? 
                             Math.round(((batchMrp - item.vendor_price) / batchMrp) * 100) : 0,
                         stock: item.stock_quantity,
                         isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
                         isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
                         inventoryId: item._id,
-
-                        // Manufacturing & Expiry Dates
                         manufacturingDate: (item.manufacturing_date || item.mfg_date)
-                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY')
+                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
                             : "N/A",
-                        expiryDate: item.expiry_date
-                            ? moment(item.expiry_date).format('MM/YYYY')
+                        expiryDate: item.expiry_date 
+                            ? moment(item.expiry_date).format('MM/YYYY') 
                             : "N/A",
+
+                        // 🚨 NEWLY ADDED: Return & Replacement permissions per store batch
+                        isReturnAllowed: Boolean(item.isReturnAllowed),
+                        isReplacementAllowed: Boolean(item.isReplacementAllowed),
 
                         comboOffer: activePromo ? {
                             offerId: activePromo._id,
@@ -1262,26 +1267,42 @@ const getMedicineVendors = async (req, res) => {
 
         availableInPharmacies.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
 
+        // 🚨 Compute Summary Return Flags for Top Medicine Details Card
+        let isReturnAllowedSummary = false;
+        let isReplacementAllowedSummary = false;
+
+        if (availableInPharmacies.length > 0) {
+            // Evaluates from nearest/active store option
+            isReturnAllowedSummary = availableInPharmacies[0].isReturnAllowed;
+            isReplacementAllowedSummary = availableInPharmacies[0].isReplacementAllowed;
+        }
+
+        masterMedicine.isReturnAllowed = isReturnAllowedSummary;
+        masterMedicine.isReplacementAllowed = isReplacementAllowedSummary;
+        masterMedicine.returnPolicyText = isReturnAllowedSummary 
+            ? "3 Days Return/Replacement Available" 
+            : "Non-Returnable Product";
+
         res.json({
             success: true,
             maxRadius: `${maxRadius} km`,
             locationApplied: (req?.body?.lat || req?.query?.lat) ? "User GPS" : "Delhi (Default)",
             count: availableInPharmacies.length,
-            isCodAvailable: isPharmacyCodAvailable, // 👈 Root Level par COD Status added
-            data: {
-                medicineDetails: {
-                    ...masterMedicine,
+            isCodAvailable: isPharmacyCodAvailable,
+            data: { 
+                medicineDetails: { 
+                    ...masterMedicine, 
                     minPrice: minPriceFound,
                     totalSellers: availableInPharmacies.length,
-                    isCodAvailable: isPharmacyCodAvailable // 👈 Medicine details ke andar bhi safety ke liye added
-                },
-                availableInPharmacies: availableInPharmacies
+                    isCodAvailable: isPharmacyCodAvailable
+                }, 
+                availableInPharmacies: availableInPharmacies 
             }
         });
 
-    } catch (error) {
+    } catch (error) { 
         console.error("Crash Error:", error.message);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
