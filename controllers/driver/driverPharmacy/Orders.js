@@ -237,7 +237,8 @@ const startDelivery = async (req, res) => {
 };
 
 
-// Arrived at Patient Location (Figma Screen 15 "Arrived" Button Action)
+// 1. ARRIVE AT DESTINATION & GENERATE DYNAMIC DELIVERY OTP
+// Endpoint: PATCH /driver/pharmacy/orders/arrive/:orderId
 const arriveAtLocation = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -251,7 +252,7 @@ const arriveAtLocation = async (req, res) => {
             return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
-        // 🎲 Dynamic 4-Digit Delivery OTP
+        // 🎲 Real Dynamic 4-Digit Delivery OTP
         const dynamicDeliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
 
         order.deliveryStatus = 'ReachedLocation';
@@ -259,16 +260,18 @@ const arriveAtLocation = async (req, res) => {
         order.arrivedAt = new Date();
         await order.save();
 
-        // 🚨 Push notification to patient with Delivery OTP
+        // 🚨 Send Delivery OTP via Push Notification to Customer
         if (order.userId) {
             await sendPushNotification(
                 order.userId._id,
                 'user',
                 "Medicine Delivery Partner Arrived!",
-                `Delivery partner ${driver?.name || ''} has arrived. Share Delivery OTP: ${dynamicDeliveryOtp} upon receiving medicine parcel.`,
+                `Delivery partner ${driver?.name || ''} has arrived. Share Delivery OTP: ${dynamicDeliveryOtp} upon receiving parcel.`,
                 { orderId: order._id.toString(), otp: dynamicDeliveryOtp, type: 'pharmacy_delivery_otp' }
             );
         }
+
+        console.log(`[PHARMACY REAL OTP]: Generated Delivery OTP for Order #${order.orderId}: ${dynamicDeliveryOtp}`);
 
         res.json({ 
             success: true, 
@@ -280,8 +283,7 @@ const arriveAtLocation = async (req, res) => {
     }
 };
 
-
-// 2. VERIFY OTP & DELIVER (Fixed COD Payment Status auto-marking 'Paid')
+// 2. VERIFY REAL DELIVERY OTP (Strict Check - No '1111' Bypass)
 // Endpoint: POST /driver/pharmacy/orders/verify-otp
 const verifyOtpAndDeliver = async (req, res) => {
     try {
@@ -299,9 +301,14 @@ const verifyOtpAndDeliver = async (req, res) => {
             return res.status(403).json({ message: "Unauthorized operation" });
         }
 
-        // Strict OTP verification
-        if (order.deliveryOTP !== String(otp).trim()) {
-            return res.status(400).json({ success: false, message: "Invalid Delivery OTP. Please collect valid OTP from customer." });
+        const savedOtp = String(order.deliveryOTP || "").trim();
+        const incomingOtp = String(otp).trim();
+
+        if (!savedOtp || savedOtp !== incomingOtp) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid Delivery OTP. Please collect correct OTP from customer." 
+            });
         }
 
         let deliveryProofs = [];
@@ -319,9 +326,9 @@ const verifyOtpAndDeliver = async (req, res) => {
         order.deliveryStatus = 'Delivered';
         order.status = 'Delivered';
         order.deliveredAt = new Date();
-        order.deliveryOTP = null;
+        order.deliveryOTP = null; // Clear OTP
 
-        // 🚨 CRITICAL FIX: If COD, mark payment as Paid upon successful delivery!
+        // Auto-mark COD as Paid
         if (order.paymentMethod === 'COD') {
             order.paymentStatus = 'Paid';
             if (!order.paymentDetails) order.paymentDetails = {};
@@ -332,7 +339,6 @@ const verifyOtpAndDeliver = async (req, res) => {
 
         await order.save();
 
-        // Release driver back to Available
         await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
 
         res.json({ 
