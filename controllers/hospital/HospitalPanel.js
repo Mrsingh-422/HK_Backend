@@ -933,7 +933,6 @@ const deleteWard = async (req, res) => {
 };
 
 // 4. GET ALL ADMISSIONS/PATIENTS (Figma: Patient List)
-// 4. GET ALL ADMISSIONS/PATIENTS (Figma: Patient List)
 // Updated: Added full bedId/ward populations and pagination controls
 const getAllHospitalAdmissions = async (req, res) => {
     try {
@@ -986,7 +985,6 @@ const getAllHospitalAdmissions = async (req, res) => {
     }
 };
 
-// --- EMERGENCY CASES ---
 // --- EMERGENCY CASES ---
 // Updated: Added dynamic pagination and full populated bed identifiers
 const getEmergencyCases = async (req, res) => {
@@ -1053,52 +1051,68 @@ const getEmergencyCases = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-// --- TRACK AMBULANCES ---
+// --- TRACK AMBULANCES (Hospital Admin Fleet Map) ---
+// Path: controllers/hospital/HospitalPanel.js
+// Updated: Calculates live distance between hospital base and ambulance coordinates instead of static "2.3 km"
 const trackAllAmbulances = async (req, res) => {
     try {
         const hospitalId = req.user.id;
 
-        // Fetch all ambulances linked to this hospital
-        const ambulances = await Ambulance.find({ hospitalId: hospitalId })
-            .select('name vehicleNumber vehicleType availableForEmergency location driverInfo phone');
+        const [hospital, ambulances] = await Promise.all([
+            Hospital.findById(hospitalId).select('location'),
+            Ambulance.find({ hospitalId: hospitalId })
+                .select('name vehicleNumber vehicleType availableForEmergency location driverInfo phone')
+        ]);
 
-        // Logic for Top Cards (Screenshot 14)
+        const hospLat = hospital?.location?.lat || 30.7046;
+        const hospLng = hospital?.location?.lng || 76.7179;
+
         const stats = {
             total: ambulances.length,
             available: ambulances.filter(a => a.availableForEmergency).length,
             onDuty: ambulances.filter(a => !a.availableForEmergency).length,
-            maintenance: 0 // Agar aapke paas maintenance ka logic hai toh yahan add karein
+            maintenance: 0
         };
 
-        // Format data as per Figma (Screenshot 13 & 37)
-        const formattedData = ambulances.map(amb => ({
-            _id: amb._id,
-            ambulanceCode: amb.name, // e.g. "AMB-002"
-            driverName: amb.driverInfo?.fullName || "Not Assigned",
-            vehicleNumber: amb.vehicleNumber || "N/A",
-            type: amb.vehicleType, // ALS, BLS, Traveller
-            status: amb.availableForEmergency ? 'Available' : 'On Duty',
-            contactNumber: amb.phone,
-            liveLocation: {
-                lat: amb.location?.lat || 0,
-                lng: amb.location?.lng || 0
-            },
-            // Note: ETA aur Distance real-time mein Google Maps API se aayenge
-            // Abhi ke liye professional project mein hum static labels bhejte hain jab tak trip link na ho
-            eta: amb.availableForEmergency ? "Stationary" : "8 mins",
-            distance: amb.availableForEmergency ? "At Base" : "2.3 km"
+        // 🚀 DYNAMIC DISTANCE CALCULATION for each ambulance relative to hospital base
+        const formattedData = await Promise.all(ambulances.map(async (amb) => {
+            let distanceStr = "At Base";
+            let etaStr = "Stationary";
+
+            if (!amb.availableForEmergency && amb.location?.lat) {
+                const rawDist = await getDistance(hospLat, hospLng, amb.location.lat, amb.location.lng);
+                distanceStr = `${rawDist.toFixed(1)} km`;
+                etaStr = `${Math.max(1, Math.round(rawDist * 3))} mins`;
+            }
+
+            return {
+                _id: amb._id,
+                ambulanceCode: amb.name,
+                driverName: amb.driverInfo?.fullName || "Not Assigned",
+                vehicleNumber: amb.vehicleNumber || "N/A",
+                type: amb.vehicleType,
+                status: amb.availableForEmergency ? 'Available' : 'On Duty',
+                contactNumber: amb.phone,
+                liveLocation: {
+                    lat: amb.location?.lat || 0,
+                    lng: amb.location?.lng || 0
+                },
+                eta: etaStr,
+                distance: distanceStr
+            };
         }));
 
         res.json({ 
             success: true, 
-            stats, // Figma Screenshot 14: Total, Available, On Duty cards
-            data: formattedData // Figma Screenshot 13: List View
+            stats, 
+            data: formattedData 
         });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 const toggleAmbulanceStatus = async (req, res) => {
     try {

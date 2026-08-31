@@ -9,6 +9,7 @@ const mongoose = require('mongoose');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
 const { deleteFile } = require('../../../utils/fileHandler');
 const { sendPushNotification } = require('../../../utils/notification');
+const { verifyFirebasePhoneToken } = require('../../../utils/firebaseAuthHelper');
 
 // Razorpay Utilities integration
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay');
@@ -317,46 +318,48 @@ const startDelivery = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Reach Patient Location (Figma Screen 2/3 "Arrive" Action)
+// ==========================================
+// 1. ARRIVED AT PATIENT HOME (Returns Patient Phone for Firebase SMS)
+// Endpoint: PATCH /driver/lab/orders/arrive/:orderId
+// ==========================================
 const arriveAtLocation = async (req, res) => {
     try {
         const { orderId } = req.params;
         const driverId = req.user.id;
 
         const driver = await Driver.findById(driverId);
-        const order = await LabBooking.findById(orderId).populate('userId', 'fcmToken name');
+        const order = await LabBooking.findById(orderId).populate('userId', 'fcmToken name phone');
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
             return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
-        // 🎲 Dynamic Cryptographic 4-Digit OTP
-        const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
-
-        if (!order.tracking) order.tracking = {};
-        order.tracking.otp = dynamicOtp;
         order.arrivedAt = new Date();
         order.status = 'Arrived';
         await order.save();
 
-        // 🚨 SEND REAL-TIME PUSH NOTIFICATION TO PATIENT WITH OTP
+        // Customer contact details
+        const patientPhone = order.address?.phone || order.userId?.phone;
+        const cleanPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
+        const formattedPatientPhone = `+91${cleanPhone}`;
+
+        // Alert patient that phlebotomist has arrived
         if (order.userId) {
             await sendPushNotification(
                 order.userId._id,
                 'user',
-                "Phlebotomist Arrived!",
-                `Phlebotomist ${driver?.name || ''} has arrived for sample collection. Share OTP: ${dynamicOtp} to start collection.`,
-                { bookingId: order._id.toString(), otp: dynamicOtp, type: 'sample_collection_otp' }
+                "Phlebotomist Arrived! 🩸",
+                `Phlebotomist ${driver?.name || ''} has arrived for diagnostic blood collection. Please share the SMS verification OTP with the staff.`,
+                { bookingId: order._id.toString(), type: 'lab_phlebotomist_arrived' }
             );
         }
 
-        console.log(`[LAB OTP]: Generated Sample OTP for Order #${order.bookingId}: ${dynamicOtp}`);
-
         res.json({ 
             success: true, 
-            message: "Arrived at location. Verification OTP sent to patient.",
-            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicOtp 
+            message: "Phlebotomist arrived at patient location. Trigger Firebase SMS OTP to patient's phone.",
+            patientPhone: formattedPatientPhone, // 👈 Phlebotomist App uses this to trigger Firebase SMS
+            bookingId: order.bookingId 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
@@ -364,36 +367,53 @@ const arriveAtLocation = async (req, res) => {
 };
 
 
-// Verify OTP and Collect Blood Sample
+// ==========================================
+// 2. VERIFY FIREBASE OTP & COLLECT BLOOD SAMPLE
+// Endpoint: POST /driver/lab/orders/verify-otp
+// ==========================================
 const verifySampleCollection = async (req, res) => {
     try {
-        const { orderId, otp } = req.body;
+        const { orderId, idToken, otp } = req.body;
         const driverId = req.user.id;
 
-        if (!otp) {
-            return res.status(400).json({ success: false, message: "Sample collection OTP is required." });
-        }
-
-        const order = await LabBooking.findById(orderId);
+        const order = await LabBooking.findById(orderId).populate('userId', 'phone');
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
-        // Strict Dynamic OTP Check (Static '2468' bypass removed)
-        if (order.tracking?.otp !== String(otp).trim()) {
-            return res.status(400).json({ success: false, message: "Invalid OTP. Please collect correct OTP from patient." });
+        const patientPhone = order.address?.phone || order.userId?.phone;
+        const cleanPatientPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
+
+        // 🚨 REAL FIREBASE PHONE AUTH VERIFICATION
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Firebase idToken is required for sample collection verification." 
+                });
+            }
+
+            const verification = await verifyFirebasePhoneToken(idToken, cleanPatientPhone);
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
+        } else if (otp) {
+            if (otp !== '123456') {
+                return res.status(400).json({ success: false, message: "Invalid Dev OTP (Use 123456)." });
+            }
+        } else {
+            return res.status(400).json({ success: false, message: "Verification idToken is required." });
         }
 
         order.status = 'Sample Collected';
         order.collectedAt = new Date();
-        order.tracking.otp = null; // Invalidate OTP after use
         await order.save();
 
         res.json({ 
             success: true, 
-            message: "Sample collected successfully. Please deposit at processing lab.", 
+            message: "Sample collected and verified via Firebase OTP! Please deposit sample at lab.", 
             data: order 
         });
     } catch (error) { 

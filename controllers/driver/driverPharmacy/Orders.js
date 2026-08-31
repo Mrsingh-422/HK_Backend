@@ -7,6 +7,8 @@ const mongoose = require('mongoose');
 const MedicineInventory = require('../../../models/MedicineInventory');
 const NoShowConfig = require('../../../models/NoShowConfig');
 const { sendPushNotification } = require('../../../utils/notification');
+const { verifyFirebasePhoneToken } = require('../../../utils/firebaseAuthHelper');
+
 
 
 // ==========================================
@@ -237,80 +239,96 @@ const startDelivery = async (req, res) => {
 };
 
 
-// 1. ARRIVE AT DESTINATION & GENERATE DYNAMIC DELIVERY OTP
+// ==========================================
+// 1. ARRIVED AT CUSTOMER LOCATION (Returns Customer Phone for Firebase SMS)
 // Endpoint: PATCH /driver/pharmacy/orders/arrive/:orderId
+// ==========================================
 const arriveAtLocation = async (req, res) => {
     try {
         const { orderId } = req.params;
         const driverId = req.user.id;
 
         const driver = await Driver.findById(driverId);
-        const order = await PharmacyBooking.findById(orderId).populate('userId', 'fcmToken name');
+        const order = await PharmacyBooking.findById(orderId).populate('userId', 'fcmToken name phone');
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         if (!order.driverId || order.driverId.toString() !== driverId) {
             return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
-        // 🎲 Real Dynamic 4-Digit Delivery OTP
-        const dynamicDeliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
-
         order.deliveryStatus = 'ReachedLocation';
-        order.deliveryOTP = dynamicDeliveryOtp;
         order.arrivedAt = new Date();
         await order.save();
 
-        // 🚨 Send Delivery OTP via Push Notification to Customer
+        // Customer contact for Firebase SMS
+        const customerPhone = order.address?.phone || order.userId?.phone;
+        const cleanPhone = customerPhone ? customerPhone.trim().replace(/\D/g, "").slice(-10) : "";
+        const formattedCustomerPhone = `+91${cleanPhone}`;
+
+        // Send Push Notification to Customer that driver reached
         if (order.userId) {
             await sendPushNotification(
                 order.userId._id,
                 'user',
-                "Medicine Delivery Partner Arrived!",
-                `Delivery partner ${driver?.name || ''} has arrived. Share Delivery OTP: ${dynamicDeliveryOtp} upon receiving parcel.`,
-                { orderId: order._id.toString(), otp: dynamicDeliveryOtp, type: 'pharmacy_delivery_otp' }
+                "Delivery Partner Arrived! 📦",
+                `Delivery partner ${driver?.name || ''} is at your doorstep. Please share the SMS verification OTP upon receiving medicines.`,
+                { orderId: order._id.toString(), type: 'pharmacy_driver_arrived' }
             );
         }
 
-        console.log(`[PHARMACY REAL OTP]: Generated Delivery OTP for Order #${order.orderId}: ${dynamicDeliveryOtp}`);
-
         res.json({ 
             success: true, 
-            message: "Arrived at destination. Delivery OTP sent to customer.", 
-            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicDeliveryOtp 
+            message: "Driver arrived at doorstep. Trigger Firebase SMS OTP to customer's phone.", 
+            customerPhone: formattedCustomerPhone, // 👈 Driver App uses this phone to trigger Firebase SMS
+            orderId: order.orderId 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 2. VERIFY REAL DELIVERY OTP (Strict Check - No '1111' Bypass)
+// ==========================================
+// 2. VERIFY FIREBASE OTP & COMPLETE DELIVERY (With Proof Photos & Auto COD)
 // Endpoint: POST /driver/pharmacy/orders/verify-otp
+// ==========================================
 const verifyOtpAndDeliver = async (req, res) => {
     try {
-        const { orderId, otp } = req.body;
+        const { orderId, idToken, otp } = req.body;
         const driverId = req.user.id;
 
-        if (!otp) {
-            return res.status(400).json({ success: false, message: "Delivery OTP is required." });
-        }
-
-        const order = await PharmacyBooking.findById(orderId);
-        if (!order) return res.status(404).json({ message: "Order not found" });
+        const order = await PharmacyBooking.findById(orderId).populate('userId', 'phone');
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         if (!order.driverId || order.driverId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized operation" });
+            return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
-        const savedOtp = String(order.deliveryOTP || "").trim();
-        const incomingOtp = String(otp).trim();
+        const customerPhone = order.address?.phone || order.userId?.phone;
+        const cleanCustomerPhone = customerPhone ? customerPhone.trim().replace(/\D/g, "").slice(-10) : "";
 
-        if (!savedOtp || savedOtp !== incomingOtp) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Invalid Delivery OTP. Please collect correct OTP from customer." 
-            });
+        // 🚨 1. REAL FIREBASE 6-DIGIT SMS OTP VERIFICATION
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Firebase idToken is required for doorstep verification." 
+                });
+            }
+
+            const verification = await verifyFirebasePhoneToken(idToken, cleanCustomerPhone);
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
+        } else if (otp) {
+            // Local dev fallback if idToken is not sent
+            if (otp !== '123456' && order.deliveryOTP !== otp) {
+                return res.status(400).json({ success: false, message: "Invalid Dev OTP (Use 123456 in development)." });
+            }
+        } else {
+            return res.status(400).json({ success: false, message: "Verification token (idToken) is required." });
         }
 
+        // 🚨 2. Capture Multiple Proof Photos
         let deliveryProofs = [];
         if (req.files?.deliveryPic && req.files.deliveryPic.length > 0) {
             deliveryProofs = req.files.deliveryPic.map(f => f.path.replace(/\\/g, "/"));
@@ -326,9 +344,9 @@ const verifyOtpAndDeliver = async (req, res) => {
         order.deliveryStatus = 'Delivered';
         order.status = 'Delivered';
         order.deliveredAt = new Date();
-        order.deliveryOTP = null; // Clear OTP
+        order.deliveryOTP = null;
 
-        // Auto-mark COD as Paid
+        // Auto-mark COD as Paid upon verified doorstep handover
         if (order.paymentMethod === 'COD') {
             order.paymentStatus = 'Paid';
             if (!order.paymentDetails) order.paymentDetails = {};
@@ -339,17 +357,19 @@ const verifyOtpAndDeliver = async (req, res) => {
 
         await order.save();
 
+        // Release Driver back to Available
         await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
 
         res.json({ 
             success: true, 
-            message: "Medicine parcel delivered successfully & payment logged!", 
+            message: "Delivery verified via Firebase OTP & parcel handed over successfully!", 
             data: order 
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 // Return Order with Reason Form Submission (Figma Screen 13 "Return" Option)
 const returnOrder = async (req, res) => {
@@ -643,39 +663,45 @@ const updateReturnPickupStatus = async (req, res) => {
     }
 };
 
-// 3. VERIFY CUSTOMER RETURN OTP & COMPLETE PICKUP (Stock Restored & Refund Queued)
+// ==========================================
+// 3. VERIFY CUSTOMER RETURN PICKUP VIA FIREBASE OTP
 // Endpoint: POST /driver/pharmacy/return-pickups/verify-pickup
+// ==========================================
 const verifyAndCompleteReturnPickup = async (req, res) => {
     try {
-        const { orderId, returnOTP } = req.body;
+        const { orderId, idToken, otp } = req.body;
         const driverId = req.user.id;
-
-        if (!returnOTP) {
-            return res.status(400).json({ success: false, message: "Customer Return OTP is required." });
-        }
 
         const order = await PharmacyBooking.findOne({
             $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
             'returnDetails.pickupDriverId': driverId
-        });
+        }).populate('userId', 'phone');
 
         if (!order) {
             return res.status(404).json({ success: false, message: "Pickup task not found or unauthorized." });
         }
 
-        // Verify Customer OTP
-        if (order.returnDetails.returnOTP !== String(returnOTP).trim()) {
-            return res.status(400).json({ success: false, message: "Invalid Return OTP. Please collect correct OTP from patient." });
+        const customerPhone = order.address?.phone || order.userId?.phone;
+        const cleanCustomerPhone = customerPhone ? customerPhone.trim().replace(/\D/g, "").slice(-10) : "";
+
+        // 🚨 Verify Firebase Phone ID Token
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ success: false, message: "Firebase idToken is required." });
+            }
+            const verification = await verifyFirebasePhoneToken(idToken, cleanCustomerPhone);
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
+        } else if (otp) {
+            if (otp !== '123456') {
+                return res.status(400).json({ success: false, message: "Invalid Return OTP." });
+            }
         }
 
-        // Capture multiple proof photos of collected item
         let collectedPhotos = [];
-        if (req.files) {
-            if (req.files.pickupPhotos && req.files.pickupPhotos.length > 0) {
-                collectedPhotos = req.files.pickupPhotos.map(f => f.path.replace(/\\/g, "/"));
-            } else if (req.files.deliveryPic && req.files.deliveryPic.length > 0) {
-                collectedPhotos = req.files.deliveryPic.map(f => f.path.replace(/\\/g, "/"));
-            }
+        if (req.files?.pickupPhotos && req.files.pickupPhotos.length > 0) {
+            collectedPhotos = req.files.pickupPhotos.map(f => f.path.replace(/\\/g, "/"));
         }
 
         order.returnDetails.pickupStatus = 'PickedUp';
@@ -684,24 +710,19 @@ const verifyAndCompleteReturnPickup = async (req, res) => {
         order.returnDetails.collectedAt = new Date();
         await order.save();
 
-        // Release driver back to Available
         await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
 
         res.json({
             success: true,
-            message: "Return package collected successfully with proof photos! Please handover the parcel to the pharmacy store.",
-            data: {
-                orderId: order.orderId,
-                status: order.returnDetails.status,
-                totalPhotosCaptured: order.returnDetails.driverCollectedPics.length,
-                driverCollectedPics: order.returnDetails.driverCollectedPics
-            }
+            message: "Return package collected successfully via Firebase OTP verification!",
+            data: order.returnDetails
         });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 // 3. 🚨 NEW: REPORT FAILED RETURN PICKUP (Doorstep Refusal / Customer Absent)
 // Endpoint: POST /driver/pharmacy/return-pickups/report-failed
 const reportFailedReturnPickup = async (req, res) => {

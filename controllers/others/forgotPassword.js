@@ -11,6 +11,7 @@ const PoliceStaff = require("../../models/PoliceStaff");
 const FireHQ = require("../../models/FireHQ");
 const FireStation = require("../../models/FireStation");
 const FireStaff = require("../../models/FireStaff");
+const Driver = require("../../models/Driver");
 
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
@@ -26,6 +27,7 @@ const modelsList = [
     { name: "Lab", model: Lab, phoneKey: "phone", emailKey: "email" },
     { name: "Pharmacy", model: Pharmacy, phoneKey: "phone", emailKey: "email" },
     { name: "Nurse", model: Nurse, phoneKey: "phone", emailKey: "email" },
+    { name: "Driver", model: Driver, phoneKey: "phone", emailKey: "username" },
     { name: "PoliceHQ", model: PoliceHQ, phoneKey: "phone", emailKey: "email" },
     { name: "PoliceStation", model: PoliceStation, phoneKey: "phone", emailKey: "email" },
     { name: "PoliceStaff", model: PoliceStaff, phoneKey: "mobileNumber", emailKey: "officialEmail" }, 

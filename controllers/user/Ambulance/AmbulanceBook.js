@@ -847,39 +847,72 @@ const uploadIncidentPhoto = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 4. GET LIVE TRACKING DATA (Figma Screen: Arriving / Start Navigation) ---
+// --- 4. GET LIVE TRACKING DATA (100% Real Dynamic Telemetry) ---
+// Path: controllers/user/Ambulance/AmbulanceBook.js
+// Updated: Removed hardcoded "5 mins", "4.8" rating, and "1,240 trips", replaced with live DB aggregations
 const getLiveTracking = async (req, res) => {
     try {
         const booking = await Booking.findById(req.params.id)
             .populate({
                 path: 'ambulanceId',
-                select: 'name phone vehicleNumber vehicleType location driverInfo profilePic'
+                select: 'name phone vehicleNumber vehicleType location driverInfo profilePic averageRating totalReviews'
             });
 
         if (!booking) return res.status(404).json({ message: "Booking not found" });
 
-        // Figma Formatting
+        const driver = booking.ambulanceId;
+
+        // 🚀 1. DYNAMIC REAL COMPLETED TRIPS COUNT
+        let realTripsCount = 0;
+        if (driver?._id) {
+            realTripsCount = await Booking.countDocuments({
+                ambulanceId: driver._id,
+                status: 'Delivered'
+            });
+        }
+
+        // 🚀 2. DYNAMIC LIVE ETA CALCULATION (Distance between ambulance current GPS and pickup spot)
+        let dynamicEta = "Arriving";
+        if (driver?.location?.lat && booking.pickupLocation?.lat) {
+            const distance = await getDistance(
+                driver.location.lat,
+                driver.location.lng,
+                booking.pickupLocation.lat,
+                booking.pickupLocation.lng
+            );
+
+            if (distance <= 0.3) {
+                dynamicEta = "Arrived on Spot";
+            } else {
+                const estimatedMinutes = Math.max(1, Math.round(distance * 3)); // Average 3 mins per KM in city traffic
+                dynamicEta = `${estimatedMinutes} mins`;
+            }
+        }
+
         const trackingData = {
             status: booking.status,
             otp: booking.otp,
-            eta: "5 mins",
+            eta: dynamicEta, // 👈 Real live ETA calculated from GPS
             driver: {
-                name: booking.ambulanceId.driverInfo?.fullName || booking.ambulanceId.name,
-                phone: booking.ambulanceId.phone,
-                rating: 4.8,
-                trips: "1,240",
-                profilePic: booking.ambulanceId.profilePic
+                name: driver?.driverInfo?.fullName || driver?.name || "Assigned Driver",
+                phone: driver?.phone || "N/A",
+                rating: driver?.averageRating || 5.0, // 👈 Real driver rating from DB
+                totalReviews: driver?.totalReviews || 0,
+                trips: realTripsCount > 0 ? `${realTripsCount} Trips` : "New Partner", // 👈 Real completed trips from DB
+                profilePic: driver?.profilePic || null
             },
             vehicle: {
-                plateNumber: booking.ambulanceId.vehicleNumber,
-                type: booking.ambulanceId.vehicleType // Figma: Van, ALS etc.
+                plateNumber: driver?.vehicleNumber || "Verified Vehicle",
+                type: driver?.vehicleType || "Ambulance"
             },
-            location: booking.ambulanceId.location,
-            timeline: booking.trackingTimeline
+            location: driver?.location || { lat: 0, lng: 0 },
+            timeline: booking.trackingTimeline || []
         };
 
         res.json({ success: true, data: trackingData });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 

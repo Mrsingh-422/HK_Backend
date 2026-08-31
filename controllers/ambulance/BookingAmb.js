@@ -357,25 +357,52 @@ const uploadIncidentPhoto = async (req, res) => {
 };
 
 
-// --- 3. UPDATE FINALIZE HANDOFF (Update Existing Pre-Admission Record) ---
-// --- 4. FINALIZE HANDOFF (Ambulance Handoff Completed) ---
-// Updated: Automatically releases the ambulance driver back to available state upon delivery
+// --- 3. UPDATE FINALIZE HANDOFF (Fully Dynamic Telemetry) ---
+// Path: controllers/ambulance/BookingAmb.js
+// Updated: Replaced hardcoded "8.4 km" & "15 mins" with dynamic GPS distance and actual ride time calculations
 const finalizeTripHandoff = async (req, res) => {
     try {
         const { id } = req.params; 
         const { doctorName, wardName, duration, reason, totalDistance, travelTime } = req.body; 
 
-        const booking = await Booking.findById(id);
+        const booking = await Booking.findById(id).populate('hospitalId');
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
+        const now = new Date();
+
+        // 🚀 DYNAMIC TRAVEL TIME CALCULATION: Calculate real elapsed time since pickup
+        let dynamicTravelTime = travelTime;
+        if (!dynamicTravelTime) {
+            const pickupEvent = booking.trackingTimeline?.find(t => t.status === 'Patient pickup confirmed' || t.status === 'Picked-Up');
+            if (pickupEvent && pickupEvent.timestamp) {
+                const diffMinutes = Math.max(1, Math.round((now - new Date(pickupEvent.timestamp)) / 60000));
+                dynamicTravelTime = `${diffMinutes} mins`;
+            } else {
+                dynamicTravelTime = duration || "Direct Transit";
+            }
+        }
+
+        // 🚀 DYNAMIC DISTANCE CALCULATION: Calculate GPS distance between pickup and dropoff hospital
+        let dynamicDistance = totalDistance;
+        if (!dynamicDistance && booking.pickupLocation?.lat && booking.hospitalId?.location?.lat) {
+            const { getDistance } = require('../../utils/helpers');
+            const dist = await getDistance(
+                booking.pickupLocation.lat, 
+                booking.pickupLocation.lng, 
+                booking.hospitalId.location.lat, 
+                booking.hospitalId.location.lng
+            );
+            dynamicDistance = dist > 0 ? `${dist.toFixed(1)} km` : "At Destination";
+        }
+
         booking.handoffDetails = {
-            doctorName,
-            wardName,
-            duration,
-            reasonAtHandoff: reason,
-            completedAt: new Date(),
-            totalDistance: totalDistance || "8.4 km", 
-            travelTime: travelTime || "15 mins"
+            doctorName: doctorName || "Duty Staff",
+            wardName: wardName || "Emergency / Reception",
+            duration: duration || dynamicTravelTime,
+            reasonAtHandoff: reason || "Handoff completed",
+            completedAt: now,
+            totalDistance: dynamicDistance || "N/A",
+            travelTime: dynamicTravelTime
         };
 
         booking.status = 'Delivered';
@@ -388,7 +415,7 @@ const finalizeTripHandoff = async (req, res) => {
             });
         }
 
-        // 🚀 EDGE CASE 3: Only transition appointment status to 'In-Progress' if a Bed is allotted, else preserve 'Hospital-Pending'
+        // Synchronize status change to linked Appointment
         if (booking.bookingId) {
             const appointment = await Appointment.findOne({ transactionId: booking.bookingId });
             if (appointment) {
@@ -396,7 +423,7 @@ const finalizeTripHandoff = async (req, res) => {
                 
                 appointment.status = targetStatus;
                 appointment.tracking.status = 'Admitted/Dropped to Hospital';
-                appointment.tracking.rideEndTime = new Date();
+                appointment.tracking.rideEndTime = now;
                 
                 await appointment.save();
             }

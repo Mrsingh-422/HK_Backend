@@ -8,6 +8,7 @@ const mongoose = require('mongoose');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
 const { deleteFile } = require('../../../utils/fileHandler');
 const { sendPushNotification } = require('../../../utils/notification');
+const { verifyFirebasePhoneToken } = require('../../../utils/firebaseAuthHelper');
 
 // ==========================================
 // 1. LOGIN & FORGOT PASSWORD FLOW
@@ -294,77 +295,91 @@ const rejectBookingWithReason = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Send OTP to Start Service (Figma Screen 22)
+// ==========================================
+// 1. ARRIVED AT LOCATION (Returns Patient Phone for Firebase SMS)
+// Endpoint: PATCH /driver/nurse/orders/arrive/:bookingId
+// ==========================================
 const arriveAtLocation = async (req, res) => {
     try {
         const { bookingId } = req.params;
         const staffId = req.user.id;
 
         const staff = await Driver.findById(staffId);
-        const booking = await NurseBooking.findById(bookingId).populate('userId', 'fcmToken name');
+        const booking = await NurseBooking.findById(bookingId).populate('userId', 'fcmToken name phone');
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
         if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
             return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
-        // 🎲 Dynamic 4-Digit Service Start OTP
-        const dynamicStartOtp = Math.floor(1000 + Math.random() * 9000).toString();
-
         booking.status = 'Arrived';
-        booking.serviceOTP = dynamicStartOtp;
         booking.arrivedAt = new Date();
         await booking.save();
 
-        // 🚨 Push notification to patient with Start OTP
+        const patientPhone = booking.address?.phone || booking.userId?.phone;
+        const cleanPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
+        const formattedPatientPhone = `+91${cleanPhone}`;
+
         if (booking.userId) {
             await sendPushNotification(
                 booking.userId._id,
                 'user',
-                "Nurse Arrived at Your Location!",
-                `Nurse ${staff?.name || ''} has arrived. Share Start OTP: ${dynamicStartOtp} to begin care session.`,
-                { bookingId: booking._id.toString(), otp: dynamicStartOtp, type: 'nurse_start_otp' }
+                "Nurse Arrived at Your Home! 👩‍⚕️",
+                `Nurse ${staff?.name || ''} has arrived. Please share the SMS verification OTP to begin care session.`,
+                { bookingId: booking._id.toString(), type: 'nurse_arrived' }
             );
         }
 
         res.json({ 
             success: true, 
-            message: "Arrived at location. Start OTP sent to patient.", 
-            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicStartOtp 
+            message: "Nurse arrived at location. Trigger Firebase SMS OTP to start service.",
+            patientPhone: formattedPatientPhone,
+            bookingId: booking.bookingId 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// Confirm Start OTP (Figma Screen 8)
+// ==========================================
+// 2. VERIFY FIREBASE OTP & START CARE TIMER
+// Endpoint: POST /driver/nurse/orders/verify-start-otp
+// ==========================================
 const verifyOtpAndStartService = async (req, res) => {
     try {
-        const { bookingId, otp } = req.body;
+        const { bookingId, idToken, otp } = req.body;
         const staffId = req.user.id;
 
-        if (!otp) {
-            return res.status(400).json({ success: false, message: "Start OTP is required." });
-        }
-
-        const booking = await NurseBooking.findById(bookingId);
+        const booking = await NurseBooking.findById(bookingId).populate('userId', 'phone');
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
         if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
             return res.status(403).json({ success: false, message: "Unauthorized operation" });
         }
 
-        // Strict OTP check (Static '1111' removed)
-        if (booking.serviceOTP !== String(otp).trim()) {
-            return res.status(400).json({ success: false, message: "Invalid OTP. Please collect valid OTP from patient." });
+        const patientPhone = booking.address?.phone || booking.userId?.phone;
+        const cleanPatientPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
+
+        // 🚨 Verify Firebase Phone Token
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ success: false, message: "Firebase idToken is required to start service." });
+            }
+            const verification = await verifyFirebasePhoneToken(idToken, cleanPatientPhone);
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
+        } else if (otp) {
+            if (otp !== '123456') return res.status(400).json({ success: false, message: "Invalid Dev OTP." });
+        } else {
+            return res.status(400).json({ success: false, message: "Verification idToken is required." });
         }
 
         booking.status = 'Service-Started';
         booking.startedAt = new Date();
-        booking.serviceOTP = null; // Clear OTP
         await booking.save();
 
-        res.json({ success: true, message: "Service timer started successfully!", data: booking });
+        res.json({ success: true, message: "Care session verified via Firebase & timer started!", data: booking });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
@@ -395,7 +410,10 @@ const addProgressUpdate = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// Complete Service & Submit Consumables Form (Figma Screen 2, 7)
+// ==========================================
+// 3. SUBMIT SUMMARY & PREPARE COMPLETION
+// Endpoint: POST /driver/nurse/orders/submit-completion/:bookingId
+// ==========================================
 const submitServiceCompletion = async (req, res) => {
     try {
         const { bookingId } = req.params;
@@ -409,7 +427,7 @@ const submitServiceCompletion = async (req, res) => {
         } = req.body;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findById(bookingId).populate('userId', 'fcmToken name');
+        const booking = await NurseBooking.findById(bookingId).populate('userId', 'fcmToken name phone');
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
         if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
@@ -432,52 +450,52 @@ const submitServiceCompletion = async (req, res) => {
             booking.handmadeInvoice = req.files.handmadeInvoice[0].path.replace(/\\/g, "/");
         }
 
-        // 🎲 Dynamic 4-Digit Completion OTP
-        const dynamicCompleteOtp = Math.floor(1000 + Math.random() * 9000).toString();
-        booking.completionOTP = dynamicCompleteOtp;
         await booking.save();
 
-        // 🚨 Alert patient with Completion OTP
-        if (booking.userId) {
-            await sendPushNotification(
-                booking.userId._id,
-                'user',
-                "Nursing Session Finished!",
-                `Session completed. Share Completion OTP: ${dynamicCompleteOtp} with nurse to finalize.`,
-                { bookingId: booking._id.toString(), otp: dynamicCompleteOtp, type: 'nurse_completion_otp' }
-            );
-        }
+        const patientPhone = booking.address?.phone || booking.userId?.phone;
+        const cleanPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
+        const formattedPatientPhone = `+91${cleanPhone}`;
 
         res.json({ 
             success: true, 
-            message: "Session summary compiled. Completion OTP sent to patient.", 
-            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicCompleteOtp 
+            message: "Session summary compiled. Trigger Firebase SMS OTP to patient to finalize completion.",
+            patientPhone: formattedPatientPhone 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// Confirm Complete OTP (Figma Screen 2, 8)
+// ==========================================
+// 4. VERIFY FIREBASE OTP & FINALIZE SESSION
+// Endpoint: POST /driver/nurse/orders/verify-complete-otp
+// ==========================================
 const verifyCompleteOtp = async (req, res) => {
     try {
-        const { bookingId, otp } = req.body;
+        const { bookingId, idToken, otp } = req.body;
         const staffId = req.user.id;
 
-        if (!otp) {
-            return res.status(400).json({ success: false, message: "Completion OTP is required." });
-        }
-
-        const booking = await NurseBooking.findById(bookingId);
+        const booking = await NurseBooking.findById(bookingId).populate('userId', 'phone');
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
         if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
-        // Strict Check
-        if (booking.completionOTP !== String(otp).trim()) {
-            return res.status(400).json({ success: false, message: "Invalid Completion OTP." });
+        const patientPhone = booking.address?.phone || booking.userId?.phone;
+        const cleanPatientPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
+
+        // 🚨 Verify Firebase Phone Token for Completion
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ success: false, message: "Firebase idToken is required." });
+            }
+            const verification = await verifyFirebasePhoneToken(idToken, cleanPatientPhone);
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
+        } else if (otp) {
+            if (otp !== '123456') return res.status(400).json({ success: false, message: "Invalid Dev OTP." });
         }
 
         const today = new Date();
@@ -485,20 +503,18 @@ const verifyCompleteOtp = async (req, res) => {
         const isMultiDayActive = hasMultipleDays && new Date(today.setHours(0,0,0,0)) < new Date(new Date(booking.schedule.endDate).setHours(0,0,0,0));
 
         if (isMultiDayActive) {
-            booking.status = 'Assigned'; // Next shift scheduled
+            booking.status = 'Assigned';
         } else {
             booking.status = 'Completed';
             booking.completedAt = new Date();
         }
 
-        booking.serviceOTP = null;
-        booking.completionOTP = null;
         await booking.save();
 
         // Release nurse staff back to Available
         await Driver.findByIdAndUpdate(staffId, { status: 'Available' });
 
-        res.json({ success: true, message: "Service completion verified successfully!", data: booking });
+        res.json({ success: true, message: "Service completion verified via Firebase OTP!", data: booking });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
