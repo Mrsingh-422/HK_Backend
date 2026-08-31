@@ -413,7 +413,7 @@ const getMedicineFullDetails = async (req, res) => {
         const medicine = await Medicine.findById(medicineId).lean();
         if (!medicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // Dynamic Alternate Brands Lookup
+        // Dynamic Alternate Brands
         if (medicine.salt_composition) {
             const similarMeds = await Medicine.find({
                 salt_composition: medicine.salt_composition,
@@ -433,10 +433,14 @@ const getMedicineFullDetails = async (req, res) => {
             }
         }
 
-        // Fetch cheapest active store batch
         const bestOffer = await MedicineInventory.findOne({ medicineId: medicine._id, is_available: true, stock_quantity: { $gt: 0 } })
             .sort({ vendor_price: 1 })
             .lean();
+
+        // 🚨 Dynamic Admin Return Policy Days Lookup
+        const PharmacyReturnConfig = require('../../../models/PharmacyReturnConfig');
+        let returnConfig = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
+        const adminWindowDays = returnConfig?.returnWindowDays || 3;
 
         const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
         const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0);
@@ -448,16 +452,17 @@ const getMedicineFullDetails = async (req, res) => {
                 medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
             }
             
-            // 🚨 1. PDP RETURN & REPLACEMENT BADGE ON CHEAPEST BATCH (Crash-Proof Default)
             medicine.isReturnAllowed = Boolean(bestOffer.isReturnAllowed);
             medicine.isReplacementAllowed = Boolean(bestOffer.isReplacementAllowed);
+            medicine.returnWindowDays = adminWindowDays; // 👈 Dynamic Days Number
+            // 🚨 FULLY DYNAMIC TEMPLATE STRING
             medicine.returnPolicyText = medicine.isReturnAllowed 
-                ? "3 Days Return/Replacement Available" 
+                ? `${adminWindowDays} Days Return/Replacement Available` 
                 : "Non-Returnable Product";
         } else {
-            // 🚨 2. SAFE FALLBACK FOR UNSTOCKED/OLD DATA (Prevents Crashing)
             medicine.isReturnAllowed = false;
             medicine.isReplacementAllowed = false;
+            medicine.returnWindowDays = adminWindowDays;
             medicine.returnPolicyText = "Non-Returnable Product";
         }
 
@@ -1119,10 +1124,9 @@ const getMedicineVendors = async (req, res) => {
         const masterMedicine = await Medicine.findById(medObjectId).lean();
         if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // 🚨 COD STATUS CHECK: Policy helper se check karein ki Pharmacy me COD enabled hai ya nahi
         const isPharmacyCodAvailable = await isCodEnabled('Pharmacy');
 
-        // DYNAMIC ALTERNATE BRANDS ENRICHMENT
+        // Dynamic Alternate Brands Enrichment
         if (masterMedicine.salt_composition) {
             const similarMeds = await Medicine.find({
                 salt_composition: masterMedicine.salt_composition,
@@ -1201,7 +1205,6 @@ const getMedicineVendors = async (req, res) => {
                             ? moment(item.expiry_date).format('MM/YYYY') 
                             : "N/A";
 
-                        // 🚨 Return Flags Update on Cheaper Batch
                         existingItem.isReturnAllowed = Boolean(item.isReturnAllowed);
                         existingItem.isReplacementAllowed = Boolean(item.isReplacementAllowed);
                     }
@@ -1240,11 +1243,8 @@ const getMedicineVendors = async (req, res) => {
                         expiryDate: item.expiry_date 
                             ? moment(item.expiry_date).format('MM/YYYY') 
                             : "N/A",
-
-                        // 🚨 NEWLY ADDED: Return & Replacement permissions per store batch
                         isReturnAllowed: Boolean(item.isReturnAllowed),
                         isReplacementAllowed: Boolean(item.isReplacementAllowed),
-
                         comboOffer: activePromo ? {
                             offerId: activePromo._id,
                             campaignDisplayName: activePromo.campaignDisplayName,
@@ -1267,20 +1267,25 @@ const getMedicineVendors = async (req, res) => {
 
         availableInPharmacies.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
 
-        // 🚨 Compute Summary Return Flags for Top Medicine Details Card
+        // 🚨 DYNAMIC ADMIN RETURN DAYS LOOKUP
+        const PharmacyReturnConfig = require('../../../models/PharmacyReturnConfig');
+        let returnConfig = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
+        const adminWindowDays = returnConfig?.returnWindowDays || 3;
+
         let isReturnAllowedSummary = false;
         let isReplacementAllowedSummary = false;
 
         if (availableInPharmacies.length > 0) {
-            // Evaluates from nearest/active store option
             isReturnAllowedSummary = availableInPharmacies[0].isReturnAllowed;
             isReplacementAllowedSummary = availableInPharmacies[0].isReplacementAllowed;
         }
 
         masterMedicine.isReturnAllowed = isReturnAllowedSummary;
         masterMedicine.isReplacementAllowed = isReplacementAllowedSummary;
+        masterMedicine.returnWindowDays = adminWindowDays; // 👈 Dynamic Number
+        // 🚨 FULLY DYNAMIC TEMPLATE STRING
         masterMedicine.returnPolicyText = isReturnAllowedSummary 
-            ? "3 Days Return/Replacement Available" 
+            ? `${adminWindowDays} Days Return/Replacement Available` 
             : "Non-Returnable Product";
 
         res.json({
