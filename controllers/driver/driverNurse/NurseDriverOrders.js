@@ -4,6 +4,10 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const moment = require('moment');
 const NoShowConfig = require('../../../models/NoShowConfig');
+const mongoose = require('mongoose');
+const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
+const { deleteFile } = require('../../../utils/fileHandler');
+const { sendPushNotification } = require('../../../utils/notification');
 
 // ==========================================
 // 1. LOGIN & FORGOT PASSWORD FLOW
