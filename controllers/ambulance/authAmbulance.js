@@ -296,39 +296,55 @@ const resetPasswordTest = async (req, res) => {
 const forgotPasswordAmbulance = async (req, res) => {
     try {
         const { email } = req.body;
-        const driver = await Ambulance.findOne({ email: email.toLowerCase() });
+        if (!email) return res.status(400).json({ success: false, message: "Email is required." });
+
+        const driver = await Ambulance.findOne({ email: email.toLowerCase().trim() });
         if (!driver) return res.status(404).json({ success: false, message: "No driver registered with this email." });
 
-        // Generate dynamic 4-digit recovery OTP
-        const otp = Math.floor(1000 + Math.random() * 9000).toString();
+        // 🎲 6-Digit Recovery OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
         
-        // Save OTP with expiry (5 mins)
         driver.resetPasswordOtp = otp;
-        driver.resetPasswordExpires = Date.now() + 300000; // 5 mins
+        driver.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 mins
         await driver.save();
 
-        console.log(`[RECOVERY OTP] Driver: ${driver.email} | OTP: ${otp}`);
+        console.log(`\n📧 [AMBULANCE RECOVERY OTP] Driver: ${driver.email} | OTP: ${otp}\n`);
 
-        res.json({ success: true, message: "Verification OTP sent to your email.", dev_otp: "1111" });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+        res.json({ 
+            success: true, 
+            message: "6-Digit Verification OTP sent to your registered email.",
+            debugOtp: process.env.NODE_ENV === 'production' ? undefined : otp 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 2. VERIFY RECOVERY OTP (NEW: Figma Screen OTP Verify Overlay) ---
 const verifyRecoveryOtp = async (req, res) => {
     try {
         const { email, otp } = req.body;
-        const driver = await Ambulance.findOne({ email: email.toLowerCase() });
+        if (!email || !otp) return res.status(400).json({ success: false, message: "Email and OTP are required." });
+
+        const driver = await Ambulance.findOne({ email: email.toLowerCase().trim() });
         if (!driver) return res.status(404).json({ success: false, message: "Driver profile not found." });
 
-        const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
-        const isBypass = isDev && otp === '1111';
+        const savedOtp = String(driver.resetPasswordOtp || "").trim();
+        const incomingOtp = String(otp).trim();
 
-        if (!isBypass && (driver.resetPasswordOtp !== otp || Date.now() > driver.resetPasswordExpires)) {
-            return res.status(400).json({ success: false, message: "Invalid or expired recovery OTP." });
+        // Strict Check (Static 1111 bypass removed)
+        if (!savedOtp || savedOtp !== incomingOtp) {
+            return res.status(400).json({ success: false, message: "Invalid OTP code." });
+        }
+
+        if (Date.now() > driver.resetPasswordExpires) {
+            return res.status(400).json({ success: false, message: "Recovery OTP has expired. Please request a new OTP." });
         }
 
         res.json({ success: true, message: "OTP Verified successfully. Please set a new password." });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 3. RESET PASSWORD (NEW: Update Password after OTP validation) ---

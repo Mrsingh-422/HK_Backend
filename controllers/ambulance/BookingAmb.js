@@ -9,6 +9,7 @@ const { sendPushNotification, notifyAdminsAndVendor } = require('../../utils/not
 const Review = require('../../models/Review');
 const Hospital = require('../../models/Hospital');
 const NoShowConfig = require('../../models/NoShowConfig');
+const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper');
 
 
 const getMyActiveTrip = async (req, res) => {
@@ -438,39 +439,52 @@ const finalizeTripHandoff = async (req, res) => {
 // --- 1. VERIFY OTP (Figma Screen 36) ---
 const verifyPickupOtp = async (req, res) => {
     try {
-        const { id } = req.params; // Booking ObjectId
-        const { otp } = req.body; // Sent from driver panel
+        const { id } = req.params; 
+        const { otp, idToken } = req.body; 
 
-        const booking = await Booking.findById(id);
+        const booking = await Booking.findById(id).populate('userId', 'phone');
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // --- DEVELOPMENT BYPASS CHECK ---
-        const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
-        const isStaticOtpMatch = isDev && String(otp).trim() === '1111';
+        const patientPhone = booking.patientDetails?.phone || booking.userId?.phone;
+        const cleanPatientPhone = patientPhone ? String(patientPhone).replace(/\D/g, "").slice(-10) : "";
 
-        // Strict validation (Bypassed if development mode and static OTP '1111' is used)
-        if (!isStaticOtpMatch && String(booking.otp).trim() !== String(otp).trim()) {
-            return res.status(400).json({ success: false, message: "Invalid OTP. Please check with patient again." });
+        // 🚨 1. Firebase Phone Auth idToken verification (If idToken provided)
+        if (idToken && idToken.trim() !== "") {
+            const verification = await verifyFirebasePhoneToken(idToken, cleanPatientPhone);
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
+        } 
+        // 🚨 2. Strict 6-digit dynamic OTP verification (Static 1111 removed)
+        else if (otp) {
+            const savedOtp = String(booking.otp || "").trim();
+            const incomingOtp = String(otp).trim();
+
+            if (!savedOtp || savedOtp !== incomingOtp) {
+                return res.status(400).json({ success: false, message: "Invalid Pickup OTP. Please check with patient." });
+            }
+        } else {
+            return res.status(400).json({ success: false, message: "Pickup OTP or Firebase idToken is required." });
         }
 
         booking.isOtpVerified = true;
         booking.status = 'Picked-Up';
+        booking.otp = null; // Invalidate OTP after pickup
         
-        // Timeline tracking audit
         booking.trackingTimeline.push({ 
             status: 'Patient pickup confirmed', 
             timestamp: new Date(),
-            note: isStaticOtpMatch ? "OTP verified via development master bypass code." : "OTP successfully verified by driver at pickup spot."
+            note: "Patient pickup verified and onboarded into ambulance."
         });
         
         await booking.save();
 
-        res.json({ success: true, message: "OTP Verified. Start Navigation.", data: booking });
+        res.json({ success: true, message: "Pickup verified successfully! Start Navigation to Hospital.", data: booking });
     } catch (error) { 
         console.error("OTP verification error:", error);
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -654,29 +668,38 @@ const getDriverTripHistory = async (req, res) => {
 const arrivedAtDropOff = async (req, res) => {
     try {
         const { id } = req.params;
-        const booking = await Booking.findById(id);
+        const booking = await Booking.findById(id).populate('hospitalId', 'fcmToken name');
         if (!booking) return res.status(404).json({ success: false, message: "Booking record not found." });
 
-        // Generate a random 4-digit OTP for the Hospital Staff to provide
-        const hospitalOtp = Math.floor(1000 + Math.random() * 9000).toString();
-        booking.dropOffOtp = hospitalOtp;
-        booking.status = 'Arrived'; // Set back to Arrived at Hospital state
+        // 🎲 Dynamic 6-Digit Handover OTP
+        const dynamicHospitalOtp = Math.floor(100000 + Math.random() * 900000).toString();
+        booking.dropOffOtp = dynamicHospitalOtp;
+        booking.status = 'Arrived'; 
         
         booking.trackingTimeline.push({
             status: 'Arrived at Dropoff',
             timestamp: new Date(),
-            note: `Ambulance reached destination hospital (${booking.hospitalId ? 'Hospital' : 'Trauma Center'}). Awaiting handover OTP.`
+            note: `Ambulance reached destination hospital. Handover OTP: ${dynamicHospitalOtp}`
         });
 
         await booking.save();
 
-        // Print in server log for easy testing/debugging
-        console.log(`[HANDOVER OTP] Booking ID: ${booking.bookingId} | Hospital OTP: ${hospitalOtp}`);
+        if (booking.hospitalId) {
+            await sendPushNotification(
+                booking.hospitalId._id,
+                'hospital',
+                "Ambulance Arrived at Emergency Gate! 🏥",
+                `Ambulance #${booking.bookingId} has arrived. Provide Handover OTP: ${dynamicHospitalOtp} to driver.`,
+                { bookingId: booking._id.toString(), otp: dynamicHospitalOtp, type: 'ambulance_handover' }
+            );
+        }
+
+        console.log(`[AMBULANCE HANDOVER OTP] Booking: #${booking.bookingId} | OTP: ${dynamicHospitalOtp}`);
 
         res.json({ 
             success: true, 
-            message: "Arrived at hospital. Verification OTP generated.",
-            dev_otp: "1111" // Static bypass code for Sandbox
+            message: "Arrived at destination hospital. Handover OTP sent to hospital desk.",
+            debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicHospitalOtp
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
@@ -689,28 +712,33 @@ const verifyDropOffOtp = async (req, res) => {
         const { id } = req.params;
         const { otp } = req.body;
 
+        if (!otp) {
+            return res.status(400).json({ success: false, message: "Hospital Handover OTP is required." });
+        }
+
         const booking = await Booking.findById(id);
         if (!booking) return res.status(404).json({ success: false, message: "Booking record not found." });
 
-        // Bypass check for development '1111'
-        const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
-        const isStaticOtpMatch = isDev && String(otp).trim() === '1111';
+        const savedOtp = String(booking.dropOffOtp || "").trim();
+        const incomingOtp = String(otp).trim();
 
-        if (!isStaticOtpMatch && String(booking.dropOffOtp).trim() !== String(otp).trim()) {
-            return res.status(400).json({ success: false, message: "Invalid Hospital OTP. Please request a new code from staff." });
+        // Strict Check (Static 1111 bypass removed)
+        if (!savedOtp || savedOtp !== incomingOtp) {
+            return res.status(400).json({ success: false, message: "Invalid Hospital Handover OTP. Please verify with emergency desk." });
         }
 
         booking.isDropOffVerified = true;
-        booking.status = 'En-Route'; // Proceed to Handoff screen
+        booking.status = 'En-Route'; // Handoff ready
+        booking.dropOffOtp = null; // Invalidate
         
         booking.trackingTimeline.push({
             status: 'Dropoff OTP Verified',
             timestamp: new Date(),
-            note: "Hospital staff confirmed handover via OTP."
+            note: "Hospital staff confirmed handover via 6-digit OTP."
         });
 
         await booking.save();
-        res.json({ success: true, message: "OTP Verified. Please fill the Handoff Form.", data: booking });
+        res.json({ success: true, message: "Handover OTP Verified. Please complete the Handoff Form.", data: booking });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }

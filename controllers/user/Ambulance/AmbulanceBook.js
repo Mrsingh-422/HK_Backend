@@ -4,6 +4,7 @@ const Hospital = require('../../../models/Hospital');
 const User = require('../../../models/User');
 const Coupon = require('../../../models/Coupon');
 const Review = require('../../../models/Review');
+const crypto = require('crypto');
 const Wallet = require('../../../models/Wallet');
 const mongoose = require('mongoose');
 const { getDistance } = require('../../../utils/helpers');
@@ -12,6 +13,7 @@ const { createRazorpayOrder, verifyRazorpaySignature,fetchAndMapRazorpayPayment 
 const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
+const { verifyFirebasePhoneToken } = require('../../../utils/firebaseAuthHelper');
 
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
@@ -422,10 +424,10 @@ const confirmAmbulanceBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Ambulance not found." });
         }
 
-        if (targetAmbulance.isOnline === false) {
+        if (targetAmbulance.isOnline === false || targetAmbulance.isActive === false) {
             return res.status(400).json({
                 success: false,
-                message: "Booking Blocked: Ambulance is currently offline and not accepting requests."
+                message: "Booking Blocked: Ambulance is currently offline or inactive."
             });
         }
 
@@ -436,7 +438,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             if (!isCodAllowed) {
                 return res.status(400).json({
                     success: false,
-                    message: "Cash on Delivery is currently disabled for Ambulance bookings. Please pay online to place your request."
+                    message: "Cash on Delivery is currently disabled for Ambulance bookings. Please pay online."
                 });
             }
         }
@@ -464,7 +466,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const finalReason = reason || referralReason || incidentDescription || parsedDetails.emergencyDescription || "";
 
-        // 7. Parse Location
+        // 7. Parse Pickup Location
         let finalPickupLocation = { address: "Pickup Location", lat: 30.7046, lng: 76.7179 };
 
         if (body['pickupLocation[address]']) {
@@ -511,21 +513,24 @@ const confirmAmbulanceBooking = async (req, res) => {
         const tempBookingId = `HK-BOK-${Date.now().toString().slice(-6)}`;
         let rzpOrder = null;
 
-        if (!fare.isFree && activePaymentMethod !== 'COD') {
+        if (!fare.isFree && activePaymentMethod !== 'COD' && fare.total > 0) {
             rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
         }
 
         const initialStatus = activePaymentMethod === 'COD' || fare.isFree ? 'Confirmed' : 'Searching';
 
-        // 8. Save Booking Record
+        // 🎲 8. Real 6-Digit Pickup OTP Generated
+        const dynamicPickupOtp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // 9. Save Booking Record
         const booking = await Booking.create({
             bookingId: tempBookingId,
-            caseReference: generateCaseRef(serviceType),
+            caseReference: generateCaseRef(serviceType || 'Medical Ambulance'),
             userId: req.user.id,
             ambulanceId,
-            hospitalId,
-            pickupHospitalId: pickupHospitalId || null, 
-            serviceType,
+            hospitalId: hospitalId && mongoose.isValidObjectId(hospitalId) ? hospitalId : null,
+            pickupHospitalId: pickupHospitalId && mongoose.isValidObjectId(pickupHospitalId) ? pickupHospitalId : null, 
+            serviceType: serviceType || 'Medical Ambulance',
             triageLevel: serviceType === 'Accident emergency' ? 'Emergency' : (triageLevel || 'Routine'),
             scheduledAt: scheduledDate ? new Date(scheduledDate) : null,
             scheduledTime: appointmentTime || null,
@@ -561,7 +566,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             paymentMethod: activePaymentMethod,
             transactionId: rzpOrder ? rzpOrder.id : null,
             status: initialStatus, 
-            otp: Math.floor(1000 + Math.random() * 9000).toString(),
+            otp: dynamicPickupOtp, // 👈 6-Digit Dynamic OTP
             trackingTimeline: [{ 
                 status: initialStatus, 
                 timestamp: new Date(),
@@ -574,7 +579,6 @@ const confirmAmbulanceBooking = async (req, res) => {
             }
         });
 
-        // 🚀 SYNC FIX: If status is Confirmed, lock driver availability instantly to prevent overlap bookings
         if (initialStatus === 'Confirmed') {
             targetAmbulance.availableForEmergency = false;
             await targetAmbulance.save();
@@ -599,8 +603,8 @@ const confirmAmbulanceBooking = async (req, res) => {
             await notifyAdminsAndVendor(
                 ambulanceId, 
                 'ambulance', 
-                "New Booking Request Verified!", 
-                `Ambulance booking #${tempBookingId} has been successfully placed.`,
+                "New Ambulance Request! 🚑", 
+                `Booking #${tempBookingId} has been placed. Share Pickup OTP: ${dynamicPickupOtp} upon arrival.`,
                 { bookingId: booking._id.toString(), type: 'new_booking' }
             );
 
@@ -619,7 +623,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
     } catch (error) { 
         console.error("Booking Error:", error);
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -988,25 +992,21 @@ const cancelAmbulanceBooking = async (req, res) => {
         const { id } = req.params;
         const { reason } = req.body;
 
-        const booking = await AmbulanceBooking.findOne({ _id: id, userId: req.user.id });
+        const booking = await Booking.findOne({ _id: id, userId: req.user.id });
         if (!booking) {
             return res.status(404).json({ success: false, message: "Ambulance booking not found." });
         }
 
-        // Prevent cancelling already completed or cancelled trips
         const protectedStates = ['Delivered', 'Cancelled', 'No-Show'];
         if (protectedStates.includes(booking.status)) {
             return res.status(400).json({ success: false, message: "Cannot cancel booking in its current state." });
         }
 
-        // 🚨 DYNAMIC POLICY EVALUATION (Checks if driver accepted/started transit)
         const policyResult = await processCancellationRefund(booking, 'Ambulance');
 
         booking.status = 'Cancelled';
         booking.cancelledBy = 'User';
         booking.cancellationReason = reason || "Cancelled by User";
-        
-        // Save dynamic fee metrics directly to the document
         booking.pricing.cancellationFeeApplied = policyResult.cancellationFee;
         booking.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
 
@@ -1016,13 +1016,11 @@ const cancelAmbulanceBooking = async (req, res) => {
             note: reason ? `Cancelled by User. Reason: ${reason}` : "Cancelled by User." 
         });
 
-        // Release resources
         if (booking.ambulanceId) {
             await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
-            
             await sendPushNotification(
                 booking.ambulanceId, 
-                'driver', 
+                'ambulance', 
                 "Ride Cancelled", 
                 "The patient has cancelled this booking request.",
                 { bookingId: booking._id.toString(), type: 'booking_cancelled' }
@@ -1031,7 +1029,6 @@ const cancelAmbulanceBooking = async (req, res) => {
 
         await booking.save();
 
-        // Subscription benefit refund check
         if (booking.subscriptionDetails?.isSubscriptionApplied && booking.pricing?.ambulanceCharge === 0 && booking.serviceType !== 'Accident emergency') {
             await refundBenefitCount(booking.userId, 'freeAmbulanceTripsCount');
         }
@@ -1039,7 +1036,7 @@ const cancelAmbulanceBooking = async (req, res) => {
         res.json({ 
             success: true, 
             message: policyResult.cancellationFee > 0 
-                ? `Booking cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
+                ? `Booking cancelled. Cancellation fee of ₹${policyResult.cancellationFee} applied.`
                 : "Booking cancelled successfully. No charges applied.",
             data: {
                 cancellationFee: policyResult.cancellationFee,
@@ -1051,6 +1048,7 @@ const cancelAmbulanceBooking = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 // --- 2. GET USER BOOKING HISTORY (PAGINATED) ---
 const getMyAmbulanceBookings = async (req, res) => {
@@ -1123,7 +1121,7 @@ const rateAmbulanceBooking = async (req, res) => {
     try {
         const { bookingId, rating, comment } = req.body;
 
-        const booking = await AmbulanceBooking.findOne({ _id: bookingId, userId: req.user.id });
+        const booking = await Booking.findOne({ _id: bookingId, userId: req.user.id });
         if (!booking || booking.status !== 'Delivered') {
             return res.status(400).json({ success: false, message: "You can only rate completed ambulance trips." });
         }
@@ -1133,7 +1131,6 @@ const rateAmbulanceBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "You have already submitted a review for this trip." });
         }
 
-        // Create Polymorphic Review
         await Review.create({
             userId: req.user.id,
             userName: req.user.name || "Verified User",
@@ -1144,7 +1141,6 @@ const rateAmbulanceBooking = async (req, res) => {
             comment: comment || ""
         });
 
-        // Recalculate average rating & sync to Ambulance profile
         const stats = await Review.aggregate([
             { $match: { targetId: booking.ambulanceId, targetType: 'Ambulance' } },
             { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }
