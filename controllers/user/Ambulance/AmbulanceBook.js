@@ -990,10 +990,10 @@ const createReferralBooking = async (req, res) => {
 const cancelAmbulanceBooking = async (req, res) => {
     try {
         const { id } = req.params;
-        // 🚨 CRITICAL FIX: Safe fallback if frontend sends empty body
-        const { reason } = req.body || {}; 
+        const { reason } = req.body;
         const userId = req.user.id;
 
+        // 🚨 1. Robust Query: Handles both Mongo _id and custom bookingId (HK-BOK-xxx)
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
             $or: [
@@ -1016,7 +1016,7 @@ const cancelAmbulanceBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cannot cancel a completed/delivered ambulance trip." });
         }
 
-        // Safe Dynamic Cancellation Policy Evaluation
+        // 🚨 2. Safe Dynamic Cancellation Policy Evaluation
         let policyResult = { cancellationFee: 0, refundAmount: 0 };
         try {
             policyResult = await processCancellationRefund(booking, 'Ambulance');
@@ -1028,6 +1028,7 @@ const cancelAmbulanceBooking = async (req, res) => {
         const cancellationFee = Number(policyResult.cancellationFee || 0);
         const refundAmount = Number(policyResult.refundAmount || 0);
 
+        // 🚨 3. Safe Schema Updates
         booking.status = 'Cancelled';
         booking.cancelledBy = 'User';
         booking.cancellationReason = reason || "Cancelled by User";
@@ -1035,10 +1036,12 @@ const cancelAmbulanceBooking = async (req, res) => {
         if (!booking.pricing) booking.pricing = {};
         booking.pricing.cancellationFeeApplied = cancellationFee;
         
+        // Determine Payment Status Safely
         if (booking.paymentStatus === 'Paid') {
             booking.paymentStatus = cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
         }
 
+        // Safe Timeline Push
         if (!booking.trackingTimeline) booking.trackingTimeline = [];
         booking.trackingTimeline.push({ 
             status: 'Cancelled', 
@@ -1046,7 +1049,7 @@ const cancelAmbulanceBooking = async (req, res) => {
             note: reason ? `Cancelled by User. Reason: ${reason}` : "Cancelled by User." 
         });
 
-        // Release Driver
+        // 🚨 4. Release Driver back to Available
         if (booking.ambulanceId) {
             await Ambulance.findByIdAndUpdate(booking.ambulanceId, { 
                 $set: { availableForEmergency: true } 
@@ -1061,13 +1064,13 @@ const cancelAmbulanceBooking = async (req, res) => {
                     { bookingId: booking._id.toString(), type: 'booking_cancelled' }
                 );
             } catch (notifErr) {
-                console.warn("Notification skipped:", notifErr.message);
+                console.warn("Notification send skipped:", notifErr.message);
             }
         }
 
         await booking.save();
 
-        // Refund subscription if applied
+        // 🚨 5. Refund subscription trip count if applied
         try {
             if (booking.subscriptionDetails?.isSubscriptionApplied && booking.pricing?.ambulanceCharge === 0 && booking.serviceType !== 'Accident emergency') {
                 await refundBenefitCount(booking.userId, 'freeAmbulanceTripsCount');
@@ -1079,7 +1082,7 @@ const cancelAmbulanceBooking = async (req, res) => {
         res.json({ 
             success: true, 
             message: cancellationFee > 0 
-                ? `Booking cancelled successfully. A cancellation fee of ₹${cancellationFee} was applied.`
+                ? `Booking cancelled successfully. Cancellation fee of ₹${cancellationFee} was applied.`
                 : "Booking cancelled successfully. No charges applied.",
             data: {
                 cancellationFee,
@@ -1165,11 +1168,10 @@ const getAmbulanceReviewsList = async (req, res) => {
 
 const rateAmbulanceBooking = async (req, res) => {
     try {
-        // 🚨 CRITICAL FIX: Safe fallback if body is missing
-        const { bookingId, rating, comment } = req.body || {}; 
+        const { bookingId, rating, comment } = req.body;
 
         if (!bookingId || !rating) {
-            return res.status(400).json({ success: false, message: "bookingId and rating (1-5) are required in request body." });
+            return res.status(400).json({ success: false, message: "bookingId and rating (1-5) are required." });
         }
 
         const numRating = Number(rating);
@@ -1177,6 +1179,7 @@ const rateAmbulanceBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Rating must be a number between 1 and 5." });
         }
 
+        // 🚨 Resolve booking safely by Mongo _id OR custom bookingId
         const isObjectId = mongoose.isValidObjectId(bookingId);
         const query = {
             $or: [
@@ -1191,7 +1194,7 @@ const rateAmbulanceBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Ambulance booking not found for this user." });
         }
 
-        // 🚨 STRICT CHECK: Rating can only happen on 'Delivered' (Completed) trips
+        // Only completed trips can be reviewed
         if (booking.status !== 'Delivered') {
             return res.status(400).json({ 
                 success: false, 
@@ -1199,6 +1202,7 @@ const rateAmbulanceBooking = async (req, res) => {
             });
         }
 
+        // Check for existing review
         const existingReview = await Review.findOne({ 
             userId: req.user.id, 
             orderId: booking._id 
@@ -1211,16 +1215,18 @@ const rateAmbulanceBooking = async (req, res) => {
             });
         }
 
+        // Save Review
         await Review.create({
             userId: req.user.id,
             userName: req.user.name || "Verified User",
             targetId: booking.ambulanceId,
             targetType: 'Ambulance',
-            orderId: booking._id,
+            orderId: booking._id, // Mongo ObjectId
             rating: numRating,
             comment: comment ? String(comment).trim() : ""
         });
 
+        // Recalculate average rating for Ambulance Profile
         if (booking.ambulanceId) {
             const stats = await Review.aggregate([
                 { $match: { targetId: booking.ambulanceId, targetType: 'Ambulance' } },
