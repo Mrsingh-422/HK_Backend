@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
 const { hospitalUploads } = require('../../middleware/multer.js');
 const { 
-    registerHospital, 
+    registerHospital, checkHospitalExists,
     loginHospital, toggleHospitalOnlineStatus,
     updateHospitalProfile,getMyHospitalProfile,
     getLatestHospitalProfileRequest,changeHospitalPassword
@@ -13,6 +13,7 @@ const {
 
 // --- 1. Authentication ---
 router.post('/register', registerHospital);
+router.post('/check-exists', checkHospitalExists);
 router.post('/login', loginHospital);
 
 router.patch('/status/toggle', protect('hospital'), toggleHospitalOnlineStatus);

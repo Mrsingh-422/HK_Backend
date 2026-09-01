@@ -46,19 +46,20 @@ const registerAmbulance = async (req, res) => {
     }
 };
 
-// --- 2. LOGIN AMBULANCE (Hospital Flow Style) ---
+// LOGIN AMBULANCE DRIVER (With FCM Push Token Capture)
 // Endpoint: POST /api/auth/ambulance/login
 const loginAmbulance = async (req, res) => {
     try {
-        const { email, phone, password } = req.body;
-        let query = email ? { email: email.toLowerCase() } : { phone };
+        const { email, phone, password, fcmToken } = req.body;
+        
+        let query = email ? { email: email.toLowerCase().trim() } : { phone: phone ? phone.trim().replace(/\D/g, "").slice(-10) : null };
 
         const amb = await Ambulance.findOne(query).select('+password');
         if (!amb || !(await bcrypt.compare(String(password), amb.password))) {
-            return res.status(400).json({ message: 'Invalid Credentials' });
+            return res.status(400).json({ success: false, message: 'Invalid Credentials' });
         }
 
-        // 🚨 SECURITY LOCK: Block login if Ambulance driver account is inactive/disabled by Admin
+        // Block login if deactivated
         if (amb.isActive === false) {
             return res.status(403).json({ 
                 success: false, 
@@ -66,6 +67,7 @@ const loginAmbulance = async (req, res) => {
             });
         }
 
+        // Check Profile Statuses
         if (amb.profileStatus === 'Pending') {
             return res.status(200).json({ 
                 success: true, 
@@ -109,8 +111,14 @@ const loginAmbulance = async (req, res) => {
         if (!token) {
             token = generateToken(amb._id, amb.role);
             amb.token = token;
-            await amb.save();
         }
+
+        // 🚨 CRITICAL FIX: Save device FCM Token for live task alerts!
+        if (fcmToken) {
+            amb.fcmToken = fcmToken;
+        }
+        amb.isOnline = true;
+        await amb.save();
 
         amb.password = undefined;
         res.json({ 
@@ -122,7 +130,7 @@ const loginAmbulance = async (req, res) => {
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

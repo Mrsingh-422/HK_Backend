@@ -14,6 +14,8 @@ const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require(
 const { processCancellationRefund } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
 const { verifyFirebasePhoneToken } = require('../../../utils/firebaseAuthHelper');
+const UserSubscription = require('../../../models/UserSubscription');
+const Appointment = require('../../../models/Appointment');
 
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
@@ -993,7 +995,7 @@ const cancelAmbulanceBooking = async (req, res) => {
         const { reason } = req.body;
         const userId = req.user.id;
 
-        // 🚨 1. Robust Query: Handles both Mongo _id and custom bookingId (HK-BOK-xxx)
+        // 1. Resolve booking safely by Mongo _id OR custom bookingId
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
             $or: [
@@ -1008,7 +1010,6 @@ const cancelAmbulanceBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Ambulance booking not found for this user." });
         }
 
-        // Prevent cancelling already completed or cancelled trips
         if (booking.status === 'Cancelled') {
             return res.status(400).json({ success: false, message: "This booking is already cancelled." });
         }
@@ -1016,7 +1017,7 @@ const cancelAmbulanceBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cannot cancel a completed/delivered ambulance trip." });
         }
 
-        // 🚨 2. Safe Dynamic Cancellation Policy Evaluation
+        // 2. Cancellation Policy Evaluation
         let policyResult = { cancellationFee: 0, refundAmount: 0 };
         try {
             policyResult = await processCancellationRefund(booking, 'Ambulance');
@@ -1028,7 +1029,6 @@ const cancelAmbulanceBooking = async (req, res) => {
         const cancellationFee = Number(policyResult.cancellationFee || 0);
         const refundAmount = Number(policyResult.refundAmount || 0);
 
-        // 🚨 3. Safe Schema Updates
         booking.status = 'Cancelled';
         booking.cancelledBy = 'User';
         booking.cancellationReason = reason || "Cancelled by User";
@@ -1036,12 +1036,10 @@ const cancelAmbulanceBooking = async (req, res) => {
         if (!booking.pricing) booking.pricing = {};
         booking.pricing.cancellationFeeApplied = cancellationFee;
         
-        // Determine Payment Status Safely
         if (booking.paymentStatus === 'Paid') {
             booking.paymentStatus = cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
         }
 
-        // Safe Timeline Push
         if (!booking.trackingTimeline) booking.trackingTimeline = [];
         booking.trackingTimeline.push({ 
             status: 'Cancelled', 
@@ -1049,7 +1047,7 @@ const cancelAmbulanceBooking = async (req, res) => {
             note: reason ? `Cancelled by User. Reason: ${reason}` : "Cancelled by User." 
         });
 
-        // 🚨 4. Release Driver back to Available
+        // 3. Release Ambulance Driver & Send Alert
         if (booking.ambulanceId) {
             await Ambulance.findByIdAndUpdate(booking.ambulanceId, { 
                 $set: { availableForEmergency: true } 
@@ -1064,13 +1062,44 @@ const cancelAmbulanceBooking = async (req, res) => {
                     { bookingId: booking._id.toString(), type: 'booking_cancelled' }
                 );
             } catch (notifErr) {
-                console.warn("Notification send skipped:", notifErr.message);
+                console.warn("Ambulance notification skipped:", notifErr.message);
+            }
+        }
+
+        // 🚨 4. CRITICAL SYNC: Auto-Cancel Linked Hospital Pre-Admission Record!
+        if (booking.bookingId) {
+            const linkedAppointment = await Appointment.findOneAndUpdate(
+                { transactionId: booking.bookingId },
+                { 
+                    $set: { 
+                        status: 'Cancelled-By-User',
+                        'tracking.status': 'Cancelled',
+                        'cancellationDetails.reason': reason || "Ambulance transit cancelled by patient.",
+                        'cancellationDetails.cancelledAt': new Date()
+                    } 
+                },
+                { new: true }
+            );
+
+            // Alert Destination Hospital that incoming patient was cancelled
+            if (linkedAppointment && linkedAppointment.hospitalId) {
+                try {
+                    await notifyAdminsAndVendor(
+                        linkedAppointment.hospitalId,
+                        'hospital',
+                        "Emergency Admission Cancelled",
+                        `Incoming emergency case for Ambulance #${booking.bookingId} was cancelled by user.`,
+                        { appointmentId: linkedAppointment._id.toString(), type: 'admission_cancelled' }
+                    );
+                } catch (hospNotifErr) {
+                    console.warn("Hospital notification skipped:", hospNotifErr.message);
+                }
             }
         }
 
         await booking.save();
 
-        // 🚨 5. Refund subscription trip count if applied
+        // 5. Refund subscription trip count if applied
         try {
             if (booking.subscriptionDetails?.isSubscriptionApplied && booking.pricing?.ambulanceCharge === 0 && booking.serviceType !== 'Accident emergency') {
                 await refundBenefitCount(booking.userId, 'freeAmbulanceTripsCount');
@@ -1082,7 +1111,7 @@ const cancelAmbulanceBooking = async (req, res) => {
         res.json({ 
             success: true, 
             message: cancellationFee > 0 
-                ? `Booking cancelled successfully. Cancellation fee of ₹${cancellationFee} was applied.`
+                ? `Booking cancelled successfully. A cancellation fee of ₹${cancellationFee} was applied.`
                 : "Booking cancelled successfully. No charges applied.",
             data: {
                 cancellationFee,

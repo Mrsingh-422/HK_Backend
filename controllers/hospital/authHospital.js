@@ -1,118 +1,161 @@
 const Hospital = require('../../models/Hospital');
+const Ward = require('../../models/Ward');
+const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const Ward = require('../../models/Ward');
-const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest'); // For handling profile update requests
-const { deleteFile } = require('../../utils/fileHandler');
+const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); // 👈 Firebase Helper
 
-const generateToken = (id, role) => {
-    // Agar development hai toh 100 saal (maano expire hi nahi hoga)
-    // Warna production mein sirf 30 din
+const generateToken = (id, role = 'hospital') => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
-
-    return jwt.sign(
-        { id, role }, 
-        process.env.JWT_SECRET, 
-        { expiresIn: expiry }
-    );
+    return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
+// ==========================================
+// 1. HOSPITAL PRE-CHECK (Check if already registered)
+// Endpoint: POST /api/auth/hospital/check-exists
+// ==========================================
+const checkHospitalExists = async (req, res) => {
+    try {
+        const { phone, email } = req.body;
 
-// --- 1. REGISTER HOSPITAL ---
+        if (!phone && !email) {
+            return res.status(400).json({ success: false, message: "Phone number or Email is required." });
+        }
+
+        const cleanPhone = phone ? phone.trim().replace(/\D/g, "").slice(-10) : null;
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+
+        const query = [];
+        if (cleanPhone) query.push({ phone: cleanPhone });
+        if (normalizedEmail) query.push({ email: normalizedEmail });
+
+        const exists = await Hospital.findOne({ $or: query });
+
+        if (exists) {
+            const isPhoneMatch = exists.phone === cleanPhone;
+            return res.status(200).json({ 
+                success: false, 
+                exists: true, 
+                message: isPhoneMatch 
+                    ? "This mobile number is already registered for a Hospital. Please Login." 
+                    : "This email address is already registered for a Hospital. Please Login."
+            });
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            exists: false, 
+            message: "Phone number and email are available for Hospital registration." 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 2. REGISTER HOSPITAL (With Firebase Phone Verification)
 // Endpoint: POST /api/auth/hospital/register
+// ==========================================
 const registerHospital = async (req, res) => {
     try {
         const {
-            name,
-            email,
-            phone,
-            country,
-            state,
-            city,
-            password,
-            type
+            name, email, phone, countryCode,
+            country, state, city,
+            password, type, idToken
         } = req.body;
 
-        if (!email && !phone) {
+        if (!name || !phone || !password || !type) {
             return res.status(400).json({
-                message: 'Email or Phone required'
+                success: false,
+                message: 'Hospital Name, Phone, Password, and Type are required fields.'
             });
         }
 
-        if (!password) {
-            return res.status(400).json({
-                message: 'Password is required'
-            });
-        }
+        const cleanPhone = phone.trim().replace(/\D/g, "").slice(-10);
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
 
-        if (!type) {
-            return res.status(400).json({
-                message: 'Hospital type is required'
-            });
-        }
+        // Duplicate check
+        const query = [{ phone: cleanPhone }];
+        if (normalizedEmail) query.push({ email: normalizedEmail });
 
-        const query = [];
-
-        if (email) query.push({ email });
-        if (phone) query.push({ phone });
-
-        const exists = await Hospital.findOne({
-            $or: query
-        });
-
+        const exists = await Hospital.findOne({ $or: query });
         if (exists) {
             return res.status(400).json({
-                message: 'Hospital already exists'
+                success: false,
+                message: 'Hospital already exists with this Email or Phone number.'
             });
+        }
+
+        // 🚨 Real Firebase Phone Verification
+        if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
+            if (!idToken) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Firebase idToken is required for phone verification." 
+                });
+            }
+
+            const fullPhoneToVerify = countryCode ? `${countryCode}${cleanPhone}` : cleanPhone;
+            const verification = await verifyFirebasePhoneToken(idToken, fullPhoneToVerify);
+
+            if (!verification.success) {
+                return res.status(400).json({ success: false, message: verification.message });
+            }
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newHospital = await Hospital.create({
             name,
-            email,
-            phone,
-            country,
-            state,
-            city,
+            email: normalizedEmail || undefined,
+            phone: cleanPhone,
+            countryCode: countryCode || '+91',
+            country: country || null,
+            state: state || null,
+            city: city || null,
             type,
             password: hashedPassword,
-            profileStatus: 'Incomplete'
+            isPhoneVerified: true,
+            profileStatus: 'Incomplete' // Pehla step complete, documents upload baaki
         });
 
-        const token = generateToken(newHospital._id);
+        const token = generateToken(newHospital._id, 'hospital');
+        newHospital.token = token;
+        await newHospital.save();
 
         res.status(201).json({
             success: true,
-            message: 'Registered successfully. Please upload documents.',
+            message: 'Hospital registered & Phone verified successfully. Please upload legal documents.',
             token,
+            hospitalId: newHospital._id,
             profileStatus: 'Incomplete'
         });
 
     } catch (error) {
-        res.status(500).json({
-            message: error.message
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 2. LOGIN HOSPITAL (Flow-Based Logic) ---
+// ==========================================
+// 3. LOGIN HOSPITAL (With FCM Push Token Capture)
 // Endpoint: POST /api/auth/hospital/login
+// ==========================================
 const loginHospital = async (req, res) => {
     try {
-        const { email, phone, password } = req.body;
-        let query = email ? { email } : { phone };
+        const { email, phone, password, fcmToken } = req.body;
+        
+        let query = email ? { email: email.toLowerCase().trim() } : { phone: phone ? phone.trim().replace(/\D/g, "").slice(-10) : null };
 
         const hospital = await Hospital.findOne(query).select('+password');
-        if (!hospital || !(await bcrypt.compare(password, hospital.password))) {
-            return res.status(400).json({ message: 'Invalid Credentials' });
+        if (!hospital || !(await bcrypt.compare(String(password), hospital.password))) {
+            return res.status(400).json({ success: false, message: 'Invalid Credentials' });
         }
 
-        // 🚨 SECURITY LOCK: Block login if Hospital account is inactive/disabled by Admin
         if (hospital.isActive === false) {
             return res.status(403).json({ 
                 success: false, 
-                message: "Access Denied: Your hospital account is inactive. Please contact administrator." 
+                message: "Access Denied: Your hospital account is deactivated. Please contact administrator." 
             });
         }
 
@@ -121,23 +164,23 @@ const loginHospital = async (req, res) => {
                 success: true, 
                 fullAccess: false,
                 profileStatus: 'Pending',
-                message: 'Your profile is under review. Please wait for Admin approval.' 
+                message: 'Your hospital profile is under review. Please wait for Admin approval.' 
             });
         }
 
         if (hospital.profileStatus === 'Incomplete') {
-            const token = hospital.token || generateToken(hospital._id);
+            const token = hospital.token || generateToken(hospital._id, 'hospital');
             return res.status(200).json({ 
                 success: true, 
                 fullAccess: false,
                 token,
                 profileStatus: 'Incomplete',
-                message: 'Profile incomplete. Please upload documents to proceed.' 
+                message: 'Profile incomplete. Please upload hospital documents to proceed.' 
             });
         }
 
         if (hospital.profileStatus === 'Rejected') {
-            const token = hospital.token || generateToken(hospital._id);
+            const token = hospital.token || generateToken(hospital._id, 'hospital');
             return res.status(200).json({ 
                 success: true, 
                 fullAccess: false,
@@ -157,10 +200,15 @@ const loginHospital = async (req, res) => {
         }
 
         if (!token) {
-            token = generateToken(hospital._id);
+            token = generateToken(hospital._id, 'hospital');
             hospital.token = token;
-            await hospital.save();
         }
+
+        // 🚨 CRITICAL FIX: Save FCM Token for Emergency Admission alerts!
+        if (fcmToken) {
+            hospital.fcmToken = fcmToken;
+        }
+        await hospital.save();
 
         hospital.password = undefined;
         res.json({ 
@@ -172,7 +220,7 @@ const loginHospital = async (req, res) => {
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -312,4 +360,4 @@ const changeHospitalPassword = async (req, res) => {
     }
 };
 
-module.exports = { registerHospital, loginHospital,toggleHospitalOnlineStatus, updateHospitalProfile, getMyHospitalProfile, getLatestHospitalProfileRequest, changeHospitalPassword };  
+module.exports = { checkHospitalExists, registerHospital, loginHospital,toggleHospitalOnlineStatus, updateHospitalProfile, getMyHospitalProfile, getLatestHospitalProfileRequest, changeHospitalPassword };  

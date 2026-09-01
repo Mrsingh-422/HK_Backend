@@ -1,14 +1,15 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');       // 👈 Add karein
-const axios = require('axios'); // 👈 Add karein
+const fs = require('fs');
+const axios = require('axios');
 const dotenv = require('dotenv');
 const os = require('os');
 const morgan = require('morgan');
 const http = require('http');
 const socketIo = require('socket.io');
-const chatSocketHandler = require('./utils/chatSocket'); // Import our handler
+const rateLimit = require('express-rate-limit');
+const chatSocketHandler = require('./utils/chatSocket');
 
 
 ///////// For bypassing the Windows DNS bug //////////
@@ -157,8 +158,41 @@ app.use(cors({ origin: '*' })); // Allow all origins
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Form Data (Optional)
 
+
+
 // Static folder for uploads
 // app.use('/uploads', express.static('public/uploads'));
+
+
+// =========================================================================
+// 🛡️ 2. RATE LIMITER CONFIGURATIONS (Dev vs Production Aware)
+// =========================================================================
+const isDev = process.env.NODE_ENV === 'development';
+
+// General Auth Limiter: Login & Registration (20 requests per 15 mins)
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 Minutes window
+    max: isDev ? 1000 : 20,    // 20 requests in Prod (1000 in Dev for easy testing)
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        message: "Too many login/registration attempts from this IP. Please try again after 15 minutes."
+    }
+});
+
+// Strict OTP Limiter: SMS / Email OTP & Password Reset (5 requests per 15 mins)
+const otpLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 Minutes
+    max: isDev ? 1000 : 5,     // 5 OTP attempts in Prod
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        message: "Too many OTP requests from this IP. Please wait 15 minutes before requesting again."
+    }
+});
+// ================================ end of rate limiters ============================================
 // =========================================================================
 // 🚀 AUTO-DOWNLOAD & SYNC FROM RENDER TO LOCAL DISK
 // =========================================================================
@@ -402,7 +436,7 @@ app.use('/driver/ambulance/wallet', require('./routes/ambulance/AmbulanceWalletR
 
 //////////////// others Routes or public routes  /////////////////////
 app.use('/api/public', require('./routes/others/locationRoutes'));
-app.use('/api/password', require('./routes/others/forgotPassword'));
+app.use('/api/password', otpLimiter, require('./routes/others/forgotPassword'));
 
 
 ///////////////////////// fireHQ Routes /////////////////////////
