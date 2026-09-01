@@ -990,64 +990,110 @@ const createReferralBooking = async (req, res) => {
 const cancelAmbulanceBooking = async (req, res) => {
     try {
         const { id } = req.params;
-        const { reason } = req.body;
+        // 🚨 CRITICAL FIX: Safe fallback if frontend sends empty body
+        const { reason } = req.body || {}; 
+        const userId = req.user.id;
 
-        const booking = await Booking.findOne({ _id: id, userId: req.user.id });
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(id) : new mongoose.Types.ObjectId() },
+                { bookingId: String(id).trim() }
+            ],
+            userId: new mongoose.Types.ObjectId(userId)
+        };
+
+        const booking = await Booking.findOne(query);
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Ambulance booking not found." });
+            return res.status(404).json({ success: false, message: "Ambulance booking not found for this user." });
         }
 
-        const protectedStates = ['Delivered', 'Cancelled', 'No-Show'];
-        if (protectedStates.includes(booking.status)) {
-            return res.status(400).json({ success: false, message: "Cannot cancel booking in its current state." });
+        // Prevent cancelling already completed or cancelled trips
+        if (booking.status === 'Cancelled') {
+            return res.status(400).json({ success: false, message: "This booking is already cancelled." });
+        }
+        if (booking.status === 'Delivered') {
+            return res.status(400).json({ success: false, message: "Cannot cancel a completed/delivered ambulance trip." });
         }
 
-        const policyResult = await processCancellationRefund(booking, 'Ambulance');
+        // Safe Dynamic Cancellation Policy Evaluation
+        let policyResult = { cancellationFee: 0, refundAmount: 0 };
+        try {
+            policyResult = await processCancellationRefund(booking, 'Ambulance');
+        } catch (policyErr) {
+            const totalPaid = booking.pricing?.total || 0;
+            policyResult = { cancellationFee: 0, refundAmount: totalPaid };
+        }
+
+        const cancellationFee = Number(policyResult.cancellationFee || 0);
+        const refundAmount = Number(policyResult.refundAmount || 0);
 
         booking.status = 'Cancelled';
         booking.cancelledBy = 'User';
         booking.cancellationReason = reason || "Cancelled by User";
-        booking.pricing.cancellationFeeApplied = policyResult.cancellationFee;
-        booking.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        
+        if (!booking.pricing) booking.pricing = {};
+        booking.pricing.cancellationFeeApplied = cancellationFee;
+        
+        if (booking.paymentStatus === 'Paid') {
+            booking.paymentStatus = cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        }
 
+        if (!booking.trackingTimeline) booking.trackingTimeline = [];
         booking.trackingTimeline.push({ 
             status: 'Cancelled', 
             timestamp: new Date(), 
             note: reason ? `Cancelled by User. Reason: ${reason}` : "Cancelled by User." 
         });
 
+        // Release Driver
         if (booking.ambulanceId) {
-            await Ambulance.findByIdAndUpdate(booking.ambulanceId, { availableForEmergency: true });
-            await sendPushNotification(
-                booking.ambulanceId, 
-                'ambulance', 
-                "Ride Cancelled", 
-                "The patient has cancelled this booking request.",
-                { bookingId: booking._id.toString(), type: 'booking_cancelled' }
-            );
+            await Ambulance.findByIdAndUpdate(booking.ambulanceId, { 
+                $set: { availableForEmergency: true } 
+            });
+            
+            try {
+                await sendPushNotification(
+                    booking.ambulanceId, 
+                    'ambulance', 
+                    "Ride Cancelled", 
+                    "The patient has cancelled this ambulance request.",
+                    { bookingId: booking._id.toString(), type: 'booking_cancelled' }
+                );
+            } catch (notifErr) {
+                console.warn("Notification skipped:", notifErr.message);
+            }
         }
 
         await booking.save();
 
-        if (booking.subscriptionDetails?.isSubscriptionApplied && booking.pricing?.ambulanceCharge === 0 && booking.serviceType !== 'Accident emergency') {
-            await refundBenefitCount(booking.userId, 'freeAmbulanceTripsCount');
+        // Refund subscription if applied
+        try {
+            if (booking.subscriptionDetails?.isSubscriptionApplied && booking.pricing?.ambulanceCharge === 0 && booking.serviceType !== 'Accident emergency') {
+                await refundBenefitCount(booking.userId, 'freeAmbulanceTripsCount');
+            }
+        } catch (subErr) {
+            console.warn("Subscription refund error:", subErr.message);
         }
 
         res.json({ 
             success: true, 
-            message: policyResult.cancellationFee > 0 
-                ? `Booking cancelled. Cancellation fee of ₹${policyResult.cancellationFee} applied.`
+            message: cancellationFee > 0 
+                ? `Booking cancelled successfully. A cancellation fee of ₹${cancellationFee} was applied.`
                 : "Booking cancelled successfully. No charges applied.",
             data: {
-                cancellationFee: policyResult.cancellationFee,
-                refundAmount: policyResult.refundAmount,
+                cancellationFee,
+                refundAmount,
                 booking
             }
         });
+
     } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        console.error("Critical Ambulance Cancel Error:", error);
+        res.status(500).json({ success: false, message: "Server Error: " + error.message }); 
     }
 };
+
 
 
 // --- 2. GET USER BOOKING HISTORY (PAGINATED) ---
@@ -1119,16 +1165,50 @@ const getAmbulanceReviewsList = async (req, res) => {
 
 const rateAmbulanceBooking = async (req, res) => {
     try {
-        const { bookingId, rating, comment } = req.body;
+        // 🚨 CRITICAL FIX: Safe fallback if body is missing
+        const { bookingId, rating, comment } = req.body || {}; 
 
-        const booking = await Booking.findOne({ _id: bookingId, userId: req.user.id });
-        if (!booking || booking.status !== 'Delivered') {
-            return res.status(400).json({ success: false, message: "You can only rate completed ambulance trips." });
+        if (!bookingId || !rating) {
+            return res.status(400).json({ success: false, message: "bookingId and rating (1-5) are required in request body." });
         }
 
-        const existingReview = await Review.findOne({ userId: req.user.id, orderId: bookingId });
+        const numRating = Number(rating);
+        if (isNaN(numRating) || numRating < 1 || numRating > 5) {
+            return res.status(400).json({ success: false, message: "Rating must be a number between 1 and 5." });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(bookingId) : new mongoose.Types.ObjectId() },
+                { bookingId: String(bookingId).trim() }
+            ],
+            userId: new mongoose.Types.ObjectId(req.user.id)
+        };
+
+        const booking = await Booking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Ambulance booking not found for this user." });
+        }
+
+        // 🚨 STRICT CHECK: Rating can only happen on 'Delivered' (Completed) trips
+        if (booking.status !== 'Delivered') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `You can only rate trips that are completed ('Delivered'). Current status is '${booking.status}'.` 
+            });
+        }
+
+        const existingReview = await Review.findOne({ 
+            userId: req.user.id, 
+            orderId: booking._id 
+        });
+
         if (existingReview) {
-            return res.status(400).json({ success: false, message: "You have already submitted a review for this trip." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "You have already submitted a review for this completed trip." 
+            });
         }
 
         await Review.create({
@@ -1136,26 +1216,32 @@ const rateAmbulanceBooking = async (req, res) => {
             userName: req.user.name || "Verified User",
             targetId: booking.ambulanceId,
             targetType: 'Ambulance',
-            orderId: bookingId,
-            rating,
-            comment: comment || ""
+            orderId: booking._id,
+            rating: numRating,
+            comment: comment ? String(comment).trim() : ""
         });
 
-        const stats = await Review.aggregate([
-            { $match: { targetId: booking.ambulanceId, targetType: 'Ambulance' } },
-            { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }
-        ]);
+        if (booking.ambulanceId) {
+            const stats = await Review.aggregate([
+                { $match: { targetId: booking.ambulanceId, targetType: 'Ambulance' } },
+                { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }
+            ]);
 
-        if (stats.length > 0) {
-            await Ambulance.findByIdAndUpdate(booking.ambulanceId, {
-                rating: Number(stats[0].averageRating.toFixed(1)),
-                totalReviews: stats[0].totalReviews
-            });
+            if (stats.length > 0) {
+                await Ambulance.findByIdAndUpdate(booking.ambulanceId, {
+                    $set: {
+                        averageRating: Number(stats[0].averageRating.toFixed(1)),
+                        totalReviews: stats[0].totalReviews
+                    }
+                });
+            }
         }
 
-        res.json({ success: true, message: "Thank you for rating our emergency transport!" });
+        res.json({ success: true, message: "Thank you for rating our emergency ambulance service!" });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Ambulance Rating Error:", error);
+        res.status(500).json({ success: false, message: "Server Error: " + error.message });
     }
 };
 

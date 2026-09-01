@@ -113,10 +113,10 @@ const ambulanceBookingSchema = new mongoose.Schema({
 
     // 👇 NEW: Payment Lifecycle
     paymentStatus: { 
-        type: String, 
-        enum: ['Pending', 'Paid', 'Failed', 'Refunded'], 
-        default: 'Pending' 
-    },
+    type: String, 
+    enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], // 👈 'Refund-Initiated' added
+    default: 'Pending' 
+},
     paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'Online' },
 
     // 👇 NEW: Better Cancellation Tracking
