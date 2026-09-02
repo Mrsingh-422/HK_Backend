@@ -2,11 +2,14 @@ const mongoose = require('mongoose');
 
 const cancellationConfigSchema = new mongoose.Schema({
     vendorType: {
-        type: String,
-        enum: ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Doctor', 'Ambulance'],
-        required: true,
-        unique: true
-    },
+    type: String,
+    enum: [
+        'Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Doctor', 'Ambulance',
+        'Ambulance-Medical', 'Ambulance-Referral' // 👈 Specific ambulance policies added
+    ],
+    required: true,
+    unique: true
+},
     chargeType: {
         type: String,
         enum: ['Percentage', 'Rupees'],

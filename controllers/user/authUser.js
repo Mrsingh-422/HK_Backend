@@ -167,44 +167,47 @@ const registerUser = async (req, res) => {
 };
 
 // ==========================================
-// 2. LOGIN USER (Matches Figma Login Screen)
-// endpoint: POST /api/auth/user/login
+// 1. LOGIN USER (With Banned / Inactive Check)
+// Endpoint: POST /api/auth/user/login
+// ==========================================
 const loginUser = async (req, res) => {
     try {
         const { email, phone, countryCode, password } = req.body;
 
         let query = {};
-
         if (email) {
-            query = { email };
-        } else if (phone && countryCode) {
-            query = { phone, countryCode }; // ✅ FIXED
+            query = { email: email.toLowerCase().trim() };
+        } else if (phone) {
+            query = { phone: phone.trim().replace(/\D/g, "").slice(-10) };
         } else {
-            return res.status(400).json({ 
-                message: 'Provide Email or Phone with Country Code' 
-            });
+            return res.status(400).json({ success: false, message: 'Provide Email or Phone number' });
         }
 
         const user = await User.findOne(query).select('+password');
 
-        if (!user || !(await bcrypt.compare(password, user.password))) {
-            return res.status(400).json({ message: 'Invalid Credentials' });
+        if (!user || !(await bcrypt.compare(String(password), user.password))) {
+            return res.status(400).json({ success: false, message: 'Invalid Credentials' });
+        }
+
+        // 🚨 CRITICAL LOCK: Block login if user is Banned or Deactivated
+        if (user.isActive === false || user.isBanned === true) {
+            return res.status(403).json({ 
+                success: false, 
+                isBanned: true,
+                message: user.banReason || "Your account has been suspended due to policy violations. Please contact Support/Admin to unban." 
+            });
         }
 
         let token = null;
-
-        // DEV MODE TOKEN REUSE
         if (process.env.NODE_ENV === 'development' && user.token) {
             try {
                 jwt.verify(user.token, process.env.JWT_SECRET);
                 token = user.token;
-            } catch (err) {
-                token = null;
-            }
+            } catch (err) { token = null; }
         }
 
         if (!token) {
-            token = generateToken(user._id);
+            token = generateToken(user._id, 'user');
             user.token = token;
             await user.save();
         }
@@ -216,16 +219,15 @@ const loginUser = async (req, res) => {
             token,
             user: {
                 ...user._doc,
-                fullPhone: user.countryCode 
-                    ? `${user.countryCode}${user.phone}` 
-                    : null
+                fullPhone: user.countryCode ? `${user.countryCode}${user.phone}` : null
             }
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 3. FORGOT PASSWORD FLOW (Figma Screens)
@@ -1113,6 +1115,48 @@ const getUserDashboard = async (req, res) => {
     }
 };
 
+
+// ==========================================
+// 2. VERIFY PHONE OTP IN PROFILE (Lifts 1-Time Accidental Booking Restriction)
+// Endpoint: POST /api/auth/user/verify-phone-otp
+// ==========================================
+const verifyUserPhoneWithOtp = async (req, res) => {
+    try {
+        const { idToken } = req.body;
+        const userId = req.user.id;
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ success: false, message: "User not found." });
+
+        if (!idToken) {
+            return res.status(400).json({ success: false, message: "Firebase idToken is required." });
+        }
+
+        // Verify with Firebase
+        const verification = await verifyFirebasePhoneToken(idToken, user.phone);
+        if (!verification.success) {
+            return res.status(400).json({ success: false, message: verification.message });
+        }
+
+        user.isPhoneVerified = true;
+        user.isShortRegistered = false; // 👈 1-Time Restriction permanently lifted!
+        await user.save();
+
+        res.json({
+            success: true,
+            message: "Phone number verified successfully! Unlimited emergency booking access unlocked.",
+            data: {
+                id: user._id,
+                name: user.name,
+                phone: user.phone,
+                isPhoneVerified: true
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     checkUserExists,
     registerUser, 
@@ -1149,5 +1193,6 @@ module.exports = {
     getEmergencyList,
     removeAddress,
     removeEmergency,
-    getUserDashboard
+    getUserDashboard,
+    verifyUserPhoneWithOtp
 };

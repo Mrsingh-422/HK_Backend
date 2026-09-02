@@ -3,694 +3,561 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Partner Fleet Operations Portal</title>
-    
+    <title>Health Kangaroo | Complete Ambulance System Blueprint</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome 6 Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Google Font: Plus Jakarta Sans -->
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    
-    <!-- 🗺️ Leaflet.js (100% Free Live Interactive Map) -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <style>
-        body { font-family: 'Plus Jakarta Sans', sans-serif; }
-        .sidebar-item.active { @apply bg-emerald-600 text-white shadow-lg shadow-emerald-900/30; }
-        .sidebar-item { @apply flex items-center gap-3.5 px-4 py-3.5 rounded-2xl text-xs font-bold text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-all; }
-        #liveMap { height: 100%; min-height: 420px; width: 100%; border-radius: 1.5rem; z-index: 10; }
-        .leaflet-container { background-color: #0f172a !important; font-family: inherit; }
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #080c14; color: #f8fafc; }
+        .tab-btn.active { @apply bg-emerald-600 text-white shadow-xl shadow-emerald-900/40 border-emerald-500; }
+        .tab-btn { @apply px-5 py-3 rounded-2xl font-black text-xs transition-all text-slate-400 hover:text-white border border-slate-800 bg-slate-900/80 flex items-center gap-2; }
+        .actor-pill { @apply text-[9px] font-black uppercase px-2.5 py-1 rounded-full border tracking-wider; }
+        .actor-user { @apply bg-blue-500/10 text-blue-400 border-blue-500/30; }
+        .actor-driver { @apply bg-amber-500/10 text-amber-400 border-amber-500/30; }
+        .actor-admin { @apply bg-red-500/10 text-red-400 border-red-500/30; }
+        .actor-hospital { @apply bg-purple-500/10 text-purple-400 border-purple-500/30; }
+        .step-card { @apply bg-slate-900/90 border border-slate-800/80 p-6 rounded-3xl shadow-xl transition-all hover:border-slate-700 relative; }
+        .step-card.highlight { @apply ring-2 ring-emerald-500 border-emerald-500/50; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
     </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-emerald-500 selection:text-white">
+<body class="min-h-screen flex flex-col p-6 sm:p-10 space-y-10 max-w-[1700px] mx-auto">
 
-    <!-- Toast Notification Container -->
-    <div id="toast" class="fixed top-6 right-6 z-[100] transform transition-all duration-300 translate-y-[-150%] opacity-0 bg-slate-900 border border-slate-700 px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 text-xs font-bold">
-        <span id="toastIcon" class="text-base text-emerald-400"><i class="fas fa-check-circle"></i></span>
-        <span id="toastMsg" class="text-slate-200">Action completed successfully.</span>
-    </div>
-
-    <!-- ========================================================================= -->
-    <!-- 🔒 1. DRIVER LOGIN SCREEN (Rendered if not authenticated) -->
-    <!-- ========================================================================= -->
-    <div id="authScreen" class="fixed inset-0 z-50 bg-slate-950 flex items-center justify-center p-4">
-        <div class="w-full max-w-md bg-slate-900/90 border border-slate-800 p-8 sm:p-10 rounded-[2.5rem] shadow-2xl space-y-6 backdrop-blur-xl">
-            <!-- Brand -->
-            <div class="text-center space-y-2">
-                <div class="inline-flex items-center justify-center w-16 h-16 bg-emerald-500/10 text-emerald-400 rounded-3xl text-2xl border border-emerald-500/20 shadow-inner">
-                    <i class="fas fa-truck-medical"></i>
-                </div>
-                <h2 class="text-2xl font-black tracking-tight text-white">Partner Portal</h2>
-                <p class="text-xs text-slate-400 font-medium">Login to start your service & delivery shifts</p>
+    <!-- TOP HEADER -->
+    <header class="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-8">
+        <div class="space-y-1.5">
+            <div class="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest">
+                <i class="fas fa-network-wired"></i> Unified Logistics Architecture (0 to 100)
             </div>
+            <h1 class="text-3xl sm:text-4xl font-black tracking-tight text-white">Ambulance Multi-Portal Engine</h1>
+            <p class="text-xs text-slate-400 font-medium max-w-2xl">Complete end-to-end operational synchronization between <span class="text-blue-400 font-bold">Patient App</span>, <span class="text-amber-400 font-bold">Ambulance Fleet Driver</span>, <span class="text-red-400 font-bold">Admin Control Room</span>, and <span class="text-purple-400 font-bold">Hospital Emergency Desk</span>.</p>
+        </div>
 
-            <!-- Role Selector Tabs -->
-            <div class="space-y-1.5">
-                <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Select Category</label>
-                <div class="grid grid-cols-2 gap-2 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
-                    <button type="button" onclick="setLoginRole('Ambulance')" id="btnRole-Ambulance" class="py-2 px-3 rounded-xl text-xs font-bold bg-emerald-600 text-white transition-all">🚑 Ambulance</button>
-                    <button type="button" onclick="setLoginRole('Lab')" id="btnRole-Lab" class="py-2 px-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition-all">🩸 Lab Phlebo</button>
-                    <button type="button" onclick="setLoginRole('Nurse')" id="btnRole-Nurse" class="py-2 px-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition-all">👩‍⚕️ Home Nurse</button>
-                    <button type="button" onclick="setLoginRole('Pharmacy')" id="btnRole-Pharmacy" class="py-2 px-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition-all">📦 Pharma Drop</button>
-                </div>
-            </div>
+        <!-- Actor Color Legend -->
+        <div class="flex flex-wrap items-center gap-2 bg-slate-900/90 border border-slate-800 p-3 rounded-2xl">
+            <span class="text-[10px] font-bold text-slate-400 uppercase mr-1">Actor Legend:</span>
+            <span class="actor-pill actor-user"><i class="fas fa-user mr-1"></i> Patient (User)</span>
+            <span class="actor-pill actor-driver"><i class="fas fa-truck-medical mr-1"></i> Driver Fleet</span>
+            <span class="actor-pill actor-admin"><i class="fas fa-tower-broadcast mr-1"></i> Admin 108 Command</span>
+            <span class="actor-pill actor-hospital"><i class="fas fa-hospital mr-1"></i> Hospital Trauma Desk</span>
+        </div>
+    </header>
 
-            <!-- Login Form -->
-            <form onsubmit="handleDriverLogin(event)" class="space-y-4">
-                <div>
-                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Registered Phone / Username</label>
-                    <div class="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3.5 mt-1.5 focus-within:border-emerald-500 transition">
-                        <i class="fas fa-user text-slate-500 text-xs"></i>
-                        <input id="loginIdentifier" type="text" placeholder="e.g. 9876543210 or username" required class="w-full bg-transparent text-xs font-bold text-white outline-none">
-                    </div>
-                </div>
+    <!-- FLOW SELECTOR TABS -->
+    <div class="flex flex-wrap items-center justify-between gap-4">
+        <div class="flex flex-wrap gap-2.5">
+            <button onclick="selectFlow('accidental')" id="flowTab-accidental" class="tab-btn active">
+                <i class="fas fa-siren-on text-red-400"></i> 1. Accidental Emergency (100% Free SOS)
+            </button>
+            <button onclick="selectFlow('medical')" id="flowTab-medical" class="tab-btn">
+                <i class="fas fa-ambulance text-blue-400"></i> 2. Scheduled Medical (Routine / Staff Transit)
+            </button>
+            <button onclick="selectFlow('referral')" id="flowTab-referral" class="tab-btn">
+                <i class="fas fa-hospital-user text-purple-400"></i> 3. Inter-Hospital Referral (Hospital A ➔ B)
+            </button>
+            <button onclick="selectFlow('exceptions')" id="flowTab-exceptions" class="tab-btn">
+                <i class="fas fa-triangle-exclamation text-amber-400"></i> 4. Breakdowns & Re-Routing Engine
+            </button>
+        </div>
 
-                <div>
-                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Password</label>
-                    <div class="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3.5 mt-1.5 focus-within:border-emerald-500 transition">
-                        <i class="fas fa-lock text-slate-500 text-xs"></i>
-                        <input id="loginPassword" type="password" placeholder="••••••••" required class="w-full bg-transparent text-xs font-bold text-white outline-none">
-                    </div>
-                </div>
-
-                <button id="loginBtn" type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl shadow-xl shadow-emerald-900/30 transition-all uppercase tracking-wider text-xs flex items-center justify-center gap-2">
-                    <span>Start Duty</span> <i class="fas fa-arrow-right text-xs"></i>
-                </button>
-            </form>
-
-            <p class="text-center text-[10px] text-slate-500 font-semibold">Authorized field personnel only • Health Kangaroo Network</p>
+        <!-- Quick Search Endpoint Bar -->
+        <div class="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5">
+            <i class="fas fa-search text-slate-500 text-xs"></i>
+            <input id="searchEndpointInput" oninput="filterSteps(this.value)" type="text" placeholder="Filter by endpoint / action..." class="bg-transparent text-xs font-bold text-slate-200 outline-none w-56">
         </div>
     </div>
 
-    <!-- ========================================================================= -->
-    <!-- 📊 2. MAIN DRIVER APP WORKSPACE (Rendered upon successful login) -->
-    <!-- ========================================================================= -->
-    <div id="mainApp" class="hidden flex-grow flex h-screen overflow-hidden">
-        
-        <!-- SIDEBAR -->
-        <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col p-5 space-y-6 flex-shrink-0">
-            <!-- Brand -->
-            <div class="flex items-center gap-3 px-2">
-                <div class="w-9 h-9 bg-emerald-600 rounded-xl flex items-center justify-center text-white text-base shadow-lg shadow-emerald-600/30">
-                    <i class="fas fa-shield-heart"></i>
-                </div>
-                <div>
-                    <h1 class="text-sm font-black tracking-tight uppercase leading-none">HK <span class="text-emerald-400">Partner</span></h1>
-                    <span id="sidebarRolePill" class="text-[9px] font-black text-emerald-400 uppercase tracking-wider">Driver Fleet</span>
-                </div>
-            </div>
-
-            <!-- Navigation Links -->
-            <nav class="flex-grow space-y-1.5">
-                <button onclick="switchView('live-trip')" id="nav-live-trip" class="sidebar-item active w-full">
-                    <i class="fas fa-route w-4"></i> <span>Live Job & Map</span>
-                </button>
-                <button onclick="switchView('tasks-queue')" id="nav-tasks-queue" class="sidebar-item w-full">
-                    <i class="fas fa-list-check w-4"></i> <span>Task Queue</span>
-                </button>
-                <button onclick="switchView('trip-history')" id="nav-trip-history" class="sidebar-item w-full">
-                    <i class="fas fa-clock-rotate-left w-4"></i> <span>Trip History</span>
-                </button>
-                <button onclick="switchView('earnings-wallet')" id="nav-earnings-wallet" class="sidebar-item w-full">
-                    <i class="fas fa-wallet w-4"></i> <span>Earnings & Payout</span>
-                </button>
-            </nav>
-
-            <!-- Mini User Card -->
-            <div class="bg-slate-950 border border-slate-800/80 p-3.5 rounded-2xl flex items-center gap-3">
-                <div class="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 font-black text-xs border border-slate-700">
-                    <span id="userAvatarText">D</span>
-                </div>
-                <div class="flex-grow overflow-hidden">
-                    <h4 id="driverDisplayName" class="text-xs font-black text-white truncate">Driver Name</h4>
-                    <p id="driverDisplayPhone" class="text-[10px] text-slate-400 font-mono">+91 0000000000</p>
-                </div>
-                <button onclick="handleLogout()" class="text-slate-500 hover:text-red-400 transition" title="Logout">
-                    <i class="fas fa-power-off text-xs"></i>
-                </button>
-            </div>
-        </aside>
-
-        <!-- MAIN DASHBOARD CONTENT -->
-        <div class="flex-grow flex flex-col overflow-hidden bg-slate-950">
-            
-            <!-- HEADER -->
-            <header class="h-20 bg-slate-900/60 border-b border-slate-800 px-8 flex items-center justify-between backdrop-blur-md flex-shrink-0">
-                <div class="flex items-center gap-4">
-                    <h2 id="viewTitle" class="text-lg font-black text-white">Live Job Telemetry</h2>
-                    <span id="liveStatusBadge" class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
-                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Online & Available
-                    </span>
-                </div>
-
-                <!-- Duty Toggle & Quick GPS Status -->
-                <div class="flex items-center gap-4">
-                    <div class="flex items-center gap-3 bg-slate-950 px-4 py-2 rounded-2xl border border-slate-800">
-                        <span class="text-[10px] font-bold text-slate-400 uppercase">Duty Mode</span>
-                        <button onclick="toggleDutyStatus()" id="dutySwitchBtn" class="relative inline-flex h-6 w-11 items-center rounded-full bg-emerald-600 transition-colors focus:outline-none">
-                            <span id="dutySwitchDot" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-6"></span>
-                        </button>
-                    </div>
-
-                    <button onclick="refreshCurrentView()" class="w-10 h-10 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 rounded-2xl flex items-center justify-center transition" title="Sync Data">
-                        <i class="fas fa-rotate"></i>
-                    </button>
-                </div>
-            </header>
-
-            <!-- WORKSPACE VIEWS CONTAINER -->
-            <main class="flex-grow p-8 overflow-y-auto">
-
-                <!-- ========================================================================= -->
-                <!-- 🗺️ VIEW 1: LIVE TRIP & MAP CONSOLE -->
-                <!-- ========================================================================= -->
-                <div id="view-live-trip" class="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full">
-                    
-                    <!-- Left 6 Columns: Actionable Job Card -->
-                    <div class="lg:col-span-6 space-y-6">
-                        
-                        <!-- Dynamic Active Trip Container -->
-                        <div id="activeTripBox" class="bg-slate-900 border border-slate-800 rounded-[2rem] p-7 shadow-2xl space-y-6">
-                            <!-- Populated dynamically via JS -->
-                        </div>
-
-                        <!-- Mini Stats Grid -->
-                        <div class="grid grid-cols-3 gap-4">
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-3xl text-center space-y-1">
-                                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Today's Trips</p>
-                                <h3 id="statTodayTrips" class="text-2xl font-black text-white">0</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-3xl text-center space-y-1">
-                                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Earnings</p>
-                                <h3 id="statTodayEarnings" class="text-2xl font-black text-emerald-400">₹0</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-3xl text-center space-y-1">
-                                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rating</p>
-                                <h3 id="statRating" class="text-2xl font-black text-amber-400">4.9 ★</h3>
-                            </div>
-                        </div>
-
-                    </div>
-
-                    <!-- Right 6 Columns: Interactive OpenStreetMap & Live Telemetry -->
-                    <div class="lg:col-span-6 flex flex-col space-y-4">
-                        <div class="bg-slate-900 border border-slate-800 p-4 rounded-[2rem] shadow-2xl flex-grow flex flex-col relative overflow-hidden">
-                            <div class="flex items-center justify-between px-2 pb-3">
-                                <span class="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                                    <i class="fas fa-satellite text-emerald-400"></i> GPS Route Navigation
-                                </span>
-                                <span id="gpsCoordsText" class="text-[10px] font-mono text-slate-400">Lat: 30.7046 | Lng: 76.7179</span>
-                            </div>
-                            <div id="liveMap" class="flex-grow"></div>
-                        </div>
-                    </div>
-
-                </div>
-
-                <!-- ========================================================================= -->
-                <!-- 📋 VIEW 2: TASK QUEUE / INCOMING REQUESTS -->
-                <!-- ========================================================================= -->
-                <div id="view-tasks-queue" class="hidden space-y-6 max-w-5xl mx-auto">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-base font-black text-white">Incoming Duty Queue</h3>
-                        <span id="queueCountBadge" class="text-xs font-bold bg-slate-900 text-slate-400 px-3 py-1 rounded-full border border-slate-800">0 Available</span>
-                    </div>
-                    <div id="queueCardsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <!-- Populated via JS -->
-                    </div>
-                </div>
-
-                <!-- ========================================================================= -->
-                <!-- 🕒 VIEW 3: COMPLETED TRIP HISTORY -->
-                <!-- ========================================================================= -->
-                <div id="view-trip-history" class="hidden space-y-6 max-w-5xl mx-auto">
-                    <h3 class="text-base font-black text-white">Completed & Settled Tasks</h3>
-                    <div id="historyTableContainer" class="bg-slate-900 border border-slate-800 rounded-[2rem] overflow-hidden">
-                        <!-- Populated via JS -->
-                    </div>
-                </div>
-
-                <!-- ========================================================================= -->
-                <!-- 💰 VIEW 4: EARNINGS & WALLET WITHDRAWALS -->
-                <!-- ========================================================================= -->
-                <div id="view-earnings-wallet" class="hidden space-y-6 max-w-4xl mx-auto">
-                    <div class="grid grid-cols-3 gap-6">
-                        <div class="bg-slate-900 border border-slate-800 p-6 rounded-[2rem] space-y-2">
-                            <p class="text-xs font-bold text-slate-400 uppercase">Withdrawable (Cleared)</p>
-                            <h2 id="walletWithdrawable" class="text-3xl font-black text-emerald-400">₹0</h2>
-                        </div>
-                        <div class="bg-slate-900 border border-slate-800 p-6 rounded-[2rem] space-y-2">
-                            <p class="text-xs font-bold text-slate-400 uppercase">Pending 7-Day Clearance</p>
-                            <h2 id="walletPending" class="text-3xl font-black text-amber-400">₹0</h2>
-                        </div>
-                        <div class="bg-slate-900 border border-slate-800 p-6 rounded-[2rem] space-y-2">
-                            <p class="text-xs font-bold text-slate-400 uppercase">Total Life Earnings</p>
-                            <h2 id="walletTotal" class="text-3xl font-black text-white">₹0</h2>
-                        </div>
-                    </div>
-
-                    <!-- Withdrawal Action Card -->
-                    <div class="bg-slate-900 border border-slate-800 p-8 rounded-[2rem] space-y-4">
-                        <h4 class="text-sm font-black text-white">Request Direct Bank Payout</h4>
-                        <div class="flex gap-4">
-                            <input id="payoutAmountInput" type="number" placeholder="Enter amount to withdraw" class="flex-grow bg-slate-950 border border-slate-800 rounded-2xl px-5 py-4 text-xs font-bold outline-none text-white focus:border-emerald-500">
-                            <button onclick="submitPayoutRequest()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-8 py-4 rounded-2xl text-xs uppercase tracking-wider transition">Withdraw</button>
-                        </div>
-                    </div>
-                </div>
-
-            </main>
-        </div>
+    <!-- WORKSPACE: STEP-BY-STEP SWIMLANE CONTAINER -->
+    <div id="stepsContainer" class="space-y-6">
+        <!-- Dynamically Populated via JS Engine -->
     </div>
 
-    <!-- ========================================================================= -->
-    <!-- 🔢 GLOBAL HANDSHAKE 6-DIGIT OTP MODAL (Universal for All Drivers) -->
-    <!-- ========================================================================= -->
-    <div id="otpModal" class="hidden fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-        <div class="w-full max-w-sm bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] shadow-2xl space-y-6 text-center">
-            <div class="w-16 h-16 bg-emerald-500/10 text-emerald-400 rounded-3xl flex items-center justify-center text-2xl mx-auto border border-emerald-500/20">
-                <i class="fas fa-shield-halved"></i>
-            </div>
+    <!-- MASTER COMPARISON MATRIX SECTION -->
+    <div class="bg-slate-900/90 border border-slate-800 rounded-[2.5rem] p-8 sm:p-10 space-y-6 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-4">
             <div>
-                <h3 id="otpModalTitle" class="text-lg font-black text-white">Verify Handshake OTP</h3>
-                <p class="text-xs text-slate-400 mt-1">Collect the 6-digit real OTP shown on the customer's phone</p>
+                <h3 class="text-lg font-black text-white">Full Feature & Technical Comparison Matrix</h3>
+                <p class="text-xs text-slate-400 font-medium">Cross-flow behavior comparison across all 3 ambulance booking categories</p>
             </div>
-            
-            <input id="modalOtpInput" type="text" maxlength="6" placeholder="• • • • • •" class="w-full bg-slate-950 border border-slate-700 rounded-2xl p-4 font-mono font-black text-center text-3xl tracking-[0.4em] text-emerald-400 outline-none focus:border-emerald-500">
-            
-            <div class="flex gap-3">
-                <button onclick="closeOtpModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3.5 rounded-2xl text-xs">Cancel</button>
-                <button id="modalOtpConfirmBtn" onclick="confirmModalOtp()" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider">Confirm</button>
-            </div>
+            <span class="text-[10px] bg-slate-800 text-slate-300 font-bold px-3 py-1 rounded-full uppercase">3-In-1 Matrix</span>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-slate-300">
+                <thead>
+                    <tr class="border-b border-slate-800 text-[10px] uppercase font-black tracking-wider text-slate-400">
+                        <th class="pb-3 px-4">Feature / Logic</th>
+                        <th class="pb-3 px-4 text-red-400">🚨 1. Accidental Emergency</th>
+                        <th class="pb-3 px-4 text-blue-400">🚑 2. Medical Ambulance</th>
+                        <th class="pb-3 px-4 text-purple-400">🏥 3. Referral Transfer</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 font-medium">
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Primary Objective</td>
+                        <td class="py-3.5 px-4">Road accidents, sudden highway trauma, disaster rescue</td>
+                        <td class="py-3.5 px-4">Home-to-hospital routine or scheduled non-accidental care</td>
+                        <td class="py-3.5 px-4">Hospital A (Clinic/Civil) to Hospital B (Super-Speciality)</td>
+                    </tr>
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Cost to Patient</td>
+                        <td class="py-3.5 px-4 text-emerald-400 font-bold">100% FREE (₹0)</td>
+                        <td class="py-3.5 px-4">Fixed Base + Extra KM + Doctor/Nurse Fee</td>
+                        <td class="py-3.5 px-4">Base Fare + Inter-Hospital Transfer Distance</td>
+                    </tr>
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Valuation Stored in DB</td>
+                        <td class="py-3.5 px-4 font-mono text-amber-300">originalAmbulanceCharge = ₹2000 (Preserved)</td>
+                        <td class="py-3.5 px-4 font-mono">Calculated in pricing.subtotal</td>
+                        <td class="py-3.5 px-4 font-mono">Calculated in pricing.subtotal</td>
+                    </tr>
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Dispatch Strategy</td>
+                        <td class="py-3.5 px-4 text-red-400 font-bold">Broadcast Pool (Loud Siren to all nearby drivers)</td>
+                        <td class="py-3.5 px-4">Targeted Dispatch to selected ambulance partner</td>
+                        <td class="py-3.5 px-4">Scheduled / Targeted Dispatch to ALS ICU Fleet</td>
+                    </tr>
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Hospital Pre-Admission</td>
+                        <td class="py-3.5 px-4 text-emerald-400 font-bold">Auto-Creates Trauma Appointment in Hospital DB</td>
+                        <td class="py-3.5 px-4">Standard OPD / Emergency Entry</td>
+                        <td class="py-3.5 px-4">Hospital B IPD Admission auto-synchronized</td>
+                    </tr>
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Pickup Handshake</td>
+                        <td class="py-3.5 px-4">6-Digit OTP + Live Scene Photo (Camera Capture)</td>
+                        <td class="py-3.5 px-4">6-Digit OTP on Patient Screen</td>
+                        <td class="py-3.5 px-4">6-Digit OTP + Hospital A Departure Alert Sync</td>
+                    </tr>
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Required Document</td>
+                        <td class="py-3.5 px-4 text-slate-500">None (Zero documentation for rapid response)</td>
+                        <td class="py-3.5 px-4 text-slate-500">None</td>
+                        <td class="py-3.5 px-4 text-purple-300 font-bold">Doctor's Referral Card / Transfer Slip</td>
+                    </tr>
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Breakdown Safety</td>
+                        <td class="py-3.5 px-4">Broadcast pool auto-reopens for 2nd nearest driver</td>
+                        <td class="py-3.5 px-4">Control room 1-Click Manual Force Reassign</td>
+                        <td class="py-3.5 px-4">Control room Force Reassign with Hospital Sync</td>
+                    </tr>
+                    <tr>
+                        <td class="py-3.5 px-4 font-bold text-white">Driver Settlement</td>
+                        <td class="py-3.5 px-4">Platform subsidizes base fare (₹2000) to Driver Wallet</td>
+                        <td class="py-3.5 px-4">Full booking fare credited (7-Day Cleared Engine)</td>
+                        <td class="py-3.5 px-4">Full transfer fare credited (7-Day Cleared Engine)</td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
     </div>
 
     <!-- ========================================================================= -->
-    <!-- ⚙️ SCRIPT ENGINE (Complete Logic & API Connections) -->
+    <!-- 🔍 MODAL: STEP DETAILS & RAW JSON PAYLOAD INSPECTOR -->
     <!-- ========================================================================= -->
+    <div id="inspectorModal" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="w-full max-w-2xl bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+                <div>
+                    <span id="modalActorBadge" class="actor-pill actor-user">Patient (User)</span>
+                    <h3 id="modalTitle" class="text-lg font-black text-white mt-1">Step Inspector</h3>
+                </div>
+                <button onclick="closeInspector()" class="w-8 h-8 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition"><i class="fas fa-xmark"></i></button>
+            </div>
+
+            <div class="space-y-4 text-xs">
+                <div>
+                    <p class="font-black text-slate-400 uppercase tracking-widest text-[10px]">API Endpoint & Method</p>
+                    <p id="modalEndpoint" class="bg-slate-950 p-3 rounded-xl font-mono text-emerald-400 font-bold mt-1 text-xs select-all">POST /endpoint</p>
+                </div>
+
+                <div>
+                    <p class="font-black text-slate-400 uppercase tracking-widest text-[10px]">Description & Business Rules</p>
+                    <p id="modalDesc" class="text-slate-300 mt-1 leading-relaxed"></p>
+                </div>
+
+                <div>
+                    <p class="font-black text-slate-400 uppercase tracking-widest text-[10px]">Sample Request Payload (JSON / Form-Data)</p>
+                    <pre id="modalPayload" class="bg-slate-950 p-4 rounded-xl font-mono text-slate-300 text-[11px] overflow-x-auto mt-1 border border-slate-800/80"></pre>
+                </div>
+
+                <div>
+                    <p class="font-black text-slate-400 uppercase tracking-widest text-[10px]">Sample Response Payload (JSON)</p>
+                    <pre id="modalResponse" class="bg-slate-950 p-4 rounded-xl font-mono text-emerald-400 text-[11px] overflow-x-auto mt-1 border border-slate-800/80"></pre>
+                </div>
+            </div>
+
+            <button onclick="closeInspector()" class="w-full bg-slate-800 hover:bg-slate-700 text-white font-black py-4 rounded-2xl text-xs uppercase tracking-wider transition">Close Inspector</button>
+        </div>
+    </div>
+
+    <!-- JS BLUEPRINT DATA & ENGINE -->
     <script>
-        const baseUrl = "http://localhost:5002";
-
-        // Global State
-        let selectedLoginRole = "Ambulance";
-        let activeDriver = null; // Stored user profile
-        let activeToken = null;  // Stored JWT token
-        let activeJob = null;    // Current in-progress booking
-        let liveMapInstance = null;
-        let driverMapMarker = null;
-        let patientMapMarker = null;
-        let otpModalActionCallback = null;
-
-        // Initialize App State on Window Load
-        window.onload = () => {
-            const savedSession = localStorage.getItem('hk_driver_session');
-            if (savedSession) {
-                try {
-                    const session = JSON.parse(savedSession);
-                    activeDriver = session.driver;
-                    activeToken = session.token;
-                    selectedLoginRole = session.role || "Ambulance";
-                    renderAuthenticatedDashboard();
-                } catch (e) {
-                    localStorage.removeItem('hk_driver_session');
-                    showAuthScreen();
+        const flowsData = {
+            accidental: [
+                {
+                    step: 1,
+                    actor: "user",
+                    title: "1-Tap Accidental SOS Trigger",
+                    endpoint: "POST /user/ambulance/confirm-booking",
+                    desc: "User taps 1-Click SOS on the highway/road accident spot. System sets pricing.total = ₹0, isFreeCase = true, triageLevel = 'Emergency', and captures police/fire checkboxes.",
+                    payload: {
+                        serviceType: "Accident emergency",
+                        triageLevel: "Emergency",
+                        pickupLocation: { address: "Highway NH-21, Kharar Chowk", lat: 30.7046, lng: 76.7179 },
+                        patientDetails: { name: "Accident Victim", emergencyDescription: "Severe head trauma" },
+                        policeRequired: true,
+                        fireRequired: false
+                    },
+                    response: {
+                        success: true,
+                        message: "Booking Request Sent Successfully",
+                        booking: {
+                            bookingId: "HK-BOK-491029",
+                            caseReference: "HK-2026-ACC-8910AB",
+                            status: "Confirmed",
+                            otp: "482910",
+                            isFreeCase: true,
+                            pricing: { originalAmbulanceCharge: 2000, subtotal: 2000, total: 0 }
+                        }
+                    }
+                },
+                {
+                    step: 2,
+                    actor: "admin",
+                    title: "Broadcast Siren & Live Fleet Map Alert",
+                    endpoint: "GET /admin/ambulance/active-emergencies",
+                    desc: "Backend broadcasts real-time FCM Emergency Siren alerts to all nearby online ambulances within 10km radius. Admin Command Center live fleet map displays active red alert.",
+                    payload: "Triggered automatically via Backend Notification Engine",
+                    response: {
+                        success: true,
+                        count: 1,
+                        breakdownAlertsCount: 0,
+                        data: [{ bookingId: "HK-BOK-491029", serviceType: "Accident emergency", status: "Searching" }]
+                    }
+                },
+                {
+                    step: 3,
+                    actor: "driver",
+                    title: "1st Driver Claims SOS (Atomic Lock)",
+                    endpoint: "PATCH /ambulance/booking/accept/:id",
+                    desc: "First driver to tap 'Accept' claims the trip. Driver status locked to 'Busy'. Destination Hospital Trauma Emergency Admission (Appointment) is created automatically in Hospital DB!",
+                    payload: "URL Param: :id = Booking MongoDB ID",
+                    response: {
+                        success: true,
+                        message: "Ride accepted. Pre-arrival registration triggered.",
+                        data: { bookingId: "HK-BOK-491029", status: "Confirmed", ambulanceId: "65f1234..." }
+                    }
+                },
+                {
+                    step: 4,
+                    actor: "hospital",
+                    title: "Hospital Trauma Ward Pre-Admission Sync",
+                    endpoint: "Auto Sync ➔ Model: Appointment",
+                    desc: "Destination Hospital receives instant push notification: 'Trauma patient arriving shortly via Ambulance #HK-BOK-491029'. Pre-admission created in 'Hospital-Pending' state.",
+                    payload: "Auto-synced via Booking Controller",
+                    response: {
+                        bookingType: "Admission",
+                        bedBookingType: "Emergency-Bed",
+                        status: "Hospital-Pending",
+                        transactionId: "HK-BOK-491029"
+                    }
+                },
+                {
+                    step: 5,
+                    actor: "driver",
+                    title: "Spot Arrival, 6-Digit OTP & Scene Photo",
+                    endpoint: "PATCH /ambulance/booking/verify-otp/:id\nPOST /ambulance/booking/incident-photo/:id",
+                    desc: "Driver arrives at accident spot, collects 6-digit OTP from bystander/patient (e.g. 482910) to confirm pickup, and uploads on-spot accident scene photo for clinical & legal records.",
+                    payload: { otp: "482910", incidentPhoto: "File (multipart/form-data)" },
+                    response: {
+                        success: true,
+                        message: "Pickup verified successfully! Start Navigation to Hospital.",
+                        data: { status: "Picked-Up", isOtpVerified: true, driverOnSpotPhoto: "/uploads/ambulances/scene.jpg" }
+                    }
+                },
+                {
+                    step: 6,
+                    actor: "driver",
+                    title: "Hospital Gate Arrival & Handover OTP",
+                    endpoint: "PATCH /ambulance/booking/arrived-dropoff/:id\nPATCH /ambulance/booking/verify-dropoff-otp/:id",
+                    desc: "Ambulance reaches hospital gate (Status: 'Arrived'). Generates 6-digit Handover OTP for hospital staff. Hospital emergency desk verifies handover code.",
+                    payload: { otp: "918234" },
+                    response: {
+                        success: true,
+                        message: "Handover OTP Verified. Please complete Handoff Form.",
+                        data: { status: "En-Route", isDropOffVerified: true }
+                    }
+                },
+                {
+                    step: 7,
+                    actor: "driver",
+                    title: "Finalize Handoff & Platform Subsidy Payout",
+                    endpoint: "PATCH /ambulance/booking/finalize-handoff/:id",
+                    desc: "Driver submits attending doctor name, trauma ward details, and transit time. Patient admitted to IPD ('In-Progress'). Driver released to 'Available'. Platform base fare (₹2000) credited to Driver Wallet.",
+                    payload: { doctorName: "Dr. A. K. Sharma", wardName: "Trauma ICU Bed 02", totalDistance: "8.5 km", travelTime: "18 mins" },
+                    response: {
+                        success: true,
+                        message: "Trip Finalized, Driver Released & Hospital Admission Synced successfully.",
+                        data: { status: "Delivered", handoffDetails: { doctorName: "Dr. A. K. Sharma", completedAt: "2026-09-02" } }
+                    }
                 }
-            } else {
-                showAuthScreen();
-            }
+            ],
+            medical: [
+                {
+                    step: 1,
+                    actor: "user",
+                    title: "Discovery & Clinical Staff Selection",
+                    endpoint: "POST /user/ambulance/nearest-ambulances",
+                    desc: "User searches nearby ambulances. Selects vehicle category (Van, Advance Life Support ALS, ICU Ambulance) and support staff add-ons (Doctor, Nurse).",
+                    payload: { lat: 30.7046, lng: 76.7179, serviceType: "Medical Ambulance", vehicleType: "Advance Life Support" },
+                    response: {
+                        success: true,
+                        count: 4,
+                        data: [{ name: "City ALS Ambulance", distance: "2.4 km", displayPrice: 2500, rating: 4.8 }]
+                    }
+                },
+                {
+                    step: 2,
+                    actor: "user",
+                    title: "Fare Calculation & Care Subscription",
+                    endpoint: "POST /user/ambulance/calculate-fare",
+                    desc: "Calculates total fare: Base Price + Distance Charge + Doctor/Nurse Fee - Coupon. If user has active Health Kangaroo Annual Care Plan, fare is automatically waived to ₹0 (Free Benefit).",
+                    payload: { ambulanceId: "65f123...", staffType: "Doctor,Nurse", couponCode: "HEALTH50" },
+                    response: {
+                        success: true,
+                        isCodAvailable: true,
+                        data: { ambulanceCharge: 2000, supportingStaffCharge: 800, discount: 500, total: 2300 }
+                    }
+                },
+                {
+                    step: 3,
+                    actor: "user",
+                    title: "Confirm Booking & Payment (Online / COD)",
+                    endpoint: "POST /user/ambulance/confirm-booking",
+                    desc: "Booking confirmed. If Online: Razorpay Order created. If COD: Targeted request sent directly to chosen driver partner. 6-Digit Pickup OTP generated.",
+                    payload: { ambulanceId: "65f123...", serviceType: "Medical Ambulance", paymentMethod: "COD", pickupLocation: { address: "Phase 7 Mohali" } },
+                    response: {
+                        success: true,
+                        booking: { bookingId: "HK-BOK-89210", status: "Confirmed", otp: "719203", pricing: { total: 2300 } }
+                    }
+                },
+                {
+                    step: 4,
+                    actor: "driver",
+                    title: "Doorstep Arrival & 6-Digit OTP Pickup",
+                    endpoint: "PATCH /ambulance/booking/verify-otp/:id",
+                    desc: "Driver navigates to patient's home. Patient provides 6-digit OTP displayed on their tracking screen. Driver verifies OTP and starts medical transit.",
+                    payload: { otp: "719203" },
+                    response: {
+                        success: true,
+                        message: "Pickup verified successfully! Start Navigation to Hospital.",
+                        data: { status: "Picked-Up", isOtpVerified: true }
+                    }
+                },
+                {
+                    step: 5,
+                    actor: "driver",
+                    title: "Destination Drop & Wallet Settlement",
+                    endpoint: "PATCH /ambulance/booking/finalize-handoff/:id",
+                    desc: "Patient safely dropped at hospital/home. If COD, payment is auto-marked 'Paid'. Full booking fare credited to Driver's 7-Day Cleared Wallet Engine.",
+                    payload: { doctorName: "OPD Desk", totalDistance: "6.2 km", travelTime: "14 mins" },
+                    response: {
+                        success: true,
+                        message: "Trip Finalized, Driver Released & Hospital Admission Synced successfully.",
+                        data: { status: "Delivered", paymentStatus: "Paid" }
+                    }
+                }
+            ],
+            referral: [
+                {
+                    step: 1,
+                    actor: "user",
+                    title: "Referral Booking & Doctor Card Upload",
+                    endpoint: "POST /user/ambulance/confirm-booking",
+                    desc: "Patient or Hospital A creates transfer booking. Specifies Origin Hospital A (pickupHospitalId) and Destination Hospital B (hospitalId). Uploads Doctor Referral Slip/Card.",
+                    payload: { serviceType: "Referral Ambulance", pickupHospitalId: "65e100...", hospitalId: "65e200...", referralCard: "File (multipart)" },
+                    response: {
+                        success: true,
+                        booking: { bookingId: "HK-REF-1092", serviceType: "Referral Ambulance", status: "Confirmed", otp: "582104" }
+                    }
+                },
+                {
+                    step: 2,
+                    actor: "driver",
+                    title: "Hospital A Gate Arrival & Departure Alert",
+                    endpoint: "PATCH /ambulance/booking/verify-otp/:id",
+                    desc: "ALS ICU Ambulance arrives at Hospital A gate. Doctor hands over patient. 6-Digit OTP verified. Backend automatically sends push alert to Hospital A: 'Patient Departed'.",
+                    payload: { otp: "582104" },
+                    response: {
+                        success: true,
+                        message: "Pickup verified successfully! Start Navigation to Hospital.",
+                        data: { status: "Picked-Up" }
+                    }
+                },
+                {
+                    step: 3,
+                    actor: "driver",
+                    title: "High-Speed ICU Highway Transit",
+                    endpoint: "PATCH /driver/ambulance/update-location",
+                    desc: "Driver streams live GPS telemetry with live vitals and ventilator care active. Destination Hospital B tracks live ETA for incoming IPD transfer.",
+                    payload: { lat: 30.7100, lng: 76.7200, appointmentId: "65f123..." },
+                    response: { success: true, message: "Real-time location synced with System & User" }
+                },
+                {
+                    step: 4,
+                    actor: "hospital",
+                    title: "Hospital B Arrival & IPD Admission Handoff",
+                    endpoint: "PATCH /ambulance/booking/verify-dropoff-otp/:id\nPATCH /ambulance/booking/finalize-handoff/:id",
+                    desc: "Ambulance reaches Hospital B. Hospital B staff verifies Handover OTP. Handoff details submitted. Hospital B IPD Admission is activated ('In-Progress').",
+                    payload: { doctorName: "Dr. Vikram Seth", wardName: "Specialty Neuro ICU", totalDistance: "42.0 km", travelTime: "45 mins" },
+                    response: {
+                        success: true,
+                        message: "Trip Finalized, Driver Released & Hospital Admission Synced successfully.",
+                        data: { status: "Delivered" }
+                    }
+                }
+            ],
+            exceptions: [
+                {
+                    step: 1,
+                    actor: "driver",
+                    title: "Mid-Trip Ambulance Breakdown SOS",
+                    endpoint: "POST /ambulance/booking/sos/:id",
+                    desc: "Ambulance breaks down or vehicle fails mid-trip. Driver triggers SOS. Broken ambulance is marked 'Offline'. Broadcast pool auto-reopens ('Searching') for nearby 2nd ambulances!",
+                    payload: { sosType: "Vehicle Breakdown", lat: 30.7046, lng: 76.7179 },
+                    response: {
+                        success: true,
+                        message: "Vehicle Breakdown logged. Ride reopened in broadcast pool and Control Room alerted.",
+                        data: { status: "Searching", ambulanceId: null }
+                    }
+                },
+                {
+                    step: 2,
+                    actor: "admin",
+                    title: "Admin 1-Click Force Reassignment Override",
+                    endpoint: "PATCH /admin/ambulance/reassign-booking/:bookingId",
+                    desc: "Admin Command Center views breakdown alert on Live Fleet Map and force-reassigns the patient to the next nearest driver with fresh 6-digit OTP & Hospital sync!",
+                    payload: { newAmbulanceId: "65f999...", reason: "Previous vehicle breakdown near Phase 7" },
+                    response: {
+                        success: true,
+                        message: "Successfully reassigned booking #HK-BOK-491029 to Gurpreet Singh.",
+                        data: { status: "Confirmed", ambulanceId: "65f999...", otp: "829103" }
+                    }
+                },
+                {
+                    step: 3,
+                    actor: "user",
+                    title: "Late Cancellation & Wallet Compensation Sync",
+                    endpoint: "PATCH /user/ambulance/cancel/:id",
+                    desc: "User cancels ride after driver has already departed. Policy engine deducts cancellation fee (e.g. ₹200), auto-cancels Hospital Pre-Admission, and credits ₹200 compensation directly to Driver's Wallet!",
+                    payload: { reason: "Arranged private car" },
+                    response: {
+                        success: true,
+                        message: "Booking cancelled successfully. Cancellation fee of ₹200 was applied.",
+                        data: { cancellationFee: 200, refundAmount: 1800 }
+                    }
+                }
+            ]
         };
 
-        function showToast(msg, isError = false) {
-            const toast = document.getElementById('toast');
-            const icon = document.getElementById('toastIcon');
-            const msgBox = document.getElementById('toastMsg');
-            
-            icon.innerHTML = isError ? `<i class="fas fa-circle-exclamation text-red-400"></i>` : `<i class="fas fa-circle-check text-emerald-400"></i>`;
-            msgBox.innerText = msg;
-            
-            toast.className = `fixed top-6 right-6 z-[100] transform transition-all duration-300 translate-y-0 opacity-100 bg-slate-900 border ${isError ? 'border-red-500/50' : 'border-emerald-500/50'} px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 text-xs font-bold`;
-            setTimeout(() => {
-                toast.classList.add('translate-y-[-150%]', 'opacity-0');
-            }, 3500);
-        }
+        let currentActiveFlow = 'accidental';
 
-        function setLoginRole(role) {
-            selectedLoginRole = role;
-            ['Ambulance', 'Lab', 'Nurse', 'Pharmacy'].forEach(r => {
-                const btn = document.getElementById(`btnRole-${r}`);
-                if (r === role) {
-                    btn.className = "py-2 px-3 rounded-xl text-xs font-bold bg-emerald-600 text-white transition-all";
-                } else {
-                    btn.className = "py-2 px-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition-all";
-                }
+        function selectFlow(flowKey) {
+            currentActiveFlow = flowKey;
+            ['accidental', 'medical', 'referral', 'exceptions'].forEach(k => {
+                const btn = document.getElementById(`flowTab-${k}`);
+                if (k === flowKey) btn.classList.add('active');
+                else btn.classList.remove('active');
             });
+            renderFlowSteps(flowsData[flowKey]);
         }
 
-        // ==========================================
-        // 🔑 1. AUTHENTICATION & LOGIN HANDLER
-        // ==========================================
-        async function handleDriverLogin(e) {
-            e.preventDefault();
-            const identifier = document.getElementById('loginIdentifier').value.trim();
-            const password = document.getElementById('loginPassword').value;
-            const btn = document.getElementById('loginBtn');
+        function renderFlowSteps(stepsList) {
+            const container = document.getElementById('stepsContainer');
+            container.innerHTML = stepsList.map((s, idx) => {
+                const actorClass = `actor-${s.actor}`;
+                const actorName = s.actor === 'user' ? 'Patient (User)' : (s.actor === 'driver' ? 'Driver Fleet' : (s.actor === 'admin' ? 'Admin 108 Command' : 'Hospital Desk'));
+                const icon = s.actor === 'user' ? 'fa-user' : (s.actor === 'driver' ? 'fa-truck-medical' : (s.actor === 'admin' ? 'fa-tower-broadcast' : 'fa-hospital'));
 
-            btn.disabled = true;
-            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Authenticating...`;
-
-            try {
-                let endpoint = "";
-                let bodyPayload = {};
-
-                if (selectedLoginRole === 'Ambulance') {
-                    endpoint = `${baseUrl}/api/auth/ambulance/login`;
-                    bodyPayload = { phone: identifier, password };
-                } else {
-                    endpoint = `${baseUrl}/provider/driver/login`;
-                    bodyPayload = { identifier, password };
-                }
-
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(bodyPayload)
-                });
-
-                const data = await res.json();
-
-                if (!res.ok || !data.success) {
-                    throw new Error(data.message || "Invalid driver credentials");
-                }
-
-                activeToken = data.token;
-                activeDriver = data.data;
-
-                // Save session in local storage
-                localStorage.setItem('hk_driver_session', JSON.stringify({
-                    driver: activeDriver,
-                    token: activeToken,
-                    role: selectedLoginRole
-                }));
-
-                showToast(`Welcome back, ${activeDriver.name}!`);
-                renderAuthenticatedDashboard();
-
-            } catch (err) {
-                showToast(err.message, true);
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = `<span>Start Duty</span> <i class="fas fa-arrow-right text-xs"></i>`;
-            }
-        }
-
-        function handleLogout() {
-            localStorage.removeItem('hk_driver_session');
-            activeDriver = null;
-            activeToken = null;
-            location.reload();
-        }
-
-        function showAuthScreen() {
-            document.getElementById('authScreen').classList.remove('hidden');
-            document.getElementById('mainApp').classList.add('hidden');
-        }
-
-        function renderAuthenticatedDashboard() {
-            document.getElementById('authScreen').classList.add('hidden');
-            document.getElementById('mainApp').classList.remove('hidden');
-
-            // Populate Sidebar info
-            document.getElementById('driverDisplayName').innerText = activeDriver.name || "Driver Partner";
-            document.getElementById('driverDisplayPhone').innerText = activeDriver.phone || "+91 9876543210";
-            document.getElementById('userAvatarText').innerText = (activeDriver.name || "D").charAt(0).toUpperCase();
-            document.getElementById('sidebarRolePill').innerText = `${selectedLoginRole} Partner`;
-
-            initLeafletMap();
-            loadActiveJobAndStats();
-        }
-
-        // ==========================================
-        // 🗺️ 2. LEAFLET INTERACTIVE LIVE MAP
-        // ==========================================
-        function initLeafletMap() {
-            if (liveMapInstance) return;
-
-            // Default centered on Mohali/Chandigarh or driver coordinates
-            const defaultLat = activeDriver?.location?.lat || 30.7046;
-            const defaultLng = activeDriver?.location?.lng || 76.7179;
-
-            liveMapInstance = L.map('liveMap', {
-                zoomControl: false,
-                attributionControl: false
-            }).setView([defaultLat, defaultLng], 14);
-
-            // Dark Matter Free Tiles
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-                maxZoom: 19
-            }).addTo(liveMapInstance);
-
-            // Add Custom Vehicle Marker
-            const vehicleIcon = L.divIcon({
-                className: 'custom-vehicle-icon',
-                html: `<div style="background-color: #059669; color: white; width: 36px; height: 36px; border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 15px rgba(5,150,105,0.6); font-size: 16px;"><i class="fas fa-location-arrow"></i></div>`,
-                iconSize: [36, 36]
-            });
-
-            driverMapMarker = L.marker([defaultLat, defaultLng], { icon: vehicleIcon }).addTo(liveMapInstance);
-        }
-
-        function updateMapLocation(lat, lng, label = "Current Location") {
-            if (!liveMapInstance || !driverMapMarker) return;
-            driverMapMarker.setLatLng([lat, lng]);
-            liveMapInstance.panTo([lat, lng]);
-            document.getElementById('gpsCoordsText').innerText = `Lat: ${lat.toFixed(4)} | Lng: ${lng.toFixed(4)}`;
-        }
-
-        // ==========================================
-        // 🔄 3. LOAD ACTIVE JOB, TELEMETRY & STATS
-        // ==========================================
-        async function loadActiveJobAndStats() {
-            const card = document.getElementById('activeTripBox');
-            card.innerHTML = `<div class="text-center py-12 text-slate-500 font-bold text-xs"><i class="fas fa-spinner fa-spin mr-2"></i> Syncing active job with server...</div>`;
-
-            try {
-                let jobEndpoint = "";
-                if (selectedLoginRole === 'Ambulance') jobEndpoint = `${baseUrl}/ambulance/booking/active-trip`;
-                else if (selectedLoginRole === 'Lab') jobEndpoint = `${baseUrl}/driver/lab/orders/list?tab=Active`;
-                else if (selectedLoginRole === 'Nurse') jobEndpoint = `${baseUrl}/driver/nurse/orders/list?statusFilter=Active`;
-                else if (selectedLoginRole === 'Pharmacy') jobEndpoint = `${baseUrl}/driver/pharmacy/orders/list`;
-
-                const res = await fetch(jobEndpoint, {
-                    headers: { 'Authorization': `Bearer ${activeToken}` }
-                });
-
-                const json = await res.json();
-                
-                // Parse Active Job Document
-                let current = null;
-                if (selectedLoginRole === 'Ambulance') {
-                    current = json.data;
-                } else if (json.data && Array.isArray(json.data) && json.data.length > 0) {
-                    current = json.data[0];
-                }
-
-                activeJob = current;
-                renderActiveJobCard(current);
-
-            } catch (err) {
-                card.innerHTML = `<div class="text-center py-12 text-slate-500 font-bold text-xs">No active tasks assigned right now.</div>`;
-            }
-        }
-
-        function renderActiveJobCard(job) {
-            const card = document.getElementById('activeTripBox');
-
-            if (!job) {
-                card.innerHTML = `
-                    <div class="text-center py-12 space-y-3">
-                        <div class="w-16 h-16 bg-slate-950 text-slate-600 rounded-full flex items-center justify-center text-2xl mx-auto border border-slate-800">
-                            <i class="fas fa-circle-check"></i>
+                return `
+                    <div class="step-card" id="card-step-${idx}">
+                        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                            <div class="flex items-center gap-3">
+                                <span class="w-7 h-7 rounded-xl bg-slate-800 text-slate-300 flex items-center justify-center font-black text-xs border border-slate-700">
+                                    ${s.step}
+                                </span>
+                                <h4 class="text-sm font-black text-white">${s.title}</h4>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="actor-pill ${actorClass}"><i class="fas ${icon} mr-1"></i> ${actorName}</span>
+                                <button onclick="openInspector(${idx})" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1 rounded-xl transition flex items-center gap-1.5">
+                                    <i class="fas fa-code"></i> Inspect Payload
+                                </button>
+                            </div>
                         </div>
-                        <h4 class="text-sm font-black text-white">All Caught Up!</h4>
-                        <p class="text-xs text-slate-400">You are online and available. New task requests will pop up automatically.</p>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 pt-3 text-xs items-center">
+                            <div class="lg:col-span-4 bg-slate-950 p-3 rounded-2xl border border-slate-800/80 font-mono text-[11px] text-emerald-400 font-bold break-all">
+                                <span class="text-slate-500 font-sans block text-[9px] uppercase tracking-wider mb-0.5">API Route</span>
+                                ${s.endpoint.replace(/\n/g, '<br>')}
+                            </div>
+                            <div class="lg:col-span-8 text-slate-300 leading-relaxed">
+                                <span class="text-slate-500 block text-[9px] uppercase tracking-wider mb-0.5 font-bold">Execution Details</span>
+                                ${s.desc}
+                            </div>
+                        </div>
                     </div>
                 `;
-                return;
-            }
-
-            const patientName = job.patientDetails?.name || job.userId?.name || job.userName || "Customer";
-            const patientPhone = job.patientDetails?.phone || job.userId?.phone || "+91 9876543210";
-            const address = job.pickupLocation?.address || job.address?.houseNo || "Doorstep Address Assigned";
-            const status = job.status || job.deliveryStatus || "Confirmed";
-            const bookingRef = job.bookingId || job.orderId || job._id;
-
-            card.innerHTML = `
-                <div class="flex items-center justify-between border-b border-slate-800 pb-4">
-                    <div>
-                        <span class="text-[10px] font-black uppercase tracking-wider text-emerald-400">Active Task #${bookingRef}</span>
-                        <h3 class="text-lg font-black text-white mt-0.5">${patientName}</h3>
-                    </div>
-                    <span class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-black uppercase px-3.5 py-1.5 rounded-full">
-                        ${status}
-                    </span>
-                </div>
-
-                <div class="space-y-3 text-xs">
-                    <div class="flex items-start gap-3 text-slate-300">
-                        <i class="fas fa-location-dot text-emerald-400 text-sm mt-0.5"></i>
-                        <div>
-                            <p class="font-bold text-white">Destination / Pickup Spot</p>
-                            <p class="text-slate-400 font-medium">${address}</p>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-3 text-slate-300">
-                        <i class="fas fa-phone-alt text-emerald-400 text-sm"></i>
-                        <span class="font-bold text-white font-mono">${patientPhone}</span>
-                    </div>
-                </div>
-
-                <!-- Dynamic Action Step Flow -->
-                <div class="pt-3 border-t border-slate-800 flex gap-3">
-                    ${renderJobActionButtons(job)}
-                </div>
-            `;
+            }).join('');
         }
 
-        function renderJobActionButtons(job) {
-            const status = job.status || job.deliveryStatus;
+        function openInspector(stepIdx) {
+            const step = flowsData[currentActiveFlow][stepIdx];
+            const modal = document.getElementById('inspectorModal');
 
-            if (selectedLoginRole === 'Ambulance') {
-                if (status === 'Confirmed') {
-                    return `<button onclick="handleArriveAmbulance('${job._id}')" class="w-full bg-amber-600 hover:bg-amber-500 text-white font-black py-4 rounded-2xl text-xs uppercase tracking-wider transition"><i class="fas fa-location-dot mr-2"></i> Mark Arrived at Spot</button>`;
-                } else if (status === 'Arrived') {
-                    return `<button onclick="openHandshakeOtpModal('ambulance-pickup', '${job._id}')" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl text-xs uppercase tracking-wider transition"><i class="fas fa-key mr-2"></i> Verify Patient Pickup (6-Digit OTP)</button>`;
-                } else if (status === 'Picked-Up') {
-                    return `<button onclick="handleArriveHospitalGate('${job._id}')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl text-xs uppercase tracking-wider transition"><i class="fas fa-hospital mr-2"></i> Reached Destination Hospital</button>`;
+            document.getElementById('modalTitle').innerText = `Step ${step.step}: ${step.title}`;
+            document.getElementById('modalEndpoint').innerText = step.endpoint;
+            document.getElementById('modalDesc').innerText = step.desc;
+
+            const actorClass = `actor-${step.actor}`;
+            const actorName = step.actor === 'user' ? 'Patient (User)' : (step.actor === 'driver' ? 'Driver Fleet' : (step.actor === 'admin' ? 'Admin 108 Command' : 'Hospital Desk'));
+            const badge = document.getElementById('modalActorBadge');
+            badge.className = `actor-pill ${actorClass}`;
+            badge.innerText = actorName;
+
+            document.getElementById('modalPayload').innerText = typeof step.payload === 'object' ? JSON.stringify(step.payload, null, 2) : step.payload;
+            document.getElementById('modalResponse').innerText = JSON.stringify(step.response, null, 2);
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeInspector() {
+            document.getElementById('inspectorModal').classList.add('hidden');
+        }
+
+        function filterSteps(searchKeyword) {
+            const clean = searchKeyword.toLowerCase().trim();
+            const currentSteps = flowsData[currentActiveFlow];
+
+            currentSteps.forEach((s, idx) => {
+                const card = document.getElementById(`card-step-${idx}`);
+                const matches = s.title.toLowerCase().includes(clean) || s.endpoint.toLowerCase().includes(clean) || s.desc.toLowerCase().includes(clean);
+                if (card) {
+                    card.classList.toggle('hidden', !matches);
                 }
-            } 
-            else if (selectedLoginRole === 'Pharmacy') {
-                if (status === 'Placed' || status === 'Packed') {
-                    return `<button onclick="startPharmaTrip('${job._id}')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl text-xs uppercase tracking-wider transition"><i class="fas fa-truck-fast mr-2"></i> Start Delivery Route</button>`;
-                } else if (status === 'Shipped' || status === 'OutForDelivery') {
-                    return `<button onclick="arrivePharmaDoorstep('${job._id}')" class="w-full bg-amber-600 hover:bg-amber-500 text-white font-black py-4 rounded-2xl text-xs uppercase tracking-wider transition"><i class="fas fa-bell mr-2"></i> Arrived at Doorstep</button>`;
-                } else if (status === 'ReachedLocation') {
-                    return `<button onclick="openHandshakeOtpModal('pharmacy-delivery', '${job._id}')" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl text-xs uppercase tracking-wider transition"><i class="fas fa-signature mr-2"></i> Verify OTP & Handover Parcel</button>`;
-                }
-            }
-
-            return `<button onclick="loadActiveJobAndStats()" class="w-full bg-slate-800 text-slate-300 font-bold py-3.5 rounded-2xl text-xs"><i class="fas fa-sync mr-2"></i> Refresh Status</button>`;
-        }
-
-        // ==========================================
-        // 🔑 4. UNIVERSAL 6-DIGIT OTP MODAL HANDSHAKE
-        // ==========================================
-        function openHandshakeOtpModal(actionType, recordId) {
-            document.getElementById('otpModal').classList.remove('hidden');
-            document.getElementById('modalOtpInput').value = "";
-            otpModalActionCallback = { actionType, recordId };
-        }
-
-        function closeOtpModal() {
-            document.getElementById('otpModal').classList.add('hidden');
-            otpModalActionCallback = null;
-        }
-
-        async function confirmModalOtp() {
-            const otp = document.getElementById('modalOtpInput').value.trim();
-            if (!otp || otp.length !== 6) {
-                showToast("Please enter a valid 6-digit OTP.", true);
-                return;
-            }
-
-            const { actionType, recordId } = otpModalActionCallback;
-
-            try {
-                let endpoint = "";
-                let method = "POST";
-                let payload = {};
-
-                if (actionType === 'ambulance-pickup') {
-                    endpoint = `${baseUrl}/ambulance/booking/verify-otp/${recordId}`;
-                    method = "PATCH";
-                    payload = { otp };
-                } else if (actionType === 'pharmacy-delivery') {
-                    endpoint = `${baseUrl}/driver/pharmacy/orders/verify-otp`;
-                    method = "POST";
-                    payload = { orderId: recordId, otp };
-                }
-
-                const res = await fetch(endpoint, {
-                    method,
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${activeToken}` 
-                    },
-                    body: JSON.stringify(payload)
-                });
-
-                const data = await res.json();
-                if (!res.ok || !data.success) {
-                    throw new Error(data.message || "OTP verification failed");
-                }
-
-                showToast("Handshake OTP Verified Successfully!");
-                closeOtpModal();
-                loadActiveJobAndStats();
-
-            } catch (err) {
-                showToast(err.message, true);
-            }
-        }
-
-        // ==========================================
-        // 🚀 5. SPECIFIC STEP ACTIONS
-        // ==========================================
-        async function handleArriveAmbulance(id) {
-            showToast("Arrived at spot. Alerting patient with OTP...");
-            await fetch(`${baseUrl}/ambulance/booking/update-trip/${id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${activeToken}` },
-                body: JSON.stringify({ status: "Arrived" })
             });
-            loadActiveJobAndStats();
         }
 
-        async function startPharmaTrip(id) {
-            await fetch(`${baseUrl}/driver/pharmacy/orders/start/${id}`, {
-                method: 'PATCH',
-                headers: { 'Authorization': `Bearer ${activeToken}` }
-            });
-            showToast("Out for delivery route started!");
-            loadActiveJobAndStats();
-        }
-
-        async function arrivePharmaDoorstep(id) {
-            const res = await fetch(`${baseUrl}/driver/pharmacy/orders/arrive/${id}`, {
-                method: 'PATCH',
-                headers: { 'Authorization': `Bearer ${activeToken}` }
-            });
-            const data = await res.json();
-            showToast("Arrived at doorstep! SMS OTP sent to customer.");
-            loadActiveJobAndStats();
-        }
-
-        // Navigation view switch
-        function switchView(viewName) {
-            ['live-trip', 'tasks-queue', 'trip-history', 'earnings-wallet'].forEach(v => {
-                document.getElementById(`view-${v}`).classList.toggle('hidden', v !== viewName);
-                document.getElementById(`nav-${v}`).classList.toggle('active', v === viewName);
-            });
-            document.getElementById('viewTitle').innerText = viewName.replace('-', ' ').toUpperCase();
-        }
-
-        function refreshCurrentView() {
-            loadActiveJobAndStats();
-            showToast("Dashboard synchronized with live fleet server.");
-        }
+        // Initialize on load with Accidental Emergency Flow
+        window.onload = () => {
+            selectFlow('accidental');
+        };
     </script>
 </body>
 </html>

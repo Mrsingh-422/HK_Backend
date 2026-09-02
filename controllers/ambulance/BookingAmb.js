@@ -489,54 +489,62 @@ const verifyPickupOtp = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
+        // =========================================================================
+        // 🚨 1. ACCIDENTAL EMERGENCY CASE: NO OTP REQUIRED FROM VICTIM/SPOT!
+        // =========================================================================
+        if (booking.serviceType === 'Accident emergency') {
+            booking.isOtpVerified = true;
+            booking.status = 'Picked-Up';
+            booking.otp = null;
+            
+            booking.trackingTimeline.push({ 
+                status: 'Patient pickup confirmed', 
+                timestamp: new Date(),
+                note: "Emergency accident patient onboarded directly by driver without OTP."
+            });
+            
+            await booking.save();
+
+            return res.json({ 
+                success: true, 
+                message: "Accident victim onboarded successfully without OTP. Start Navigation to Hospital!", 
+                data: booking 
+            });
+        }
+
+        // =========================================================================
+        // 🚨 2. MEDICAL & REFERRAL AMBULANCE: STRICT 6-DIGIT OTP VERIFICATION
+        // =========================================================================
         const patientPhone = booking.patientDetails?.phone || booking.userId?.phone;
         const cleanPatientPhone = patientPhone ? String(patientPhone).replace(/\D/g, "").slice(-10) : "";
 
-        // 1. Firebase Phone Token Verification
         if (idToken && idToken.trim() !== "") {
             const verification = await verifyFirebasePhoneToken(idToken, cleanPatientPhone);
             if (!verification.success) {
                 return res.status(400).json({ success: false, message: verification.message });
             }
-        } 
-        // 2. 6-Digit OTP Verification
-        else if (otp) {
+        } else if (otp) {
             const savedOtp = String(booking.otp || "").trim();
             const incomingOtp = String(otp).trim();
 
             if (!savedOtp || savedOtp !== incomingOtp) {
-                return res.status(400).json({ success: false, message: "Invalid Pickup OTP. Please check with patient." });
+                return res.status(400).json({ success: false, message: "Invalid Pickup OTP. Please collect valid 6-digit OTP from patient." });
             }
         } else {
-            return res.status(400).json({ success: false, message: "Pickup OTP or Firebase idToken is required." });
+            return res.status(400).json({ success: false, message: "6-Digit Pickup OTP is required for Medical/Referral transit." });
         }
 
         booking.isOtpVerified = true;
         booking.status = 'Picked-Up';
-        booking.otp = null; // Invalidate OTP after use
+        booking.otp = null;
         
         booking.trackingTimeline.push({ 
             status: 'Patient pickup confirmed', 
             timestamp: new Date(),
-            note: "Patient pickup verified and onboarded into ambulance."
+            note: "Patient pickup verified via 6-digit OTP."
         });
         
         await booking.save();
-
-        // 🚨 REFERRAL SYNC: If Referral booking, notify Origin Hospital A that patient departed
-        if (booking.serviceType === 'Referral Ambulance' && booking.pickupHospitalId) {
-            try {
-                await notifyAdminsAndVendor(
-                    booking.pickupHospitalId,
-                    'hospital',
-                    "Referral Patient Departed",
-                    `Patient on booking #${booking.bookingId} has been successfully transferred to Ambulance.`,
-                    { bookingId: booking._id.toString(), type: 'referral_departed' }
-                );
-            } catch (hospErr) {
-                console.warn("Origin hospital alert skipped:", hospErr.message);
-            }
-        }
 
         res.json({ 
             success: true, 
@@ -545,7 +553,7 @@ const verifyPickupOtp = async (req, res) => {
         });
 
     } catch (error) { 
-        console.error("OTP verification error:", error);
+        console.error("Pickup verification error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

@@ -31,6 +31,7 @@ const {
     getEmergencyList,
     removeAddress,
     removeEmergency,getUserDashboard
+    ,verifyUserPhoneWithOtp
 } = require('../../controllers/user/authUser.js'); 
 
 // Base route: /api/auth/user
@@ -116,6 +117,7 @@ router.put('/update-locker-pin', protect('user'), updateLockerPin);
 // Referral
 router.get('/referral-details', protect('user'), getReferralDetails);
 router.get('/family-accounts', protect('user'), getFamilyAccounts);
+router.post('/verify-phone-otp', protect('user'), verifyUserPhoneWithOtp);
 
 
 

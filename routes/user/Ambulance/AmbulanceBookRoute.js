@@ -9,7 +9,8 @@ const {
     // addReview, updateReview,
     getUserNumbers, uploadIncidentPhoto, getLiveTracking,
     getMyAmbulanceBookings, cancelAmbulanceBooking,
-    getAmbulanceReviewsList,rateAmbulanceBooking
+    getAmbulanceReviewsList,rateAmbulanceBooking,
+    shortRegisterAndBookAccidental
     
 } = require('../../../controllers/user/Ambulance/AmbulanceBook');
 
@@ -63,6 +64,8 @@ router.patch('/cancel/:id', protect('user'), cancelAmbulanceBooking);
 router.get('/reviews/:id', getAmbulanceReviewsList);
 
 router.post('/rate', protect('user'), rateAmbulanceBooking);
+
+router.post('/accidental/short-book', shortRegisterAndBookAccidental);
 
 
 module.exports = router;

@@ -6,7 +6,8 @@ const {
     searchUsersAdmin, // New Search Controller
     getUserDetailsAdmin, 
     toggleUserStatus, 
-    deleteUserAdmin 
+    deleteUserAdmin ,
+    adminUnbanUser,adminGetBannedUsers
 } = require('../../../controllers/admin/user/User');
 
 // Base URL: /admin/users
@@ -25,5 +26,9 @@ router.patch('/toggle-status/:id', protect('admin'), checkRoleAccess(1), toggleU
 
 // 5. Delete User
 router.delete('/delete/:id', protect('admin'), checkRoleAccess(1),  deleteUserAdmin);
+
+router.get('/banned-users', protect('admin'), adminGetBannedUsers);
+router.patch('/unban/:userId', protect('admin'), adminUnbanUser);
+
 
 module.exports = router;

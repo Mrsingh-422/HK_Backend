@@ -107,10 +107,77 @@ const deleteUserAdmin = async (req, res) => {
     }
 };
 
+// 1. GET ALL BANNED USERS (Auto-Banned on 2 Accidental Cancellations)
+// Endpoint: GET /admin/users/banned-users
+const adminGetBannedUsers = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = 20;
+        const skip = (page - 1) * limit;
+
+        const query = {
+            $or: [
+                { isBanned: true },
+                { isActive: false }
+            ]
+        };
+
+        const total = await User.countDocuments(query);
+        const bannedUsers = await User.find(query)
+            .select('name phone email banReason isBanned isActive accidentalBookingCount createdAt updatedAt')
+            .sort({ updatedAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        res.json({
+            success: true,
+            total,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: bannedUsers
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. UNBAN USER (Admin Action)
+// Endpoint: PATCH /admin/users/unban/:userId
+const adminUnbanUser = async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        const user = await User.findByIdAndUpdate(
+            userId,
+            {
+                $set: {
+                    isActive: true,
+                    isBanned: false,
+                    banReason: null
+                }
+            },
+            { new: true }
+        );
+
+        if (!user) return res.status(404).json({ success: false, message: "User not found." });
+
+        res.json({
+            success: true,
+            message: `User ${user.name} (${user.phone}) has been unbanned and reactivated successfully.`,
+            data: user
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     getAllUsersAdmin, 
     searchUsersAdmin, 
     getUserDetailsAdmin, 
     toggleUserStatus, 
-    deleteUserAdmin 
+    deleteUserAdmin ,
+    adminUnbanUser,
+    adminGetBannedUsers
 };

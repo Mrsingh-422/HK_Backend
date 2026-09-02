@@ -40,7 +40,6 @@ const hasDriverStarted = (booking, vendorType) => {
  * @returns {Object} - { hasStarted, cancellationFee, refundAmount }
  */
 const processCancellationRefund = async (booking, vendorType) => {
-    // 🚨 2. FIXED: Injected booking.billSummary?.totalAmount for Pharmacy & Lab Bookings
     const totalPaid = booking.totalAmount || 
                       booking.billSummary?.totalAmount || 
                       booking.priceBreakdown?.totalPrice || 
@@ -51,13 +50,19 @@ const processCancellationRefund = async (booking, vendorType) => {
     const started = hasDriverStarted(booking, vendorType);
 
     if (started) {
-        const config = await CancellationConfig.findOne({ vendorType, isActive: true });
+        // 1. Try finding specific config (e.g. 'Ambulance-Medical' or 'Ambulance-Referral')
+        let config = await CancellationConfig.findOne({ vendorType, isActive: true });
+        
+        // 2. Fallback to generic 'Ambulance' config if specific subtype not configured
+        if (!config && String(vendorType).startsWith('Ambulance')) {
+            config = await CancellationConfig.findOne({ vendorType: 'Ambulance', isActive: true });
+        }
         
         if (config && config.chargeValue > 0) {
             if (config.chargeType === 'Percentage') {
                 cancellationFee = Math.round((totalPaid * config.chargeValue) / 100);
             } else {
-                cancellationFee = Math.min(config.chargeValue, totalPaid); // Cap flat fee to avoid negative balances
+                cancellationFee = Math.min(config.chargeValue, totalPaid);
             }
         }
     }

@@ -33,55 +33,55 @@ const userSchema = new mongoose.Schema({
     // --- Medical Details: Family History (Figma Screen: Family History) ---
     // Options: 'None', 'Either Parent', 'Both parents'
     familyHistory: {
-    diabetes: { 
-        type: String, 
-        enum: ['None', 'Either Parent', 'Both parents'], 
-        default: 'None' 
+        diabetes: {
+            type: String,
+            enum: ['None', 'Either Parent', 'Both parents'],
+            default: 'None'
+        },
+        highCholesterol: {
+            type: String,
+            enum: ['None', 'Either Parent', 'Both parents'],
+            default: 'None'
+        },
+        hypertension: {
+            type: String,
+            enum: ['None', 'Either Parent', 'Both parents'],
+            default: 'None'
+        },
+        obesity: {
+            type: String,
+            enum: ['None', 'Either Parent', 'Both parents'],
+            default: 'None'
+        }
     },
-    highCholesterol: { 
-        type: String, 
-        enum: ['None', 'Either Parent', 'Both parents'], 
-        default: 'None' 
-    },
-    hypertension: { 
-        type: String, 
-        enum: ['None', 'Either Parent', 'Both parents'], 
-        default: 'None' 
-    },
-    obesity: { 
-        type: String, 
-        enum: ['None', 'Either Parent', 'Both parents'], 
-        default: 'None' 
-    }
-},
 
     // --- Medical Details: Conditions & Allergies (Figma Screen: Conditions & Allergies) ---
-   conditionStatus: {
+    conditionStatus: {
         asthma: { type: Boolean, default: false },
         diabetes: { type: Boolean, default: false },
         heartDisease: { type: Boolean, default: false },
         hypertension: { type: Boolean, default: false },
-        addedConditions: [{ type: String }], 
+        addedConditions: [{ type: String }],
         addedAllergies: [{ type: String }]
     },
 
     // --- Health Insurance Details (Figma Screen: Health Insurance Edit/Add) ---
-   insuranceDetails: {
-    hasInsurance: { type: Boolean, default: false },
-    insuranceNumber: { type: String },
-    companyName: { type: String }, // First Dropdown: "HDFC", "LICC" or "other"
-    insuranceType: { type: String }, // Used when companyName is "other" (e.g., "Cashless")
-    startDate: { type: String },
-    endDate: { type: String },
-    insuranceDocument: { type: String }, // URL of the uploaded policy file (PDF/Image)
-    // 🚀 NEW: Dual Side card uploads for TPA Claims desk verification
-    insuranceDocumentFront: { type: String, default: null }, // URL of Card Front Side
-    insuranceDocumentBack: { type: String, default: null },  // URL of Card Back Side
-    // Reference to specific master plan (Dropdown 2 when not "other")
-    masterInsuranceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Insurance', default: null }
-},
+    insuranceDetails: {
+        hasInsurance: { type: Boolean, default: false },
+        insuranceNumber: { type: String },
+        companyName: { type: String }, // First Dropdown: "HDFC", "LICC" or "other"
+        insuranceType: { type: String }, // Used when companyName is "other" (e.g., "Cashless")
+        startDate: { type: String },
+        endDate: { type: String },
+        insuranceDocument: { type: String }, // URL of the uploaded policy file (PDF/Image)
+        // 🚀 NEW: Dual Side card uploads for TPA Claims desk verification
+        insuranceDocumentFront: { type: String, default: null }, // URL of Card Front Side
+        insuranceDocumentBack: { type: String, default: null },  // URL of Card Back Side
+        // Reference to specific master plan (Dropdown 2 when not "other")
+        masterInsuranceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Insurance', default: null }
+    },
 
- 
+
     userAddress: [{
         name: String,
         addressType: { type: String, enum: ['Home', 'Work', 'Other'], default: 'Home' },
@@ -98,22 +98,22 @@ const userSchema = new mongoose.Schema({
 
     familyMember: [{
         memberName: { type: String },
-        relation: { type: String }, 
+        relation: { type: String },
         dob: { type: String },
         phone: { type: String },
         gender: { type: String },
         height: { type: String },
         weight: { type: String },
         insuranceNo: { type: String },
-        insuranceId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Insurance'  // <--- Yeh 'Insurance' model se link hona chahiye
-    },
+        insuranceId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Insurance'  // <--- Yeh 'Insurance' model se link hona chahiye
+        },
         profilePic: { type: String, default: null },
         hasInsurance: { type: Boolean, default: false }
     }],
 
-    
+
     emergencyContact: [{
         contactName: String,
         phone: String,
@@ -127,12 +127,12 @@ const userSchema = new mongoose.Schema({
         default: null
     },
     abhaDetails: {
-    abhaNumber: { type: String }, // 14 digits
-    abhaAddress: { type: String }, // user@abdm
-    txnId: { type: String }, // Tracking ID for OTP steps
-    isAbhaVerified: { type: Boolean, default: false },
-    consent: { type: Boolean, default: false } // Checkbox from UI
-},
+        abhaNumber: { type: String }, // 14 digits
+        abhaAddress: { type: String }, // user@abdm
+        txnId: { type: String }, // Tracking ID for OTP steps
+        isAbhaVerified: { type: Boolean, default: false },
+        consent: { type: Boolean, default: false } // Checkbox from UI
+    },
 
 
     role: { type: String, default: 'user' },
@@ -148,6 +148,11 @@ const userSchema = new mongoose.Schema({
         default: null
     },
     fcmToken: { type: String, default: null },
+    
+    isShortRegistered: { type: Boolean, default: false }, // True agar bina OTP short register hua hai
+    accidentalBookingCount: { type: Number, default: 0 }, // Unverified number se kitni accidental bookings hui
+    isBanned: { type: Boolean, default: false },           // True agar 2 cancellations par auto-ban hua
+    banReason: { type: String, default: null }
 
 
 }, { timestamps: true });
