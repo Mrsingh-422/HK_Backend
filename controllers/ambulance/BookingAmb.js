@@ -10,6 +10,8 @@ const Review = require('../../models/Review');
 const Hospital = require('../../models/Hospital');
 const NoShowConfig = require('../../models/NoShowConfig');
 const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper');
+const { creditVendorCompensation } = require('../../utils/policyHelper');
+
 
 
 const getMyActiveTrip = async (req, res) => {
@@ -119,83 +121,101 @@ const acceptBooking = async (req, res) => {
         const ambulanceId = req.user.id;
 
         const driver = await Ambulance.findById(ambulanceId);
-        if (!driver.availableForEmergency) {
-            return res.status(400).json({ success: false, message: "You are already on an active trip." });
+        if (!driver) {
+            return res.status(404).json({ success: false, message: "Driver not found." });
         }
 
-        const bookingCheck = await Booking.findOne({ _id: id, status: 'Searching' });
-        if (!bookingCheck) {
-            return res.status(400).json({ success: false, message: "This trip is no longer available." });
+        // 🚨 1. FIXED SELF-LOCK: Check if driver is on ANOTHER different active trip
+        const otherActiveTrip = await Booking.findOne({
+            ambulanceId: driver._id,
+            _id: { $ne: id },
+            status: { $in: ['Arrived', 'Picked-Up', 'En-Route'] }
+        });
+
+        if (otherActiveTrip) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `You are already busy on active trip #${otherActiveTrip.bookingId}. Complete it first.` 
+            });
         }
 
-        const isAccidental = bookingCheck.serviceType === 'Accident emergency';
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(id) : new mongoose.Types.ObjectId() },
+                { bookingId: id }
+            ],
+            status: { $in: ['Searching', 'Confirmed'] }
+        };
+
+        const booking = await Booking.findOne(query);
+        if (!booking) {
+            return res.status(400).json({ success: false, message: "This trip is no longer available or was claimed by another driver." });
+        }
+
+        const isAccidental = booking.serviceType === 'Accident emergency';
         const timelineStatus = isAccidental ? 'Driver Assigned' : 'Accepted by Driver';
         const timelineNote = isAccidental 
             ? `${driver.name} has accepted your emergency request and is arriving shortly.`
-            : `${driver.name} accepted your request. Waiting for payment to start navigation.`;
+            : `${driver.name} accepted your request. Navigation started.`;
 
-        // ATOMIC UPDATE
-        const booking = await Booking.findOneAndUpdate(
-            { _id: id, status: 'Searching' },
-            {
-                $set: { ambulanceId: ambulanceId, status: 'Confirmed' },
-                $push: { trackingTimeline: { status: timelineStatus, timestamp: new Date(), note: timelineNote } }
-            },
-            { new: true }
-        );
+        booking.ambulanceId = driver._id;
+        booking.status = 'Confirmed';
+        booking.trackingTimeline.push({ status: timelineStatus, timestamp: new Date(), note: timelineNote });
+        await booking.save();
 
-        if (!booking) {
-            return res.status(400).json({ success: false, message: "This trip was just claimed by another driver." });
-        }
-
+        // Lock driver availability
         driver.availableForEmergency = false;
         await driver.save();
 
-        // 🚨 PRE-ARRIVAL SHORT ADMISSION REGISTRATION FOR THE TARGET HOSPITAL
-        // If hospital is already selected, create the pre-arrival record immediately
+        // 🚨 2. HOSPITAL PRE-ADMISSION SYNC
         if (booking.hospitalId) {
-            const hospitalBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-            
-            await Appointment.create({
-                userId: booking.userId,
-                hospitalId: booking.hospitalId,
-                ambulanceId: booking.ambulanceId,
-                bookingType: 'Admission',
-                bedBookingType: 'Emergency-Bed',
-                status: 'Hospital-Pending', // Appears in Hospital's Pending List
-                bookingId: hospitalBookingId,
-                transactionId: booking.bookingId, // Map with ambulance booking reference
-                triageLevel: booking.triageLevel || 'Emergency',
-                patients: [{
-                    patientName: booking.patientDetails?.name || "Emergency Patient",
-                    patientAge: booking.patientDetails?.age || 30,
-                    gender: booking.patientDetails?.gender || "Male",
-                    reasonForVisit: booking.patientDetails?.emergencyDescription || "Ambulance Emergency Drop-off"
-                }],
-                startDate: new Date(),
-                pricingBreakdown: { baseFee: 0, subtotal: 0 },
-                totalAmount: 0
-            });
+            const existingAppt = await Appointment.findOne({ transactionId: booking.bookingId });
+            if (!existingAppt) {
+                const hospitalBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+                await Appointment.create({
+                    userId: booking.userId,
+                    hospitalId: booking.hospitalId,
+                    ambulanceId: driver._id,
+                    bookingType: 'Admission',
+                    bedBookingType: 'Emergency-Bed',
+                    status: 'Hospital-Pending',
+                    bookingId: hospitalBookingId,
+                    transactionId: booking.bookingId,
+                    triageLevel: booking.triageLevel || 'Emergency',
+                    patients: [{
+                        patientName: booking.patientDetails?.name || "Emergency Patient",
+                        patientAge: booking.patientDetails?.age || 30,
+                        gender: booking.patientDetails?.gender || "Male",
+                        reasonForVisit: booking.patientDetails?.emergencyDescription || "Ambulance Emergency Drop-off"
+                    }],
+                    startDate: new Date(),
+                    pricingBreakdown: { baseFee: 0, subtotal: 0 },
+                    totalAmount: 0
+                });
 
-            // Trigger Notification to Destination Hospital (Figma Notification Screen)
-            await notifyAdminsAndVendor(
-                booking.hospitalId,
-                'hospital',
-                "🚨 New Incoming Emergency Case",
-                `Trauma patient is arriving shortly via Ambulance #${booking.bookingId}. Prepare emergency ward.`,
-                { bookingId: booking._id.toString(), type: 'incoming_emergency_case' }
-            );
+                await notifyAdminsAndVendor(
+                    booking.hospitalId,
+                    'hospital',
+                    "🚨 New Incoming Emergency Case",
+                    `Trauma patient is arriving shortly via Ambulance #${booking.bookingId}. Prepare emergency ward.`,
+                    { bookingId: booking._id.toString(), type: 'incoming_emergency_case' }
+                );
+            }
         }
 
-        // Send Push Notifications to User
-        if (isAccidental) {
-            await sendPushNotification(booking.userId, 'user', "Emergency Driver Assigned!", `${driver.name} is arriving shortly. OTP is ${booking.otp}.`);
-        } else {
-            await sendPushNotification(booking.userId, 'user', "Ambulance Request Accepted", "Driver accepted! Please complete payment to start navigation.");
-        }
+        // Alert user
+        await sendPushNotification(
+            booking.userId, 
+            'user', 
+            "Ambulance Assigned!", 
+            `${driver.name} is on the way. Share Pickup OTP: ${booking.otp} on arrival.`,
+            { bookingId: booking._id.toString(), otp: booking.otp, type: 'driver_assigned' }
+        );
 
-        res.json({ success: true, message: "Ride accepted. Pre-arrival registration triggered.", data: booking });
+        res.json({ success: true, message: "Ride accepted successfully. Navigation active.", data: booking });
     } catch (error) {
+        console.error("Accept Booking Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -204,11 +224,10 @@ const acceptBooking = async (req, res) => {
 // --- 3. REJECT REQUEST (Driver Rejection) ---
 const rejectBooking = async (req, res) => {
     try {
-        const { id } = req.params; // Booking Mongo ObjectId
+        const { id } = req.params;
         const { reason, comments } = req.body; 
         const driverId = req.user.id;
 
-        // Figma Screen 11/Reject Modal Strict Validation
         const figmaRejectionReasons = [
             'Busy on another case',
             'Pickup location too far',
@@ -223,35 +242,58 @@ const rejectBooking = async (req, res) => {
             });
         }
 
-        const booking = await Booking.findById(id); 
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = isObjectId ? { _id: id } : { bookingId: id };
+
+        const booking = await Booking.findOne(query); 
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        booking.status = 'Cancelled';
-        booking.cancelledBy = 'Driver';
-        booking.cancellationReason = `${reason}. Comments: ${comments || 'None'}`;
-        
-        booking.trackingTimeline.push({ 
-            status: 'Cancelled', 
-            timestamp: new Date(), 
-            note: `Request rejected by driver. Reason: ${reason}` 
-        });
+        // 🚨 CRITICAL POOLING FIX: Add driver to rejectedBy, DO NOT kill booking if other drivers can take it!
+        booking.rejectedBy = booking.rejectedBy || [];
+        if (!booking.rejectedBy.includes(driverId)) {
+            booking.rejectedBy.push(driverId);
+        }
+
+        // If it was an accidental SOS or broadcast, reopen pool
+        if (booking.serviceType === 'Accident emergency') {
+            booking.ambulanceId = null;
+            booking.status = 'Searching';
+            booking.trackingTimeline.push({ 
+                status: 'Driver Passed', 
+                timestamp: new Date(), 
+                note: `Driver ${req.user.name || ''} was unavailable (${reason}). Searching next nearest ambulance.` 
+            });
+        } else {
+            // For targeted bookings, mark cancelled and inform user to choose another ambulance
+            booking.status = 'Cancelled';
+            booking.cancelledBy = 'Driver';
+            booking.cancellationReason = `${reason}. Comments: ${comments || 'None'}`;
+            booking.trackingTimeline.push({ 
+                status: 'Cancelled by Driver', 
+                timestamp: new Date(), 
+                note: `Selected driver unavailable: ${reason}.` 
+            });
+
+            await sendPushNotification(
+                booking.userId, 
+                'user', 
+                "Ambulance Driver Unavailable", 
+                "The selected ambulance is busy. Please choose another ambulance.",
+                { bookingId: booking._id.toString(), type: 'request_rejected' }
+            );
+        }
 
         await booking.save();
 
-        // Release Driver back to Available status
+        // Release Driver back to Available
         await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: true } });
 
-        // Notify User immediately
-        await sendPushNotification(
-            booking.userId, 
-            'user', 
-            "Ambulance Request Rejected", 
-            "The driver is currently busy. Please select another ambulance.",
-            { type: 'request_rejected' }
-        );
-
-        res.json({ success: true, message: "SOS Booking rejected successfully. User notified." });
+        res.json({ 
+            success: true, 
+            message: "Request passed successfully. You are now Available for other calls." 
+        });
     } catch (error) { 
+        console.error("Reject Booking Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -450,14 +492,14 @@ const verifyPickupOtp = async (req, res) => {
         const patientPhone = booking.patientDetails?.phone || booking.userId?.phone;
         const cleanPatientPhone = patientPhone ? String(patientPhone).replace(/\D/g, "").slice(-10) : "";
 
-        // 🚨 1. Firebase Phone Auth idToken verification (If idToken provided)
+        // 1. Firebase Phone Token Verification
         if (idToken && idToken.trim() !== "") {
             const verification = await verifyFirebasePhoneToken(idToken, cleanPatientPhone);
             if (!verification.success) {
                 return res.status(400).json({ success: false, message: verification.message });
             }
         } 
-        // 🚨 2. Strict 6-digit dynamic OTP verification (Static 1111 removed)
+        // 2. 6-Digit OTP Verification
         else if (otp) {
             const savedOtp = String(booking.otp || "").trim();
             const incomingOtp = String(otp).trim();
@@ -471,7 +513,7 @@ const verifyPickupOtp = async (req, res) => {
 
         booking.isOtpVerified = true;
         booking.status = 'Picked-Up';
-        booking.otp = null; // Invalidate OTP after pickup
+        booking.otp = null; // Invalidate OTP after use
         
         booking.trackingTimeline.push({ 
             status: 'Patient pickup confirmed', 
@@ -481,7 +523,27 @@ const verifyPickupOtp = async (req, res) => {
         
         await booking.save();
 
-        res.json({ success: true, message: "Pickup verified successfully! Start Navigation to Hospital.", data: booking });
+        // 🚨 REFERRAL SYNC: If Referral booking, notify Origin Hospital A that patient departed
+        if (booking.serviceType === 'Referral Ambulance' && booking.pickupHospitalId) {
+            try {
+                await notifyAdminsAndVendor(
+                    booking.pickupHospitalId,
+                    'hospital',
+                    "Referral Patient Departed",
+                    `Patient on booking #${booking.bookingId} has been successfully transferred to Ambulance.`,
+                    { bookingId: booking._id.toString(), type: 'referral_departed' }
+                );
+            } catch (hospErr) {
+                console.warn("Origin hospital alert skipped:", hospErr.message);
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Pickup verified successfully! Start Navigation to Hospital.", 
+            data: booking 
+        });
+
     } catch (error) { 
         console.error("OTP verification error:", error);
         res.status(500).json({ success: false, message: error.message }); 
@@ -744,32 +806,56 @@ const verifyDropOffOtp = async (req, res) => {
     }
 };
 
-// --- 3. AMBULANCE SOS TRIGGER (Figma Screen 18 - Police / Vehicle Breakdown) ---
+// BREAKDOWN SOS TRIGGER (Broadcast Pool Auto-Reopen Sync)
 const triggerAmbulanceSos = async (req, res) => {
     try {
         const { id } = req.params;
-        const { sosType, lat, lng } = req.body; // sosType: 'Police Required', 'Vehicle Breakdown', 'Control Room'
+        const { sosType, lat, lng } = req.body; 
 
-        const booking = await Booking.findById(id);
-        
-        if (booking) {
-            booking.trackingTimeline.push({
-                status: 'SOS Alert',
-                timestamp: new Date(),
-                note: `Driver triggered SOS alert: ${sosType}. Location logged at Lat: ${lat}, Lng: ${lng}`
-            });
-            await booking.save();
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = isObjectId ? { _id: id } : { bookingId: id };
+
+        const booking = await Booking.findOne(query);
+        if (!booking) return res.status(404).json({ success: false, message: "Booking record not found." });
+
+        booking.trackingTimeline.push({
+            status: 'SOS Alert',
+            timestamp: new Date(),
+            note: `Driver triggered SOS: ${sosType}. Coordinates: [Lat: ${lat || 'N/A'}, Lng: ${lng || 'N/A'}]`
+        });
+
+        // 🚨 BREAKDOWN LOGIC: Auto-reopen broadcast pool for other ambulances
+        if (sosType === 'Vehicle Breakdown') {
+            const oldDriverId = booking.ambulanceId;
+            booking.rejectedBy = booking.rejectedBy || [];
+            if (oldDriverId) booking.rejectedBy.push(oldDriverId);
+
+            booking.ambulanceId = null;
+            booking.status = 'Searching'; // Reopen for all nearby drivers!
+
+            if (oldDriverId) {
+                await Ambulance.findByIdAndUpdate(oldDriverId, {
+                    $set: { availableForEmergency: false, isOnline: false } // Marked offline
+                });
+            }
         }
 
-        // Trigger push notification to System Admins regarding active SOS
+        await booking.save();
+
+        // Alert Control Room & Admins
         await notifyAdminsAndVendor(
             null,
             'admin',
-            `🚨 AMBULANCE SOS: ${sosType}`,
-            `Driver on booking ID #${booking ? booking.bookingId : 'N/A'} requires urgent ${sosType} assistance.`
+            `🚨 AMBULANCE EMERGENCY SOS: ${sosType}!`,
+            `Ambulance #${booking.bookingId} reported ${sosType} at Lat: ${lat}, Lng: ${lng}. Action required.`,
+            { bookingId: booking._id.toString(), type: 'ambulance_sos_alert' }
         );
 
-        res.json({ success: true, message: `${sosType} Alert logged and control room notified.` });
+        res.json({ 
+            success: true, 
+            message: `${sosType} logged. Ride reopened in broadcast pool and Control Room alerted.`,
+            data: booking 
+        });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
@@ -844,13 +930,17 @@ const reportAmbulanceNoShow = async (req, res) => {
         const { bookingId, comments } = req.body;
         const driverId = req.user.id; 
 
-        // Locate active arriving booking linked to this driver
-        const booking = await Booking.findOne({ 
-            _id: bookingId, 
-            ambulanceId: driverId, 
-            status: 'Arrived' 
-        });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(bookingId) : new mongoose.Types.ObjectId() },
+                { bookingId }
+            ],
+            ambulanceId: driverId,
+            status: 'Arrived'
+        };
 
+        const booking = await Booking.findOne(query);
         if (!booking) {
             return res.status(404).json({ 
                 success: false, 
@@ -858,20 +948,17 @@ const reportAmbulanceNoShow = async (req, res) => {
             });
         }
 
-        // --- DYNAMIC SUB-TYPE MAPPING ---
         const serviceTypeToVendorMap = {
             'Accident emergency': 'Ambulance-Accident',
             'Medical Ambulance': 'Ambulance-Medical',
             'Quick Response': 'Ambulance-Medical',
             'Referral Ambulance': 'Ambulance-Referral'
         };
-
         const targetVendorType = serviceTypeToVendorMap[booking.serviceType] || 'Ambulance-Medical';
 
         const totalPaid = booking.pricing?.total || 0;
         let noShowFee = 0;
 
-        // Fetch the specific dynamic admin no-show rules for this ambulance subtype
         const config = await NoShowConfig.findOne({ vendorType: targetVendorType, isActive: true });
         if (config && config.chargeValue > 0) {
             noShowFee = config.chargeType === 'Percentage' 
@@ -879,44 +966,44 @@ const reportAmbulanceNoShow = async (req, res) => {
                 : Math.min(config.chargeValue, totalPaid);
         }
 
-        // Set status to Cancelled and apply dynamic no-show fee
         booking.status = 'Cancelled';
         booking.cancelledBy = 'Driver';
         booking.cancellationReason = comments || "Ambulance Driver arrived on spot but customer was unreachable.";
+        if (!booking.pricing) booking.pricing = {};
         booking.pricing.noShowFeeApplied = noShowFee;
         booking.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
 
         booking.trackingTimeline.push({
             status: 'No-Show',
             timestamp: new Date(),
-            note: `Ambulance driver reported spot No-Show on ${booking.serviceType}. Penalty fee applied: ₹${noShowFee}.`
+            note: `Ambulance driver reported spot No-Show. Penalty applied: ₹${noShowFee}.`
         });
 
-        // Release ambulance availability status back to available
+        // Release driver
         await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: true } });
-
         await booking.save();
 
-        // 🚀 CRITICAL WORKFLOW SYNC FIX: Update status in linked Hospital Appointment
+        // 🚨 CRITICAL WALLET SYNC: Credit No-Show Penalty to Driver's Wallet!
+        if (noShowFee > 0) {
+            await creditVendorCompensation(driverId, 'Ambulance', noShowFee, booking.bookingId, 'No-Show Fee');
+        }
+
+        // Sync Hospital Pre-Admission cancel
         if (booking.bookingId) {
             await Appointment.findOneAndUpdate(
                 { transactionId: booking.bookingId },
-                { 
-                    $set: { 
-                        status: 'No-Show',
-                        'tracking.status': 'No-Show'
-                    } 
-                }
+                { $set: { status: 'Cancelled-By-Doctor', 'tracking.status': 'No-Show' } }
             );
         }
 
         res.json({ 
             success: true, 
-            message: `Ambulance Spot No-Show logged successfully for ${booking.serviceType}.`, 
+            message: `Spot No-Show logged. ₹${noShowFee} credited to your driver wallet.`, 
             noShowFeeApplied: noShowFee,
             data: booking
         });
     } catch (error) {
+        console.error("No-Show Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

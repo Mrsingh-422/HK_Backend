@@ -9,50 +9,41 @@ const mongoose = require('mongoose');
 // Helper to calculate Ambulance specific 7-day cleared and locked balances [1.2.2]
 const calculateAmbulanceBalances = async (ambulanceId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
+    const ambulanceObjId = new mongoose.Types.ObjectId(ambulanceId);
 
-    // 1. Total Completed Earnings (Trips with status 'Delivered')
-    const totalEarningsQuery = await Booking.aggregate([
-        { 
-            $match: { 
-                ambulanceId: new mongoose.Types.ObjectId(ambulanceId), 
-                status: 'Delivered' 
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$pricing.total" } } }
-    ]);
-    const totalEarnings = totalEarningsQuery[0]?.total || 0;
+    // 🚨 FINANCIAL FIX: Sum actual earning base (originalAmbulanceCharge if total was 0 on Accidental/Subscription)
+    const allCompletedTrips = await Booking.find({
+        ambulanceId: ambulanceObjId,
+        status: 'Delivered'
+    }).select('pricing updatedAt').lean();
 
-    // 2. Cleared Earnings (Trips completed 7 or more days ago) - [1.2.2]
-    const clearedEarningsQuery = await Booking.aggregate([
-        { 
-            $match: { 
-                ambulanceId: new mongoose.Types.ObjectId(ambulanceId), 
-                status: 'Delivered',
-                updatedAt: { $lte: sevenDaysAgo } // Older than 7 days [1.2.2]
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$pricing.total" } } }
-    ]);
-    const clearedEarnings = clearedEarningsQuery[0]?.total || 0;
+    let totalEarnings = 0;
+    let clearedEarnings = 0;
+    let pendingEarnings = 0;
 
-    // 3. Pending Earnings (Completed within the last 7 days - Locked) - [1.2.2]
-    const pendingEarningsQuery = await Booking.aggregate([
-        { 
-            $match: { 
-                ambulanceId: new mongoose.Types.ObjectId(ambulanceId), 
-                status: 'Delivered',
-                updatedAt: { $gt: sevenDaysAgo } // Completed within last 7 days [1.2.2]
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$pricing.total" } } }
-    ]);
-    const pendingEarnings = pendingEarningsQuery[0]?.total || 0;
+    allCompletedTrips.forEach(trip => {
+        // If trip was free for patient (Accidental/Plan benefit), credit original fixed base fee
+        const tripFare = Number(
+            trip.pricing?.total > 0 
+                ? trip.pricing.total 
+                : (trip.pricing?.originalAmbulanceCharge || trip.pricing?.ambulanceCharge || 1200)
+        );
 
-    // 4. Total Payouts Requested till date (Pending or Approved)
+        totalEarnings += tripFare;
+
+        // 7-Day Rolling Cleared vs Locked calculation
+        if (new Date(trip.updatedAt) <= sevenDaysAgo) {
+            clearedEarnings += tripFare;
+        } else {
+            pendingEarnings += tripFare;
+        }
+    });
+
+    // Payouts Requested till date
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
-                vendorId: new mongoose.Types.ObjectId(ambulanceId),
+                vendorId: ambulanceObjId,
                 vendorModel: 'Ambulance',
                 status: { $in: ['Pending', 'Approved'] }
             }
@@ -69,6 +60,7 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
         walletBalance: Math.max(0, totalEarnings - totalWithdrawals)
     };
 };
+
 
 
 // 1. GET AMBULANCE WALLET STATS

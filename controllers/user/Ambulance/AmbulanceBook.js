@@ -995,7 +995,7 @@ const cancelAmbulanceBooking = async (req, res) => {
         const { reason } = req.body;
         const userId = req.user.id;
 
-        // 1. Resolve booking safely by Mongo _id OR custom bookingId
+        // 🚨 1. Dual ID Resolution (Supports Mongo _id as well as custom bookingId e.g. HK-BOK-491029)
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
             $or: [
@@ -1007,28 +1007,39 @@ const cancelAmbulanceBooking = async (req, res) => {
 
         const booking = await Booking.findOne(query);
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Ambulance booking not found for this user." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Ambulance booking not found for this user." 
+            });
         }
 
+        // 🚨 2. Guard: Prevent cancelling already completed or cancelled trips
         if (booking.status === 'Cancelled') {
-            return res.status(400).json({ success: false, message: "This booking is already cancelled." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "This booking is already cancelled." 
+            });
         }
         if (booking.status === 'Delivered') {
-            return res.status(400).json({ success: false, message: "Cannot cancel a completed/delivered ambulance trip." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cannot cancel a completed/delivered ambulance trip." 
+            });
         }
 
-        // 2. Cancellation Policy Evaluation
+        // 🚨 3. Dynamic Cancellation Policy Evaluation
         let policyResult = { cancellationFee: 0, refundAmount: 0 };
         try {
             policyResult = await processCancellationRefund(booking, 'Ambulance');
         } catch (policyErr) {
-            const totalPaid = booking.pricing?.total || 0;
+            const totalPaid = booking.pricing?.total || booking.totalAmount || 0;
             policyResult = { cancellationFee: 0, refundAmount: totalPaid };
         }
 
         const cancellationFee = Number(policyResult.cancellationFee || 0);
         const refundAmount = Number(policyResult.refundAmount || 0);
 
+        // 🚨 4. Update Booking Document
         booking.status = 'Cancelled';
         booking.cancelledBy = 'User';
         booking.cancellationReason = reason || "Cancelled by User";
@@ -1036,10 +1047,12 @@ const cancelAmbulanceBooking = async (req, res) => {
         if (!booking.pricing) booking.pricing = {};
         booking.pricing.cancellationFeeApplied = cancellationFee;
         
+        // Update payment status based on fee & previous payment
         if (booking.paymentStatus === 'Paid') {
             booking.paymentStatus = cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
         }
 
+        // Safe Timeline Audit
         if (!booking.trackingTimeline) booking.trackingTimeline = [];
         booking.trackingTimeline.push({ 
             status: 'Cancelled', 
@@ -1047,7 +1060,7 @@ const cancelAmbulanceBooking = async (req, res) => {
             note: reason ? `Cancelled by User. Reason: ${reason}` : "Cancelled by User." 
         });
 
-        // 3. Release Ambulance Driver & Send Alert
+        // 🚨 5. Release Ambulance Driver & Send FCM Alert
         if (booking.ambulanceId) {
             await Ambulance.findByIdAndUpdate(booking.ambulanceId, { 
                 $set: { availableForEmergency: true } 
@@ -1062,28 +1075,43 @@ const cancelAmbulanceBooking = async (req, res) => {
                     { bookingId: booking._id.toString(), type: 'booking_cancelled' }
                 );
             } catch (notifErr) {
-                console.warn("Ambulance notification skipped:", notifErr.message);
+                console.warn("Ambulance push notification warning:", notifErr.message);
             }
         }
 
-        // 🚨 4. CRITICAL SYNC: Auto-Cancel Linked Hospital Pre-Admission Record!
-        if (booking.bookingId) {
-            const linkedAppointment = await Appointment.findOneAndUpdate(
-                { transactionId: booking.bookingId },
-                { 
-                    $set: { 
-                        status: 'Cancelled-By-User',
-                        'tracking.status': 'Cancelled',
-                        'cancellationDetails.reason': reason || "Ambulance transit cancelled by patient.",
-                        'cancellationDetails.cancelledAt': new Date()
-                    } 
-                },
-                { new: true }
-            );
+        // 🚨 6. DRIVER WALLET SYNC: Credit cancellation fee compensation to Driver's Wallet!
+        if (cancellationFee > 0 && booking.ambulanceId) {
+            try {
+                await creditVendorCompensation(
+                    booking.ambulanceId, 
+                    'Ambulance', 
+                    cancellationFee, 
+                    booking.bookingId, 
+                    'Cancellation Fee'
+                );
+            } catch (walletErr) {
+                console.warn("Driver wallet compensation sync warning:", walletErr.message);
+            }
+        }
 
-            // Alert Destination Hospital that incoming patient was cancelled
-            if (linkedAppointment && linkedAppointment.hospitalId) {
-                try {
+        // 🚨 7. HOSPITAL PRE-ADMISSION SYNC: Cancel linked Hospital Pre-Admission Record!
+        if (booking.bookingId) {
+            try {
+                const linkedAppointment = await Appointment.findOneAndUpdate(
+                    { transactionId: booking.bookingId },
+                    { 
+                        $set: { 
+                            status: 'Cancelled-By-User',
+                            'tracking.status': 'Cancelled',
+                            'cancellationDetails.reason': reason || "Ambulance transit cancelled by patient.",
+                            'cancellationDetails.cancelledAt': new Date()
+                        } 
+                    },
+                    { new: true }
+                );
+
+                // Alert destination hospital emergency desk
+                if (linkedAppointment && linkedAppointment.hospitalId) {
                     await notifyAdminsAndVendor(
                         linkedAppointment.hospitalId,
                         'hospital',
@@ -1091,23 +1119,24 @@ const cancelAmbulanceBooking = async (req, res) => {
                         `Incoming emergency case for Ambulance #${booking.bookingId} was cancelled by user.`,
                         { appointmentId: linkedAppointment._id.toString(), type: 'admission_cancelled' }
                     );
-                } catch (hospNotifErr) {
-                    console.warn("Hospital notification skipped:", hospNotifErr.message);
                 }
+            } catch (hospErr) {
+                console.warn("Hospital pre-admission sync warning:", hospErr.message);
             }
         }
 
         await booking.save();
 
-        // 5. Refund subscription trip count if applied
+        // 🚨 8. Subscription Benefit Refund
         try {
             if (booking.subscriptionDetails?.isSubscriptionApplied && booking.pricing?.ambulanceCharge === 0 && booking.serviceType !== 'Accident emergency') {
                 await refundBenefitCount(booking.userId, 'freeAmbulanceTripsCount');
             }
         } catch (subErr) {
-            console.warn("Subscription refund error:", subErr.message);
+            console.warn("Subscription benefit refund warning:", subErr.message);
         }
 
+        // 9. Standardized Success Response
         res.json({ 
             success: true, 
             message: cancellationFee > 0 
@@ -1132,25 +1161,65 @@ const cancelAmbulanceBooking = async (req, res) => {
 const getMyAmbulanceBookings = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 20;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
 
-        const bookings = await Booking.find({ userId: req.user.id })
-            .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
-            .populate('hospitalId', 'name address')
-            .sort({ createdAt: -1 })
-            .skip((page - 1) * limit)
-            .limit(limit);
+        // Query parameters: 'type', 'serviceType', ya 'status'
+        const { type, serviceType, status } = req.query;
+        const activeFilter = (type || serviceType || "").toLowerCase().trim();
 
-        const total = await Booking.countDocuments({ userId: req.user.id });
+        // Base Query: Logged-in user's bookings
+        const query = { userId: req.user.id };
+
+        // 🚨 DYNAMIC SERVICE TYPE FILTER (Case-Insensitive & Flexible)
+        if (activeFilter && activeFilter !== 'all') {
+            if (activeFilter === 'accidental' || activeFilter === 'accident emergency') {
+                query.serviceType = 'Accident emergency';
+            } 
+            else if (activeFilter === 'medical' || activeFilter === 'medical ambulance' || activeFilter === 'quick response') {
+                query.serviceType = { $in: ['Medical Ambulance', 'Quick Response'] };
+            } 
+            else if (activeFilter === 'referral' || activeFilter === 'referral ambulance') {
+                query.serviceType = 'Referral Ambulance';
+            } 
+            else {
+                // Direct exact match fallback if custom string passed
+                query.serviceType = serviceType || type;
+            }
+        }
+
+        // Optional Status Filter (e.g. status=Delivered ya status=Confirmed)
+        if (status && status !== 'All') {
+            query.status = status;
+        }
+
+        // Parallel execution for count & paginated records
+        const [bookings, total] = await Promise.all([
+            Booking.find(query)
+                .populate('ambulanceId', 'name vehicleNumber vehicleType phone profilePic driverInfo')
+                .populate('hospitalId', 'name address location phone hospitalImage')
+                .populate('pickupHospitalId', 'name address location phone') // 👈 Referral ke liye Hospital A populate
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Booking.countDocuments(query)
+        ]);
 
         res.json({ 
             success: true, 
             count: bookings.length, 
+            totalItems: total,
             totalPages: Math.ceil(total / limit),
             currentPage: page,
+            filterApplied: activeFilter || 'all',
             data: bookings 
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+    } catch (error) { 
+        console.error("Get My Bookings Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 
