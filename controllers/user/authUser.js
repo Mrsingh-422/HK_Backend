@@ -1116,43 +1116,72 @@ const getUserDashboard = async (req, res) => {
 };
 
 
-// ==========================================
-// 2. VERIFY PHONE OTP IN PROFILE (Lifts 1-Time Accidental Booking Restriction)
-// Endpoint: POST /api/auth/user/verify-phone-otp
-// ==========================================
-const verifyUserPhoneWithOtp = async (req, res) => {
+// =========================================================================
+// VERIFY PHONE OTP & SET PERMANENT PASSWORD (For Short-Registered Users)
+// Endpoint: POST /api/auth/user/verify-phone-and-set-password
+// =========================================================================
+const verifyPhoneAndSetPassword = async (req, res) => {
     try {
-        const { idToken } = req.body;
+        const { idToken, newPassword, confirmPassword, name, email } = req.body;
         const userId = req.user.id;
 
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ success: false, message: "User not found." });
 
         if (!idToken) {
-            return res.status(400).json({ success: false, message: "Firebase idToken is required." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Firebase idToken is required for phone verification." 
+            });
         }
 
-        // Verify with Firebase
+        if (!newPassword || newPassword.length < 6) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Password must be at least 6 characters long." 
+            });
+        }
+
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "New password and Confirm password do not match." 
+            });
+        }
+
+        // 1. Verify Phone Number with Firebase
         const verification = await verifyFirebasePhoneToken(idToken, user.phone);
         if (!verification.success) {
             return res.status(400).json({ success: false, message: verification.message });
         }
 
+        // 2. Hash New Permanent Password
+        const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+
+        // 3. Update User Document Permanently
+        user.password = hashedPassword;
         user.isPhoneVerified = true;
-        user.isShortRegistered = false; // 👈 1-Time Restriction permanently lifted!
+        user.isShortRegistered = false; // 👈 1-Time restriction lifted!
+        if (name) user.name = name;
+        if (email) user.email = email.toLowerCase().trim();
+
         await user.save();
 
         res.json({
             success: true,
-            message: "Phone number verified successfully! Unlimited emergency booking access unlocked.",
-            data: {
+            message: "Phone verified and permanent password set successfully! You can now use this password to login anytime.",
+            user: {
                 id: user._id,
                 name: user.name,
                 phone: user.phone,
-                isPhoneVerified: true
+                email: user.email,
+                isPhoneVerified: true,
+                isShortRegistered: false
             }
         });
+
     } catch (error) {
+        console.error("Set Password Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -1194,5 +1223,5 @@ module.exports = {
     removeAddress,
     removeEmergency,
     getUserDashboard,
-    verifyUserPhoneWithOtp
+    verifyPhoneAndSetPassword
 };
