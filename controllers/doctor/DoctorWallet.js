@@ -4,54 +4,45 @@ const Appointment = require('../../models/Appointment');
 const WithdrawalRequest = require('../../models/WithdrawalRequest'); 
 const moment = require('moment');
 const mongoose = require('mongoose');
+const { calculateAdminCommission } = require('../../utils/policyHelper');
+
 
 // Helper function to calculate all dynamic balances for a vendor
 const calculateVendorBalances = async (vendorId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
+    const doctorObjId = new mongoose.Types.ObjectId(vendorId);
 
-    // 1. Total Completed Earnings (Aaj tak ki total kamai)
-    const totalEarningsQuery = await Appointment.aggregate([
-        { 
-            $match: { 
-                doctorId: new mongoose.Types.ObjectId(vendorId), 
-                status: 'Completed' 
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-    ]);
-    const totalEarnings = totalEarningsQuery[0]?.total || 0;
+    // 1. Fetch all completed appointments
+    const completedAppointments = await Appointment.find({
+        doctorId: doctorObjId,
+        status: 'Completed'
+    }).select('totalAmount updatedAt').lean();
 
-    // 2. Cleared Earnings (Appointments completed 7 or more days ago) - [1.2.2]
-    const clearedEarningsQuery = await Appointment.aggregate([
-        { 
-            $match: { 
-                doctorId: new mongoose.Types.ObjectId(vendorId), 
-                status: 'Completed',
-                updatedAt: { $lte: sevenDaysAgo } // 👈 7 din ya usse purani completed bookings
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-    ]);
-    const clearedEarnings = clearedEarningsQuery[0]?.total || 0;
+    let totalEarnings = 0;
+    let clearedEarnings = 0;
+    let pendingEarnings = 0;
 
-    // 3. Pending Earnings (Completed within the last 7 days - Locked) - [1.2.2]
-    const pendingEarningsQuery = await Appointment.aggregate([
-        { 
-            $match: { 
-                doctorId: new mongoose.Types.ObjectId(vendorId), 
-                status: 'Completed',
-                updatedAt: { $gt: sevenDaysAgo } // 👈 Pichle 7 dino me completed bookings
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-    ]);
-    const pendingEarnings = pendingEarningsQuery[0]?.total || 0;
+    // 🚨 2. Deduct Admin Commission for each completed appointment
+    for (let appt of completedAppointments) {
+        const grossAmount = Number(appt.totalAmount || 0);
+        const { netVendorAmount } = await calculateAdminCommission('Doctor', grossAmount);
 
-    // 4. Total Withdrawals requested till date (Pending or Approved)
+        totalEarnings += netVendorAmount;
+
+        // 7-Day Rolling Cleared vs Locked Calculation
+        if (new Date(appt.updatedAt) <= sevenDaysAgo) {
+            clearedEarnings += netVendorAmount;
+        } else {
+            pendingEarnings += netVendorAmount;
+        }
+    }
+
+    // 3. Total Withdrawals requested till date
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
-                vendorId: new mongoose.Types.ObjectId(vendorId),
+                vendorId: doctorObjId,
+                vendorModel: 'Doctor',
                 status: { $in: ['Pending', 'Approved'] }
             }
         },
@@ -59,17 +50,13 @@ const calculateVendorBalances = async (vendorId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    // 5. Final Balances Calculations
-    const withdrawableBalance = Math.max(0, clearedEarnings - totalWithdrawals); // Payout target balance
-    const walletBalance = Math.max(0, totalEarnings - totalWithdrawals);       // Total virtual balance
-
     return {
         totalEarnings,
         clearedEarnings,
-        pendingEarnings, // Locked balance
+        pendingEarnings, // Locked balance (last 7 days)
         totalWithdrawals,
-        withdrawableBalance, // Available to request
-        walletBalance
+        withdrawableBalance: Math.max(0, clearedEarnings - totalWithdrawals), // Cleared for payout
+        walletBalance: Math.max(0, totalEarnings - totalWithdrawals)          // Total virtual balance
     };
 };
 

@@ -302,6 +302,7 @@ app.use('/api/admin/police', require('./routes/admin/others/PoliceHQ')); // Dash
 app.use('/api/admin/policy-config', require('./routes/admin/others/PolicyConfigRoute')); // Policy Config Management Route
 app.use('/api/admin/profile-update', require('./routes/admin/others/ProfileUpdateApprovalRoute')); // Profile Update Approval Management Route
 app.use('/api/admin/refunds', require('./routes/admin/others/RefundsRoute')); // Refunds Management Route
+app.use('/api/admin/commission-config', require('./routes/admin/others/CommissionConfigRoute'));
 // --- Admin pharmacy Routes ---
 app.use('/admin/pharmacy/tax-config', require('./routes/admin/Pharmacy/TaxConfigRoute'));
 app.use('/admin/pharmacy/return-policy', require('./routes/admin/Pharmacy/ReturnPolicyRoute')); // Pharmacy Return Policy Management Route

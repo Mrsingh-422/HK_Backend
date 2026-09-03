@@ -9,6 +9,12 @@ const Lab = require('../../models/Lab');
 const Pharmacy = require('../../models/Pharmacy');
 const Nurse = require('../../models/Nurse');
 const Ambulance = require('../../models/Ambulance');
+const { calculateAdminCommission } = require('../../utils/policyHelper');
+const Appointment = require('../../models/Appointment');
+const LabBooking = require('../../models/LabBooking');
+const PharmacyBooking = require('../../models/PharmacyBooking');
+const NurseBooking = require('../../models/NurseBooking');
+const AmbulanceBooking = require('../../models/AmbulanceBooking');
 
 // 1. GET ALL PENDING WITHDRAWALS (Admin dashboard lists all doctors, labs, nurses requests) - [1.2.2]
 const getPendingWithdrawals = async (req, res) => {
@@ -192,12 +198,13 @@ const getPendingBankVerifications = async (req, res) => {
 // GET: /api/admin/wallet/dashboard-stats
 const getAdminWalletDashboardStats = async (req, res) => {
     try {
-        // A. Calculate Total Platform Liability (All active wallets balance combined)
-        const totalLiability = await Wallet.aggregate([
+        // A. Calculate Total Platform Liability (Vendors ka total bacha hua wallet balance)
+        const totalLiabilityQuery = await Wallet.aggregate([
             { $group: { _id: null, total: { $sum: "$balance" } } }
         ]);
+        const platformTotalLiability = totalLiabilityQuery[0]?.total || 0;
 
-        // B. Calculate Payout Metrics (Pending, Approved, Rejected count and amounts)
+        // B. Calculate Payout Metrics (Pending, Approved, Rejected)
         const payoutStats = await WithdrawalRequest.aggregate([
             {
                 $group: {
@@ -223,7 +230,7 @@ const getAdminWalletDashboardStats = async (req, res) => {
             }
         });
 
-        // C. Count Pending Bank Verifications (Across all 6 collections)
+        // C. Count Pending Bank Verifications
         const queryFilter = {
             "bankDetails.accountNumber": { $exists: true, $ne: "" },
             $or: [
@@ -240,19 +247,78 @@ const getAdminWalletDashboardStats = async (req, res) => {
             Nurse.countDocuments(queryFilter),
             Ambulance.countDocuments(queryFilter)
         ]);
-
         const totalPendingBanks = doctors + hospitals + labs + pharmacies + nurses + ambulances;
+
+        // 🚨 D. CALCULATE TOTAL PLATFORM COMMISSION EARNED (Admin Revenue across all 6 collections)
+        const [completedAppts, completedLabs, completedPharmas, completedNurses, completedAmbulances] = await Promise.all([
+            Appointment.find({ status: 'Completed' }).select('bookingType totalAmount').lean(),
+            LabBooking.find({ status: { $in: ['Report Uploaded', 'Completed'] } }).select('billSummary totalPrice').lean(),
+            PharmacyBooking.find({ status: { $in: ['Delivered', 'Completed'] } }).select('billSummary').lean(),
+            NurseBooking.find({ status: 'Completed' }).select('priceBreakdown totalPrice').lean(),
+            AmbulanceBooking.find({ status: 'Delivered' }).select('serviceType pricing').lean()
+        ]);
+
+        let totalAdminCommissionRevenue = 0;
+        let totalGrossOrderVolume = 0;
+
+        // 1. Doctor & Hospital Appointments Commission
+        for (let appt of completedAppts) {
+            const role = appt.bookingType === 'Admission' ? 'Hospital' : 'Doctor';
+            const gross = Number(appt.totalAmount || 0);
+            totalGrossOrderVolume += gross;
+            const { adminCutoff } = await calculateAdminCommission(role, gross);
+            totalAdminCommissionRevenue += adminCutoff;
+        }
+
+        // 2. Lab Commission
+        for (let lab of completedLabs) {
+            const gross = Number(lab.billSummary?.totalAmount || lab.totalPrice || 0);
+            totalGrossOrderVolume += gross;
+            const { adminCutoff } = await calculateAdminCommission('Lab', gross);
+            totalAdminCommissionRevenue += adminCutoff;
+        }
+
+        // 3. Pharmacy Commission
+        for (let pharma of completedPharmas) {
+            const gross = Number(pharma.billSummary?.totalAmount || 0);
+            totalGrossOrderVolume += gross;
+            const { adminCutoff } = await calculateAdminCommission('Pharmacy', gross);
+            totalAdminCommissionRevenue += adminCutoff;
+        }
+
+        // 4. Nurse Commission
+        for (let nurse of completedNurses) {
+            const gross = Number(nurse.priceBreakdown?.totalPrice || nurse.totalPrice || 0);
+            totalGrossOrderVolume += gross;
+            const { adminCutoff } = await calculateAdminCommission('Nurse', gross);
+            totalAdminCommissionRevenue += adminCutoff;
+        }
+
+        // 5. Ambulance Commission
+        for (let amb of completedAmbulances) {
+            let subtype = 'Ambulance-Medical';
+            if (amb.serviceType === 'Accident emergency') subtype = 'Ambulance-Accident';
+            else if (amb.serviceType === 'Referral Ambulance') subtype = 'Ambulance-Referral';
+
+            const gross = Number(amb.pricing?.total > 0 ? amb.pricing.total : (amb.pricing?.originalAmbulanceCharge || 2000));
+            totalGrossOrderVolume += gross;
+            const { adminCutoff } = await calculateAdminCommission(subtype, gross);
+            totalAdminCommissionRevenue += adminCutoff;
+        }
 
         res.json({
             success: true,
             data: {
-                platformTotalLiability: totalLiability[0]?.total || 0, // Total cash we currently owe to all vendors
+                totalGrossOrderVolume,              // Platform par total kitne rupaye ke orders huye
+                totalAdminCommissionRevenue,        // 👈 Admin ka apna total kamaya gaya profit
+                platformTotalLiability,             // Vendors ko abhi kitna cash pay karna bacha hai
                 payoutStats: formattedPayouts,
                 pendingBankVerificationsCount: totalPendingBanks
             }
         });
 
     } catch (error) {
+        console.error("Admin Wallet Stats Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

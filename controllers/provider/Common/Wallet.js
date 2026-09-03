@@ -9,79 +9,74 @@ const Lab = require('../../../models/Lab');
 const Pharmacy = require('../../../models/Pharmacy');
 const Nurse = require('../../../models/Nurse');
 const LabBooking = require('../../../models/LabBooking');
-const PharmacyBooking = require('../../../models/PharmacyBooking'); // 👈 Fixed Import
-const NurseBooking = require('../../../models/NurseBooking');       // 👈 Fixed Import
+const PharmacyBooking = require('../../../models/PharmacyBooking');
+const NurseBooking = require('../../../models/NurseBooking');
+const { calculateAdminCommission } = require('../../../utils/policyHelper');
 
 // Helper to dynamically resolve booking model and run aggregate calculations based on Provider Type
 const calculateProviderBalances = async (vendorId, role) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
+    const vendorObjId = new mongoose.Types.ObjectId(vendorId);
     
     let BookingModel;
     let matchQuery = {};
-    let sumField = "$totalAmount"; // Default fallback
     let completedStatuses = ['Completed'];
 
-    // 🚨 FIX: Corrected Model Name, nested sum fields path, and status enums [1]
     if (role === 'Lab') {
         BookingModel = LabBooking;
-        matchQuery = { labId: new mongoose.Types.ObjectId(vendorId) };
-        sumField = "$billSummary.totalAmount"; // Nested inside billSummary
+        matchQuery = { labId: vendorObjId };
         completedStatuses = ['Report Uploaded', 'Completed'];
     } 
     else if (role === 'Pharmacy') {
-        BookingModel = PharmacyBooking; // 👈 Resolved to correct model
-        matchQuery = { pharmacyId: new mongoose.Types.ObjectId(vendorId) };
-        sumField = "$billSummary.totalAmount"; // 👈 Nested inside billSummary
+        BookingModel = PharmacyBooking;
+        matchQuery = { pharmacyId: vendorObjId };
         completedStatuses = ['Delivered', 'Completed'];
     } 
     else if (role === 'Nurse') {
-        BookingModel = NurseBooking; // 👈 Resolved to correct model
-        matchQuery = { nurseId: new mongoose.Types.ObjectId(vendorId) };
-        sumField = "$priceBreakdown.totalPrice"; // 👈 Nested inside priceBreakdown
+        BookingModel = NurseBooking;
+        matchQuery = { nurseId: vendorObjId };
         completedStatuses = ['Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed'];
     } else {
         throw new Error("Invalid Provider Role inside Wallet controller.");
     }
 
-    // A. Calculate Total Earnings till date
-    const totalEarningsQuery = await BookingModel.aggregate([
-        { $match: { ...matchQuery, status: { $in: completedStatuses } } },
-        { $group: { _id: null, total: { $sum: sumField } } }
-    ]);
-    const totalEarnings = totalEarningsQuery[0]?.total || 0;
+    // 1. Fetch all completed bookings for this provider
+    const completedOrders = await BookingModel.find({
+        ...matchQuery,
+        status: { $in: completedStatuses }
+    }).select('billSummary totalPrice priceBreakdown updatedAt').lean();
 
-    // B. Calculate Cleared Earnings (Older than 7 days) - [1.2.2]
-    const clearedEarningsQuery = await BookingModel.aggregate([
-        { 
-            $match: { 
-                ...matchQuery, 
-                status: { $in: completedStatuses },
-                updatedAt: { $lte: sevenDaysAgo } // 7-day period completed - [1.2.2]
-            } 
-        },
-        { $group: { _id: null, total: { $sum: sumField } } }
-    ]);
-    const clearedEarnings = clearedEarningsQuery[0]?.total || 0;
+    let totalEarnings = 0;
+    let clearedEarnings = 0;
+    let pendingEarnings = 0;
 
-    // C. Calculate Pending Earnings (Within last 7 days - Locked) - [1.2.2]
-    const pendingEarningsQuery = await BookingModel.aggregate([
-        { 
-            $match: { 
-                ...matchQuery, 
-                status: { $in: completedStatuses },
-                updatedAt: { $gt: sevenDaysAgo } // Completed within last 7 days - [1.2.2]
-            } 
-        },
-        { $group: { _id: null, total: { $sum: sumField } } }
-    ]);
-    const pendingEarnings = pendingEarningsQuery[0]?.total || 0;
+    // 🚨 2. Deduct Admin Commission based on specific provider role
+    for (let order of completedOrders) {
+        let grossAmount = 0;
+        if (role === 'Lab' || role === 'Pharmacy') {
+            grossAmount = Number(order.billSummary?.totalAmount || order.totalPrice || 0);
+        } else if (role === 'Nurse') {
+            grossAmount = Number(order.priceBreakdown?.totalPrice || order.totalPrice || 0);
+        }
 
-    // D. Calculate total requested withdrawals (Pending/Approved)
+        const { netVendorAmount } = await calculateAdminCommission(role, grossAmount);
+
+        totalEarnings += netVendorAmount;
+
+        // 7-Day Rolling Cleared vs Locked calculation
+        if (new Date(order.updatedAt) <= sevenDaysAgo) {
+            clearedEarnings += netVendorAmount;
+        } else {
+            pendingEarnings += netVendorAmount;
+        }
+    }
+
+    // 3. Total requested withdrawals
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
-                vendorId: new mongoose.Types.ObjectId(vendorId),
-                vendorModel: role, // Dynamically maps to Lab, Pharmacy, or Nurse
+                vendorId: vendorObjId,
+                vendorModel: role,
                 status: { $in: ['Pending', 'Approved'] }
             }
         },

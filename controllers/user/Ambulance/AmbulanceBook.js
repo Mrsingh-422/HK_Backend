@@ -6,6 +6,8 @@ const Coupon = require('../../../models/Coupon');
 const Review = require('../../../models/Review');
 const crypto = require('crypto');
 const Wallet = require('../../../models/Wallet');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const moment = require('moment');
 const { getDistance } = require('../../../utils/helpers');
@@ -17,6 +19,8 @@ const { isCodEnabled } = require('../../../utils/policyHelper');
 const { verifyFirebasePhoneToken } = require('../../../utils/firebaseAuthHelper');
 const UserSubscription = require('../../../models/UserSubscription');
 const Appointment = require('../../../models/Appointment');
+const policyHelper = require('../../../utils/policyHelper');
+
 
 const generateToken = (id, role = 'user') => {
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -939,14 +943,19 @@ const cancelAmbulanceBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cannot cancel completed ambulance trips." });
         }
 
-        // 🚨 1. EVALUATE CANCELLATION CHARGE (Managed by Admin CancellationConfig)
-        // Accidental cases have 0 cancellation charge. Medical & Referral deduct policy charge.
+        // 1. Evaluate Cancellation Charge
         let policyResult = { cancellationFee: 0, refundAmount: 0 };
         const isAccidental = (booking.serviceType === 'Accident emergency');
 
         if (!isAccidental) {
-            const specificVendorType = booking.serviceType === 'Referral Ambulance' ? 'Ambulance-Referral' : 'Ambulance-Medical';
-            policyResult = await processCancellationRefund(booking, specificVendorType);
+            try {
+                const specificVendorType = booking.serviceType === 'Referral Ambulance' ? 'Ambulance-Referral' : 'Ambulance-Medical';
+                policyResult = await processCancellationRefund(booking, specificVendorType);
+            } catch (policyErr) {
+                console.warn("Policy calculation warning:", policyErr.message);
+                const totalPaid = booking.pricing?.total || booking.totalAmount || 0;
+                policyResult = { cancellationFee: 0, refundAmount: totalPaid };
+            }
         } else {
             policyResult = { cancellationFee: 0, refundAmount: 0 };
         }
@@ -961,11 +970,11 @@ const cancelAmbulanceBooking = async (req, res) => {
         if (!booking.pricing) booking.pricing = {};
         booking.pricing.cancellationFeeApplied = cancellationFee;
 
-        // Payment status moves to Refund-Initiated for Admin to execute refund
         if (booking.paymentStatus === 'Paid') {
             booking.paymentStatus = 'Refund-Initiated';
         }
 
+        if (!booking.trackingTimeline) booking.trackingTimeline = [];
         booking.trackingTimeline.push({
             status: 'Cancelled',
             timestamp: new Date(),
@@ -975,55 +984,66 @@ const cancelAmbulanceBooking = async (req, res) => {
         // Release Driver
         if (booking.ambulanceId) {
             await Ambulance.findByIdAndUpdate(booking.ambulanceId, { $set: { availableForEmergency: true } });
-            await sendPushNotification(
-                booking.ambulanceId, 
-                'ambulance', 
-                "Ride Cancelled", 
-                "Patient has cancelled this ambulance request.",
-                { bookingId: booking._id.toString(), type: 'booking_cancelled' }
-            );
 
-            // Credit driver compensation if late cancellation fee was charged
+            try {
+                await sendPushNotification(
+                    booking.ambulanceId, 
+                    'ambulance', 
+                    "Ride Cancelled", 
+                    "Patient has cancelled this ambulance request.",
+                    { bookingId: booking._id.toString(), type: 'booking_cancelled' }
+                );
+            } catch (e) {}
+
             if (cancellationFee > 0) {
-                await creditVendorCompensation(booking.ambulanceId, 'Ambulance', cancellationFee, booking.bookingId, 'Cancellation Fee');
+                try {
+                    await creditVendorCompensation(booking.ambulanceId, 'Ambulance', cancellationFee, booking.bookingId, 'Cancellation Fee');
+                } catch (e) {}
             }
         }
 
         // Cancel Hospital Pre-Admission
         if (booking.bookingId) {
-            await Appointment.findOneAndUpdate(
-                { transactionId: booking.bookingId },
-                { $set: { status: 'Cancelled-By-User', 'tracking.status': 'Cancelled' } }
-            );
+            try {
+                await Appointment.findOneAndUpdate(
+                    { transactionId: booking.bookingId },
+                    { $set: { status: 'Cancelled-By-User', 'tracking.status': 'Cancelled' } }
+                );
+            } catch (e) {}
         }
 
         await booking.save();
 
         // =========================================================================
-        // 🚨 2. ACCIDENTAL EMERGENCY AUTO-BAN ENGINE (2 Cancellations in 1 Day)
+        // 🚨 2. ACCIDENTAL AUTO-BAN CHECK (Unban-Aware Counting Logic)
         // =========================================================================
         let isUserBannedNow = false;
         let banMessage = "";
 
         if (isAccidental) {
-            const todayStart = moment().startOf('day').toDate();
+            const todayStart = new Date();
+            todayStart.setHours(0, 0, 0, 0);
             
-            // Count accidental cancellations by this user today
-            const todayAccidentalCancellations = await Booking.countDocuments({
+            // 🚨 CRITICAL FIX: Agar Admin ne unban kiya hai, toh unban hone ke BAAD ki cancellations hi ginenge!
+            const effectiveStartDate = (user.unbannedAt && new Date(user.unbannedAt) > todayStart)
+                ? new Date(user.unbannedAt)
+                : todayStart;
+
+            const cancellationsSinceEffectiveStart = await Booking.countDocuments({
                 userId: user._id,
                 serviceType: 'Accident emergency',
                 status: 'Cancelled',
                 cancelledBy: 'User',
-                updatedAt: { $gte: todayStart }
+                updatedAt: { $gte: effectiveStartDate }
             });
 
-            // If 2 or more cancellations today -> AUTO BAN USER!
-            if (todayAccidentalCancellations >= 2) {
+            // Sirf tabhi ban hoga agar Unban hone ke baad dobara 2 baar cancel kare
+            if (cancellationsSinceEffectiveStart >= 2) {
                 isUserBannedNow = true;
                 user.isActive = false;
                 user.isBanned = true;
                 user.banReason = "Account automatically suspended due to multiple (2) accidental emergency cancellations within a single day. Please contact Admin to reactivate.";
-                user.token = null; // Revoke all sessions
+                user.token = null;
                 await user.save();
 
                 banMessage = "⚠️ WARNING: Your account has been suspended for cancelling 2 accidental emergency bookings in a single day. Please contact Admin to unban.";

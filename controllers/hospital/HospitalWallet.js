@@ -4,54 +4,42 @@ const Appointment = require('../../models/Appointment'); // Synced with real App
 const WithdrawalRequest = require('../../models/WithdrawalRequest'); // Centralized requests
 const moment = require('moment');
 const mongoose = require('mongoose');
+const { calculateAdminCommission } = require('../../utils/policyHelper');
 
 // Helper to calculate Hospital specific 7-day cleared and locked balances [1.2.2]
 const calculateHospitalBalances = async (hospitalId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
+    const hospitalObjId = new mongoose.Types.ObjectId(hospitalId);
 
-    // 1. Total Completed Earnings (Admissions + Appointments completed till date)
-    const totalEarningsQuery = await Appointment.aggregate([
-        { 
-            $match: { 
-                hospitalId: new mongoose.Types.ObjectId(hospitalId), 
-                status: 'Completed' 
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-    ]);
-    const totalEarnings = totalEarningsQuery[0]?.total || 0;
+    // 1. Fetch all completed admissions & appointments
+    const completedAppointments = await Appointment.find({
+        hospitalId: hospitalObjId,
+        status: 'Completed'
+    }).select('totalAmount updatedAt').lean();
 
-    // 2. Cleared Earnings (Completed 7 or more days ago) - [1.2.2]
-    const clearedEarningsQuery = await Appointment.aggregate([
-        { 
-            $match: { 
-                hospitalId: new mongoose.Types.ObjectId(hospitalId), 
-                status: 'Completed',
-                updatedAt: { $lte: sevenDaysAgo } // Older than 7 days [1.2.2]
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-    ]);
-    const clearedEarnings = clearedEarningsQuery[0]?.total || 0;
+    let totalEarnings = 0;
+    let clearedEarnings = 0;
+    let pendingEarnings = 0;
 
-    // 3. Pending Earnings (Completed within the last 7 days - Locked) - [1.2.2]
-    const pendingEarningsQuery = await Appointment.aggregate([
-        { 
-            $match: { 
-                hospitalId: new mongoose.Types.ObjectId(hospitalId), 
-                status: 'Completed',
-                updatedAt: { $gt: sevenDaysAgo } // Pichle 7 dino me completed bookings [1.2.2]
-            } 
-        }, 
-        { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-    ]);
-    const pendingEarnings = pendingEarningsQuery[0]?.total || 0;
+    // 🚨 2. Deduct Admin Commission for each completed hospital admission
+    for (let appt of completedAppointments) {
+        const grossAmount = Number(appt.totalAmount || 0);
+        const { netVendorAmount } = await calculateAdminCommission('Hospital', grossAmount);
 
-    // 4. Total Payouts Requested till date (Pending or Approved)
+        totalEarnings += netVendorAmount;
+
+        if (new Date(appt.updatedAt) <= sevenDaysAgo) {
+            clearedEarnings += netVendorAmount;
+        } else {
+            pendingEarnings += netVendorAmount;
+        }
+    }
+
+    // 3. Total Payouts Requested till date
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
-                vendorId: new mongoose.Types.ObjectId(hospitalId),
+                vendorId: hospitalObjId,
                 vendorModel: 'Hospital',
                 status: { $in: ['Pending', 'Approved'] }
             }

@@ -154,7 +154,8 @@ const adminUnbanUser = async (req, res) => {
                 $set: {
                     isActive: true,
                     isBanned: false,
-                    banReason: null
+                    banReason: null,
+                    unbannedAt: new Date() // 👈 Saves unban timestamp
                 }
             },
             { new: true }

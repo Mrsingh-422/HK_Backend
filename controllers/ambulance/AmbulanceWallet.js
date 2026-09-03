@@ -5,41 +5,47 @@ const WithdrawalRequest = require('../../models/WithdrawalRequest');
 const Ambulance = require('../../models/Ambulance'); // 👈 Imported Ambulance model (fixes profile update)
 const moment = require('moment');
 const mongoose = require('mongoose');
+const { calculateAdminCommission } = require('../../utils/policyHelper'); // 👈 Import the commission calculation utility
 
-// Helper to calculate Ambulance specific 7-day cleared and locked balances [1.2.2]
 const calculateAmbulanceBalances = async (ambulanceId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const ambulanceObjId = new mongoose.Types.ObjectId(ambulanceId);
 
-    // 🚨 FINANCIAL FIX: Sum actual earning base (originalAmbulanceCharge if total was 0 on Accidental/Subscription)
     const allCompletedTrips = await Booking.find({
         ambulanceId: ambulanceObjId,
         status: 'Delivered'
-    }).select('pricing updatedAt').lean();
+    }).select('serviceType pricing updatedAt').lean();
 
     let totalEarnings = 0;
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    allCompletedTrips.forEach(trip => {
-        // If trip was free for patient (Accidental/Plan benefit), credit original fixed base fee
-        const tripFare = Number(
+    for (let trip of allCompletedTrips) {
+        let vendorSubtype = 'Ambulance-Medical';
+        if (trip.serviceType === 'Accident emergency') vendorSubtype = 'Ambulance-Accident';
+        else if (trip.serviceType === 'Referral Ambulance') vendorSubtype = 'Ambulance-Referral';
+
+        // Base trip gross fare
+        const grossFare = Number(
             trip.pricing?.total > 0 
                 ? trip.pricing.total 
-                : (trip.pricing?.originalAmbulanceCharge || trip.pricing?.ambulanceCharge || 1200)
+                : (trip.pricing?.originalAmbulanceCharge || 2000)
         );
 
-        totalEarnings += tripFare;
+        // 🚨 DEDUCT ADMIN CUTOFF (Commission Engine)
+        const { netVendorAmount } = await calculateAdminCommission(vendorSubtype, grossFare);
+
+        totalEarnings += netVendorAmount;
 
         // 7-Day Rolling Cleared vs Locked calculation
         if (new Date(trip.updatedAt) <= sevenDaysAgo) {
-            clearedEarnings += tripFare;
+            clearedEarnings += netVendorAmount;
         } else {
-            pendingEarnings += tripFare;
+            pendingEarnings += netVendorAmount;
         }
-    });
+    }
 
-    // Payouts Requested till date
+    // Payouts Requested
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
