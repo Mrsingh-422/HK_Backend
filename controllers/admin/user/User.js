@@ -1,4 +1,5 @@
 const User = require('../../../models/User');
+const UnbanRequest = require('../../../models/UnbanRequest');
 
 // Helper function: Data ko transform karne ke liye (Exact Keys as requested)
 const transformUserData = (user) => ({
@@ -173,6 +174,107 @@ const adminUnbanUser = async (req, res) => {
     }
 };
 
+// 1. GET ALL UNBAN REQUESTS (Pending, Approved, Rejected)
+// Endpoint: GET /admin/users/unban-requests?status=Pending&page=1
+const adminGetUnbanRequests = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { status } = req.query;
+
+        const query = {};
+        if (status && status !== 'All') {
+            query.status = status;
+        }
+
+        const total = await UnbanRequest.countDocuments(query);
+        const requests = await UnbanRequest.find(query)
+            .populate('userId', 'name phone email banReason accidentalBookingCount createdAt')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        res.json({
+            success: true,
+            total,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: requests
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. ADMIN ACTION ON UNBAN REQUEST (Approve / Reject)
+// Endpoint: PATCH /admin/users/unban-requests/:requestId
+const adminHandleUnbanAction = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { action, adminComments } = req.body; // action: 'Approved' | 'Rejected'
+        const adminId = req.user.id;
+
+        if (!action || !['Approved', 'Rejected'].includes(action)) {
+            return res.status(400).json({ success: false, message: "action must be 'Approved' or 'Rejected'." });
+        }
+
+        const request = await UnbanRequest.findById(requestId);
+        if (!request || request.status !== 'Pending') {
+            return res.status(404).json({ success: false, message: "Active pending unban request not found." });
+        }
+
+        // ==========================================
+        // CASE A: APPROVE UNBAN
+        // ==========================================
+        if (action === 'Approved') {
+            request.status = 'Approved';
+            request.adminComments = adminComments || "Unbanned by Admin";
+            request.adminId = adminId;
+            request.resolvedAt = new Date();
+            await request.save();
+
+            // 🚨 UNBAN USER & GIVE FRESH 24-HOUR CHANCE
+            await User.findByIdAndUpdate(request.userId, {
+                $set: {
+                    isActive: true,
+                    isBanned: false,
+                    banReason: null,
+                    unbannedAt: new Date() // 👈 Reset unban timestamp
+                }
+            });
+
+            return res.json({
+                success: true,
+                message: `User ${request.name} (${request.phone}) has been unbanned successfully!`,
+                data: request
+            });
+        }
+
+        // ==========================================
+        // CASE B: REJECT UNBAN
+        // ==========================================
+        if (action === 'Rejected') {
+            request.status = 'Rejected';
+            request.adminComments = adminComments || "Unban request rejected by Admin.";
+            request.adminId = adminId;
+            request.resolvedAt = new Date();
+            await request.save();
+
+            return res.json({
+                success: true,
+                message: "Unban request rejected. User remains suspended.",
+                data: request
+            });
+        }
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     getAllUsersAdmin, 
     searchUsersAdmin, 
@@ -180,5 +282,7 @@ module.exports = {
     toggleUserStatus, 
     deleteUserAdmin ,
     adminUnbanUser,
-    adminGetBannedUsers
+    adminGetBannedUsers,
+    adminGetUnbanRequests,
+    adminHandleUnbanAction
 };

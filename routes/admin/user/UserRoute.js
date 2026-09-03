@@ -7,7 +7,7 @@ const {
     getUserDetailsAdmin, 
     toggleUserStatus, 
     deleteUserAdmin ,
-    adminUnbanUser,adminGetBannedUsers
+    adminUnbanUser,adminGetBannedUsers,adminGetUnbanRequests,adminHandleUnbanAction
 } = require('../../../controllers/admin/user/User');
 
 // Base URL: /admin/users
@@ -29,6 +29,9 @@ router.delete('/delete/:id', protect('admin'), checkRoleAccess(1),  deleteUserAd
 
 router.get('/banned-users', protect('admin'), adminGetBannedUsers);
 router.patch('/unban/:userId', protect('admin'), adminUnbanUser);
+// Admin Unban Management
+router.get('/unban-requests', protect('admin'), adminGetUnbanRequests);
+router.patch('/unban-requests/:requestId', protect('admin'), adminHandleUnbanAction);
 
 
 module.exports = router;

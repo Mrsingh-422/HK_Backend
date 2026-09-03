@@ -31,7 +31,8 @@ const {
     getEmergencyList,
     removeAddress,
     removeEmergency,getUserDashboard
-    ,verifyPhoneAndSetPassword
+    ,verifyPhoneAndSetPassword,
+    requestUserUnban
 } = require('../../controllers/user/authUser.js'); 
 
 // Base route: /api/auth/user
@@ -119,7 +120,8 @@ router.get('/referral-details', protect('user'), getReferralDetails);
 router.get('/family-accounts', protect('user'), getFamilyAccounts);
 router.post('/verify-phone-and-set-password', protect('user'), verifyPhoneAndSetPassword);
 
-
+// Public: Submit Unban Request Without Login
+router.post('/request-unban', requestUserUnban);
 
 
 module.exports = router;

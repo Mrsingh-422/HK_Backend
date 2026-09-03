@@ -9,6 +9,7 @@ const PillReminder = require('../../models/PillReminder');
 const HealthNews = require('../../models/HealthNews'); // New Model
 const { getActiveSubscriptionMetadata } = require('../../utils/subscriptionBenefitHelper'); // New Helper
 const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); // 👈 Firebase Helper
+const UnbanRequest = require('../../models/UnbanRequest');
 
 
 // Helper: Token Generator
@@ -167,67 +168,43 @@ const registerUser = async (req, res) => {
 };
 
 // ==========================================
-// 1. LOGIN USER (With Banned / Inactive Check)
-// Endpoint: POST /api/auth/user/login
+// 1. UPDATED: LOGIN USER (With Banned Flag & Unban Prompt)// Endpoint: POST /api/auth/user/login
 // ==========================================
 const loginUser = async (req, res) => {
     try {
-        const { email, phone, countryCode, password } = req.body;
+        const { email, phone, password } = req.body;
 
         let query = {};
-        if (email) {
-            query = { email: email.toLowerCase().trim() };
-        } else if (phone) {
-            query = { phone: phone.trim().replace(/\D/g, "").slice(-10) };
-        } else {
-            return res.status(400).json({ success: false, message: 'Provide Email or Phone number' });
-        }
+        if (email) query.email = email.toLowerCase().trim();
+        else if (phone) query.phone = phone.trim().replace(/\D/g, "").slice(-10);
+        else return res.status(400).json({ success: false, message: 'Provide Email or Phone number' });
 
         const user = await User.findOne(query).select('+password');
-
         if (!user || !(await bcrypt.compare(String(password), user.password))) {
             return res.status(400).json({ success: false, message: 'Invalid Credentials' });
         }
 
-        // 🚨 CRITICAL LOCK: Block login if user is Banned or Deactivated
+        // 🚨 CRITICAL LOCK: Block login if user is Banned
         if (user.isActive === false || user.isBanned === true) {
             return res.status(403).json({ 
                 success: false, 
                 isBanned: true,
-                message: user.banReason || "Your account has been suspended due to policy violations. Please contact Support/Admin to unban." 
+                canRequestUnban: true, // 👈 Tells frontend to show "Request Unban" button!
+                phone: user.phone,
+                message: user.banReason || "Your account has been suspended due to 2 accidental cancellations in 24 hours. Please submit an unban request to Admin." 
             });
         }
 
-        let token = null;
-        if (process.env.NODE_ENV === 'development' && user.token) {
-            try {
-                jwt.verify(user.token, process.env.JWT_SECRET);
-                token = user.token;
-            } catch (err) { token = null; }
-        }
-
-        if (!token) {
-            token = generateToken(user._id, 'user');
-            user.token = token;
-            await user.save();
-        }
-
+        let token = generateToken(user._id, 'user');
+        user.token = token;
+        await user.save();
         user.password = undefined;
 
-        res.json({
-            success: true,
-            token,
-            user: {
-                ...user._doc,
-                fullPhone: user.countryCode ? `${user.countryCode}${user.phone}` : null
-            }
-        });
-
+        res.json({ success: true, token, user });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // ==========================================
 // 3. FORGOT PASSWORD FLOW (Figma Screens)
@@ -1186,6 +1163,84 @@ const verifyPhoneAndSetPassword = async (req, res) => {
     }
 };
 
+
+// =========================================================================
+// 🚀 2. NEW: SUBMIT UNBAN REQUEST TO ADMIN (PUBLIC - WITHOUT LOGIN)
+// Endpoint: POST /api/auth/user/request-unban
+// =========================================================================
+const requestUserUnban = async (req, res) => {
+    try {
+        const { phone, reason } = req.body;
+
+        if (!phone || !reason || reason.trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Registered Phone number and Explanation Reason are required to submit an unban request." 
+            });
+        }
+
+        const cleanPhone = String(phone).trim().replace(/\D/g, "").slice(-10);
+
+        // 1. Find User by phone
+        const user = await User.findOne({ phone: cleanPhone });
+        if (!user) {
+            return res.status(404).json({ success: false, message: "No account registered with this phone number." });
+        }
+
+        // 2. Check if user is actually banned
+        if (user.isBanned === false && user.isActive === true) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Your account is not banned. You can login normally with your credentials." 
+            });
+        }
+
+        // 3. Check if an unban request is already pending
+        const existingPending = await UnbanRequest.findOne({ 
+            userId: user._id, 
+            status: 'Pending' 
+        });
+
+        if (existingPending) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Your unban request is already under review by the Admin team. Please wait." 
+            });
+        }
+
+        // 4. Create Unban Request
+        const newRequest = await UnbanRequest.create({
+            userId: user._id,
+            name: user.name,
+            phone: user.phone,
+            reason: reason.trim(),
+            status: 'Pending'
+        });
+
+        // 5. Notify Platform Admins
+        try {
+            await notifyAdminsAndVendor(
+                null,
+                'admin',
+                "🚨 New Account Unban Request!",
+                `User ${user.name} (${user.phone}) submitted an unban request: "${reason.trim()}"`,
+                { requestId: newRequest._id.toString(), type: 'unban_request' }
+            );
+        } catch (e) {}
+
+        res.status(201).json({
+            success: true,
+            message: "Unban request submitted to Admin successfully. You will be able to login once approved.",
+            data: newRequest
+        });
+
+    } catch (error) {
+        console.error("Unban Request Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     checkUserExists,
     registerUser, 
@@ -1223,5 +1278,6 @@ module.exports = {
     removeAddress,
     removeEmergency,
     getUserDashboard,
-    verifyPhoneAndSetPassword
+    verifyPhoneAndSetPassword,
+    requestUserUnban
 };

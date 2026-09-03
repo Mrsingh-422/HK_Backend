@@ -919,7 +919,11 @@ const cancelAmbulanceBooking = async (req, res) => {
         if (!user) return res.status(404).json({ success: false, message: "User not found." });
 
         if (user.isActive === false || user.isBanned === true) {
-            return res.status(403).json({ success: false, message: user.banReason || "Your account is banned." });
+            return res.status(403).json({ 
+                success: false, 
+                isBanned: true,
+                message: user.banReason || "Your account has been suspended. Please submit an unban request." 
+            });
         }
 
         const isObjectId = mongoose.isValidObjectId(id);
@@ -943,19 +947,12 @@ const cancelAmbulanceBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cannot cancel completed ambulance trips." });
         }
 
-        // 1. Evaluate Cancellation Charge
-        let policyResult = { cancellationFee: 0, refundAmount: 0 };
         const isAccidental = (booking.serviceType === 'Accident emergency');
+        let policyResult = { cancellationFee: 0, refundAmount: 0 };
 
         if (!isAccidental) {
-            try {
-                const specificVendorType = booking.serviceType === 'Referral Ambulance' ? 'Ambulance-Referral' : 'Ambulance-Medical';
-                policyResult = await processCancellationRefund(booking, specificVendorType);
-            } catch (policyErr) {
-                console.warn("Policy calculation warning:", policyErr.message);
-                const totalPaid = booking.pricing?.total || booking.totalAmount || 0;
-                policyResult = { cancellationFee: 0, refundAmount: totalPaid };
-            }
+            const specificVendorType = booking.serviceType === 'Referral Ambulance' ? 'Ambulance-Referral' : 'Ambulance-Medical';
+            policyResult = await processCancellationRefund(booking, specificVendorType);
         } else {
             policyResult = { cancellationFee: 0, refundAmount: 0 };
         }
@@ -984,7 +981,6 @@ const cancelAmbulanceBooking = async (req, res) => {
         // Release Driver
         if (booking.ambulanceId) {
             await Ambulance.findByIdAndUpdate(booking.ambulanceId, { $set: { availableForEmergency: true } });
-
             try {
                 await sendPushNotification(
                     booking.ambulanceId, 
@@ -994,12 +990,6 @@ const cancelAmbulanceBooking = async (req, res) => {
                     { bookingId: booking._id.toString(), type: 'booking_cancelled' }
                 );
             } catch (e) {}
-
-            if (cancellationFee > 0) {
-                try {
-                    await creditVendorCompensation(booking.ambulanceId, 'Ambulance', cancellationFee, booking.bookingId, 'Cancellation Fee');
-                } catch (e) {}
-            }
         }
 
         // Cancel Hospital Pre-Admission
@@ -1015,38 +1005,38 @@ const cancelAmbulanceBooking = async (req, res) => {
         await booking.save();
 
         // =========================================================================
-        // 🚨 2. ACCIDENTAL AUTO-BAN CHECK (Unban-Aware Counting Logic)
+        // 🚨 24-HOURS ACCIDENTAL AUTO-BAN ENGINE (FOR ALL USERS: VERIFIED & UNVERIFIED)
         // =========================================================================
         let isUserBannedNow = false;
         let banMessage = "";
 
         if (isAccidental) {
-            const todayStart = new Date();
-            todayStart.setHours(0, 0, 0, 0);
-            
-            // 🚨 CRITICAL FIX: Agar Admin ne unban kiya hai, toh unban hone ke BAAD ki cancellations hi ginenge!
-            const effectiveStartDate = (user.unbannedAt && new Date(user.unbannedAt) > todayStart)
-                ? new Date(user.unbannedAt)
-                : todayStart;
+            const now = new Date();
+            const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Strict 24-hour rolling window
 
-            const cancellationsSinceEffectiveStart = await Booking.countDocuments({
+            // If user was unbanned recently within last 24h, count only cancellations after unban
+            const effectiveStartDate = (user.unbannedAt && new Date(user.unbannedAt) > last24Hours)
+                ? new Date(user.unbannedAt)
+                : last24Hours;
+
+            // Counts all accidental cancellations for this user in last 24h (Chahe User kare, Driver kare ya Admin)
+            const cancellationsIn24Hrs = await Booking.countDocuments({
                 userId: user._id,
                 serviceType: 'Accident emergency',
                 status: 'Cancelled',
-                cancelledBy: 'User',
                 updatedAt: { $gte: effectiveStartDate }
             });
 
-            // Sirf tabhi ban hoga agar Unban hone ke baad dobara 2 baar cancel kare
-            if (cancellationsSinceEffectiveStart >= 2) {
+            // 🚨 IF 2 OR MORE ACCIDENTAL CANCELLATIONS IN 24 HOURS ➔ AUTO BAN USER!
+            if (cancellationsIn24Hrs >= 2) {
                 isUserBannedNow = true;
                 user.isActive = false;
                 user.isBanned = true;
-                user.banReason = "Account automatically suspended due to multiple (2) accidental emergency cancellations within a single day. Please contact Admin to reactivate.";
-                user.token = null;
+                user.banReason = "Account automatically suspended: 2 accidental emergency bookings were cancelled within 24 hours. You can submit an unban request to Admin.";
+                user.token = null; // Revoke all active login sessions
                 await user.save();
 
-                banMessage = "⚠️ WARNING: Your account has been suspended for cancelling 2 accidental emergency bookings in a single day. Please contact Admin to unban.";
+                banMessage = "⚠️ CRITICAL: Your account has been suspended for cancelling 2 accidental emergency bookings in 24 hours. Please submit an Unban Request to Admin from the app.";
             }
         }
 
@@ -1056,6 +1046,7 @@ const cancelAmbulanceBooking = async (req, res) => {
                 ? `Booking cancelled. A cancellation fee of ₹${cancellationFee} was deducted. Remaining ₹${refundAmount} sent to Admin Refund Queue.`
                 : "Booking cancelled successfully."),
             isBanned: isUserBannedNow,
+            canRequestUnban: isUserBannedNow,
             data: {
                 cancellationFee,
                 refundAmount,
