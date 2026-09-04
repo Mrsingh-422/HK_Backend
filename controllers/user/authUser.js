@@ -1,3 +1,4 @@
+// controllers/user/authUser.js
 const User = require('../../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -10,6 +11,7 @@ const HealthNews = require('../../models/HealthNews'); // New Model
 const { getActiveSubscriptionMetadata } = require('../../utils/subscriptionBenefitHelper'); // New Helper
 const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); // 👈 Firebase Helper
 const UnbanRequest = require('../../models/UnbanRequest');
+const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
 
 
 // Helper: Token Generator
@@ -18,36 +20,57 @@ const generateToken = (id, role = 'user') => {
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
+// ==========================================
+// USER PRE-CHECK (Already-Registered Check FIRST, Limiter Check SECOND)
 // Endpoint: POST /api/auth/user/check-exists
+// ==========================================
 const checkUserExists = async (req, res) => {
     try {
         const { phone, email } = req.body;
 
         if (!phone && !email) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Phone number or Email is required." 
-            });
+            return res.status(400).json({ success: false, message: "Phone number or Email is required." });
         }
 
+        const cleanPhone = phone ? String(phone).trim().replace(/\D/g, "").slice(-10) : null;
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+
+        const clientIp = req.headers['cf-connecting-ip'] || 
+                         req.headers['x-forwarded-for']?.split(',')[0].trim() || 
+                         req.socket.remoteAddress;
+
+        // 🚨 1. STEP A: FIRST CHECK IF USER ALREADY EXISTS IN DATABASE
         const query = [];
-        if (phone) query.push({ phone: phone.trim().replace(/\D/g, "").slice(-10) });
-        if (email) query.push({ email: email.toLowerCase().trim() });
+        if (cleanPhone) query.push({ phone: cleanPhone });
+        if (normalizedEmail) query.push({ email: normalizedEmail });
 
         const exists = await User.findOne({ $or: query });
 
         if (exists) {
-            const isPhoneMatch = exists.phone === (phone ? phone.trim().replace(/\D/g, "").slice(-10) : "");
+            const isPhoneMatch = exists.phone === cleanPhone;
+            // ❌ Directly return Already Registered (DO NOT consume rate limit!)
             return res.status(200).json({ 
                 success: false, 
                 exists: true, 
                 message: isPhoneMatch 
-                    ? "This mobile number is already registered. Please Login instead." 
-                    : "This email address is already registered. Please Login instead."
+                    ? "This mobile number is already registered. Please Login." 
+                    : "This email address is already registered. Please Login."
             });
         }
 
-        // Available for registration
+        // 🚨 2. STEP B: USER DOES NOT EXIST ➔ NOW CHECK & CONSUME 'Registration-OTP' LIMIT
+        if (cleanPhone) {
+            const limitCheck = await checkAndConsumeOtpLimit(cleanPhone, 'phone', 'Registration-OTP', clientIp);
+            if (!limitCheck.allowed) {
+                return res.status(limitCheck.statusCode).json({
+                    success: false,
+                    errorType: "OTP_LIMIT_EXCEEDED",
+                    message: limitCheck.message
+                });
+            }
+        }
+
+        // Available for registration & within rate limit
         res.status(200).json({ 
             success: true, 
             exists: false, 
@@ -172,35 +195,75 @@ const registerUser = async (req, res) => {
 // ==========================================
 const loginUser = async (req, res) => {
     try {
-        const { email, phone, password } = req.body;
+        const { email, phone, countryCode, password } = req.body;
 
         let query = {};
-        if (email) query.email = email.toLowerCase().trim();
-        else if (phone) query.phone = phone.trim().replace(/\D/g, "").slice(-10);
-        else return res.status(400).json({ success: false, message: 'Provide Email or Phone number' });
+        if (email) {
+            query = { email: email.toLowerCase().trim() };
+        } else if (phone) {
+            query = { phone: phone.trim().replace(/\D/g, "").slice(-10) };
+        } else {
+            return res.status(400).json({ success: false, message: 'Provide Email or Phone number' });
+        }
 
+        // Fetch user with password
         const user = await User.findOne(query).select('+password');
+
         if (!user || !(await bcrypt.compare(String(password), user.password))) {
             return res.status(400).json({ success: false, message: 'Invalid Credentials' });
         }
 
-        // 🚨 CRITICAL LOCK: Block login if user is Banned
-        if (user.isActive === false || user.isBanned === true) {
+        // 🚨 1. DEACTIVATED CHECK: If Admin deactivated this user (isActive === false)
+        if (user.isActive === false) {
+            return res.status(403).json({ 
+                success: false, 
+                isDeactivated: true,
+                isActive: false,
+                status: "Deactivated",
+                message: "Access Denied: Your account has been deactivated by the Administrator. Please contact support." 
+            });
+        }
+
+        // 🚨 2. AUTO-BAN CHECK: If user was auto-banned for 2 cancellations
+        if (user.isBanned === true) {
             return res.status(403).json({ 
                 success: false, 
                 isBanned: true,
-                canRequestUnban: true, // 👈 Tells frontend to show "Request Unban" button!
+                canRequestUnban: true,
                 phone: user.phone,
                 message: user.banReason || "Your account has been suspended due to 2 accidental cancellations in 24 hours. Please submit an unban request to Admin." 
             });
         }
 
-        let token = generateToken(user._id, 'user');
-        user.token = token;
-        await user.save();
+        // Generate Token
+        let token = null;
+        if (process.env.NODE_ENV === 'development' && user.token) {
+            try {
+                jwt.verify(user.token, process.env.JWT_SECRET);
+                token = user.token;
+            } catch (err) { token = null; }
+        }
+
+        if (!token) {
+            token = generateToken(user._id, 'user');
+            user.token = token;
+            await user.save();
+        }
+
         user.password = undefined;
 
-        res.json({ success: true, token, user });
+        // ✅ Normal Active Login Response
+        res.json({
+            success: true,
+            token,
+            user: {
+                ...user._doc,
+                isActive: true,
+                status: "Active",
+                fullPhone: user.countryCode ? `${user.countryCode}${user.phone}` : null
+            }
+        });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

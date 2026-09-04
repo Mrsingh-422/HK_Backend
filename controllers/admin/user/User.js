@@ -7,6 +7,7 @@ const transformUserData = (user) => ({
     name: user.name || "",
     email: user.email || "",
     number: user.phone || "",
+    active: user.isActive !== false,
     active: user.profileStatus === 'Approved', // Approved = true, else false
     profilePic: user.profilePic // Added as per your request
 });
@@ -82,18 +83,43 @@ const getUserDetailsAdmin = async (req, res) => {
     }
 };
 
-// 4. TOGGLE USER STATUS
+// 4. TOGGLE USER STATUS (Active / Inactive Switch)
 const toggleUserStatus = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id);
-        if (!user) return res.status(404).json({ message: "User not found" });
+        const { id } = req.params;
 
-        user.profileStatus = user.profileStatus === 'Approved' ? 'Blocked' : 'Approved';
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        // 🔄 Toggle isActive status (True <-> False)
+        user.isActive = user.isActive === false ? true : false;
+
+        // Agar Admin ne user ko Deactivate / Inactive kar diya, toh uske active session tokens revoke karein
+        if (user.isActive === false) {
+            user.token = null; // 👈 Auto-logout from all devices
+        }
+
         await user.save();
 
-        res.json({ success: true, message: `User is now ${user.profileStatus}`, status: user.profileStatus });
+        const currentStatus = user.isActive ? 'Active' : 'Inactive';
+
+        res.json({
+            success: true,
+            message: `User status successfully updated to ${currentStatus}.`,
+            isActive: user.isActive,
+            status: currentStatus,
+            data: {
+                id: user._id,
+                name: user.name,
+                phone: user.phone,
+                isActive: user.isActive
+            }
+        });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

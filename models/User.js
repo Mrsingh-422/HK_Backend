@@ -151,6 +151,7 @@ const userSchema = new mongoose.Schema({
     
     isShortRegistered: { type: Boolean, default: false }, // True agar bina OTP short register hua hai
     accidentalBookingCount: { type: Number, default: 0 }, // Unverified number se kitni accidental bookings hui
+    isActive: { type: Boolean, default: true },
     isBanned: { type: Boolean, default: false },           // True agar 2 cancellations par auto-ban hua
     banReason: { type: String, default: null }
 

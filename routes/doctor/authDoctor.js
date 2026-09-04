@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { dynamicOtpLimiter } = require('../../middleware/dynamicOtpLimiter');
 const { protect } = require('../../middleware/authMiddleware');
 const { doctorDocUploads } = require('../../middleware/multer');
 const { 

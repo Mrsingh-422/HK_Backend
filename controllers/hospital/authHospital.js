@@ -1,9 +1,11 @@
-const Hospital = require('../../models/Hospital');
+// controllers/hospital/authHospital.js
+ Hospital = require('../../models/Hospital');
 const Ward = require('../../models/Ward');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); // 👈 Firebase Helper
+const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper');
+const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
 
 const generateToken = (id, role = 'hospital') => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
@@ -11,7 +13,7 @@ const generateToken = (id, role = 'hospital') => {
 };
 
 // ==========================================
-// 1. HOSPITAL PRE-CHECK (Check if already registered)
+// HOSPITAL PRE-CHECK (Already-Registered Check FIRST, Limiter Check SECOND)
 // Endpoint: POST /api/auth/hospital/check-exists
 // ==========================================
 const checkHospitalExists = async (req, res) => {
@@ -22,9 +24,14 @@ const checkHospitalExists = async (req, res) => {
             return res.status(400).json({ success: false, message: "Phone number or Email is required." });
         }
 
-        const cleanPhone = phone ? phone.trim().replace(/\D/g, "").slice(-10) : null;
+        const cleanPhone = phone ? String(phone).trim().replace(/\D/g, "").slice(-10) : null;
         const normalizedEmail = email ? email.toLowerCase().trim() : null;
 
+        const clientIp = req.headers['cf-connecting-ip'] || 
+                         req.headers['x-forwarded-for']?.split(',')[0].trim() || 
+                         req.socket.remoteAddress;
+
+        // 1. STEP A: Check Database First
         const query = [];
         if (cleanPhone) query.push({ phone: cleanPhone });
         if (normalizedEmail) query.push({ email: normalizedEmail });
@@ -40,6 +47,18 @@ const checkHospitalExists = async (req, res) => {
                     ? "This mobile number is already registered for a Hospital. Please Login." 
                     : "This email address is already registered for a Hospital. Please Login."
             });
+        }
+
+        // 2. STEP B: Check 'Registration-OTP' Rate Limit
+        if (cleanPhone) {
+            const limitCheck = await checkAndConsumeOtpLimit(cleanPhone, 'phone', 'Registration-OTP', clientIp);
+            if (!limitCheck.allowed) {
+                return res.status(limitCheck.statusCode).json({
+                    success: false,
+                    errorType: "OTP_LIMIT_EXCEEDED",
+                    message: limitCheck.message
+                });
+            }
         }
 
         res.status(200).json({ 

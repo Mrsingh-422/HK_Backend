@@ -17,6 +17,7 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { getAuth } = require('firebase-admin/auth'); 
 const { sendEmailOTP } = require("../../utils/emailService");
+const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
 
 // All active models in the project
 const modelsList = [
@@ -98,9 +99,12 @@ const forgotPasswordPhone = async (req, res) => {
             return res.status(400).json({ success: false, message: "Please provide a valid 10-digit phone number." });
         }
 
-        const matchedProfiles = [];
+        const clientIp = req.headers['cf-connecting-ip'] || 
+                         req.headers['x-forwarded-for']?.split(',')[0].trim() || 
+                         req.socket.remoteAddress;
 
-        // Check accounts across all systems
+        // 🚨 1. Check if Account Exists First
+        const matchedProfiles = [];
         for (let item of modelsList) {
             const query = buildPhoneQuery(item.phoneKey, phone);
             const account = await item.model.findOne(query);
@@ -117,6 +121,16 @@ const forgotPasswordPhone = async (req, res) => {
             return res.status(404).json({ success: false, message: "No account registered with this phone number." });
         }
 
+        // 🚨 2. Account Exists ➔ Now Check & Consume 'Phone-OTP' Rate Limit (Isolated Bucket)
+        const limitCheck = await checkAndConsumeOtpLimit(last10, 'phone', 'Phone-OTP', clientIp);
+        if (!limitCheck.allowed) {
+            return res.status(limitCheck.statusCode).json({
+                success: false,
+                errorType: "OTP_LIMIT_EXCEEDED",
+                message: limitCheck.message
+            });
+        }
+
         res.json({ 
             success: true, 
             message: `${matchedProfiles.length} account(s) found. Verify OTP to reset password.`, 
@@ -126,6 +140,7 @@ const forgotPasswordPhone = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // STEP 2: Verify Firebase ID Token & Return Secure Reset Token
 // Endpoint: POST /api/password/verify-firebase-otp
@@ -271,7 +286,7 @@ const resetPasswordPhone = async (req, res) => {
 // ✉️ EMAIL FLOW (Universal Brevo OTP - Schema Bypassed)
 // =========================================================================
 
-// 1. SEND 6-DIGIT EMAIL OTP
+// 2. FORGOT PASSWORD EMAIL (Uses 'Email-OTP' Bucket - Completely separate)
 // Endpoint: POST /api/password/forgot-password
 const forgotPassword = async (req, res) => {
     try {
@@ -279,48 +294,45 @@ const forgotPassword = async (req, res) => {
         if (!email) return res.status(400).json({ success: false, message: "Email is required" });
 
         const cleanEmail = email.toLowerCase().trim();
-        const result = await findAccountByEmail(cleanEmail);
+        const clientIp = req.headers['cf-connecting-ip'] || 
+                         req.headers['x-forwarded-for']?.split(',')[0].trim() || 
+                         req.socket.remoteAddress;
 
+        // 1. Check if Account Exists First
+        const result = await findAccountByEmail(cleanEmail);
         if (!result) {
             return res.status(404).json({ success: false, message: "Account not found with this email address." });
         }
 
-        const { account, Model } = result;
-
-        // 🎲 Generate Random 6-Digit OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        const expiryDate = new Date(Date.now() + 10 * 60 * 1000); // 10 Minutes
-
-        // 🚨 CRITICAL FIX: Direct MongoDB write to bypass Mongoose Schema omissions!
-        await Model.collection.updateOne(
-            { _id: account._id },
-            { 
-                $set: { 
-                    resetPasswordOtp: String(otp).trim(),
-                    resetPasswordExpires: expiryDate 
-                } 
-            }
-        );
-
-        console.log(`\n📧 [BREVO TRIGGER] Sending OTP to ${cleanEmail}: ${otp} for Model: ${Model.modelName}\n`);
-
-        // Send Real Email via Brevo
-        const emailSent = await sendEmailOTP(cleanEmail, otp);
-
-        if (!emailSent) {
-            return res.status(500).json({ 
-                success: false, 
-                message: "Failed to send email. Please check Brevo configuration." 
+        // 2. Check & Consume 'Email-OTP' Rate Limit (Isolated Bucket)
+        const limitCheck = await checkAndConsumeOtpLimit(cleanEmail, 'email', 'Email-OTP', clientIp);
+        if (!limitCheck.allowed) {
+            return res.status(limitCheck.statusCode).json({
+                success: false,
+                errorType: "OTP_LIMIT_EXCEEDED",
+                message: limitCheck.message
             });
         }
 
-        res.json({ 
-            success: true, 
-            message: "OTP sent successfully to your email address."
-        });
+        const { account, Model } = result;
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiryDate = new Date(Date.now() + 10 * 60 * 1000);
+
+        await Model.collection.updateOne(
+            { _id: account._id },
+            { $set: { resetPasswordOtp: String(otp).trim(), resetPasswordExpires: expiryDate } }
+        );
+
+        console.log(`\n📧 [BREVO TRIGGER] Sending OTP to ${cleanEmail}: ${otp}\n`);
+        const emailSent = await sendEmailOTP(cleanEmail, otp);
+
+        if (!emailSent) {
+            return res.status(500).json({ success: false, message: "Failed to send email. Check Brevo configuration." });
+        }
+
+        res.json({ success: true, message: "OTP sent successfully to your email address." });
 
     } catch (error) {
-        console.error("Forgot Password Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

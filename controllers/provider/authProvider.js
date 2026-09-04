@@ -7,7 +7,9 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto'); 
 const sendEmailOTP = require('../../utils/emailService'); 
 const { deleteFile } = require('../../utils/fileHandler');
-const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); // 👈 Firebase Helper Import
+const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper');
+const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
+
 
 // Helper: Token Generation
 const generateToken = (id, role) => {
@@ -19,6 +21,68 @@ const generateToken = (id, role) => {
 const getModelByCategory = (category) => {
     const map = { 'Lab': Lab, 'Pharmacy': Pharmacy, 'Nurse': Nurse };
     return map[category];
+};
+
+// ==========================================
+// PROVIDER PRE-CHECK (Already-Registered Check FIRST, Limiter Check SECOND)
+// Endpoint: POST /api/auth/provider/check-exists
+// ==========================================
+const checkProviderExists = async (req, res) => {
+    try {
+        const { phone, email, category } = req.body;
+
+        if (!phone && !email) {
+            return res.status(400).json({ success: false, message: "Phone or Email is required." });
+        }
+
+        const Model = getModelByCategory(category);
+        if (!Model) {
+            return res.status(400).json({ success: false, message: "Please specify category (Lab/Pharmacy/Nurse)." });
+        }
+
+        const cleanPhone = phone ? String(phone).trim().replace(/\D/g, "").slice(-10) : null;
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+
+        const clientIp = req.headers['cf-connecting-ip'] || 
+                         req.headers['x-forwarded-for']?.split(',')[0].trim() || 
+                         req.socket.remoteAddress;
+
+        // 1. STEP A: Check Database First (Category-Scoped)
+        const query = [];
+        if (cleanPhone) query.push({ phone: cleanPhone });
+        if (normalizedEmail) query.push({ email: normalizedEmail });
+
+        const exists = await Model.findOne({ $or: query });
+
+        if (exists) {
+            return res.status(200).json({ 
+                success: false, 
+                exists: true, 
+                message: `This phone/email is already registered as a ${category}. Please login instead.` 
+            });
+        }
+
+        // 2. STEP B: Check 'Registration-OTP' Rate Limit
+        if (cleanPhone) {
+            const limitCheck = await checkAndConsumeOtpLimit(cleanPhone, 'phone', 'Registration-OTP', clientIp);
+            if (!limitCheck.allowed) {
+                return res.status(limitCheck.statusCode).json({
+                    success: false,
+                    errorType: "OTP_LIMIT_EXCEEDED",
+                    message: limitCheck.message
+                });
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            exists: false, 
+            message: `Available for registration as ${category}.` 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // ==========================================
@@ -116,47 +180,6 @@ const registerProvider = async (req, res) => {
     }
 };
 
-// Endpoint: POST /api/auth/provider/check-exists
-const checkProviderExists = async (req, res) => {
-    try {
-        const { phone, email, category } = req.body;
-
-        if (!phone && !email) {
-            return res.status(400).json({ success: false, message: "Phone or Email is required." });
-        }
-
-        const Model = getModelByCategory(category);
-        if (!Model) {
-            return res.status(400).json({ success: false, message: "Please specify category (Lab/Pharmacy/Nurse)." });
-        }
-
-        const cleanPhone = phone ? phone.trim().replace(/\D/g, "").slice(-10) : null;
-        const normalizedEmail = email ? email.toLowerCase().trim() : null;
-
-        const query = [];
-        if (cleanPhone) query.push({ phone: cleanPhone });
-        if (normalizedEmail) query.push({ email: normalizedEmail });
-
-        const exists = await Model.findOne({ $or: query });
-
-        if (exists) {
-            return res.status(200).json({ 
-                success: false, 
-                exists: true, 
-                message: `This phone/email is already registered as a ${category}. Please login instead.` 
-            });
-        }
-
-        res.status(200).json({ 
-            success: true, 
-            exists: false, 
-            message: `Available for registration as ${category}.` 
-        });
-
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
 
 
 // ==========================================
