@@ -504,6 +504,113 @@ const getUserOrdersAdmin = async (req, res) => {
     }
 };
 
+const getUserOrderDetailAdmin = async (req, res) => {
+    try {
+        const { type, id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid MongoDB ID format." });
+        }
+
+        let detail = null;
+
+        switch (type) {
+            case 'Doctor':
+                // 🩺 Doctor Appointment & Hospital Bed Booking (Both resolved under Appointment schema)
+                detail = await Appointment.findById(id)
+                    .populate('userId', 'name email phone profilePic gender dob')
+                    .populate('doctorId', 'name email phone speciality qualification profileImage fees alternatePhone languages')
+                    .populate('hospitalId', 'name address phone location hospitalImage type')
+                    .populate('bedId', 'bedNumber status pricePerDay isVentilatorAvailable')
+                    .populate('clinicalLogs.doctorId', 'name speciality')
+                    .populate('bedsideCareTeam.doctorId', 'name speciality')
+                    .populate('activeMedications.addedBy', 'name speciality')
+                    .populate('pendingDoctorId', 'name speciality')
+                    .populate('treatmentHistory.fromDoctorId', 'name speciality')
+                    .populate('treatmentHistory.toDoctorId', 'name speciality')
+                    .lean();
+
+                if (!detail) {
+                    return res.status(404).json({ success: false, message: "Doctor Appointment/Admission record not found." });
+                }
+                break;
+
+            case 'Lab':
+                // 🧪 Lab Tests & Packages Bookings
+                detail = await LabBooking.findById(id)
+                    .populate('userId', 'name email phone profilePic')
+                    .populate('labId', 'name email phone location address isHomeCollectionAvailable isRapidServiceAvailable')
+                    .populate('phlebotomistId', 'name phone profilePic vehicleNumber vehicleType')
+                    .populate('items.tests.testId', 'testName mainCategory sampleType reportTime amount discountPrice')
+                    .populate('items.packages.packageId', 'packageName mainCategory sampleType reportTime amount discountPrice')
+                    .lean();
+
+                if (!detail) {
+                    return res.status(404).json({ success: false, message: "Lab Booking not found." });
+                }
+                break;
+
+            case 'Pharmacy':
+                // 💊 Pharmacy Medicine Orders
+                detail = await PharmacyBooking.findById(id)
+                    .populate('userId', 'name email phone profilePic')
+                    .populate('pharmacyId', 'name email phone address location isHomeDeliveryAvailable')
+                    .populate('driverId', 'name phone profilePic vehicleNumber vehicleType')
+                    .populate('items.medicineId', 'name manufacturers packaging mrp best_price salt_composition image_url introduction benefits')
+                    .lean();
+
+                if (!detail) {
+                    return res.status(404).json({ success: false, message: "Pharmacy Order not found." });
+                }
+                break;
+
+            case 'Nurse':
+                // 🩻 Nurse Clinical Visita & Stay Packages
+                detail = await NurseBooking.findById(id)
+                    .populate('userId', 'name email phone profilePic gender dob')
+                    .populate('nurseId', 'name email phone speciality profileImage experienceYears gender about')
+                    .populate('assignedStaffId', 'name phone profilePic vehicleNumber vehicleType status')
+                    .lean();
+
+                if (!detail) {
+                    return res.status(404).json({ success: false, message: "Nurse Booking not found." });
+                }
+                break;
+
+            case 'Ambulance':
+                // 🚑 Emergency SOS & Scheduled Ambulance Bookings
+                detail = await AmbulanceBooking.findById(id)
+                    .populate('userId', 'name email phone profilePic')
+                    .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo profilePic')
+                    .populate('hospitalId', 'name address location phone hospitalImage')
+                    .populate('pickupHospitalId', 'name address location phone')
+                    .lean();
+
+                if (!detail) {
+                    return res.status(404).json({ success: false, message: "Ambulance Booking not found." });
+                }
+                break;
+
+            default:
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Invalid order type. Supported categories are: Doctor, Lab, Pharmacy, Nurse, Ambulance." 
+                });
+        }
+
+        res.json({
+            success: true,
+            type,
+            data: detail
+        });
+
+    } catch (error) {
+        console.error("Admin Get User Order Detail Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     getAllUsersAdmin, 
     searchUsersAdmin, 
@@ -514,5 +621,6 @@ module.exports = {
     adminGetBannedUsers,
     adminGetUnbanRequests,
     adminHandleUnbanAction,
-    getUserOrdersAdmin
+    getUserOrdersAdmin,
+    getUserOrderDetailAdmin
 };

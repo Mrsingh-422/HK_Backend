@@ -8,7 +8,7 @@ const {
     toggleUserStatus, 
     deleteUserAdmin ,
     adminUnbanUser,adminGetBannedUsers,adminGetUnbanRequests,adminHandleUnbanAction,
-    getUserOrdersAdmin
+    getUserOrdersAdmin,getUserOrderDetailAdmin
 } = require('../../../controllers/admin/user/User');
 
 // Base URL: /admin/users
@@ -35,6 +35,6 @@ router.get('/unban-requests', protect('admin'), adminGetUnbanRequests);
 router.patch('/unban-requests/:requestId', protect('admin'), adminHandleUnbanAction);
 
 router.get('/details/:id/orders', protect('admin'), checkRoleAccess(1), getUserOrdersAdmin);
-
+router.get('/orders/details/:type/:id', protect('admin'), checkRoleAccess(1), getUserOrderDetailAdmin);
 
 module.exports = router;
