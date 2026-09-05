@@ -1,6 +1,13 @@
 const User = require('../../../models/User');
 const UnbanRequest = require('../../../models/UnbanRequest');
 
+const Appointment = require('../../../models/Appointment');
+const LabBooking = require('../../../models/LabBooking');
+const PharmacyBooking = require('../../../models/PharmacyBooking');
+const NurseBooking = require('../../../models/NurseBooking');
+const AmbulanceBooking = require('../../../models/AmbulanceBooking');
+const mongoose = require('mongoose');
+
 // Helper function: Data ko transform karne ke liye (Exact Keys as requested)
 const transformUserData = (user) => ({
     id: user._id,
@@ -300,6 +307,202 @@ const adminHandleUnbanAction = async (req, res) => {
     }
 };
 
+const getUserOrdersAdmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+        const type = req.query.type || 'All'; // Options: 'Doctor', 'Lab', 'Pharmacy', 'Nurse', 'Ambulance', 'All'
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid User ID format." });
+        }
+
+        let orders = [];
+        let total = 0;
+
+        // Specific category logic for fast DB execution & precise pagination
+        if (type === 'Doctor') {
+            total = await Appointment.countDocuments({ userId: id });
+            const data = await Appointment.find({ userId: id })
+                .populate('doctorId', 'name speciality')
+                .populate('hospitalId', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean();
+
+            orders = data.map(item => ({
+                orderId: item.bookingId || "N/A",
+                mongoId: item._id,
+                type: 'Doctor',
+                date: item.appointmentDate || item.createdAt,
+                status: item.status,
+                total: item.totalAmount || 0,
+                details: item.bookingType === 'Admission' ? 'Hospital Admission' : `Consultation with Dr. ${item.doctorId?.name || 'Staff'}`
+            }));
+
+        } else if (type === 'Lab') {
+            total = await LabBooking.countDocuments({ userId: id });
+            const data = await LabBooking.find({ userId: id })
+                .populate('labId', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean();
+
+            orders = data.map(item => ({
+                orderId: item.bookingId || "N/A",
+                mongoId: item._id,
+                type: 'Lab',
+                date: item.appointmentDate || item.createdAt,
+                status: item.status,
+                total: item.billSummary?.totalAmount || 0,
+                details: `Lab Test at ${item.labId?.name || 'Partner Lab'}`
+            }));
+
+        } else if (type === 'Pharmacy') {
+            total = await PharmacyBooking.countDocuments({ userId: id });
+            const data = await PharmacyBooking.find({ userId: id })
+                .populate('pharmacyId', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean();
+
+            orders = data.map(item => ({
+                orderId: item.orderId || "N/A",
+                mongoId: item._id,
+                type: 'Pharmacy',
+                date: item.appointmentDate || item.createdAt,
+                status: item.status,
+                total: item.billSummary?.totalAmount || 0,
+                details: `Medicine Order from ${item.pharmacyId?.name || 'Pharmacy Partner'}`
+            }));
+
+        } else if (type === 'Nurse') {
+            total = await NurseBooking.countDocuments({ userId: id });
+            const data = await NurseBooking.find({ userId: id })
+                .populate('nurseId', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean();
+
+            orders = data.map(item => ({
+                orderId: item.bookingId || "N/A",
+                mongoId: item._id,
+                type: 'Nurse',
+                date: item.schedule?.startDate || item.createdAt,
+                status: item.status,
+                total: item.priceBreakdown?.totalPrice || 0,
+                details: `Nurse Service by ${item.nurseId?.name || 'Staff'}`
+            }));
+
+        } else if (type === 'Ambulance') {
+            total = await AmbulanceBooking.countDocuments({ userId: id });
+            const data = await AmbulanceBooking.find({ userId: id })
+                .populate('ambulanceId', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean();
+
+            orders = data.map(item => ({
+                orderId: item.bookingId || "N/A",
+                mongoId: item._id,
+                type: 'Ambulance',
+                date: item.scheduledAt || item.createdAt,
+                status: item.status,
+                total: item.pricing?.total || 0,
+                details: `${item.serviceType} Booking`
+            }));
+
+        } else {
+            // 'All' - Parallel fetch for recent orders across all services
+            const [doctorList, labList, pharmacyList, nurseList, ambulanceList] = await Promise.all([
+                Appointment.find({ userId: id }).populate('doctorId', 'name').populate('hospitalId', 'name').sort({ createdAt: -1 }).limit(100).lean(),
+                LabBooking.find({ userId: id }).populate('labId', 'name').sort({ createdAt: -1 }).limit(100).lean(),
+                PharmacyBooking.find({ userId: id }).populate('pharmacyId', 'name').sort({ createdAt: -1 }).limit(100).lean(),
+                NurseBooking.find({ userId: id }).populate('nurseId', 'name').sort({ createdAt: -1 }).limit(100).lean(),
+                AmbulanceBooking.find({ userId: id }).populate('ambulanceId', 'name').sort({ createdAt: -1 }).limit(100).lean()
+            ]);
+
+            const compiled = [
+                ...doctorList.map(item => ({
+                    orderId: item.bookingId || "N/A",
+                    mongoId: item._id,
+                    type: 'Doctor',
+                    date: item.appointmentDate || item.createdAt,
+                    status: item.status,
+                    total: item.totalAmount || 0,
+                    details: item.bookingType === 'Admission' ? 'Hospital Admission' : `Consultation with Dr. ${item.doctorId?.name || 'Staff'}`,
+                    createdAt: item.createdAt
+                })),
+                ...labList.map(item => ({
+                    orderId: item.bookingId || "N/A",
+                    mongoId: item._id,
+                    type: 'Lab',
+                    date: item.appointmentDate || item.createdAt,
+                    status: item.status,
+                    total: item.billSummary?.totalAmount || 0,
+                    details: `Lab Test at ${item.labId?.name || 'Partner Lab'}`,
+                    createdAt: item.createdAt
+                })),
+                ...pharmacyList.map(item => ({
+                    orderId: item.orderId || "N/A",
+                    mongoId: item._id,
+                    type: 'Pharmacy',
+                    date: item.appointmentDate || item.createdAt,
+                    status: item.status,
+                    total: item.billSummary?.totalAmount || 0,
+                    details: `Medicine Order from ${item.pharmacyId?.name || 'Pharmacy Partner'}`,
+                    createdAt: item.createdAt
+                })),
+                ...nurseList.map(item => ({
+                    orderId: item.bookingId || "N/A",
+                    mongoId: item._id,
+                    type: 'Nurse',
+                    date: item.schedule?.startDate || item.createdAt,
+                    status: item.status,
+                    total: item.priceBreakdown?.totalPrice || 0,
+                    details: `Nurse Service by ${item.nurseId?.name || 'Staff'}`,
+                    createdAt: item.createdAt
+                })),
+                ...ambulanceList.map(item => ({
+                    orderId: item.bookingId || "N/A",
+                    mongoId: item._id,
+                    type: 'Ambulance',
+                    date: item.scheduledAt || item.createdAt,
+                    status: item.status,
+                    total: item.pricing?.total || 0,
+                    details: `${item.serviceType} Booking`,
+                    createdAt: item.createdAt
+                }))
+            ];
+
+            // Real-time Sorting of compiled logs by creation timestamp
+            compiled.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+            total = compiled.length;
+            orders = compiled.slice(skip, skip + limit);
+        }
+
+        res.json({
+            success: true,
+            total,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            limit,
+            typeApplied: type,
+            data: orders
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 module.exports = { 
     getAllUsersAdmin, 
@@ -310,5 +513,6 @@ module.exports = {
     adminUnbanUser,
     adminGetBannedUsers,
     adminGetUnbanRequests,
-    adminHandleUnbanAction
+    adminHandleUnbanAction,
+    getUserOrdersAdmin
 };
