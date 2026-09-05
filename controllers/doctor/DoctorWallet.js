@@ -80,6 +80,18 @@ const getDoctorWalletStats = async (req, res) => {
             ]),
         };
 
+        // 🚨 LAZY INITIALIZATION: Stats load karte waqt bhi self-heal initialize lagaya
+        let wallet = await Wallet.findOne({ vendorId: doctorId, vendorModel: 'Doctor' });
+        if (!wallet) {
+            wallet = await Wallet.create({
+                vendorId: doctorId,
+                vendorModel: 'Doctor',
+                balance: 0,
+                transactions: []
+            });
+            console.log(`[Wallet] Self-Healed on Stats: Created new wallet for Doctor ${doctorId}`);
+        }
+
         res.json({ 
             success: true, 
             totalBalance: balances.walletBalance,
@@ -94,16 +106,23 @@ const getDoctorWalletStats = async (req, res) => {
     }
 };
 
-// 2. DOCTOR WITHDRAWAL REQUEST (With strict 7-day Lock Period validation)
+// 2. DOCTOR WITHDRAWAL REQUEST (With lazy-initialization fix)
 const requestDoctorWithdrawal = async (req, res) => {
     try {
         const { amount } = req.body;
         const doctorId = req.user.id;
         const doctor = req.user; // Decoded and populated via protect('doctor') middleware
 
-        const wallet = await Wallet.findOne({ vendorId: doctorId, vendorModel: 'Doctor' });
+        // 🚨 LAZY INITIALIZATION: Wallet database mein na hone par initialize karega
+        let wallet = await Wallet.findOne({ vendorId: doctorId, vendorModel: 'Doctor' });
         if (!wallet) {
-            return res.status(404).json({ success: false, message: "Wallet not found." });
+            wallet = await Wallet.create({
+                vendorId: doctorId,
+                vendorModel: 'Doctor',
+                balance: 0,
+                transactions: []
+            });
+            console.log(`[Wallet] Self-Healed on Payout: Created wallet for Doctor ${doctorId}`);
         }
 
         // Calculate dynamic balances using lock checks
@@ -169,7 +188,17 @@ const requestDoctorWithdrawal = async (req, res) => {
 // 3. GET TRANSACTION HISTORY
 const getDoctorTransactions = async (req, res) => {
     try {
-        const wallet = await Wallet.findOne({ vendorId: req.user.id, vendorModel: 'Doctor' });
+        // 🚨 LAZY INITIALIZATION: History fetch karte waqt bhi self-heal block check lagaya
+        let wallet = await Wallet.findOne({ vendorId: req.user.id, vendorModel: 'Doctor' });
+        if (!wallet) {
+            wallet = await Wallet.create({
+                vendorId: req.user.id,
+                vendorModel: 'Doctor',
+                balance: 0,
+                transactions: []
+            });
+            console.log(`[Wallet] Self-Healed on Tx History: Created wallet for Doctor ${req.user.id}`);
+        }
         res.json({ success: true, transactions: wallet?.transactions || [] });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
