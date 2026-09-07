@@ -97,13 +97,24 @@ const getIncomingRequests = async (req, res) => {
         const limit = 10;
         const driverId = req.user.id;
 
-        // 🚀 SYNC FIX: Strictly filters out trips already rejected by this driver
-        const requests = await Booking.find({ 
-            status: 'Searching',
-            rejectedBy: { $ne: driverId }, // 👈 Excludes rejected broadcasts
+        // 🚨 STRICT DRIVER VISIBILITY FILTER:
+        // 1. Accidental Emergency (Searching in broadcast pool, not rejected by this driver)
+        // 2. Direct Assigned Medical / Referral ONLY IF Confirmed AND (COD or Paid)
+        const requests = await Booking.find({
             $or: [
-                { serviceType: 'Accident emergency' }, // Broadcast emergency
-                { ambulanceId: driverId }              // Directly targeted to this driver
+                {
+                    serviceType: 'Accident emergency',
+                    status: 'Searching',
+                    rejectedBy: { $ne: driverId }
+                },
+                {
+                    ambulanceId: driverId,
+                    status: 'Confirmed', // 👈 Blocks 'Pending' unpaid online orders!
+                    $or: [
+                        { paymentMethod: 'COD' },
+                        { paymentStatus: 'Paid' }
+                    ]
+                }
             ]
         })
         .sort({ createdAt: -1 })
@@ -429,12 +440,14 @@ const finalizeTripHandoff = async (req, res) => {
         const { id } = req.params; 
         const { doctorName, wardName, duration, reason, totalDistance, travelTime } = req.body; 
 
-        const booking = await Booking.findById(id).populate('hospitalId');
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = isObjectId ? { _id: id } : { bookingId: id };
+
+        const booking = await Booking.findOne(query).populate('hospitalId');
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
         const now = new Date();
 
-        // 🚀 DYNAMIC TRAVEL TIME CALCULATION: Calculate real elapsed time since pickup
         let dynamicTravelTime = travelTime;
         if (!dynamicTravelTime) {
             const pickupEvent = booking.trackingTimeline?.find(t => t.status === 'Patient pickup confirmed' || t.status === 'Picked-Up');
@@ -446,7 +459,6 @@ const finalizeTripHandoff = async (req, res) => {
             }
         }
 
-        // 🚀 DYNAMIC DISTANCE CALCULATION: Calculate GPS distance between pickup and dropoff hospital
         let dynamicDistance = totalDistance;
         if (!dynamicDistance && booking.pickupLocation?.lat && booking.hospitalId?.location?.lat) {
             const { getDistance } = require('../../utils/helpers');
@@ -479,21 +491,29 @@ const finalizeTripHandoff = async (req, res) => {
             });
         }
 
-        // Synchronize status change to linked Appointment
+        // 🚀 SYNC FIX: Transfer handoff wardName, doctorName, and reason into Hospital Admission record
         if (booking.bookingId) {
             const appointment = await Appointment.findOne({ transactionId: booking.bookingId });
             if (appointment) {
                 const targetStatus = appointment.bedId ? 'In-Progress' : 'Hospital-Pending';
                 
                 appointment.status = targetStatus;
+                appointment.wardName = appointment.wardName || wardName;
                 appointment.tracking.status = 'Admitted/Dropped to Hospital';
                 appointment.tracking.rideEndTime = now;
+                
+                if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+                appointment.clinicalSummary.admissionNote = `Admitted via Ambulance #${booking.bookingId}. Handoff to Dr. ${doctorName || 'Duty Physician'} (${wardName || 'Emergency'}). Notes: ${reason || 'Stable at handoff'}`;
                 
                 await appointment.save();
             }
         }
 
-        res.json({ success: true, message: "Trip Finalized, Driver Released & Hospital Admission Synced successfully.", data: booking });
+        res.json({ 
+            success: true, 
+            message: "Trip Finalized, Driver Released & Hospital Admission Synced successfully.", 
+            data: booking 
+        });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
     }
@@ -606,75 +626,97 @@ const sanitizeObjectId = (id) => {
 // --- DYNAMIC RE-ROUTE (Strict Hospital Swap & Record Transfer) ---
 const reRouteAmbulance = async (req, res) => {
     try {
-        const { id } = req.params; // Booking ID
+        const { id } = req.params;
         const { newHospitalId, reason } = req.body;
 
-        // 1. Sanitize the Input IDs first to block CastErrors
         const cleanBookingId = sanitizeObjectId(id);
         const cleanNewHospitalId = sanitizeObjectId(newHospitalId);
 
-        if (!cleanBookingId) {
-            return res.status(400).json({ success: false, message: "Valid Booking ID is required." });
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = isObjectId ? { _id: id } : { bookingId: id };
+
+        const booking = await Booking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Transit booking not found." });
         }
+
         if (!cleanNewHospitalId) {
             return res.status(400).json({ success: false, message: "Valid target Hospital ID is required for re-routing." });
         }
 
-        const booking = await Booking.findById(cleanBookingId);
-        if (!booking) return res.status(404).json({ success: false, message: "Transit booking not found." });
+        // Protocol Check
+        if (booking.serviceType !== 'Accident emergency') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Re-routing is strictly restricted to 'Accident emergency' cases only. Pre-scheduled '${booking.serviceType}' destination hospital cannot be altered in transit.` 
+            });
+        }
+
+        if (!['Confirmed', 'Picked-Up', 'En-Route'].includes(booking.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot re-route ambulance in current status '${booking.status}'. Re-routing is only allowed during active transit.`
+            });
+        }
 
         const oldHospitalId = booking.hospitalId;
         const oldHospital = oldHospitalId ? await Hospital.findById(oldHospitalId) : null;
         const newHospital = await Hospital.findById(cleanNewHospitalId);
 
-        if (!newHospital) return res.status(404).json({ success: false, message: "New target hospital not found in database." });
+        if (!newHospital) {
+            return res.status(404).json({ success: false, message: "New target hospital not found in database." });
+        }
 
-        // Update target Hospital Destination
         booking.hospitalId = cleanNewHospitalId;
         booking.trackingTimeline.push({
             status: 'Re-Routed',
             timestamp: new Date(),
-            note: `Re-routed from ${oldHospital ? oldHospital.name : 'Unassigned/Trauma Center'} to ${newHospital.name}. Reason: ${reason || 'Mechanical/Clinical decision'}`
+            note: `Emergency Re-routed from ${oldHospital ? oldHospital.name : 'Unassigned/Spot'} to ${newHospital.name}. Reason: ${reason || 'Traffic congestion / Clinical emergency decision'}`
         });
         await booking.save();
 
-        // =========================================================================
-        // 🚨 ADMISSION RECORD SWAP
-        // Find the active pre-arrival Appointment record and transfer it to the new hospital
-        // =========================================================================
+        // Swap Hospital Pre-Admission File
         const activeAdmission = await Appointment.findOne({ 
-            transactionId: booking.bookingId, // Mapped via booking ID reference
+            transactionId: booking.bookingId,
             status: 'Hospital-Pending'
         });
 
         if (activeAdmission) {
-            // Update hospital reference in the admission document
             activeAdmission.hospitalId = cleanNewHospitalId;
             await activeAdmission.save();
 
-            // 🟢 Send cancellation/removal notification to Old Hospital
             if (oldHospitalId) {
                 await notifyAdminsAndVendor(
                     oldHospitalId,
                     'hospital',
                     "ℹ️ Emergency Case Diverted",
-                    `Incoming patient from Ambulance #${booking.bookingId} has been re-routed to another hospital.`
+                    `Incoming patient from Ambulance #${booking.bookingId} has been diverted to another facility due to: ${reason || 'Route obstruction'}.`
                 );
             }
 
-            // 🟢 Send new incoming notification to New Hospital
             await notifyAdminsAndVendor(
                 cleanNewHospitalId,
                 'hospital',
-                "🚨 Emergency Case Re-Routed to You!",
-                `An incoming emergency patient from Ambulance #${booking.bookingId} has been diverted to your facility. Reason: ${reason || 'Emergency Re-route'}`,
+                "🚨 Emergency Case Diverted to You!",
+                `An incoming trauma patient from Ambulance #${booking.bookingId} has been re-routed to your facility. Reason: ${reason || 'Emergency Re-route'}`,
                 { appointmentId: activeAdmission._id.toString(), type: 'emergency_re_routed' }
+            );
+        }
+
+        // 🚀 SYNC FIX: Notify Patient & Family about Emergency Diversion
+        if (booking.userId) {
+            await sendPushNotification(
+                booking.userId,
+                'user',
+                "🚨 Ambulance Route Diverted to Nearest Hospital",
+                `Ambulance #${booking.bookingId} is re-routed to ${newHospital.name} due to: ${reason || 'Traffic obstruction'}. Tracking updated.`,
+                { bookingId: booking._id.toString(), hospitalName: newHospital.name, type: 'emergency_re_routed' }
             );
         }
 
         res.json({ 
             success: true, 
-            message: `Successfully re-routed to ${newHospital.name}. Pre-arrival data transferred.`, 
+            message: `Emergency successfully re-routed to ${newHospital.name}. Pre-arrival admission file transferred.`, 
             data: booking 
         });
 
@@ -689,28 +731,26 @@ const reRouteAmbulance = async (req, res) => {
 // --- 7. GET DRIVER DASHBOARD COUNTS (NEW API - Figma Screen 1/2) ---
 const getDriverDashboardStats = async (req, res) => {
     try {
-        const driverId = req.user.id; // Logged-in Driver ID
+        const driverId = req.user.id;
+        const driverObjId = new mongoose.Types.ObjectId(driverId);
 
-        // Parallel processing: Live stats count aur Reviews count ek sath fetch karein
-        const [stats, reviews, totalTrips] = await Promise.all([
-            // Trip counts based on serviceType
+        const [stats, reviews, totalTrips, driverProfile] = await Promise.all([
+            // 🚀 SYNC FIX: Pure 3-types aggregation without Quick Response remnant
             Booking.aggregate([
-                { $match: { ambulanceId: new mongoose.Types.ObjectId(driverId) } },
+                { $match: { ambulanceId: driverObjId } },
                 { $group: {
                     _id: null,
-                    emergency: { $sum: { $cond: [{ $in: ["$serviceType", ["Accident emergency", "Quick Response"]] }, 1, 0] } },
+                    emergency: { $sum: { $cond: [{ $eq: ["$serviceType", "Accident emergency"] }, 1, 0] } },
                     medical: { $sum: { $cond: [{ $eq: ["$serviceType", "Medical Ambulance"] }, 1, 0] } },
                     referral: { $sum: { $cond: [{ $eq: ["$serviceType", "Referral Ambulance"] }, 1, 0] } }
                 }}
             ]),
-            // Fetch live reviews for rating calculation
-            Review.find({ targetId: driverId, targetType: 'Ambulance' }).select('rating').lean(),
-            // Count total completed/delivered trips
-            Booking.countDocuments({ ambulanceId: driverId, status: 'Delivered' })
+            Review.find({ targetId: driverObjId, targetType: 'Ambulance' }).select('rating').lean(),
+            Booking.countDocuments({ ambulanceId: driverId, status: 'Delivered' }),
+            Ambulance.findById(driverId).select('averageRating totalReviews').lean()
         ]);
 
-        // Calculate dynamic average rating
-        let averageRating = 4.8; // Default fallback if no reviews exist in DB yet
+        let averageRating = driverProfile?.averageRating > 0 ? driverProfile.averageRating : 5.0;
         if (reviews.length > 0) {
             const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
             averageRating = Number((totalRating / reviews.length).toFixed(1));
@@ -721,12 +761,12 @@ const getDriverDashboardStats = async (req, res) => {
         res.json({
             success: true,
             data: {
-                emergencyTrips: counts.emergency, // Emergency trips count
-                medicalTrips: counts.medical,     // Medical trips count
-                referralTrips: counts.referral,   // Referral trips count
-                totalTrips: totalTrips,           // Total delivered trips
-                rating: averageRating,             // 👈 LIVE DYNAMIC RATING FOR DRIVER
-                totalReviews: reviews.length      // Total reviews count
+                emergencyTrips: counts.emergency, // Accidental SOS trips
+                medicalTrips: counts.medical,     // Medical Ambulance trips
+                referralTrips: counts.referral,   // Referral Ambulance trips
+                totalTrips: totalTrips,           // Delivered trips
+                rating: averageRating,
+                totalReviews: reviews.length || driverProfile?.totalReviews || 0
             }
         });
     } catch (error) {
@@ -1023,10 +1063,10 @@ const reportAmbulanceNoShow = async (req, res) => {
             });
         }
 
+        // 🚀 SYNC FIX: Exactly 3 booking types mapped to NoShow policy
         const serviceTypeToVendorMap = {
             'Accident emergency': 'Ambulance-Accident',
             'Medical Ambulance': 'Ambulance-Medical',
-            'Quick Response': 'Ambulance-Medical',
             'Referral Ambulance': 'Ambulance-Referral'
         };
         const targetVendorType = serviceTypeToVendorMap[booking.serviceType] || 'Ambulance-Medical';
@@ -1054,20 +1094,20 @@ const reportAmbulanceNoShow = async (req, res) => {
             note: `Ambulance driver reported spot No-Show. Penalty applied: ₹${noShowFee}.`
         });
 
-        // Release driver
+        // Release driver back to Available
         await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: true } });
         await booking.save();
 
-        // 🚨 CRITICAL WALLET SYNC: Credit No-Show Penalty to Driver's Wallet!
+        // Credit No-Show Penalty to Driver's Wallet
         if (noShowFee > 0) {
             await creditVendorCompensation(driverId, 'Ambulance', noShowFee, booking.bookingId, 'No-Show Fee');
         }
 
-        // Sync Hospital Pre-Admission cancel
+        // Sync Hospital Pre-Admission cancel status
         if (booking.bookingId) {
             await Appointment.findOneAndUpdate(
                 { transactionId: booking.bookingId },
-                { $set: { status: 'Cancelled-By-Doctor', 'tracking.status': 'No-Show' } }
+                { $set: { status: 'No-Show', 'tracking.status': 'No-Show' } }
             );
         }
 

@@ -19,8 +19,6 @@ const { isCodEnabled } = require('../../../utils/policyHelper');
 const { verifyFirebasePhoneToken } = require('../../../utils/firebaseAuthHelper');
 const UserSubscription = require('../../../models/UserSubscription');
 const Appointment = require('../../../models/Appointment');
-const policyHelper = require('../../../utils/policyHelper');
-
 
 const generateToken = (id, role = 'user') => {
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -78,13 +76,16 @@ const getNearbyHospitals = async (req, res) => {
 
 
 // --- 3. FIND NEAREST AMBULANCES (POST with Distance) ---
-// Figma Screen 43
 const getNearestAmbulances = async (req, res) => {
     try {
         const { lat, lng, serviceType, vehicleType } = req.body; 
 
-        // Strictly filters: Only ACTIVE (isActive: true) and APPROVED ambulances (Offline ones included)
-        let query = { isActive: true, profileStatus: 'Approved' };
+        // Strictly query Approved & Active Ambulances
+        let query = { 
+            isActive: true, 
+            profileStatus: 'Approved'
+        };
+        
         if (vehicleType) query.vehicleType = vehicleType;
 
         const ambulances = await Ambulance.find(query);
@@ -97,7 +98,7 @@ const getNearestAmbulances = async (req, res) => {
                 targetType: 'Ambulance' 
             }).select('rating').lean();
 
-            let averageRating = 4.8; 
+            let averageRating = amb.averageRating > 0 ? amb.averageRating : 5.0; 
             if (reviews.length > 0) {
                 const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
                 averageRating = Number((totalRating / reviews.length).toFixed(1)); 
@@ -109,10 +110,10 @@ const getNearestAmbulances = async (req, res) => {
             if (serviceType === 'Accident emergency') {
                 displayPrice = 0;
                 isFree = true;
-            } else if (serviceType === 'Medical Ambulance' && amb.freeServices.emergency) {
+            } else if (serviceType === 'Medical Ambulance' && amb.freeServices?.emergency) {
                 displayPrice = 0;
                 isFree = true;
-            } else if (serviceType === 'Referral Ambulance' && amb.freeServices.referral) {
+            } else if (serviceType === 'Referral Ambulance' && amb.freeServices?.referral) {
                 displayPrice = 0;
                 isFree = true;
             }
@@ -126,11 +127,19 @@ const getNearestAmbulances = async (req, res) => {
                 eta: `${Math.round(distance * 3)} mins`,
                 rating: averageRating,       
                 totalReviews: reviews.length,
-                isOnline: amb.isOnline ?? true // Passes isOnline state to list response
+                isOnline: amb.isOnline ?? true,
+                availableForEmergency: amb.availableForEmergency ?? true
             };
         }));
 
-        data.sort((a, b) => a.rawDistance - b.rawDistance);
+        // 🚀 SYNC FIX: Sort Online & Free ambulances first, then by Nearest Distance
+        data.sort((a, b) => {
+            if (a.availableForEmergency === b.availableForEmergency) {
+                return a.rawDistance - b.rawDistance;
+            }
+            return a.availableForEmergency ? -1 : 1;
+        });
+
         res.json({ success: true, count: data.length, data });
     } catch (error) { 
         res.status(500).json({ message: error.message }); 
@@ -291,7 +300,19 @@ const validateAmbulanceCoupon = async (req, res) => {
 
 // --- PRIVATE HELPER: Shared Pricing Logic ---
 const getFinalFare = async (params, userId) => {
-    let { ambulanceId, serviceType, staffType, couponCode } = params;
+    let { 
+        ambulanceId, 
+        serviceType, 
+        staffType, 
+        couponCode, 
+        pickupLat, 
+        pickupLng, 
+        dropLat, 
+        dropLng,
+        pickupLocation,
+        hospitalId,
+        pickupHospitalId
+    } = params;
     
     const cleanCoupon = (couponCode && couponCode !== "null" && couponCode !== "undefined") ? couponCode.trim().toUpperCase() : null;
 
@@ -300,23 +321,60 @@ const getFinalFare = async (params, userId) => {
 
     const isFree = (serviceType === 'Accident emergency');
     
-    // 🚨 FIX: Hamesha actual base fixed price capture karega (e.g. ₹2000)
-    const baseAmbulanceFixedPrice = amb.pricing?.fixedPrice || 2000;
-    let originalAmbulanceCharge = baseAmbulanceFixedPrice; 
+    // 1. Base Price & Per KM Rate from Ambulance Schema
+    const baseAmbulanceFixedPrice = Number(amb.pricing?.fixedPrice || 2000);
+    const baseDistance = Number(amb.pricing?.baseDistance || 5); // Base free km
+    const pricePerKM = Number(amb.pricing?.pricePerKM || 0);
 
-    // User ke liye payable charge (Free case me 0)
-    let ambulanceCharge = isFree ? 0 : baseAmbulanceFixedPrice;
+    // 2. Dynamic GPS Distance Calculation (Exact same for Medical & Referral)
+    let dynamicDistanceSurge = 0;
+    let pLat = pickupLat || pickupLocation?.lat;
+    let pLng = pickupLng || pickupLocation?.lng;
+    let dLat = dropLat;
+    let dLng = dropLng;
+
+    // For Referral: Fetch Origin Hospital Coordinates if passed
+    if ((!pLat || !pLng) && pickupHospitalId && mongoose.isValidObjectId(pickupHospitalId)) {
+        const originHosp = await Hospital.findById(pickupHospitalId).select('location').lean();
+        if (originHosp?.location?.lat) {
+            pLat = originHosp.location.lat;
+            pLng = originHosp.location.lng;
+        }
+    }
+
+    // For Medical / Referral: Fetch Destination Hospital Coordinates if passed
+    if ((!dLat || !dLng) && hospitalId && mongoose.isValidObjectId(hospitalId)) {
+        const destHosp = await Hospital.findById(hospitalId).select('location').lean();
+        if (destHosp?.location?.lat) {
+            dLat = destHosp.location.lat;
+            dLng = destHosp.location.lng;
+        }
+    }
+
+    // Calculate Extra Distance Cost
+    if (pLat && pLng && dLat && dLng && pricePerKM > 0) {
+        const { getDistance } = require('../../../utils/helpers');
+        const totalDistance = await getDistance(Number(pLat), Number(pLng), Number(dLat), Number(dLng));
+        const extraKM = totalDistance - baseDistance;
+        if (extraKM > 0) {
+            dynamicDistanceSurge = Math.round(extraKM * pricePerKM);
+        }
+    }
+
+    // Base Fare + Distance Surge
+    let originalAmbulanceCharge = baseAmbulanceFixedPrice + dynamicDistanceSurge; 
+    let ambulanceCharge = isFree ? 0 : originalAmbulanceCharge;
     
     let isSubscriptionApplied = false;
     let planName = "";
     let userSubscriptionId = null;
 
-    // Subscription Benefit check for non-accidental rides
-    if (!isFree) {
+    // 3. Subscription Benefit Check (Medical & Referral)
+    if (!isFree && userId) {
         const ambBenefit = await checkAndApplyBenefit(userId, 'freeAmbulanceTripsCount', ambulanceCharge);
         
         if (ambBenefit.isApplied) {
-            ambulanceCharge = 0; // Waived under subscription
+            ambulanceCharge = 0; // Waived under active subscription
             isSubscriptionApplied = true;
 
             const activeSub = await UserSubscription.findOne({
@@ -332,21 +390,22 @@ const getFinalFare = async (params, userId) => {
         }
     }
 
+    // 4. Supporting Staff Charges (Doctor / Nurse)
     let supportingStaffCharge = 0;
     if (!isFree && staffType) {
         let staffList = Array.isArray(staffType) ? staffType : (typeof staffType === 'string' ? staffType.split(',') : []);
         staffList = staffList.map(s => s.trim());
 
         if (staffList.includes('Doctor')) {
-            supportingStaffCharge += (amb.supportStaff?.doctor?.price || 0);
+            supportingStaffCharge += Number(amb.supportStaff?.doctor?.price || 0);
         }
         if (staffList.includes('Nurse')) {
-            supportingStaffCharge += (amb.supportStaff?.nurse?.price || 0);
+            supportingStaffCharge += Number(amb.supportStaff?.nurse?.price || 0);
         }
     }
 
-    // Subtotal stores the actual market valuation (e.g. ₹2000)
-    let subtotal = isFree ? baseAmbulanceFixedPrice : (ambulanceCharge + supportingStaffCharge);
+    // 5. Subtotal & Coupon Discount
+    let subtotal = isFree ? originalAmbulanceCharge : (ambulanceCharge + supportingStaffCharge);
     let discount = 0;
     let couponId = null;
     let finalCouponCode = null;
@@ -373,11 +432,11 @@ const getFinalFare = async (params, userId) => {
 
     return { 
         ambulanceCharge, 
-        originalAmbulanceCharge, // 👈 Accidental me bhi real ₹2000 jayega
+        originalAmbulanceCharge,
         supportingStaffCharge, 
-        subtotal,                // 👈 Actual valuation ₹2000
+        subtotal,
         discount, 
-        total: isFree ? 0 : Math.max(0, subtotal - discount), // 👈 User payable = ₹0
+        total: isFree ? 0 : Math.max(0, subtotal - discount),
         isFree, 
         couponId, 
         finalCouponCode,
@@ -430,7 +489,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const isAccidental = (serviceType === 'Accident emergency');
 
-        // Unverified short-registered user check for accidental
+        // Unverified short user limit check
         if (isAccidental && !user.isPhoneVerified && user.accidentalBookingCount >= 1) {
             return res.status(403).json({
                 success: false,
@@ -470,14 +529,34 @@ const confirmAmbulanceBooking = async (req, res) => {
             ? `HK-ACC-${Date.now().toString().slice(-6)}` 
             : `HK-BOK-${Date.now().toString().slice(-6)}`;
 
+        // Parse supporting staff
+        let staffList = staffType ? (Array.isArray(staffType) ? staffType : (typeof staffType === 'string' ? staffType.split(',') : [])) : [];
+        staffList = staffList.map(s => s.trim());
+
+        // 🚨 STRICT STATUS MACHINE:
+        // 1. Accidental -> Searching (Broadcast)
+        // 2. COD / Free Subscription -> Confirmed (Direct Assign)
+        // 3. Paid Online -> Pending (Holds until Razorpay verification)
+        let initialStatus = 'Searching';
+        let initialPaymentStatus = 'Pending';
+
+        if (isAccidental) {
+            initialStatus = 'Searching';
+            initialPaymentStatus = 'Paid';
+        } else if (activePaymentMethod === 'COD' || fare.total === 0) {
+            initialStatus = 'Confirmed';
+            initialPaymentStatus = fare.total === 0 ? 'Paid' : 'Pending';
+        } else {
+            initialStatus = 'Pending'; // 👈 Awaiting payment completion
+            initialPaymentStatus = 'Pending';
+        }
+
         let rzpOrder = null;
         if (!fare.isFree && activePaymentMethod !== 'COD' && fare.total > 0) {
             rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
         }
 
-        // 6-Digit OTP only for Medical & Referral (Accidental has NO OTP)
         const dynamicPickupOtp = isAccidental ? null : Math.floor(100000 + Math.random() * 900000).toString();
-        const initialStatus = isAccidental ? 'Searching' : (activePaymentMethod === 'COD' || fare.total === 0 ? 'Confirmed' : 'Searching');
 
         const booking = await Booking.create({
             bookingId: tempBookingId,
@@ -494,6 +573,10 @@ const confirmAmbulanceBooking = async (req, res) => {
             additionalSupport: {
                 policeRequired: policeRequired === 'true' || policeRequired === true,
                 fireRequired: fireRequired === 'true' || fireRequired === true
+            },
+            supportStaffSelected: {
+                doctor: staffList.includes('Doctor'),
+                nurse: staffList.includes('Nurse')
             },
             patientDetails: {
                 ...parsedDetails,
@@ -512,23 +595,33 @@ const confirmAmbulanceBooking = async (req, res) => {
                 total: fare.total
             },
             isFreeCase: fare.isFree,
-            paymentStatus: fare.isFree ? 'Paid' : 'Pending',
+            paymentStatus: initialPaymentStatus,
             paymentMethod: activePaymentMethod,
             transactionId: rzpOrder ? rzpOrder.id : null,
             status: initialStatus,
             otp: dynamicPickupOtp,
+            subscriptionDetails: {
+                isSubscriptionApplied: fare.isSubscriptionApplied,
+                userSubscriptionId: fare.userSubscriptionId,
+                planName: fare.planName
+            },
             trackingTimeline: [{
                 status: initialStatus,
                 timestamp: new Date(),
-                note: `Booking created under ${serviceType}.`
+                note: `Booking created under ${serviceType}. Staff: ${staffList.length > 0 ? staffList.join(', ') : 'None'}.`
             }]
         });
 
+        // Deduct subscription trip count
+        if (fare.isSubscriptionApplied) {
+            await deductBenefitCount(userId, 'freeAmbulanceTripsCount');
+        }
+
+        // Accidental SOS: Alert drivers & control room
         if (isAccidental) {
             user.accidentalBookingCount = (user.accidentalBookingCount || 0) + 1;
             await user.save();
 
-            // 🚀 SYNC FIX: Broadcast push alert to control room & admins
             await notifyAdminsAndVendor(
                 targetAmbulance ? targetAmbulance._id : null,
                 targetAmbulance ? 'ambulance' : 'admin',
@@ -538,13 +631,32 @@ const confirmAmbulanceBooking = async (req, res) => {
             );
         }
 
-        if (fare.isFree || activePaymentMethod === 'COD' || fare.total === 0) {
-            return res.status(201).json({ success: true, message: "Booking Request Sent Successfully", booking });
+        // COD / Free Booking: Immediately lock driver & notify
+        if (initialStatus === 'Confirmed' && targetAmbulance) {
+            await Ambulance.findByIdAndUpdate(targetAmbulance._id, { $set: { availableForEmergency: false } });
+            
+            await sendPushNotification(
+                targetAmbulance._id,
+                'ambulance',
+                "🚨 New Confirmed Ambulance Ride!",
+                `New ${serviceType} booking #${tempBookingId} assigned to you. Destination: ${finalPickupLocation.address}.`,
+                { bookingId: booking._id.toString(), type: 'driver_assigned' }
+            );
         }
 
+        // Immediate Return for COD / Free Rides
+        if (fare.isFree || activePaymentMethod === 'COD' || fare.total === 0) {
+            return res.status(201).json({ 
+                success: true, 
+                message: "Ambulance Booked & Confirmed Successfully!", 
+                booking 
+            });
+        }
+
+        // Return Razorpay Order for Online Payment
         res.status(201).json({
             success: true,
-            message: "Razorpay order created for ambulance.",
+            message: "Razorpay order created for ambulance. Complete payment to confirm booking.",
             key_id: process.env.RAZORPAY_KEY_ID,
             amount: rzpOrder.amount,
             razorpayOrderId: rzpOrder.id,
@@ -612,28 +724,61 @@ const verifyAmbulancePayment = async (req, res) => {
 
         const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
-            return res.status(400).json({ success: false, message: "Signature verification failed." });
+            return res.status(400).json({ success: false, message: "Payment signature verification failed." });
         }
 
-        const booking = await Booking.findById(appointmentId);
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = isObjectId ? { _id: appointmentId } : { bookingId: appointmentId };
+
+        const booking = await Booking.findOne(query);
         if (!booking) return res.status(404).json({ success: false, message: "Ambulance booking not found." });
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
+        // 🚨 PAYMENT SUCCESS: Transition Status from 'Pending' to 'Confirmed'
         booking.paymentStatus = 'Paid';
+        booking.status = 'Confirmed'; 
         booking.transactionId = razorpayPaymentId;
         booking.paymentDetails = rzpDetails; 
+        
+        booking.trackingTimeline.push({
+            status: 'Confirmed',
+            timestamp: new Date(),
+            note: "Online payment verified successfully. Ride confirmed and assigned to ambulance driver."
+        });
+
         await booking.save();
 
-        // 🚨 LOGICAL RESOLVE: No deduction here because this was a paid transaction (isFree: false flow)
+        // Lock Assigned Driver & Send Push Alert
+        if (booking.ambulanceId) {
+            await Ambulance.findByIdAndUpdate(booking.ambulanceId, { $set: { availableForEmergency: false } });
+            
+            await sendPushNotification(
+                booking.ambulanceId,
+                'ambulance',
+                "🚨 New Paid Ride Assigned!",
+                `Patient has completed online payment for booking #${booking.bookingId}. Start navigation to pickup spot.`,
+                { bookingId: booking._id.toString(), type: 'driver_assigned' }
+            );
+        }
+
+        // Notify Patient with OTP
+        await sendPushNotification(
+            booking.userId,
+            'user',
+            "Payment Received & Ambulance Confirmed! 🚑",
+            `Your ride is confirmed. Share Pickup OTP: ${booking.otp} with driver on arrival.`,
+            { bookingId: booking._id.toString(), otp: booking.otp, type: 'driver_assigned' }
+        );
 
         res.json({
             success: true,
-            message: "Ambulance payment successfully verified!",
+            message: "Payment verified successfully! Ambulance has been assigned.",
             data: booking
         });
 
     } catch (error) {
+        console.error("Payment Verification Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -641,60 +786,24 @@ const verifyAmbulancePayment = async (req, res) => {
 
 
 
-// --- 4. CREATE BOOKING (Figma Screen 44/45) ---
-const createAmbulanceBooking = async (req, res) => {
-    try {
-        const { 
-            hospitalId, serviceType, triageLevel, 
-            patientDetails, ambulanceId, staffType 
-        } = req.body;
-
-        const bookingId = `HK-AMB-${Date.now().toString().slice(-6)}`;
-        const otp = Math.floor(1000 + Math.random() * 9000).toString();
-
-        const amb = await Ambulance.findById(ambulanceId);
-        const ambulanceCharge = amb?.pricing?.fixedPrice || 1200;
-        const staffCharge = staffType === 'Doctor' ? 500 : (staffType === 'Nurse' ? 300 : 0);
-
-        const booking = await Booking.create({
-            bookingId,
-            userId: req.user.id,
-            hospitalId,
-            ambulanceId,
-            serviceType,
-            triageLevel,
-            patientDetails,
-            otp,
-            pricing: {
-                ambulanceCharge,
-                supportingStaffCharge: staffCharge,
-                total: ambulanceCharge + staffCharge
-            },
-            status: 'Searching',
-            trackingTimeline: [{ status: 'Searching', timestamp: new Date() }]
-        });
-
-        res.status(201).json({ success: true, booking }); // "booking" key matched with your requirement
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-
 // --- 5. GET BOOKING DETAILS (Tracking Screen 37/38) ---
 const getBookingStatus = async (req, res) => {
     try {
-        const booking = await Booking.findById(req.params.id)
-            .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo')
-            .populate('hospitalId', 'name address location');
+        const { id } = req.params;
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = isObjectId ? { _id: id } : { bookingId: id };
+
+        const booking = await Booking.findOne(query)
+            .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo profilePic')
+            .populate('hospitalId', 'name address location phone hospitalImage')
+            .populate('pickupHospitalId', 'name address location phone'); // 🚀 SYNC FIX: Populates Origin Hospital
         
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
         res.json({ success: true, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////////////////// Accidental Ambulance Bookings //////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 
 // --- 1. GET USER NUMBERS (Figma Screen: Choose your number) ---
 const getUserNumbers = async (req, res) => {
@@ -708,61 +817,6 @@ const getUserNumbers = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 2. CREATE ACCIDENTAL BOOKING (Figma Screen: Accidental Emergency) ---
-const createAccidentalBooking = async (req, res) => {
-    try {
-        const { 
-            ambulanceId, 
-            pickupLocation, 
-            patientRelation, 
-            emergencyDescription, 
-            phone 
-        } = req.body;
-
-        const amb = await Ambulance.findById(ambulanceId);
-        if (!amb) return res.status(404).json({ message: "Ambulance not found" });
-
-        const isFree = amb.freeServices.accidental;
-
-        const booking = await Booking.create({
-            bookingId: `HK-ACC-${Date.now().toString().slice(-4)}`,
-            caseReference: `HK-2026-${Math.floor(10000 + Math.random() * 90000)}`,
-            userId: req.user.id,
-            ambulanceId: ambulanceId,
-            serviceType: 'Accident emergency',
-            triageLevel: 'Emergency', 
-            patientDetails: {
-                relation: patientRelation,
-                emergencyDescription: emergencyDescription
-            },
-            isFreeCase: true,
-            pricing: {
-                ambulanceCharge: 0,
-                supportingStaffCharge: 0,
-                total: 0
-            },
-            status: 'Searching',
-            otp: Math.floor(1000 + Math.random() * 9000).toString(),
-            trackingTimeline: [{ status: 'Request Accepted by Driver', timestamp: new Date() }]
-        });
-
-        // 🚨 Trigger Notification for Accidental emergencies
-        await notifyAdminsAndVendor(
-            ambulanceId,
-            'ambulance',
-            "🚨 Emergency Accident Booking!",
-            "An accidental emergency booking has been reported. Action required.",
-            { bookingId: booking._id.toString(), type: 'emergency_booking' }
-        );
-
-        res.status(201).json({ 
-            success: true, 
-            message: "Searching for Driver...", 
-            bookingId: booking._id,
-            booking 
-        });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
 
 // --- 3. UPLOAD INCIDENT PHOTO (Figma Screen: Capture Incident Photo) ---
 const uploadIncidentPhoto = async (req, res) => {
@@ -787,17 +841,22 @@ const uploadIncidentPhoto = async (req, res) => {
 // Updated: Removed hardcoded "5 mins", "4.8" rating, and "1,240 trips", replaced with live DB aggregations
 const getLiveTracking = async (req, res) => {
     try {
-        const booking = await Booking.findById(req.params.id)
+        const { id } = req.params;
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = isObjectId ? { _id: id } : { bookingId: id };
+
+        const booking = await Booking.findOne(query)
             .populate({
                 path: 'ambulanceId',
                 select: 'name phone vehicleNumber vehicleType location driverInfo profilePic averageRating totalReviews'
-            });
+            })
+            .populate('hospitalId', 'name address location')
+            .populate('pickupHospitalId', 'name address location');
 
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
         const driver = booking.ambulanceId;
 
-        // 🚀 1. DYNAMIC REAL COMPLETED TRIPS COUNT
         let realTripsCount = 0;
         if (driver?._id) {
             realTripsCount = await Booking.countDocuments({
@@ -806,7 +865,6 @@ const getLiveTracking = async (req, res) => {
             });
         }
 
-        // 🚀 2. DYNAMIC LIVE ETA CALCULATION (Distance between ambulance current GPS and pickup spot)
         let dynamicEta = "Arriving";
         if (driver?.location?.lat && booking.pickupLocation?.lat) {
             const distance = await getDistance(
@@ -819,7 +877,7 @@ const getLiveTracking = async (req, res) => {
             if (distance <= 0.3) {
                 dynamicEta = "Arrived on Spot";
             } else {
-                const estimatedMinutes = Math.max(1, Math.round(distance * 3)); // Average 3 mins per KM in city traffic
+                const estimatedMinutes = Math.max(1, Math.round(distance * 3));
                 dynamicEta = `${estimatedMinutes} mins`;
             }
         }
@@ -827,13 +885,14 @@ const getLiveTracking = async (req, res) => {
         const trackingData = {
             status: booking.status,
             otp: booking.otp,
-            eta: dynamicEta, // 👈 Real live ETA calculated from GPS
+            serviceType: booking.serviceType,
+            eta: dynamicEta,
             driver: {
                 name: driver?.driverInfo?.fullName || driver?.name || "Assigned Driver",
                 phone: driver?.phone || "N/A",
-                rating: driver?.averageRating || 5.0, // 👈 Real driver rating from DB
+                rating: driver?.averageRating || 5.0,
                 totalReviews: driver?.totalReviews || 0,
-                trips: realTripsCount > 0 ? `${realTripsCount} Trips` : "New Partner", // 👈 Real completed trips from DB
+                trips: realTripsCount > 0 ? `${realTripsCount} Trips` : "New Partner",
                 profilePic: driver?.profilePic || null
             },
             vehicle: {
@@ -841,81 +900,17 @@ const getLiveTracking = async (req, res) => {
                 type: driver?.vehicleType || "Ambulance"
             },
             location: driver?.location || { lat: 0, lng: 0 },
+            pickupHospital: booking.pickupHospitalId || null,
+            destinationHospital: booking.hospitalId || null,
             timeline: booking.trackingTimeline || []
         };
 
         res.json({ success: true, data: trackingData });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////// Referal Ambulance Bookings /////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-// --- 1. CREATE REFERRAL BOOKING (Figma Screen 4, 6, 7) ---
-const createReferralBooking = async (req, res) => {
-    try {
-        const { 
-            pickupHospitalId, 
-            destinationHospitalId, 
-            scheduledDate, 
-            scheduledTime,
-            patientRelation,
-            referralReason,
-            staffType, 
-            ambulanceId,
-            triageLevel 
-        } = req.body;
-
-        const amb = await Ambulance.findById(ambulanceId);
-        if (!amb) return res.status(404).json({ message: "Ambulance not found" });
-
-        const ambulanceCharge = amb.pricing?.fixedPrice || 2000;
-        const supportingStaffCharge = staffType === 'Doctor' ? 500 : (staffType === 'Nurse' ? 300 : 0);
-
-        const booking = await Booking.create({
-            bookingId: `HK-REF-${Date.now().toString().slice(-4)}`,
-            caseReference: `HK-2026-${Math.floor(10000 + Math.random() * 90000)}`,
-            userId: req.user.id,
-            ambulanceId,
-            pickupHospitalId,
-            hospitalId: destinationHospitalId,
-            serviceType: 'Referral Ambulance',
-            triageLevel,
-            scheduledAt: new Date(scheduledDate),
-            appointmentTime: scheduledTime,
-            patientDetails: {
-                relation: patientRelation,
-                referralReason: referralReason,
-                referralCard: req.file ? `/uploads/referrals/${req.file.filename}` : null
-            },
-            pricing: {
-                ambulanceCharge,
-                supportingStaffCharge,
-                total: ambulanceCharge + supportingStaffCharge
-            },
-            status: 'Searching'
-        });
-
-        // 🚨 Trigger Notification for Referral Bookings
-        await notifyAdminsAndVendor(
-            ambulanceId,
-            'ambulance',
-            "New Referral Booking Request",
-            "A referral ambulance booking has been scheduled.",
-            { bookingId: booking._id.toString(), type: 'referral_booking' }
-        );
-
-        res.status(201).json({ success: true, message: "Referral Request Sent", booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // CANCEL AMBULANCE BOOKING (With 2-Cancellation Daily Auto-Ban & Admin Fee Deduction)
 const cancelAmbulanceBooking = async (req, res) => {
@@ -931,7 +926,8 @@ const cancelAmbulanceBooking = async (req, res) => {
             return res.status(403).json({ 
                 success: false, 
                 isBanned: true,
-                message: user.banReason || "Your account has been suspended. Please submit an unban request." 
+                canRequestUnban: true,
+                message: user.banReason || "Your account has been suspended due to cancellation violations." 
             });
         }
 
@@ -957,16 +953,15 @@ const cancelAmbulanceBooking = async (req, res) => {
         }
 
         const isAccidental = (booking.serviceType === 'Accident emergency');
-        let policyResult = { cancellationFee: 0, refundAmount: 0 };
+        let policyResult = { cancellationFee: 0, driverCompensation: 0, refundAmount: 0 };
 
         if (!isAccidental) {
             const specificVendorType = booking.serviceType === 'Referral Ambulance' ? 'Ambulance-Referral' : 'Ambulance-Medical';
             policyResult = await processCancellationRefund(booking, specificVendorType);
-        } else {
-            policyResult = { cancellationFee: 0, refundAmount: 0 };
         }
 
         const cancellationFee = Number(policyResult.cancellationFee || 0);
+        const driverCompensation = Number(policyResult.driverCompensation || 0);
         const refundAmount = Number(policyResult.refundAmount || 0);
 
         booking.status = 'Cancelled';
@@ -987,21 +982,33 @@ const cancelAmbulanceBooking = async (req, res) => {
             note: reason ? `Cancelled by User. Reason: ${reason}` : "Cancelled by User."
         });
 
-        // Release Driver
+        // 1. Credit Driver Compensation Fee to Driver's Wallet
         if (booking.ambulanceId) {
             await Ambulance.findByIdAndUpdate(booking.ambulanceId, { $set: { availableForEmergency: true } });
+            
+            if (driverCompensation > 0) {
+                await creditVendorCompensation(booking.ambulanceId, 'Ambulance', driverCompensation, booking.bookingId, 'Cancellation Fee');
+            }
+
             try {
                 await sendPushNotification(
                     booking.ambulanceId, 
                     'ambulance', 
                     "Ride Cancelled", 
-                    "Patient has cancelled this ambulance request.",
+                    driverCompensation > 0 
+                        ? `Patient cancelled ride. ₹${driverCompensation} compensation credited to your wallet.`
+                        : "Patient has cancelled this ambulance request.",
                     { bookingId: booking._id.toString(), type: 'booking_cancelled' }
                 );
             } catch (e) {}
         }
 
-        // Cancel Hospital Pre-Admission
+        // 2. Refund Subscription Benefit Count back to user
+        if (booking.subscriptionDetails?.isSubscriptionApplied) {
+            await refundBenefitCount(userId, 'freeAmbulanceTripsCount');
+        }
+
+        // 3. Cancel Hospital Pre-Admission
         if (booking.bookingId) {
             try {
                 await Appointment.findOneAndUpdate(
@@ -1011,24 +1018,24 @@ const cancelAmbulanceBooking = async (req, res) => {
             } catch (e) {}
         }
 
-        await booking.save();
+        await booking.save(); // Save cancellation first
 
         // =========================================================================
-        // 🚨 24-HOURS ACCIDENTAL AUTO-BAN ENGINE (FOR ALL USERS: VERIFIED & UNVERIFIED)
+        // 🚨 4. RESTORED: 24-HOURS ACCIDENTAL AUTO-BAN ENGINE (2 CANCELLATIONS = BAN)
         // =========================================================================
         let isUserBannedNow = false;
         let banMessage = "";
 
         if (isAccidental) {
             const now = new Date();
-            const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Strict 24-hour rolling window
+            const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 24 Hours rolling window
 
             // If user was unbanned recently within last 24h, count only cancellations after unban
             const effectiveStartDate = (user.unbannedAt && new Date(user.unbannedAt) > last24Hours)
                 ? new Date(user.unbannedAt)
                 : last24Hours;
 
-            // Counts all accidental cancellations for this user in last 24h (Chahe User kare, Driver kare ya Admin)
+            // Count accidental cancellations for this user in last 24h
             const cancellationsIn24Hrs = await Booking.countDocuments({
                 userId: user._id,
                 serviceType: 'Accident emergency',
@@ -1042,7 +1049,7 @@ const cancelAmbulanceBooking = async (req, res) => {
                 user.isActive = false;
                 user.isBanned = true;
                 user.banReason = "Account automatically suspended: 2 accidental emergency bookings were cancelled within 24 hours. You can submit an unban request to Admin.";
-                user.token = null; // Revoke all active login sessions
+                user.token = null; // Auto-logout session
                 await user.save();
 
                 banMessage = "⚠️ CRITICAL: Your account has been suspended for cancelling 2 accidental emergency bookings in 24 hours. Please submit an Unban Request to Admin from the app.";
@@ -1052,12 +1059,13 @@ const cancelAmbulanceBooking = async (req, res) => {
         res.json({
             success: true,
             message: banMessage || (cancellationFee > 0 
-                ? `Booking cancelled. A cancellation fee of ₹${cancellationFee} was deducted. Remaining ₹${refundAmount} sent to Admin Refund Queue.`
+                ? `Booking cancelled. A cancellation fee of ₹${cancellationFee} was deducted. Remaining ₹${refundAmount} sent to Refund Queue.`
                 : "Booking cancelled successfully."),
             isBanned: isUserBannedNow,
             canRequestUnban: isUserBannedNow,
             data: {
                 cancellationFee,
+                driverCompensation,
                 refundAmount,
                 booking
             }
@@ -1078,41 +1086,37 @@ const getMyAmbulanceBookings = async (req, res) => {
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
 
-        // Query parameters: 'type', 'serviceType', ya 'status'
         const { type, serviceType, status } = req.query;
         const activeFilter = (type || serviceType || "").toLowerCase().trim();
 
         // Base Query: Logged-in user's bookings
         const query = { userId: req.user.id };
 
-        // 🚨 DYNAMIC SERVICE TYPE FILTER (Case-Insensitive & Flexible)
+        // 🚀 SYNC FIX: Clean 3-Service Type Filtering
         if (activeFilter && activeFilter !== 'all') {
             if (activeFilter === 'accidental' || activeFilter === 'accident emergency') {
                 query.serviceType = 'Accident emergency';
             } 
-            else if (activeFilter === 'medical' || activeFilter === 'medical ambulance' || activeFilter === 'quick response') {
-                query.serviceType = { $in: ['Medical Ambulance', 'Quick Response'] };
+            else if (activeFilter === 'medical' || activeFilter === 'medical ambulance') {
+                query.serviceType = 'Medical Ambulance';
             } 
             else if (activeFilter === 'referral' || activeFilter === 'referral ambulance') {
                 query.serviceType = 'Referral Ambulance';
             } 
             else {
-                // Direct exact match fallback if custom string passed
                 query.serviceType = serviceType || type;
             }
         }
 
-        // Optional Status Filter (e.g. status=Delivered ya status=Confirmed)
         if (status && status !== 'All') {
             query.status = status;
         }
 
-        // Parallel execution for count & paginated records
         const [bookings, total] = await Promise.all([
             Booking.find(query)
                 .populate('ambulanceId', 'name vehicleNumber vehicleType phone profilePic driverInfo')
                 .populate('hospitalId', 'name address location phone hospitalImage')
-                .populate('pickupHospitalId', 'name address location phone') // 👈 Referral ke liye Hospital A populate
+                .populate('pickupHospitalId', 'name address location phone') // Referral Hospital A
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -1403,7 +1407,7 @@ module.exports = {
     getAmbulanceMasterData,
     getNearbyHospitals,
     getNearestAmbulances,getAmbulanceDetails,
-    createAmbulanceBooking,
+    // createAmbulanceBooking,
     getBookingStatus, getAmbulanceCoupons , validateAmbulanceCoupon,
     calculateAmbulanceFare,
     confirmAmbulanceBooking,initiateAmbulancePaymentAfterAcceptance,
@@ -1411,11 +1415,11 @@ module.exports = {
     // updateReview,addReview,
 
     getUserNumbers,
-    createAccidentalBooking,
+    // createAccidentalBooking,
     uploadIncidentPhoto,
     getLiveTracking,
 
-    createReferralBooking,
+    // createReferralBooking,
     cancelAmbulanceBooking,getMyAmbulanceBookings,
 
 

@@ -10,7 +10,7 @@ const ambulanceBookingSchema = new mongoose.Schema({
      pickupHospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital' }, // For Referral Ambulance
      serviceType: { 
         type: String, 
-        enum: ['Accident emergency', 'Medical Ambulance', 'Referral Ambulance', 'Quick Response'],
+        enum: ['Accident emergency', 'Medical Ambulance', 'Referral Ambulance'],
         required: true 
     },
     incidentType: { type: String }, // Road Accident, Trauma, Heart Attack
