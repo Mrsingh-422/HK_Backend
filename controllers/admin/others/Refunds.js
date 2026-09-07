@@ -220,7 +220,6 @@ const processAdminRefund = async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid service model category." });
         }
 
-        // 🚨 CRITICAL FIX: Safe Hybrid Lookup (Handles MongoDB _id, orderId, or bookingId)
         const isObjectId = mongoose.Types.ObjectId.isValid(bookingId);
         const searchConditions = [];
 
@@ -243,22 +242,26 @@ const processAdminRefund = async (req, res) => {
         let paymentId = booking.paymentDetails?.razorpayPaymentId || booking.transactionId;
         let refundAmount = 0;
 
+        // 🚀 SYNC FIX: Deduct both cancellation and no-show penalties in fallback
         if (vendorModel === 'Doctor' || vendorModel === 'Hospital') {
-            refundAmount = booking.cancellationDetails?.refundAmountCalculated || 
-                           (booking.totalAmount - (booking.pricingBreakdown?.noShowFeeApplied || 0));
+            const penalty = (booking.pricingBreakdown?.cancellationFeeApplied || 0) + (booking.pricingBreakdown?.noShowFeeApplied || 0);
+            refundAmount = booking.cancellationDetails?.refundAmountCalculated || Math.max(0, booking.totalAmount - penalty);
         } else if (vendorModel === 'Nurse') {
-            refundAmount = booking.priceBreakdown?.totalPrice - (booking.priceBreakdown?.cancellationFeeApplied || booking.priceBreakdown?.noShowFeeApplied || 0);
+            const penalty = (booking.priceBreakdown?.cancellationFeeApplied || 0) + (booking.priceBreakdown?.noShowFeeApplied || 0);
+            refundAmount = (booking.priceBreakdown?.totalPrice || 0) - penalty;
         } else if (vendorModel === 'Pharmacy') {
-            // Check if product return vs cancellation
             if (booking.returnDetails && (booking.returnDetails.status === 'Approved' || booking.returnDetails.status === 'Completed')) {
                 refundAmount = booking.returnDetails.refundAmount || booking.billSummary?.totalAmount || 0;
             } else {
-                refundAmount = booking.billSummary?.totalAmount - (booking.billSummary?.cancellationFeeApplied || booking.billSummary?.noShowFeeApplied || 0);
+                const penalty = (booking.billSummary?.cancellationFeeApplied || 0) + (booking.billSummary?.noShowFeeApplied || 0);
+                refundAmount = (booking.billSummary?.totalAmount || 0) - penalty;
             }
         } else if (vendorModel === 'Lab') {
-            refundAmount = booking.billSummary?.totalAmount - (booking.billSummary?.cancellationFeeApplied || booking.billSummary?.noShowFeeApplied || 0);
+            const penalty = (booking.billSummary?.cancellationFeeApplied || 0) + (booking.billSummary?.noShowFeeApplied || 0);
+            refundAmount = (booking.billSummary?.totalAmount || 0) - penalty;
         } else if (vendorModel === 'Ambulance') {
-            refundAmount = booking.pricing?.total - (booking.pricing?.cancellationFeeApplied || booking.pricing?.noShowFeeApplied || 0);
+            const penalty = (booking.pricing?.cancellationFeeApplied || 0) + (booking.pricing?.noShowFeeApplied || 0);
+            refundAmount = (booking.pricing?.total || 0) - penalty;
         }
 
         if (refundAmount <= 0) {
@@ -275,7 +278,7 @@ const processAdminRefund = async (req, res) => {
             return res.json({ success: true, message: "COD/Free booking marked as refunded locally." });
         }
 
-        // 🚨 Trigger Environment-Aware Razorpay Refund
+        // Trigger Razorpay Refund
         const trackingReference = booking.orderId || booking.bookingId || booking._id.toString();
         const refundResponse = await refundRazorpayPayment(paymentId, refundAmount, trackingReference);
 

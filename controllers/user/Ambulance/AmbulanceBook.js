@@ -430,7 +430,7 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const isAccidental = (serviceType === 'Accident emergency');
 
-        // 🚨 Unverified short-registered user check for accidental
+        // Unverified short-registered user check for accidental
         if (isAccidental && !user.isPhoneVerified && user.accidentalBookingCount >= 1) {
             return res.status(403).json({
                 success: false,
@@ -475,7 +475,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
         }
 
-        // 🚨 6-Digit OTP only for Medical & Referral (Accidental has NO OTP)
+        // 6-Digit OTP only for Medical & Referral (Accidental has NO OTP)
         const dynamicPickupOtp = isAccidental ? null : Math.floor(100000 + Math.random() * 900000).toString();
         const initialStatus = isAccidental ? 'Searching' : (activePaymentMethod === 'COD' || fare.total === 0 ? 'Confirmed' : 'Searching');
 
@@ -505,7 +505,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             },
             pricing: {
                 ambulanceCharge: fare.ambulanceCharge,
-                originalAmbulanceCharge: fare.originalAmbulanceCharge, // 👈 Real Base Valuation (₹2000)
+                originalAmbulanceCharge: fare.originalAmbulanceCharge,
                 supportingStaffCharge: fare.supportingStaffCharge,
                 subtotal: fare.subtotal,
                 discount: fare.discount,
@@ -516,7 +516,7 @@ const confirmAmbulanceBooking = async (req, res) => {
             paymentMethod: activePaymentMethod,
             transactionId: rzpOrder ? rzpOrder.id : null,
             status: initialStatus,
-            otp: dynamicPickupOtp, // 👈 Null for Accidental, 6-Digits for Medical/Referral
+            otp: dynamicPickupOtp,
             trackingTimeline: [{
                 status: initialStatus,
                 timestamp: new Date(),
@@ -527,6 +527,15 @@ const confirmAmbulanceBooking = async (req, res) => {
         if (isAccidental) {
             user.accidentalBookingCount = (user.accidentalBookingCount || 0) + 1;
             await user.save();
+
+            // 🚀 SYNC FIX: Broadcast push alert to control room & admins
+            await notifyAdminsAndVendor(
+                targetAmbulance ? targetAmbulance._id : null,
+                targetAmbulance ? 'ambulance' : 'admin',
+                "🚨 CRITICAL: Emergency Accident Booking Placed!",
+                `Accidental SOS booking #${tempBookingId} at ${finalPickupLocation.address || 'Spot'}.`,
+                { bookingId: booking._id.toString(), type: 'emergency_booking_placed' }
+            );
         }
 
         if (fare.isFree || activePaymentMethod === 'COD' || fare.total === 0) {

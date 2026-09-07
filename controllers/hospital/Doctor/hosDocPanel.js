@@ -1136,19 +1136,17 @@ const startSpecialistCare = async (req, res) => {
 // --- 3. SUBMIT CO-DOCTOR CLINICAL FEEDBACK (Fixed: Allows MULTIPLE feedbacks while In-Progress) ---
 const submitSpecialistFeedback = async (req, res) => {
     try {
-        const { 
-            appointmentId, 
-            observation, 
-            patientCondition, 
-            priorityRating, 
-            recommendedMedicines, 
-            vitals,
-            bp, pulse, temp, spo2 // 👈 Added direct flat fields support
-        } = req.body;
+        const body = req.body || {};
         
+        // 1. Flexible Appointment ID Resolution
+        const appointmentId = body.appointmentId || body.id || body.caseId || req.query.appointmentId;
         const specialistId = req.user.id;
 
-        // 1. Verify active shift for this specialist
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: "Appointment ID is required." });
+        }
+
+        // 2. Verify specialist active treatment shift
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             "bedsideCareTeam.doctorId": specialistId,
@@ -1177,68 +1175,73 @@ const submitSpecialistFeedback = async (req, res) => {
             careTeamObj.specialistFeedback = [];
         }
 
-        // 🚨 2. DUAL VITALS PARSER (Supports both nested vitals object AND flat keys)
-        let parsedVitals = { bp: "", pulse: "", temp: "", spo2: "" };
-
-        if (vitals) {
-            try {
-                parsedVitals = typeof vitals === 'string' ? JSON.parse(vitals) : vitals;
-            } catch (e) {
-                parsedVitals = { bp: "", pulse: "", temp: "", spo2: "" };
-            }
-        } else {
-            // Fallback for flat keys from Frontend / Form-Data
-            parsedVitals = {
-                bp: bp || req.body.bp || "",
-                pulse: pulse || req.body.pulse || "",
-                temp: temp || req.body.temp || "",
-                spo2: spo2 || req.body.spo2 || ""
-            };
+        // 🚨 3. UNIVERSAL NEXT.JS MULTI-KEY VITALS PARSER (Catches all frontend naming variations)
+        let rawVitals = body.vitals;
+        if (typeof rawVitals === 'string') {
+            try { rawVitals = JSON.parse(rawVitals); } catch (e) { rawVitals = {}; }
         }
+        rawVitals = rawVitals || {};
 
-        // 🚨 3. Push new observation feedback with vitals
+        const bpValue = rawVitals.bp || rawVitals.bloodPressure || rawVitals.blood_pressure || rawVitals.BP ||
+                        body.bp || body.bloodPressure || body.blood_pressure || body.BP || "";
+
+        const pulseValue = rawVitals.pulse || rawVitals.pulseRate || rawVitals.pulse_rate || rawVitals.heartRate || rawVitals.heart_rate ||
+                           body.pulse || body.pulseRate || body.pulse_rate || body.heartRate || body.heart_rate || "";
+
+        const tempValue = rawVitals.temp || rawVitals.temperature || rawVitals.bodyTemp || rawVitals.body_temperature ||
+                          body.temp || body.temperature || body.bodyTemp || body.body_temperature || "";
+
+        const spo2Value = rawVitals.spo2 || rawVitals.spO2 || rawVitals.spo_2 || rawVitals.oxygen || rawVitals.oxygenSaturation ||
+                          body.spo2 || body.spO2 || body.spo_2 || body.oxygen || body.oxygenSaturation || "";
+
+        const parsedVitals = {
+            bp: String(bpValue).trim(),
+            pulse: String(pulseValue).trim(),
+            temp: String(tempValue).trim(),
+            spo2: String(spo2Value).trim()
+        };
+
+        // 🚨 4. Push observation feedback
         careTeamObj.specialistFeedback.push({
-            observation: observation || "",
-            patientCondition: patientCondition || "",
-            priorityRating: priorityRating || 'Routine',
-            vitals: {
-                bp: String(parsedVitals.bp || ""),
-                pulse: String(parsedVitals.pulse || ""),
-                temp: String(parsedVitals.temp || ""),
-                spo2: String(parsedVitals.spo2 || "")
-            },
+            observation: body.observation || body.notes || "",
+            patientCondition: body.patientCondition || body.condition || "Stable",
+            priorityRating: body.priorityRating || body.priority || 'Routine',
+            vitals: parsedVitals,
             submittedAt: new Date()
         });
 
-        // 🚨 4. Push recommended medicines
-        if (recommendedMedicines) {
+        // 🚨 5. Parse Recommended Medicines safely
+        const incomingMeds = body.recommendedMedicines || body.medicines;
+        if (incomingMeds) {
             let medicinesArray = [];
-            try {
-                medicinesArray = typeof recommendedMedicines === 'string' ? JSON.parse(recommendedMedicines) : recommendedMedicines;
-            } catch (e) {
-                medicinesArray = Array.isArray(recommendedMedicines) ? recommendedMedicines : [];
+            if (typeof incomingMeds === 'string') {
+                try { medicinesArray = JSON.parse(incomingMeds); } catch (e) { medicinesArray = []; }
+            } else if (Array.isArray(incomingMeds)) {
+                medicinesArray = incomingMeds;
             }
             
-            if (Array.isArray(medicinesArray) && medicinesArray.length > 0) {
+            if (medicinesArray.length > 0) {
                 if (!careTeamObj.recommendedMedicines) {
                     careTeamObj.recommendedMedicines = [];
                 }
 
                 medicinesArray.forEach(med => {
-                    careTeamObj.recommendedMedicines.push({
-                        name: med.name,
-                        dosage: med.dosage || "",
-                        frequency: med.frequency || "",
-                        duration: med.duration || "",
-                        instructions: med.instructions || "",
-                        type: med.type || 'Active-Stay', 
-                        addedAt: new Date()
-                    });
+                    if (med && med.name) {
+                        careTeamObj.recommendedMedicines.push({
+                            name: med.name,
+                            dosage: med.dosage || med.dose || "",
+                            frequency: med.frequency || med.time || "",
+                            duration: med.duration || "",
+                            instructions: med.instructions || "",
+                            type: med.type || 'Active-Stay', 
+                            addedAt: new Date()
+                        });
+                    }
                 });
             }
         }
 
-        // 🚨 5. CRITICAL FIX: Explicitly notify Mongoose about deep nested mutations
+        // 🚨 6. Deep Mongoose change tracking notification
         appointment.markModified('bedsideCareTeam');
 
         await appointment.save();
@@ -1551,7 +1554,12 @@ const getPatientDetails = async (req, res) => {
     try {
         const patient = await Appointment.findById(req.params.id)
             .populate('userId', 'name profilePic phone age gender bloodGroup')
-            .populate('bedId', 'bedNumber pricePerDay')
+            // 🚀 SYNC FIX: Deeply populates ward details inside bedId
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay status isVentilatorAvailable',
+                populate: { path: 'wardId', select: 'name type totalBeds availableBeds' }
+            })
             .populate({
                 path: 'treatmentHistory.fromDoctorId',
                 select: 'name speciality profileImage'
@@ -1568,7 +1576,6 @@ const getPatientDetails = async (req, res) => {
                 path: 'clinicalLogs.doctorId',
                 select: 'name speciality qualification profileImage'
             })
-            // 🚀 SYNC FIX: Populates profiles of doctors who ordered stay medicines for clinical transparency
             .populate({
                 path: 'activeMedications.addedBy',
                 select: 'name speciality qualification profileImage'
@@ -1576,7 +1583,9 @@ const getPatientDetails = async (req, res) => {
 
         if (!patient) return res.status(404).json({ message: "Patient not found" });
         res.json({ success: true, data: patient });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 

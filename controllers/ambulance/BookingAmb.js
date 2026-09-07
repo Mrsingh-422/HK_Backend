@@ -792,23 +792,28 @@ const verifyDropOffOtp = async (req, res) => {
         const savedOtp = String(booking.dropOffOtp || "").trim();
         const incomingOtp = String(otp).trim();
 
-        // Strict Check (Static 1111 bypass removed)
+        // Strict Check
         if (!savedOtp || savedOtp !== incomingOtp) {
             return res.status(400).json({ success: false, message: "Invalid Hospital Handover OTP. Please verify with emergency desk." });
         }
 
         booking.isDropOffVerified = true;
-        booking.status = 'En-Route'; // Handoff ready
-        booking.dropOffOtp = null; // Invalidate
+        // 🚀 SYNC FIX: Status remains 'Arrived' (Ready for final handoff) instead of rolling back to 'En-Route'
+        booking.status = 'Arrived'; 
+        booking.dropOffOtp = null; // Invalidate OTP after use
         
         booking.trackingTimeline.push({
             status: 'Dropoff OTP Verified',
             timestamp: new Date(),
-            note: "Hospital staff confirmed handover via 6-digit OTP."
+            note: "Hospital staff confirmed patient arrival via 6-digit Handover OTP. Handoff ready."
         });
 
         await booking.save();
-        res.json({ success: true, message: "Handover OTP Verified. Please complete the Handoff Form.", data: booking });
+        res.json({ 
+            success: true, 
+            message: "Handover OTP Verified. Please complete the Handoff Form.", 
+            data: booking 
+        });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }

@@ -5,35 +5,49 @@ const Ambulance = require('../../models/Ambulance');
 const startAmbulanceRide = async (req, res) => {
     try {
         const { appointmentId } = req.body;
+        
         const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment/Trip record not found." });
+        }
 
+        if (!appointment.tracking) appointment.tracking = {};
         appointment.tracking.status = 'Ride Started';
         appointment.tracking.rideStartTime = new Date();
         appointment.status = 'In-Progress';
         
         // Mark ambulance as On Duty (Busy)
-        await Ambulance.findByIdAndUpdate(req.user.id, { availableForEmergency: false });
+        await Ambulance.findByIdAndUpdate(req.user.id, { $set: { availableForEmergency: false } });
 
         await appointment.save();
-        res.json({ success: true, message: "Ride started. Patient and Fleet tracking active." });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, message: "Ride started. Patient and Fleet tracking active.", data: appointment });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 2. REACHED HOSPITAL (Screenshot 37) ---
 const completeAmbulanceRide = async (req, res) => {
     try {
         const { appointmentId } = req.body;
+        
         const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment/Trip record not found." });
+        }
 
+        if (!appointment.tracking) appointment.tracking = {};
         appointment.tracking.status = 'Admitted/Dropped to Hospital';
         appointment.tracking.rideEndTime = new Date();
         
-        // Ambulance wapas free ho gayi
-        await Ambulance.findByIdAndUpdate(req.user.id, { availableForEmergency: true });
+        // Ambulance free ho gayi
+        await Ambulance.findByIdAndUpdate(req.user.id, { $set: { availableForEmergency: true } });
 
         await appointment.save();
-        res.json({ success: true, message: "Handover successful. Ambulance is now free." });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, message: "Handover successful. Ambulance is now free.", data: appointment });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 3. DYNAMIC GPS & LIVE LOCATION (Merged Logic) ---
@@ -72,17 +86,23 @@ const updateJourneyStatus = async (req, res) => {
         const { appointmentId, journeyStatus, eta } = req.body;
 
         const update = {
-            'tracking.status': journeyStatus, // e.g., 'On The Way'
+            'tracking.status': journeyStatus,
             'tracking.eta': eta || "10 mins"
         };
 
-        if(journeyStatus === 'Admitted/Dropped to Hospital') {
-            update.status = 'In-Progress'; // Admission process starts
+        if (journeyStatus === 'Admitted/Dropped to Hospital') {
+            update.status = 'In-Progress';
         }
 
-        const appointment = await Appointment.findByIdAndUpdate(appointmentId, update, { new: true });
-        res.json({ success: true, message: `Timeline updated to: ${journeyStatus}` });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const appointment = await Appointment.findByIdAndUpdate(appointmentId, { $set: update }, { new: true });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment/Trip record not found." });
+        }
+
+        res.json({ success: true, message: `Timeline updated to: ${journeyStatus}`, data: appointment });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 module.exports = { startAmbulanceRide, completeAmbulanceRide, updateAmbulanceGPS, updateJourneyStatus };

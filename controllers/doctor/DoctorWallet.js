@@ -209,12 +209,13 @@ const getDoctorTransactions = async (req, res) => {
 const updateDoctorBankDetails = async (req, res) => {
     try {
         const { accountType, bankName, accountHolderName, accountNumber, ifscCode, upiId } = req.body;
+        const doctorId = req.user.id;
 
         if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
             return res.status(400).json({ success: false, message: "Missing required bank details fields." });
         }
 
-        // 🚨 SECURITY GUARD: Reset verification status to false on any change [1]
+        // 🚨 SECURITY GUARD: Reset verification status to false on any edit for admin re-approval
         const updatedBankDetails = {
             accountType: accountType || 'Savings',
             bankName,
@@ -222,16 +223,24 @@ const updateDoctorBankDetails = async (req, res) => {
             accountNumber,
             ifscCode,
             upiId: upiId || "",
-            isVerified: false // Locked for admin re-verification [1]
+            isVerified: false // Locked for admin re-verification
         };
 
-        req.user.bankDetails = updatedBankDetails;
-        await req.user.save();
+        // 🚀 SYNC FIX: Atomic update prevents 2dsphere & full-document schema validation crashes
+        const updatedDoc = await Doctor.findByIdAndUpdate(
+            doctorId,
+            { $set: { bankDetails: updatedBankDetails } },
+            { new: true }
+        ).select('-password');
+
+        if (!updatedDoc) {
+            return res.status(404).json({ success: false, message: "Doctor profile not found." });
+        }
 
         res.json({ 
             success: true, 
             message: "Bank details updated successfully. Payouts are locked until Admin verifies your account.", 
-            data: updatedBankDetails 
+            data: updatedDoc.bankDetails 
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

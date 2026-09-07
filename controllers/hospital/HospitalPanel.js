@@ -815,19 +815,57 @@ const assignDriverToCase = async (req, res) => {
     try {
         const { appointmentId, ambulanceId } = req.body;
 
-        // 1. Mark Ambulance as Busy (Duty ON)
-        await Ambulance.findByIdAndUpdate(ambulanceId, { 
-            availableForEmergency: false 
+        if (!appointmentId || !ambulanceId) {
+            return res.status(400).json({ success: false, message: "Both appointmentId and ambulanceId are required." });
+        }
+
+        // 1. Fetch & Verify Ambulance
+        const ambulance = await Ambulance.findById(ambulanceId);
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        // 2. Mark Ambulance as Busy (Duty ON)
+        ambulance.availableForEmergency = false;
+        await ambulance.save();
+
+        // 3. 🚀 SYNC FIX: Correctly link root-level ambulanceId & update status
+        const appointment = await Appointment.findByIdAndUpdate(
+            appointmentId,
+            {
+                $set: {
+                    ambulanceId: ambulanceId, // 👈 Root-level reference
+                    status: 'Confirmed',
+                    'tracking.status': 'Driver Assigned'
+                }
+            },
+            { new: true }
+        );
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
+        }
+
+        // 4. Notify Driver via Push Notification
+        const { sendPushNotification } = require('../../utils/notification');
+        await sendPushNotification(
+            ambulanceId,
+            'ambulance',
+            "🚨 New Case Assigned to You!",
+            `Hospital has assigned you to emergency case #${appointment.bookingId}. Prepare for transit.`,
+            { appointmentId: appointment._id.toString(), type: 'case_assigned' }
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Driver Assigned successfully. Ambulance is now On Duty.",
+            data: appointment
         });
 
-        // 2. Link Trip to Appointment
-        await Appointment.findByIdAndUpdate(appointmentId, {
-            'tracking.ambulanceId': ambulanceId,
-            'tracking.status': 'Driver Assigned'
-        });
-
-        res.json({ success: true, message: "Driver Assigned. Ambulance is now On Duty." });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("Assign Driver Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 
@@ -2407,7 +2445,6 @@ const transferPatientBed = async (req, res) => {
             return res.status(400).json({ success: false, message: "Appointment ID and New Bed ID are required." });
         }
 
-        // 1. Fetch Target Appointment
         const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Admission request record not found." });
@@ -2426,7 +2463,6 @@ const transferPatientBed = async (req, res) => {
             return res.status(400).json({ success: false, message: "Patient is already assigned to this bed." });
         }
 
-        // 2. Fetch and Validate New Bed
         const newBed = await Bed.findById(newBedId).populate('wardId');
         if (!newBed) {
             return res.status(404).json({ success: false, message: "Target Bed not found in system." });
@@ -2436,9 +2472,9 @@ const transferPatientBed = async (req, res) => {
             return res.status(400).json({ success: false, message: `Target Bed ${newBed.bedNumber} is currently ${newBed.status}.` });
         }
 
-        let oldBedPricePerDay = 500; // default fallback
+        let oldBedPricePerDay = 500;
 
-        // 3. RELEASE OLD BED & CALCULATE SPLIT BILLING
+        // RELEASE OLD BED & CALCULATE SPLIT BILLING
         if (oldBedId) {
             const oldBed = await Bed.findById(oldBedId);
             if (oldBed) {
@@ -2446,59 +2482,55 @@ const transferPatientBed = async (req, res) => {
                 oldBed.status = 'Available';
                 await oldBed.save();
 
-                // Increment old ward capacity
                 await Ward.findByIdAndUpdate(oldBed.wardId, { $inc: { availableBeds: 1 } });
             }
 
-            // 🚀 DYNAMIC SPLIT STAY ACCUMULATOR (Prepaid Adjusted)
             if (appointment.startDate) {
                 const start = moment(appointment.startDate).startOf('day');
                 const now = moment().startOf('day');
-                const oldStayDays = Math.max(1, now.diff(start, 'days')); // Minimum 1 day unit billing
+                const oldStayDays = Math.max(1, now.diff(start, 'days'));
                 const oldStayCharge = oldStayDays * oldBedPricePerDay;
 
-                // Lock previous bed stay cost as a special service line item
                 appointment.specialServices.push({
                     serviceName: `Bed Stay: ${oldWardName} - ${oldBedNumber} (${oldStayDays} days)`,
                     price: oldStayCharge
                 });
 
-                // Update dynamic pricing breakdown ledger
                 if (!appointment.pricingBreakdown) {
                     appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
                 }
 
-                // 🚀 PREPAID ADJUSTMENT GUARD: Deduct previous unspent advance base fee from totalAmount to prevent double-billing
                 const originalBaseFee = appointment.pricingBreakdown.baseFee || 0;
                 if (originalBaseFee > 0) {
                     appointment.totalAmount = Math.max(0, (appointment.totalAmount || 0) - originalBaseFee);
                 }
                 
-                // Reset active baseFee to 0 so the next bed stay starts fresh
                 appointment.pricingBreakdown.baseFee = 0; 
                 appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + oldStayCharge;
-                appointment.totalAmount = (appointment.totalAmount || 0) + oldStayCharge;
+                
+                // 🚀 SYNC FIX: Recompute Subtotal & Total Amount consistently
+                const discount = appointment.pricingBreakdown.discountAmount || 0;
+                appointment.pricingBreakdown.subtotal = (appointment.pricingBreakdown.baseFee || 0) + 
+                                                       (appointment.pricingBreakdown.visitCharges || 0) + 
+                                                       (appointment.pricingBreakdown.extraCharges || 0);
+                appointment.totalAmount = Math.max(0, appointment.pricingBreakdown.subtotal - discount);
 
-                // Reset appointment startDate to "now" so new bed stay duration starts counting from today
                 appointment.startDate = new Date();
             }
         }
 
-        // 4. LOCK AND OCCUPY NEW BED
+        // LOCK AND OCCUPY NEW BED
         newBed.status = 'Occupied';
         await newBed.save();
 
-        // Decrement new ward capacity
         await Ward.findByIdAndUpdate(newBed.wardId, { $inc: { availableBeds: -1 } });
 
-        // 5. UPDATE APPOINTMENT TO NEW BED PROPERTIES
         appointment.bedId = newBedId;
         appointment.bedNumber = newBed.bedNumber;
         appointment.wardName = newBed.wardId ? newBed.wardId.name : "Ward";
 
         const now = new Date();
 
-        // Push audit log to clinical history timeline
         appointment.treatmentHistory.push({
             action: 'Transfer-Accepted',
             notes: `Bed shifted from ${oldWardName} (Bed: ${oldBedNumber}) to ${appointment.wardName} (Bed: ${appointment.bedNumber}).`,
