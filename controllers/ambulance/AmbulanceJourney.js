@@ -58,26 +58,43 @@ const completeAmbulanceRide = async (req, res) => {
 */
 const updateAmbulanceGPS = async (req, res) => {
     try {
-        const { lat, lng, appointmentId } = req.body;
+        const { lat, lng, appointmentId, bookingId } = req.body;
+        const driverId = req.user.id;
+
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, message: "Latitude and Longitude are required." });
+        }
+
+        const numericLat = Number(lat);
+        const numericLng = Number(lng);
 
         // A. Update global position in Ambulance Model
-        await Ambulance.findByIdAndUpdate(req.user.id, {
-            location: { lat: Number(lat), lng: Number(lng) }
+        await Ambulance.findByIdAndUpdate(driverId, {
+            $set: { location: { lat: numericLat, lng: numericLng } }
         });
 
-        // B. Update trip-specific position in Appointment Model (If active)
-        if (appointmentId) {
-            await Appointment.findByIdAndUpdate(appointmentId, {
-                'tracking.liveLocation': {
-                    lat: Number(lat),
-                    lng: Number(lng),
-                    lastUpdated: new Date()
+        const activeRef = appointmentId || bookingId;
+
+        // B. Update trip-specific position (CastError-Proof hybrid lookup)
+        if (activeRef) {
+            const isObjectId = mongoose.isValidObjectId(activeRef);
+            const query = isObjectId ? { _id: activeRef } : { transactionId: activeRef };
+
+            await Appointment.findOneAndUpdate(query, {
+                $set: {
+                    'tracking.liveLocation': {
+                        lat: numericLat,
+                        lng: numericLng,
+                        lastUpdated: new Date()
+                    }
                 }
             });
         }
 
         res.json({ success: true, message: "Real-time location synced with System & User" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 4. CHANGE JOURNEY STATUS (Screenshot 37 Timeline) ---

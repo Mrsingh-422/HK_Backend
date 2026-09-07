@@ -97,21 +97,26 @@ const getIncomingRequests = async (req, res) => {
         const limit = 10;
         const driverId = req.user.id;
 
-        // Query logic: Driver strictly sees broadcast accidental emergencies OR requests targeted directly to them
+        // 🚀 SYNC FIX: Strictly filters out trips already rejected by this driver
         const requests = await Booking.find({ 
             status: 'Searching',
+            rejectedBy: { $ne: driverId }, // 👈 Excludes rejected broadcasts
             $or: [
                 { serviceType: 'Accident emergency' }, // Broadcast emergency
-                { ambulanceId: driverId } // Directly requested to this driver
+                { ambulanceId: driverId }              // Directly targeted to this driver
             ]
         })
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
-        .populate('userId', 'name phone profilePic');
+        .populate('userId', 'name phone profilePic')
+        .populate('pickupHospitalId', 'name address')
+        .populate('hospitalId', 'name address');
 
         res.json({ success: true, page, data: requests });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // --- 2. ACCEPT REQUEST (Figma Screen 35) ---
@@ -125,10 +130,11 @@ const acceptBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Driver not found." });
         }
 
-        // 🚨 1. FIXED SELF-LOCK: Check if driver is on ANOTHER different active trip
+        // 1. Check if driver is on another active trip
         const otherActiveTrip = await Booking.findOne({
             ambulanceId: driver._id,
             _id: { $ne: id },
+            bookingId: { $ne: id },
             status: { $in: ['Arrived', 'Picked-Up', 'En-Route'] }
         });
 
@@ -140,17 +146,25 @@ const acceptBooking = async (req, res) => {
         }
 
         const isObjectId = mongoose.isValidObjectId(id);
+        
+        // 🚀 SYNC FIX: Only unassigned ('Searching') OR trips already assigned to this driver can be accepted
         const query = {
             $or: [
                 { _id: isObjectId ? new mongoose.Types.ObjectId(id) : new mongoose.Types.ObjectId() },
                 { bookingId: id }
             ],
-            status: { $in: ['Searching', 'Confirmed'] }
+            $or: [
+                { status: 'Searching' },
+                { status: 'Confirmed', ambulanceId: driver._id }
+            ]
         };
 
         const booking = await Booking.findOne(query);
         if (!booking) {
-            return res.status(400).json({ success: false, message: "This trip is no longer available or was claimed by another driver." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "This trip is no longer available or was claimed by another driver." 
+            });
         }
 
         const isAccidental = booking.serviceType === 'Accident emergency';
@@ -168,7 +182,7 @@ const acceptBooking = async (req, res) => {
         driver.availableForEmergency = false;
         await driver.save();
 
-        // 🚨 2. HOSPITAL PRE-ADMISSION SYNC
+        // 2. HOSPITAL PRE-ADMISSION SYNC
         if (booking.hospitalId) {
             const existingAppt = await Appointment.findOne({ transactionId: booking.bookingId });
             if (!existingAppt) {
@@ -209,7 +223,7 @@ const acceptBooking = async (req, res) => {
             booking.userId, 
             'user', 
             "Ambulance Assigned!", 
-            `${driver.name} is on the way. Share Pickup OTP: ${booking.otp} on arrival.`,
+            `${driver.name} is on the way. Share Pickup OTP: ${booking.otp || 'None (Accidental)'} on arrival.`,
             { bookingId: booking._id.toString(), otp: booking.otp, type: 'driver_assigned' }
         );
 
@@ -248,13 +262,12 @@ const rejectBooking = async (req, res) => {
         const booking = await Booking.findOne(query); 
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        // 🚨 CRITICAL POOLING FIX: Add driver to rejectedBy, DO NOT kill booking if other drivers can take it!
         booking.rejectedBy = booking.rejectedBy || [];
         if (!booking.rejectedBy.includes(driverId)) {
             booking.rejectedBy.push(driverId);
         }
 
-        // If it was an accidental SOS or broadcast, reopen pool
+        // If it was an accidental SOS or broadcast, reopen pool for other ambulances
         if (booking.serviceType === 'Accident emergency') {
             booking.ambulanceId = null;
             booking.status = 'Searching';
@@ -264,7 +277,7 @@ const rejectBooking = async (req, res) => {
                 note: `Driver ${req.user.name || ''} was unavailable (${reason}). Searching next nearest ambulance.` 
             });
         } else {
-            // For targeted bookings, mark cancelled and inform user to choose another ambulance
+            // For targeted bookings, mark cancelled and inform user
             booking.status = 'Cancelled';
             booking.cancelledBy = 'Driver';
             booking.cancellationReason = `${reason}. Comments: ${comments || 'None'}`;
@@ -281,6 +294,14 @@ const rejectBooking = async (req, res) => {
                 "The selected ambulance is busy. Please choose another ambulance.",
                 { bookingId: booking._id.toString(), type: 'request_rejected' }
             );
+
+            // 🚀 SYNC FIX: Cancel linked pre-admission Appointment in hospital
+            if (booking.bookingId) {
+                await Appointment.findOneAndUpdate(
+                    { transactionId: booking.bookingId },
+                    { $set: { status: 'Cancelled-By-Doctor', 'tracking.status': 'Cancelled by Driver' } }
+                );
+            }
         }
 
         await booking.save();
@@ -484,14 +505,16 @@ const verifyPickupOtp = async (req, res) => {
         const { id } = req.params; 
         const { otp, idToken } = req.body; 
 
-        const booking = await Booking.findById(id).populate('userId', 'phone');
+        // 🚀 SYNC FIX: Safe Hybrid ID lookup (supports both Mongo _id and custom bookingId string)
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = isObjectId ? { _id: id } : { bookingId: id };
+
+        const booking = await Booking.findOne(query).populate('userId', 'phone');
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // =========================================================================
-        // 🚨 1. ACCIDENTAL EMERGENCY CASE: NO OTP REQUIRED FROM VICTIM/SPOT!
-        // =========================================================================
+        // 1. ACCIDENTAL EMERGENCY: NO OTP REQUIRED
         if (booking.serviceType === 'Accident emergency') {
             booking.isOtpVerified = true;
             booking.status = 'Picked-Up';
@@ -505,6 +528,14 @@ const verifyPickupOtp = async (req, res) => {
             
             await booking.save();
 
+            // 🚀 SYNC FIX: Sync status to linked Appointment model
+            if (booking.bookingId) {
+                await Appointment.findOneAndUpdate(
+                    { transactionId: booking.bookingId },
+                    { $set: { 'tracking.isOtpVerified': true, 'tracking.status': 'Picked-Up' } }
+                );
+            }
+
             return res.json({ 
                 success: true, 
                 message: "Accident victim onboarded successfully without OTP. Start Navigation to Hospital!", 
@@ -512,9 +543,7 @@ const verifyPickupOtp = async (req, res) => {
             });
         }
 
-        // =========================================================================
-        // 🚨 2. MEDICAL & REFERRAL AMBULANCE: STRICT 6-DIGIT OTP VERIFICATION
-        // =========================================================================
+        // 2. MEDICAL & REFERRAL: 6-DIGIT OTP VERIFICATION
         const patientPhone = booking.patientDetails?.phone || booking.userId?.phone;
         const cleanPatientPhone = patientPhone ? String(patientPhone).replace(/\D/g, "").slice(-10) : "";
 
@@ -545,6 +574,14 @@ const verifyPickupOtp = async (req, res) => {
         });
         
         await booking.save();
+
+        // 🚀 SYNC FIX: Sync status and OTP verification to linked Appointment model
+        if (booking.bookingId) {
+            await Appointment.findOneAndUpdate(
+                { transactionId: booking.bookingId },
+                { $set: { 'tracking.isOtpVerified': true, 'tracking.status': 'Picked-Up' } }
+            );
+        }
 
         res.json({ 
             success: true, 
@@ -708,10 +745,11 @@ const getDriverTripHistory = async (req, res) => {
 
         const history = await Booking.find({
             ambulanceId: driverId,
-            status: { $in: ['Delivered', 'Cancelled'] } // Strictly completed/cancelled trips
+            status: { $in: ['Delivered', 'Cancelled'] }
         })
         .populate('userId', 'name phone profilePic')
-        .populate('hospitalId', 'name address')
+        .populate('hospitalId', 'name address location')
+        .populate('pickupHospitalId', 'name address location') // 🚀 SYNC FIX: Populates origin hospital for referrals!
         .sort({ updatedAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit);
@@ -738,10 +776,21 @@ const getDriverTripHistory = async (req, res) => {
 const arrivedAtDropOff = async (req, res) => {
     try {
         const { id } = req.params;
-        const booking = await Booking.findById(id).populate('hospitalId', 'fcmToken name');
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = isObjectId ? { _id: id } : { bookingId: id };
+
+        const booking = await Booking.findOne(query).populate('hospitalId', 'fcmToken name');
         if (!booking) return res.status(404).json({ success: false, message: "Booking record not found." });
 
-        // 🎲 Dynamic 6-Digit Handover OTP
+        // 🚀 SYNC FIX: Guard against null hospital in unallocated accidental trips
+        if (!booking.hospitalId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "No destination hospital is linked to this trip. Please allocate a destination hospital first." 
+            });
+        }
+
+        // Dynamic 6-Digit Handover OTP
         const dynamicHospitalOtp = Math.floor(100000 + Math.random() * 900000).toString();
         booking.dropOffOtp = dynamicHospitalOtp;
         booking.status = 'Arrived'; 
@@ -749,26 +798,22 @@ const arrivedAtDropOff = async (req, res) => {
         booking.trackingTimeline.push({
             status: 'Arrived at Dropoff',
             timestamp: new Date(),
-            note: `Ambulance reached destination hospital. Handover OTP: ${dynamicHospitalOtp}`
+            note: `Ambulance reached destination hospital (${booking.hospitalId.name}). Handover OTP: ${dynamicHospitalOtp}`
         });
 
         await booking.save();
 
-        if (booking.hospitalId) {
-            await sendPushNotification(
-                booking.hospitalId._id,
-                'hospital',
-                "Ambulance Arrived at Emergency Gate! 🏥",
-                `Ambulance #${booking.bookingId} has arrived. Provide Handover OTP: ${dynamicHospitalOtp} to driver.`,
-                { bookingId: booking._id.toString(), otp: dynamicHospitalOtp, type: 'ambulance_handover' }
-            );
-        }
-
-        console.log(`[AMBULANCE HANDOVER OTP] Booking: #${booking.bookingId} | OTP: ${dynamicHospitalOtp}`);
+        await sendPushNotification(
+            booking.hospitalId._id,
+            'hospital',
+            "Ambulance Arrived at Emergency Gate! 🏥",
+            `Ambulance #${booking.bookingId} has arrived. Provide Handover OTP: ${dynamicHospitalOtp} to driver.`,
+            { bookingId: booking._id.toString(), otp: dynamicHospitalOtp, type: 'ambulance_handover' }
+        );
 
         res.json({ 
             success: true, 
-            message: "Arrived at destination hospital. Handover OTP sent to hospital desk.",
+            message: `Arrived at destination hospital (${booking.hospitalId.name}). Handover OTP sent to emergency desk.`,
             debugOtp: process.env.NODE_ENV === 'production' ? undefined : dynamicHospitalOtp
         });
     } catch (error) { 
@@ -837,19 +882,38 @@ const triggerAmbulanceSos = async (req, res) => {
             note: `Driver triggered SOS: ${sosType}. Coordinates: [Lat: ${lat || 'N/A'}, Lng: ${lng || 'N/A'}]`
         });
 
-        // 🚨 BREAKDOWN LOGIC: Auto-reopen broadcast pool for other ambulances
+        // BREAKDOWN LOGIC: Auto-reopen broadcast pool for other ambulances
         if (sosType === 'Vehicle Breakdown') {
             const oldDriverId = booking.ambulanceId;
             booking.rejectedBy = booking.rejectedBy || [];
             if (oldDriverId) booking.rejectedBy.push(oldDriverId);
 
             booking.ambulanceId = null;
-            booking.status = 'Searching'; // Reopen for all nearby drivers!
+            booking.status = 'Searching'; // Reopen for all nearby drivers
 
             if (oldDriverId) {
                 await Ambulance.findByIdAndUpdate(oldDriverId, {
-                    $set: { availableForEmergency: false, isOnline: false } // Marked offline
+                    $set: { availableForEmergency: false, isOnline: false }
                 });
+            }
+
+            // 🚀 SYNC FIX 1: Notify the Patient/User immediately
+            if (booking.userId) {
+                await sendPushNotification(
+                    booking.userId,
+                    'user',
+                    "⚠️ Ambulance Breakdown Alert",
+                    "Assigned ambulance reported vehicle breakdown. Re-dispatching nearest replacement ambulance immediately.",
+                    { bookingId: booking._id.toString(), type: 'ambulance_breakdown_redispatch' }
+                );
+            }
+
+            // 🚀 SYNC FIX 2: Update Hospital Pre-admission file
+            if (booking.bookingId) {
+                await Appointment.findOneAndUpdate(
+                    { transactionId: booking.bookingId },
+                    { $set: { ambulanceId: null, 'tracking.status': 'Vehicle Breakdown - Re-dispatching' } }
+                );
             }
         }
 
@@ -860,21 +924,19 @@ const triggerAmbulanceSos = async (req, res) => {
             null,
             'admin',
             `🚨 AMBULANCE EMERGENCY SOS: ${sosType}!`,
-            `Ambulance #${booking.bookingId} reported ${sosType} at Lat: ${lat}, Lng: ${lng}. Action required.`,
+            `Ambulance #${booking.bookingId} reported ${sosType} at Lat: ${lat || 'N/A'}, Lng: ${lng || 'N/A'}. Action required.`,
             { bookingId: booking._id.toString(), type: 'ambulance_sos_alert' }
         );
 
         res.json({ 
             success: true, 
-            message: `${sosType} logged. Ride reopened in broadcast pool and Control Room alerted.`,
+            message: `${sosType} logged. Ride reopened in broadcast pool, User & Control Room alerted.`,
             data: booking 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
-
 
 // --- 2. CHANGE PASSWORD (NEW: Profile Modal Screen) ---
 const changeDriverPassword = async (req, res) => {

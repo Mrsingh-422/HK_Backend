@@ -16,7 +16,9 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
         status: 'Delivered'
     }).select('serviceType pricing updatedAt').lean();
 
+    let grossEarnings = 0;
     let totalEarnings = 0;
+    let adminCommissionDeducted = 0;
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
@@ -32,9 +34,12 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
                 : (trip.pricing?.originalAmbulanceCharge || 2000)
         );
 
-        // 🚨 DEDUCT ADMIN CUTOFF (Commission Engine)
-        const { netVendorAmount } = await calculateAdminCommission(vendorSubtype, grossFare);
+        grossEarnings += grossFare;
 
+        // DEDUCT ADMIN CUTOFF
+        const { netVendorAmount, adminCutoff } = await calculateAdminCommission(vendorSubtype, grossFare);
+
+        adminCommissionDeducted += adminCutoff;
         totalEarnings += netVendorAmount;
 
         // 7-Day Rolling Cleared vs Locked calculation
@@ -58,26 +63,35 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
+    // Fetch Active Commission Policy details
+    const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
+    const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Ambulance-Medical', isActive: true }).lean();
+
     return {
+        grossEarnings,
+        adminCommissionDeducted,
         totalEarnings,
         clearedEarnings,
         pendingEarnings,
+        totalWithdrawals,
         withdrawableBalance: Math.max(0, clearedEarnings - totalWithdrawals),
-        walletBalance: Math.max(0, totalEarnings - totalWithdrawals)
+        walletBalance: Math.max(0, totalEarnings - totalWithdrawals),
+        commissionConfig: {
+            commissionType: commissionConfig?.commissionType || 'Percentage',
+            percentageValue: commissionConfig?.percentageValue ?? 10,
+            fixedRupeesValue: commissionConfig?.fixedRupeesValue ?? 0
+        }
     };
 };
-
-
 
 // 1. GET AMBULANCE WALLET STATS
 const getAmbulanceWalletStats = async (req, res) => {
     try {
         const ambulanceId = req.user.id;
-        const ambulance = req.user; // Decoded profile carries fresh bankDetails [1]
+        const ambulance = req.user;
 
         const balances = await calculateAmbulanceBalances(ambulanceId);
 
-        // Daily vs Weekly stats for dashboard
         const stats = {
             todayEarnings: await Booking.aggregate([
                 { $match: { ambulanceId: new mongoose.Types.ObjectId(ambulanceId), status: 'Delivered', updatedAt: { $gte: moment().startOf('day').toDate() } } },
@@ -89,7 +103,6 @@ const getAmbulanceWalletStats = async (req, res) => {
             ])
         };
 
-        // 🚨 LAZY INITIALIZATION: Agar Wallet nahi mila, toh auto-initialize karein [1]
         let wallet = await Wallet.findOne({ vendorId: ambulanceId, vendorModel: 'Ambulance' });
         if (!wallet) {
             wallet = await Wallet.create({
@@ -98,25 +111,28 @@ const getAmbulanceWalletStats = async (req, res) => {
                 balance: 0,
                 transactions: []
             });
-            console.log(`[Wallet] Self-Healed: Created new wallet for Ambulance ${ambulanceId}`);
         }
 
         res.json({ 
             success: true, 
+            grossEarnings: balances.grossEarnings,                     // 👈 Total trip fare before commission
+            adminCommissionDeducted: balances.adminCommissionDeducted, // 👈 Admin commission deducted
+            commissionPolicy: balances.commissionConfig,               // 👈 Active commission rate
             totalBalance: balances.walletBalance,             
             withdrawableBalance: balances.withdrawableBalance,      
             pendingBalance: balances.pendingEarnings,         
-            bankDetails: ambulance.bankDetails || null, // 👈 Read dynamically from Ambulance profile [1]
+            bankDetails: ambulance.bankDetails || null,
             stats: {
                 today: stats.todayEarnings[0]?.total || 0,
                 weekly: stats.weeklyEarnings[0]?.total || 0
             },
-            transactions: wallet?.transactions.slice(-10) || [] 
+            transactions: wallet?.transactions?.slice(-10) || [] 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 // 2. REQUEST WITHDRAWAL
 const requestAmbulanceWithdrawal = async (req, res) => {

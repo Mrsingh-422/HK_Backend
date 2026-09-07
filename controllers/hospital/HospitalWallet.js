@@ -17,15 +17,20 @@ const calculateHospitalBalances = async (hospitalId) => {
         status: 'Completed'
     }).select('totalAmount updatedAt').lean();
 
+    let grossEarnings = 0;
     let totalEarnings = 0;
+    let adminCommissionDeducted = 0;
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 🚨 2. Deduct Admin Commission for each completed hospital admission
+    // 2. Deduct Admin Commission for each completed hospital admission
     for (let appt of completedAppointments) {
         const grossAmount = Number(appt.totalAmount || 0);
-        const { netVendorAmount } = await calculateAdminCommission('Hospital', grossAmount);
+        grossEarnings += grossAmount;
 
+        const { netVendorAmount, adminCutoff } = await calculateAdminCommission('Hospital', grossAmount);
+
+        adminCommissionDeducted += adminCutoff;
         totalEarnings += netVendorAmount;
 
         if (new Date(appt.updatedAt) <= sevenDaysAgo) {
@@ -48,21 +53,32 @@ const calculateHospitalBalances = async (hospitalId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
+    // 4. Fetch Active Commission Policy details
+    const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
+    const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Hospital', isActive: true }).lean();
+
     return {
+        grossEarnings,
+        adminCommissionDeducted,
         totalEarnings,
         clearedEarnings,
         pendingEarnings,
+        totalWithdrawals,
         withdrawableBalance: Math.max(0, clearedEarnings - totalWithdrawals),
-        walletBalance: Math.max(0, totalEarnings - totalWithdrawals)
+        walletBalance: Math.max(0, totalEarnings - totalWithdrawals),
+        commissionConfig: {
+            commissionType: commissionConfig?.commissionType || 'Percentage',
+            percentageValue: commissionConfig?.percentageValue ?? 10,
+            fixedRupeesValue: commissionConfig?.fixedRupeesValue ?? 0
+        }
     };
 };
 
-
-// 1. GET HOSPITAL WALLET STATS (Screenshot 10)
+// 1. GET HOSPITAL WALLET STATS
 const getHospitalWalletStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const hospital = req.user; // Decoded profile carries fresh bankDetails [1]
+        const hospital = req.user;
 
         const balances = await calculateHospitalBalances(hospitalId);
 
@@ -77,24 +93,36 @@ const getHospitalWalletStats = async (req, res) => {
             ])
         };
 
-        const wallet = await Wallet.findOne({ vendorId: hospitalId, vendorModel: 'Hospital' });
+        let wallet = await Wallet.findOne({ vendorId: hospitalId, vendorModel: 'Hospital' });
+        if (!wallet) {
+            wallet = await Wallet.create({
+                vendorId: hospitalId,
+                vendorModel: 'Hospital',
+                balance: 0,
+                transactions: []
+            });
+        }
 
         res.json({ 
             success: true, 
+            grossEarnings: balances.grossEarnings,                     // 👈 Total bill volume before commission
+            adminCommissionDeducted: balances.adminCommissionDeducted, // 👈 Admin commission deducted
+            commissionPolicy: balances.commissionConfig,               // 👈 Active commission rate
             totalBalance: balances.walletBalance,             
             withdrawableBalance: balances.withdrawableBalance,      
             pendingBalance: balances.pendingEarnings,         
-            bankDetails: hospital.bankDetails || null, // 👈 Read dynamically from Hospital profile [1]
+            bankDetails: hospital.bankDetails || null,
             stats: {
                 today: stats.todayEarnings[0]?.total || 0,
                 weekly: stats.weeklyEarnings[0]?.total || 0
             },
-            transactions: wallet?.transactions.slice(-10) || [] 
+            transactions: wallet?.transactions?.slice(-10) || [] 
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+4
 
 // 2. REQUEST WITHDRAWAL (With 7-days dynamic locks)
 // Replacing requestHospitalWithdrawal inside controllers/hospital/HospitalWallet.js

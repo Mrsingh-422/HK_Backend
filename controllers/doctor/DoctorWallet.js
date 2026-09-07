@@ -18,15 +18,20 @@ const calculateVendorBalances = async (vendorId) => {
         status: 'Completed'
     }).select('totalAmount updatedAt').lean();
 
+    let grossEarnings = 0;
     let totalEarnings = 0;
+    let adminCommissionDeducted = 0;
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 🚨 2. Deduct Admin Commission for each completed appointment
+    // 2. Deduct Admin Commission for each completed appointment
     for (let appt of completedAppointments) {
         const grossAmount = Number(appt.totalAmount || 0);
-        const { netVendorAmount } = await calculateAdminCommission('Doctor', grossAmount);
+        grossEarnings += grossAmount;
 
+        const { netVendorAmount, adminCutoff } = await calculateAdminCommission('Doctor', grossAmount);
+
+        adminCommissionDeducted += adminCutoff;
         totalEarnings += netVendorAmount;
 
         // 7-Day Rolling Cleared vs Locked Calculation
@@ -50,22 +55,32 @@ const calculateVendorBalances = async (vendorId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
+    // 4. Fetch Active Commission Policy details
+    const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
+    const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Doctor', isActive: true }).lean();
+
     return {
+        grossEarnings,
+        adminCommissionDeducted,
         totalEarnings,
         clearedEarnings,
-        pendingEarnings, // Locked balance (last 7 days)
+        pendingEarnings,
         totalWithdrawals,
-        withdrawableBalance: Math.max(0, clearedEarnings - totalWithdrawals), // Cleared for payout
-        walletBalance: Math.max(0, totalEarnings - totalWithdrawals)          // Total virtual balance
+        withdrawableBalance: Math.max(0, clearedEarnings - totalWithdrawals),
+        walletBalance: Math.max(0, totalEarnings - totalWithdrawals),
+        commissionConfig: {
+            commissionType: commissionConfig?.commissionType || 'Percentage',
+            percentageValue: commissionConfig?.percentageValue ?? 10,
+            fixedRupeesValue: commissionConfig?.fixedRupeesValue ?? 0
+        }
     };
 };
-
 
 // 1. GET DOCTOR EARNING STATS
 const getDoctorWalletStats = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        const doctor = req.user; // Decoded profile carries fresh bankDetails [1]
+        const doctor = req.user;
 
         const balances = await calculateVendorBalances(doctorId);
 
@@ -80,7 +95,6 @@ const getDoctorWalletStats = async (req, res) => {
             ]),
         };
 
-        // 🚨 LAZY INITIALIZATION: Stats load karte waqt bhi self-heal initialize lagaya
         let wallet = await Wallet.findOne({ vendorId: doctorId, vendorModel: 'Doctor' });
         if (!wallet) {
             wallet = await Wallet.create({
@@ -89,22 +103,26 @@ const getDoctorWalletStats = async (req, res) => {
                 balance: 0,
                 transactions: []
             });
-            console.log(`[Wallet] Self-Healed on Stats: Created new wallet for Doctor ${doctorId}`);
         }
 
         res.json({ 
             success: true, 
+            grossEarnings: balances.grossEarnings,                     // 👈 Total consultation revenue before commission
+            adminCommissionDeducted: balances.adminCommissionDeducted, // 👈 Admin platform fee deducted
+            commissionPolicy: balances.commissionConfig,               // 👈 Active commission rate
             totalBalance: balances.walletBalance,
             withdrawableBalance: balances.withdrawableBalance,
             pendingBalance: balances.pendingEarnings,
             todayEarning: stats.today[0]?.total || 0,
             weeklyEarning: stats.weekly[0]?.total || 0,
-            bankDetails: doctor.bankDetails || null // 👈 Read dynamically from Doctor profile [1]
+            bankDetails: doctor.bankDetails || null,
+            transactions: wallet?.transactions?.slice(-10) || []
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+3
 
 // 2. DOCTOR WITHDRAWAL REQUEST (With lazy-initialization fix)
 const requestDoctorWithdrawal = async (req, res) => {

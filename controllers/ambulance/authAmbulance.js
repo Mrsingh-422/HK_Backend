@@ -139,25 +139,24 @@ const loginAmbulance = async (req, res) => {
 const completeAmbulanceProfile = async (req, res) => {
     try {
         const ambId = req.user.id;
-        const updates = req.body;
-        const files = req.files;
+        const updates = { ...req.body };
+        const files = req.files || {};
 
-        // Figma logic: Handle Documents and update status to Pending
-        if (files) {
+        // 🚀 SYNC FIX: Store clean, web-accessible URL paths instead of OS raw disk paths
+        if (Object.keys(files).length > 0) {
             const documentPaths = {
-                drivingLicenseFile: files.drivingLicenseFile ? files.drivingLicenseFile[0].path : null,
-                rcFile: files.rcFile ? files.rcFile[0].path : null,
-                insuranceFile: files.insuranceFile ? files.insuranceFile[0].path : null,
-                fitnessCertificate: files.fitnessCertificate ? files.fitnessCertificate[0].path : null,
-                ambulancePermit: files.ambulancePermit ? files.ambulancePermit[0].path : null
+                drivingLicenseFile: files.drivingLicenseFile ? `/uploads/ambulances/${files.drivingLicenseFile[0].filename}` : null,
+                rcFile: files.rcFile ? `/uploads/ambulances/${files.rcFile[0].filename}` : null,
+                insuranceFile: files.insuranceFile ? `/uploads/ambulances/${files.insuranceFile[0].filename}` : null,
+                fitnessCertificate: files.fitnessCertificate ? `/uploads/ambulances/${files.fitnessCertificate[0].filename}` : null,
+                ambulancePermit: files.ambulancePermit ? `/uploads/ambulances/${files.ambulancePermit[0].filename}` : null
             };
             
             updates.documents = documentPaths;
 
-            // Agar main documents upload ho gaye hain, to status Pending kar do
             if (files.drivingLicenseFile && files.rcFile) {
                 updates.profileStatus = 'Pending';
-                updates.rejectionReason = null; // Purana reject reason hatao
+                updates.rejectionReason = null;
             }
         }
 
@@ -165,7 +164,7 @@ const completeAmbulanceProfile = async (req, res) => {
             ambId, 
             { $set: updates }, 
             { new: true }
-        );
+        ).select('-password');
 
         res.json({ 
             success: true, 

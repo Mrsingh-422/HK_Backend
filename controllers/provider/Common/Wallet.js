@@ -35,7 +35,7 @@ const calculateProviderBalances = async (vendorId, role) => {
     else if (role === 'Nurse') {
         BookingModel = NurseBooking;
         matchQuery = { nurseId: vendorObjId };
-        completedStatuses = ['Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed'];
+        completedStatuses = ['Completed']; // 🚀 FIXED: Only count earnings when service is officially Completed!
     } else {
         throw new Error("Invalid Provider Role inside Wallet controller.");
     }
@@ -46,11 +46,13 @@ const calculateProviderBalances = async (vendorId, role) => {
         status: { $in: completedStatuses }
     }).select('billSummary totalPrice priceBreakdown updatedAt').lean();
 
-    let totalEarnings = 0;
+    let grossEarnings = 0;
+    let totalEarnings = 0; // Net earnings after commission
+    let adminCommissionDeducted = 0;
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 🚨 2. Deduct Admin Commission based on specific provider role
+    // 2. Deduct Admin Commission based on specific provider role
     for (let order of completedOrders) {
         let grossAmount = 0;
         if (role === 'Lab' || role === 'Pharmacy') {
@@ -59,8 +61,11 @@ const calculateProviderBalances = async (vendorId, role) => {
             grossAmount = Number(order.priceBreakdown?.totalPrice || order.totalPrice || 0);
         }
 
-        const { netVendorAmount } = await calculateAdminCommission(role, grossAmount);
+        grossEarnings += grossAmount;
 
+        const { netVendorAmount, adminCutoff } = await calculateAdminCommission(role, grossAmount);
+
+        adminCommissionDeducted += adminCutoff;
         totalEarnings += netVendorAmount;
 
         // 7-Day Rolling Cleared vs Locked calculation
@@ -84,16 +89,28 @@ const calculateProviderBalances = async (vendorId, role) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
+    // 4. Fetch Active Commission Policy details for vendor transparency
+    const AdminCommissionConfig = require('../../../models/AdminCommissionConfig');
+    const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: role, isActive: true }).lean();
+
     return {
+        grossEarnings,
+        adminCommissionDeducted,
         totalEarnings,
         clearedEarnings,
         pendingEarnings,
+        totalWithdrawals,
         withdrawableBalance: Math.max(0, clearedEarnings - totalWithdrawals),
-        walletBalance: Math.max(0, totalEarnings - totalWithdrawals)
+        walletBalance: Math.max(0, totalEarnings - totalWithdrawals),
+        commissionConfig: {
+            commissionType: commissionConfig?.commissionType || 'Percentage',
+            percentageValue: commissionConfig?.percentageValue ?? 10,
+            fixedRupeesValue: commissionConfig?.fixedRupeesValue ?? 0
+        }
     };
 };
 
-// 1. GET PROVIDER EARNING STATS
+// 1. GET PROVIDER EARNING STATS (With Transparent Commission Breakdown)
 const getWalletStats = async (req, res) => {
     try {
         const vendorId = req.user.id;
@@ -103,7 +120,7 @@ const getWalletStats = async (req, res) => {
         // Dynamic balances calculate karein
         const balances = await calculateProviderBalances(vendorId, role);
 
-        // 🚨 LAZY INITIALIZATION: Agar Wallet nahi mila, toh auto-initialize karein [1]
+        // LAZY INITIALIZATION
         let wallet = await Wallet.findOne({ vendorId, vendorModel: role });
         if (!wallet) {
             wallet = await Wallet.create({
@@ -118,14 +135,42 @@ const getWalletStats = async (req, res) => {
         res.json({ 
             success: true, 
             providerRole: role,
-            totalBalance: balances.walletBalance,             
-            withdrawableBalance: balances.withdrawableBalance,      
-            pendingBalance: balances.pendingEarnings,         
+            grossEarnings: balances.grossEarnings,                     // 👈 Total business generated before commission
+            adminCommissionDeducted: balances.adminCommissionDeducted, // 👈 Total platform fee deducted
+            commissionPolicy: balances.commissionConfig,               // 👈 Active commission rate (e.g. 10%)
+            totalBalance: balances.walletBalance,                      // Net virtual earnings
+            withdrawableBalance: balances.withdrawableBalance,         // Cleared balance
+            pendingBalance: balances.pendingEarnings,                  // Locked in 7-day period
             bankDetails: provider.bankDetails || null,
-            transactions: wallet?.transactions || []
+            transactions: wallet?.transactions?.slice(-10) || []
         });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// 4. GET FULL TRANSACTIONS HISTORY (Newly Added for Lab, Pharmacy, Nurse)
+const getProviderTransactions = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const role = req.user.role;
+
+        let wallet = await Wallet.findOne({ vendorId, vendorModel: role });
+        if (!wallet) {
+            wallet = await Wallet.create({
+                vendorId,
+                vendorModel: role,
+                balance: 0,
+                transactions: []
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            transactions: wallet?.transactions || [] 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -256,4 +301,4 @@ const updateProviderBankDetails = async (req, res) => {
     }
 };
 
-module.exports = { getWalletStats, requestWithdrawal, updateProviderBankDetails };
+module.exports = { getWalletStats,getProviderTransactions, requestWithdrawal, updateProviderBankDetails };

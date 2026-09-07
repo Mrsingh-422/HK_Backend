@@ -251,7 +251,16 @@ const appointmentSchema = new mongoose.Schema({
     tracking: {
         otp: { type: String, default: null },
         isOtpVerified: { type: Boolean, default: false },
-        noShowReason: { type: String, default: "" }
+        noShowReason: { type: String, default: "" },
+        status: { type: String, default: "" },             // 👈 Added (e.g. 'Ride Started', 'Picked-Up')
+        eta: { type: String, default: "" },                // 👈 Added (e.g. '10 mins')
+        rideStartTime: { type: Date, default: null },       // 👈 Added
+        rideEndTime: { type: Date, default: null },         // 👈 Added
+        liveLocation: {                                    // 👈 Added (Live Map tracking for user)
+            lat: { type: Number, default: 0 },
+            lng: { type: Number, default: 0 },
+            lastUpdated: { type: Date, default: Date.now }
+        }
     }
 
 
