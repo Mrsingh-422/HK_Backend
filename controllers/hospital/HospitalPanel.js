@@ -24,6 +24,7 @@ const Insurance = require('../../models/Insurance');
 const InsuranceType = require('../../models/InsuranceType');
 const { sendPushNotification } = require('../../utils/notification');
 const User = require('../../models/User');
+const crypto = require('crypto');
 
 const getShortName = (name) => {
     return name.split(' ').map(word => word[0]).join('').toUpperCase();

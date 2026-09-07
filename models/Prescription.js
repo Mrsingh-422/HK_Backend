@@ -19,7 +19,9 @@ const prescriptionSchema = new mongoose.Schema({
     dose: { type: String, default: "" },                  // Optional (e.g., "1 - 0 - 1")
     time: { type: String, default: "" },                  // Optional (e.g., "Morning - Evening")
     duration: { type: String, default: "" },              // Optional (e.g., "5 Days")
-    instructions: { type: String, default: "" }           // Optional extra guidelines
+    instructions: { type: String, default: "" },           // Optional extra guidelines
+    frequency: { type: String, default: "" }, 
+    dosage: { type: String, default: "" },
                 }],
     vitals: {
     bp: { type: String, default: "" },      // Blood Pressure (e.g. 120/80)

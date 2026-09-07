@@ -1136,10 +1136,19 @@ const startSpecialistCare = async (req, res) => {
 // --- 3. SUBMIT CO-DOCTOR CLINICAL FEEDBACK (Fixed: Allows MULTIPLE feedbacks while In-Progress) ---
 const submitSpecialistFeedback = async (req, res) => {
     try {
-        const { appointmentId, observation, patientCondition, priorityRating, recommendedMedicines, vitals } = req.body;
+        const { 
+            appointmentId, 
+            observation, 
+            patientCondition, 
+            priorityRating, 
+            recommendedMedicines, 
+            vitals,
+            bp, pulse, temp, spo2 // 👈 Added direct flat fields support
+        } = req.body;
+        
         const specialistId = req.user.id;
 
-        // 🚀 SYNC FIX 1: Allows both 'Accepted' and 'In-Progress' states to prevent lock errors
+        // 1. Verify active shift for this specialist
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             "bedsideCareTeam.doctorId": specialistId,
@@ -1159,42 +1168,62 @@ const submitSpecialistFeedback = async (req, res) => {
 
         const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
         
-        // 🚀 SYNC FIX 2: If the specialist direct submits observation, transition their state to In-Progress & start tracking!
         if (careTeamObj.status === 'Accepted') {
             careTeamObj.status = 'In-Progress';
             careTeamObj.startTime = careTeamObj.startTime || new Date(); 
-            console.log(`[Self-Healed Specialist Shift]: Doctor ${specialistId} status auto-transitioned to 'In-Progress'`);
         }
 
         if (!careTeamObj.specialistFeedback) {
             careTeamObj.specialistFeedback = [];
         }
 
-        // Parse incoming vitals dynamically
+        // 🚨 2. DUAL VITALS PARSER (Supports both nested vitals object AND flat keys)
         let parsedVitals = { bp: "", pulse: "", temp: "", spo2: "" };
+
         if (vitals) {
-            parsedVitals = typeof vitals === 'string' ? JSON.parse(vitals) : vitals;
+            try {
+                parsedVitals = typeof vitals === 'string' ? JSON.parse(vitals) : vitals;
+            } catch (e) {
+                parsedVitals = { bp: "", pulse: "", temp: "", spo2: "" };
+            }
+        } else {
+            // Fallback for flat keys from Frontend / Form-Data
+            parsedVitals = {
+                bp: bp || req.body.bp || "",
+                pulse: pulse || req.body.pulse || "",
+                temp: temp || req.body.temp || "",
+                spo2: spo2 || req.body.spo2 || ""
+            };
         }
 
-        // Push new observation feedback with vitals
+        // 🚨 3. Push new observation feedback with vitals
         careTeamObj.specialistFeedback.push({
             observation: observation || "",
             patientCondition: patientCondition || "",
             priorityRating: priorityRating || 'Routine',
             vitals: {
-                bp: parsedVitals.bp || "",
-                pulse: parsedVitals.pulse || "",
-                temp: parsedVitals.temp || "",
-                spo2: parsedVitals.spo2 || ""
+                bp: String(parsedVitals.bp || ""),
+                pulse: String(parsedVitals.pulse || ""),
+                temp: String(parsedVitals.temp || ""),
+                spo2: String(parsedVitals.spo2 || "")
             },
             submittedAt: new Date()
         });
 
-        // Push recommended medicines
+        // 🚨 4. Push recommended medicines
         if (recommendedMedicines) {
-            const medicinesArray = typeof recommendedMedicines === 'string' ? JSON.parse(recommendedMedicines) : recommendedMedicines;
+            let medicinesArray = [];
+            try {
+                medicinesArray = typeof recommendedMedicines === 'string' ? JSON.parse(recommendedMedicines) : recommendedMedicines;
+            } catch (e) {
+                medicinesArray = Array.isArray(recommendedMedicines) ? recommendedMedicines : [];
+            }
             
             if (Array.isArray(medicinesArray) && medicinesArray.length > 0) {
+                if (!careTeamObj.recommendedMedicines) {
+                    careTeamObj.recommendedMedicines = [];
+                }
+
                 medicinesArray.forEach(med => {
                     careTeamObj.recommendedMedicines.push({
                         name: med.name,
@@ -1209,13 +1238,23 @@ const submitSpecialistFeedback = async (req, res) => {
             }
         }
 
+        // 🚨 5. CRITICAL FIX: Explicitly notify Mongoose about deep nested mutations
+        appointment.markModified('bedsideCareTeam');
+
         await appointment.save();
-        res.json({ success: true, message: "Clinical feedback and medication recommendations recorded successfully!" });
+
+        res.json({ 
+            success: true, 
+            message: "Clinical feedback, vitals, and medication recommendations recorded successfully!",
+            data: careTeamObj.specialistFeedback[careTeamObj.specialistFeedback.length - 1]
+        });
 
     } catch (error) {
+        console.error("Specialist Feedback Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 const getCollaborativeMedications = async (req, res) => {
     try {
         const { appointmentId } = req.params;

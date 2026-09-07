@@ -1,5 +1,5 @@
 // controllers/hospital/authHospital.js
- Hospital = require('../../models/Hospital');
+const Hospital = require('../../models/Hospital');
 const Ward = require('../../models/Ward');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 const bcrypt = require('bcryptjs');
