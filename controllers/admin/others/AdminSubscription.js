@@ -1,5 +1,8 @@
 const SubscriptionPlan = require('../../../models/SubscriptionPlan');
+const UserSubscription = require('../../../models/UserSubscription');
+const User = require('../../../models/User');
 
+// --- 1. CREATE PLAN ---
 const createSubscriptionPlanByAdmin = async (req, res) => {
     try {
         const { 
@@ -15,7 +18,7 @@ const createSubscriptionPlanByAdmin = async (req, res) => {
             planType,
             name,
             diseaseType: planType === 'Condition Management' ? diseaseType : null,
-            validityInDays: Number(validityInDays), // Convert validity to days
+            validityInDays: Number(validityInDays),
             price: Number(price),
             description,
             termsAndConditions: termsAndConditions || "",
@@ -36,6 +39,7 @@ const createSubscriptionPlanByAdmin = async (req, res) => {
     }
 };
 
+// --- 2. UPDATE PLAN ---
 const updateSubscriptionPlanByAdmin = async (req, res) => {
     try {
         const { id } = req.params;
@@ -72,7 +76,8 @@ const updateSubscriptionPlanByAdmin = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// 3. DELETE/TOGGLE PLAN (Optional Helper)
+
+// --- 3. DELETE PLAN ---
 const deleteSubscriptionPlanByAdmin = async (req, res) => {
     try {
         const { id } = req.params;
@@ -84,5 +89,113 @@ const deleteSubscriptionPlanByAdmin = async (req, res) => {
     }
 };
 
+// --- 4. GET ALL SUBSCRIBED USERS LIST (NEW: For Admin Panel) ---
+const getAllSubscribersForAdmin = async (req, res) => {
+    try {
+        const { 
+            page = 1, 
+            limit = 10, 
+            status,       // 'Active', 'Expired', 'Pending', 'Cancelled'
+            planType,     // 'Elder Care', 'Condition Management'
+            diseaseType,  // 'Dementia', 'Dialysis', 'Cancer'
+            search        // Search by user name, phone, email
+        } = req.query;
 
-module.exports = { createSubscriptionPlanByAdmin, updateSubscriptionPlanByAdmin, deleteSubscriptionPlanByAdmin };
+        const query = {};
+
+        // 1. Status Filter
+        if (status) {
+            query.status = status;
+        }
+
+        // 2. User Search Filter (Name, Phone, Email)
+        if (search) {
+            const matchedUsers = await User.find({
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { phone: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } }
+                ]
+            }).select('_id');
+
+            const userIds = matchedUsers.map(u => u._id);
+            query.userId = { $in: userIds };
+        }
+
+        const skip = (Number(page) - 1) * Number(limit);
+
+        // 3. Fetch Data with Population
+        let subscriptions = await UserSubscription.find(query)
+            .populate('userId', 'name email phone countryCode profilePic gender dob userAddress')
+            .populate('planId', 'name planType diseaseType price validityInDays features benefits')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(Number(limit))
+            .lean();
+
+        // 4. In-memory Filter if planType or diseaseType is passed
+        if (planType || diseaseType) {
+            subscriptions = subscriptions.filter(sub => {
+                let match = true;
+                if (planType && sub.planId?.planType !== planType) match = false;
+                if (diseaseType && sub.planId?.diseaseType !== diseaseType) match = false;
+                return match;
+            });
+        }
+
+        const totalRecords = await UserSubscription.countDocuments(query);
+
+        // 5. Quick Overview Stats for Admin Dashboard Top Cards
+        const totalActive = await UserSubscription.countDocuments({ status: 'Active' });
+        const totalExpired = await UserSubscription.countDocuments({ status: 'Expired' });
+        const totalPaid = await UserSubscription.countDocuments({ paymentStatus: 'Paid' });
+
+        res.status(200).json({
+            success: true,
+            count: subscriptions.length,
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / Number(limit)),
+            currentPage: Number(page),
+            overview: {
+                totalActiveSubscribers: totalActive,
+                totalExpiredSubscribers: totalExpired,
+                totalPaidSubscriptions: totalPaid
+            },
+            data: subscriptions
+        });
+
+    } catch (error) {
+        console.error("Get All Subscribers Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 5. GET SINGLE SUBSCRIBER DETAIL (NEW: For Modal / View Details) ---
+const getSubscriberDetailForAdmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const subscription = await UserSubscription.findById(id)
+            .populate('userId', 'name email phone countryCode profilePic gender dob userAddress conditionStatus')
+            .populate('planId');
+
+        if (!subscription) {
+            return res.status(404).json({ success: false, message: "Subscription record not found." });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: subscription
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { 
+    createSubscriptionPlanByAdmin, 
+    updateSubscriptionPlanByAdmin, 
+    deleteSubscriptionPlanByAdmin,
+    getAllSubscribersForAdmin,
+    getSubscriberDetailForAdmin
+};

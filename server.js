@@ -304,6 +304,7 @@ app.use('/api/admin/profile-update', require('./routes/admin/others/ProfileUpdat
 app.use('/api/admin/refunds', require('./routes/admin/others/RefundsRoute')); // Refunds Management Route
 app.use('/api/admin/commission-config', require('./routes/admin/others/CommissionConfigRoute'));
 app.use('/api/admin/otp-limits', require('./routes/admin/others/OtpLimitAdminRoute'));
+app.use('/admin/issues', require('./routes/admin/others/IssueRoute')); // Issue Management Route
 // --- Admin pharmacy Routes ---
 app.use('/admin/pharmacy/tax-config', require('./routes/admin/Pharmacy/TaxConfigRoute'));
 app.use('/admin/pharmacy/return-policy', require('./routes/admin/Pharmacy/ReturnPolicyRoute')); // Pharmacy Return Policy Management Route
