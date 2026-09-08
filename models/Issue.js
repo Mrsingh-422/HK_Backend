@@ -3,20 +3,19 @@ const mongoose = require('mongoose');
 const issueSchema = new mongoose.Schema({
     issueNumber: { 
         type: Number, 
-        unique: true 
+        index: true 
     },
     title: { 
         type: String, 
-        required: true, 
+        required: [true, "Issue title is required"], 
         trim: true 
-    }, // e.g. "Health locker update issue."
+    },
     detailedDescription: { 
         type: String, 
         default: "" 
     },
     category: {
         type: String,
-        enum: ['Health Locker', 'Profile', 'Hospital Bed', 'Service Booking', 'Payment', 'Other'],
         default: 'Other'
     },
     status: {
@@ -44,13 +43,12 @@ const issueSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-// 🚀 Auto-Increment Sequential Issue Number (#1, #2, #3...)
-issueSchema.pre('save', async function(next) {
+// 🚀 Fixed & Safe Async Auto-Increment Hook (No next() conflict)
+issueSchema.pre('save', async function() {
     if (this.isNew && !this.issueNumber) {
         const lastIssue = await this.constructor.findOne().sort({ issueNumber: -1 });
-        this.issueNumber = lastIssue && lastIssue.issueNumber ? lastIssue.issueNumber + 1 : 1;
+        this.issueNumber = (lastIssue && lastIssue.issueNumber) ? lastIssue.issueNumber + 1 : 1;
     }
-    next();
 });
 
 module.exports = mongoose.model('Issue', issueSchema);

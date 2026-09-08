@@ -8,31 +8,50 @@ const createIssue = async (req, res) => {
     try {
         const { title, detailedDescription, category, loggedDate } = req.body;
 
-        if (!title) {
-            return res.status(400).json({ success: false, message: "Issue description/title is required." });
+        if (!title || title.trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Issue description/title is required." 
+            });
+        }
+
+        // 🔢 Auto Calculate next issueNumber safely
+        const lastIssue = await Issue.findOne().sort({ issueNumber: -1 });
+        const nextIssueNumber = (lastIssue && lastIssue.issueNumber) ? lastIssue.issueNumber + 1 : 1;
+
+        // 📅 Safe Date parsing
+        let parsedDate = new Date();
+        if (loggedDate) {
+            const mDate = moment(loggedDate, ['YYYY-MM-DD', 'DD-MM-YYYY', moment.ISO_8601]);
+            parsedDate = mDate.isValid() ? mDate.toDate() : new Date();
         }
 
         const newIssue = await Issue.create({
+            issueNumber: nextIssueNumber,
             title: title.trim(),
             detailedDescription: detailedDescription || "",
             category: category || "Other",
-            loggedDate: loggedDate ? new Date(loggedDate) : new Date(),
+            loggedDate: parsedDate,
             status: 'IN PROGRESS',
             createdBy: req.user?._id || null
         });
 
-        res.status(201).json({
+        return res.status(201).json({
             success: true,
             message: "Issue logged successfully.",
             data: newIssue
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("❌ [CREATE ISSUE ERROR]:", error);
+        return res.status(500).json({ 
+            success: false, 
+            message: error.message || "Failed to create issue" 
+        });
     }
 };
 
 // ==========================================
-// 2. GET ALL ISSUES (Search, Pagination, Filter)
+// 2. GET ALL ISSUES (Search & Pagination)
 // ==========================================
 const getAllIssues = async (req, res) => {
     try {
@@ -40,13 +59,11 @@ const getAllIssues = async (req, res) => {
 
         const query = {};
 
-        // Status Filter ('IN PROGRESS' or 'RESOLVED')
         if (status && status !== 'ALL') {
             query.status = status.toUpperCase();
         }
 
-        // Live Search across Title and Description
-        if (search.trim() !== "") {
+        if (search && search.trim() !== "") {
             query.$or = [
                 { title: { $regex: search.trim(), $options: 'i' } },
                 { detailedDescription: { $regex: search.trim(), $options: 'i' } }
@@ -59,18 +76,17 @@ const getAllIssues = async (req, res) => {
             Issue.find(query)
                 .populate('resolvedBy', 'name email role')
                 .populate('createdBy', 'name email')
-                .sort({ issueNumber: 1 }) // #1, #2... order
+                .sort({ issueNumber: 1 })
                 .skip(skip)
                 .limit(Number(limit))
                 .lean(),
             Issue.countDocuments(query)
         ]);
 
-        // Format data matching exact screenshot UI
         const formattedData = issues.map(item => ({
             _id: item._id,
-            displayId: `#${item.issueNumber}`,
-            issueNumber: item.issueNumber,
+            displayId: `#${item.issueNumber || 1}`,
+            issueNumber: item.issueNumber || 1,
             title: item.title,
             detailedDescription: item.detailedDescription,
             category: item.category,
@@ -81,7 +97,7 @@ const getAllIssues = async (req, res) => {
             createdAt: item.createdAt
         }));
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             totalRecords: total,
             totalPages: Math.ceil(total / Number(limit)),
@@ -90,12 +106,13 @@ const getAllIssues = async (req, res) => {
             data: formattedData
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("❌ [GET ISSUES ERROR]:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // ==========================================
-// 3. EDIT ISSUE (Pencil Icon)
+// 3. EDIT ISSUE
 // ==========================================
 const updateIssue = async (req, res) => {
     try {
@@ -119,18 +136,18 @@ const updateIssue = async (req, res) => {
             return res.status(404).json({ success: false, message: "Issue not found." });
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             message: "Issue updated successfully.",
             data: updatedIssue
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // ==========================================
-// 4. QUICK RESOLVE (Green Checkmark Button)
+// 4. QUICK RESOLVE (Checkmark)
 // ==========================================
 const resolveIssue = async (req, res) => {
     try {
@@ -142,10 +159,6 @@ const resolveIssue = async (req, res) => {
             return res.status(404).json({ success: false, message: "Issue not found." });
         }
 
-        if (issue.status === 'RESOLVED') {
-            return res.status(400).json({ success: false, message: "This issue is already marked as RESOLVED." });
-        }
-
         issue.status = 'RESOLVED';
         issue.resolvedBy = resolvingAdminId;
         issue.resolvedAt = new Date();
@@ -153,7 +166,7 @@ const resolveIssue = async (req, res) => {
 
         const populatedIssue = await Issue.findById(id).populate('resolvedBy', 'name email role');
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             message: `Issue marked as RESOLVED by ${req.user?.name || 'Admin'}.`,
             data: {
@@ -166,12 +179,12 @@ const resolveIssue = async (req, res) => {
             }
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // ==========================================
-// 5. DELETE ISSUE (Red Cross Button)
+// 5. DELETE ISSUE
 // ==========================================
 const deleteIssue = async (req, res) => {
     try {
@@ -182,12 +195,12 @@ const deleteIssue = async (req, res) => {
             return res.status(404).json({ success: false, message: "Issue not found." });
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: `Issue #${deletedIssue.issueNumber} deleted successfully.`
+            message: `Issue #${deletedIssue.issueNumber || ''} deleted successfully.`
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
