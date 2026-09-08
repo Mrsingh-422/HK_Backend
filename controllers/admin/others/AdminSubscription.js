@@ -2,6 +2,110 @@ const SubscriptionPlan = require('../../../models/SubscriptionPlan');
 const UserSubscription = require('../../../models/UserSubscription');
 const User = require('../../../models/User');
 
+// =========================================================================
+// 1. GET ALL SUBSCRIPTION PLANS (Admin View: Active + Inactive + Search + Filters)
+// =========================================================================
+const getAllSubscriptionPlansByAdmin = async (req, res) => {
+    try {
+        const { 
+            page = 1, 
+            limit = 10, 
+            search = "", 
+            planType,     // 'Elder Care', 'Condition Management'
+            diseaseType,  // 'Dementia', 'Dialysis', 'Cancer'
+            isActive      // 'true', 'false'
+        } = req.query;
+
+        const query = {};
+
+        // 1. Plan Type Filter
+        if (planType && planType !== 'All') {
+            query.planType = planType;
+        }
+
+        // 2. Disease Type Filter
+        if (diseaseType && diseaseType !== 'All') {
+            query.diseaseType = diseaseType;
+        }
+
+        // 3. Status Filter (Active / Inactive)
+        if (isActive !== undefined && isActive !== 'All') {
+            query.isActive = (isActive === 'true' || isActive === true);
+        }
+
+        // 4. Search Filter (By Plan Name)
+        if (search.trim() !== "") {
+            query.name = { $regex: search.trim(), $options: 'i' };
+        }
+
+        const skip = (Number(page) - 1) * Number(limit);
+
+        const [plans, total] = await Promise.all([
+            SubscriptionPlan.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(Number(limit))
+                .lean(),
+            SubscriptionPlan.countDocuments(query)
+        ]);
+
+        // 🚀 Bonus: Calculate live active subscribers count for each plan
+        const plansWithStats = await Promise.all(plans.map(async (plan) => {
+            const activeSubscribers = await UserSubscription.countDocuments({
+                planId: plan._id,
+                status: 'Active'
+            });
+            return {
+                ...plan,
+                activeSubscribersCount: activeSubscribers
+            };
+        }));
+
+        res.status(200).json({
+            success: true,
+            totalRecords: total,
+            totalPages: Math.ceil(total / Number(limit)),
+            currentPage: Number(page),
+            count: plansWithStats.length,
+            data: plansWithStats
+        });
+
+    } catch (error) {
+        console.error("Get All Plans Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// =========================================================================
+// 2. GET SINGLE SUBSCRIPTION PLAN BY ID (For Admin Edit Modal Pre-fill)
+// =========================================================================
+const getSubscriptionPlanByIdByAdmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const plan = await SubscriptionPlan.findById(id);
+        if (!plan) {
+            return res.status(404).json({ success: false, message: "Subscription plan not found." });
+        }
+
+        const activeSubscribers = await UserSubscription.countDocuments({
+            planId: plan._id,
+            status: 'Active'
+        });
+
+        res.status(200).json({
+            success: true,
+            data: {
+                ...plan._doc,
+                activeSubscribersCount: activeSubscribers
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // --- 1. CREATE PLAN ---
 const createSubscriptionPlanByAdmin = async (req, res) => {
     try {
@@ -193,6 +297,8 @@ const getSubscriberDetailForAdmin = async (req, res) => {
 };
 
 module.exports = { 
+    getAllSubscriptionPlansByAdmin,
+    getSubscriptionPlanByIdByAdmin,
     createSubscriptionPlanByAdmin, 
     updateSubscriptionPlanByAdmin, 
     deleteSubscriptionPlanByAdmin,
