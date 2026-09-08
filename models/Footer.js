@@ -11,12 +11,24 @@ const footerSchema = new mongoose.Schema({
     aboutDescription: { type: String, default: '' },
 
     // Social Media Links
-    socialLinks: {
-        facebook: { type: String, default: '' },
-        twitter: { type: String, default: '' },
-        instagram: { type: String, default: '' },
-        youtube: { type: String, default: '' }
-    },
+     socialLinks: [{
+        platform: { 
+            type: String, 
+            required: true, 
+            trim: true 
+            // e.g. 'facebook', 'twitter', 'instagram', 'youtube', 'linkedin', 'whatsapp', 'telegram'
+        },
+        url: { 
+            type: String, 
+            required: true, 
+            trim: true 
+            // e.g. 'https://facebook.com/healthkangaroo'
+        },
+        icon: { 
+            type: String, 
+            default: '' 
+        }
+    }],
 
     // Lists
     services: [{ type: String }], // Array of strings
