@@ -923,6 +923,26 @@ const insuranceApprovalUpload = multer({
 }).single('approvalLetterPdf'); // 👈 Multipart form key: 'approvalLetterPdf'
 
 
+// ==========================================
+// 47. MAINTENANCE HERO IMAGE UPLOAD (Figma Screen: Maintenance Page)
+// ==========================================
+const maintenanceDir = 'public/uploads/maintenance';
+ensureDir(maintenanceDir);
+
+const maintenanceUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, maintenanceDir),
+        filename: (req, file, cb) => cb(null, `maintenance-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only JPG, PNG, and WebP images are allowed!'), false);
+        }
+    },
+    limits: { fileSize: 2 * 1024 * 1024 } // 2MB Limit as shown in Figma
+}).single('heroImage'); // Field key: 'heroImage'
 
 
 module.exports = { 
@@ -973,6 +993,7 @@ module.exports = {
     nursingPrescriptionUploads,
     labReportUpload,
     docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,insuranceCardUploads,
-    insuranceApprovalUpload
+    insuranceApprovalUpload,
+    maintenanceUpload
 
 };  
