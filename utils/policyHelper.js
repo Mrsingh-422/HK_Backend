@@ -4,6 +4,7 @@ const NoShowConfig = require('../models/NoShowConfig');
 const AdminCommissionConfig = require('../models/AdminCommissionConfig');
 const Wallet = require('../models/Wallet');
 const CodConfig = require('../models/CodConfig');
+const UserSubscription = require('../models/UserSubscription'); // 👈 Imported
 
 /**
  * Checks if a driver or provider has started transit on a booking
@@ -49,7 +50,6 @@ const processCancellationRefund = async (booking, vendorType) => {
     const started = hasDriverStarted(booking, vendorType);
 
     if (started) {
-        // Fetch specific config
         let config = await CancellationConfig.findOne({ vendorType, isActive: true });
         if (!config && String(vendorType).startsWith('Ambulance')) {
             config = await CancellationConfig.findOne({ vendorType: 'Ambulance', isActive: true });
@@ -64,10 +64,9 @@ const processCancellationRefund = async (booking, vendorType) => {
             }
         }
 
-        // Accidental me user se 0 charge hoga, par driver ko platform se fee jayegi
         if (isAccidental) {
-            driverCompensation = cancellationFee > 0 ? cancellationFee : 200; // Default ₹200 platform compensation
-            cancellationFee = 0; // Free for user
+            driverCompensation = cancellationFee > 0 ? cancellationFee : 200;
+            cancellationFee = 0;
         } else {
             driverCompensation = cancellationFee;
         }
@@ -77,15 +76,14 @@ const processCancellationRefund = async (booking, vendorType) => {
 
     return {
         hasStarted: started,
-        cancellationFee,      // User se kitna deduct hua (Accidental me 0)
-        driverCompensation,   // Driver ko kitna mila (Platform or User fee)
-        refundAmount          // User ko kitna wapas milega
+        cancellationFee,
+        driverCompensation,
+        refundAmount
     };
 };
 
 /**
  * 💰 DYNAMIC ADMIN CUTOFF / COMMISSION CALCULATOR
- * Calculates Admin Platform Cutoff vs Net Vendor Earnings
  */
 const calculateAdminCommission = async (vendorType, totalAmount) => {
     try {
@@ -156,11 +154,35 @@ const creditVendorCompensation = async (vendorId, vendorModel, amount, bookingId
     }
 };
 
-const isCodEnabled = async (vendorType) => {
+/**
+ * 🚀 SMART COD EVALUATOR:
+ * 1. If User has an ACTIVE SUBSCRIPTION ➔ COD is ALWAYS TRUE (100% UNLOCKED).
+ * 2. If User has NO Active Plan ➔ Checks Admin Global CodConfig.
+ * @param {String} vendorType - 'Doctor', 'Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance'
+ * @param {String} [userId] - Optional User ID
+ * @returns {Promise<Boolean>}
+ */
+const isCodEnabled = async (vendorType, userId = null) => {
     try {
+        // 🌟 1. SUBSCRIBER PRIVILEGE CHECK:
+        if (userId) {
+            const activeSubscription = await UserSubscription.findOne({
+                userId,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            });
+
+            // If user has an active care subscription plan -> COD ALWAYS ALLOWED!
+            if (activeSubscription) {
+                return true; 
+            }
+        }
+
+        // 🌟 2. NON-SUBSCRIBER: Check Admin Policy Configuration
         const config = await CodConfig.findOne({ vendorType });
         return config ? config.isCodAvailable : true;
     } catch (error) {
+        console.error("COD check error:", error);
         return true;
     }
 };
@@ -168,7 +190,7 @@ const isCodEnabled = async (vendorType) => {
 module.exports = { 
     hasDriverStarted, 
     processCancellationRefund, 
-    calculateAdminCommission, // 👈 New Export
+    calculateAdminCommission,
     creditVendorCompensation, 
     isCodEnabled 
 };

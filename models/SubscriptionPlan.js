@@ -1,36 +1,46 @@
 const mongoose = require('mongoose');
 
 const subscriptionPlanSchema = new mongoose.Schema({
-    planType: { 
-        type: String, 
-        enum: ['Elder Care', 'Condition Management'], 
-        required: true 
+    categoryId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'SubscriptionCategory', 
+        required: [true, "Category reference is required"] 
     },
-    name: { type: String, required: true }, // e.g., 'Basic Annual Care', 'Dementia Care Plan'
-    
-    // For Condition Management Plan
-    diseaseType: { 
+    // 🩺 Supports MULTIPLE diseases under one plan
+    diseaseIds: [{ 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'SubscriptionDisease' 
+    }],
+
+    name: { 
         type: String, 
-        enum: ['Dementia', 'Dialysis', 'Cancer', null], 
-        default: null 
-    },
-
-    validityInDays: { type: Number, required: true }, // e.g., 7, 30, 180, 365
-
+        required: [true, "Plan name is required"], 
+        trim: true 
+    }, // e.g., 'Chronic Disease Combo Shield (Diabetes + Cardiology)'
     
-    price: { type: Number, required: true }, // rupees (₹)
-    description: { type: String },
-    features: [{ type: String }], // Bullet points list
+    validityInDays: { 
+        type: Number, 
+        required: [true, "Validity in days is required"] 
+    }, // e.g., 30, 90, 180, 365
+    
+    price: { 
+        type: Number, 
+        required: [true, "Plan price is required"],
+        min: 0 
+    },
+    
+    description: { type: String, default: "" },
+    features: [{ type: String }],
+    termsAndConditions: { type: String, default: "" },
 
-    termsAndConditions: { type: String, default: "" }, // Terms and Conditions
-
-    // System Enforced limits/benefits
+    // 🎁 System Enforced Benefits & COD Guarantee
     benefits: {
+        unlimitedCodAccess: { type: Boolean, default: true }, // 👈 Subscribed users get COD always unlocked
         freeDoctorAppointmentsCount: { type: Number, default: 0 },
         freeNurseVisitsCount: { type: Number, default: 0 },
-        freeLabDeliveriesCount: { type: Number, default: 0 },      // Alag Lab delivery counter
-        freeNurseDeliveriesCount: { type: Number, default: 0 },    // Alag Nurse delivery counter
-        freePharmacyDeliveriesCount: { type: Number, default: 0 }, // Alag Pharmacy delivery counter
+        freeLabDeliveriesCount: { type: Number, default: 0 },
+        freeNurseDeliveriesCount: { type: Number, default: 0 },
+        freePharmacyDeliveriesCount: { type: Number, default: 0 },
         freeAmbulanceTripsCount: { type: Number, default: 0 }
     },
     
