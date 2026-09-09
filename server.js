@@ -269,8 +269,9 @@ app.use((err, req, res, next) => {
     next(err);
 });
 
-
-////////////////// Admin Routes /////////////////////////
+const { checkMaintenanceMode } = require('./middleware/maintenanceMiddleware');
+app.use(checkMaintenanceMode); // Maintenance Mode Middleware
+////////////////// Admin Routes (always open) /////////////////////////
 app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
 app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
 app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
@@ -339,6 +340,8 @@ app.get('/doctor_register.html', (req, res) => {
 });
 
 
+// 
+app.use('/api/user-vendor/issues', require('./routes/others/UserVendorIssueRoute')); // User & Vendor Issue Reporting Route
 
 /////////////  User Routes /////////////////////////
 app.use('/user/homepage', require('./routes/user/SearchRoutes'));

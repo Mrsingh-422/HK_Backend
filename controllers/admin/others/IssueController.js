@@ -1,71 +1,39 @@
+// controllers/admin/others/IssueController.js
 const Issue = require('../../../models/Issue');
 const moment = require('moment');
+const { sendPushNotification } = require('../../../utils/notification');
 
-// ==========================================
-// 1. CREATE NEW ISSUE (Modal: "+ ADD ISSUE")
-// ==========================================
-const createIssue = async (req, res) => {
+// =========================================================================
+// 1. GET ALL ISSUES (Admin Panel Table with Search & Filters)
+// =========================================================================
+const getAllIssuesForAdmin = async (req, res) => {
     try {
-        const { title, detailedDescription, category, loggedDate } = req.body;
-
-        if (!title || title.trim() === "") {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Issue description/title is required." 
-            });
-        }
-
-        // 🔢 Auto Calculate next issueNumber safely
-        const lastIssue = await Issue.findOne().sort({ issueNumber: -1 });
-        const nextIssueNumber = (lastIssue && lastIssue.issueNumber) ? lastIssue.issueNumber + 1 : 1;
-
-        // 📅 Safe Date parsing
-        let parsedDate = new Date();
-        if (loggedDate) {
-            const mDate = moment(loggedDate, ['YYYY-MM-DD', 'DD-MM-YYYY', moment.ISO_8601]);
-            parsedDate = mDate.isValid() ? mDate.toDate() : new Date();
-        }
-
-        const newIssue = await Issue.create({
-            issueNumber: nextIssueNumber,
-            title: title.trim(),
-            detailedDescription: detailedDescription || "",
-            category: category || "Other",
-            loggedDate: parsedDate,
-            status: 'IN PROGRESS',
-            createdBy: req.user?._id || null
-        });
-
-        return res.status(201).json({
-            success: true,
-            message: "Issue logged successfully.",
-            data: newIssue
-        });
-    } catch (error) {
-        console.error("❌ [CREATE ISSUE ERROR]:", error);
-        return res.status(500).json({ 
-            success: false, 
-            message: error.message || "Failed to create issue" 
-        });
-    }
-};
-
-// ==========================================
-// 2. GET ALL ISSUES (Search & Pagination)
-// ==========================================
-const getAllIssues = async (req, res) => {
-    try {
-        const { page = 1, limit = 10, search = "", status } = req.query;
+        const { 
+            page = 1, 
+            limit = 10, 
+            search = "", 
+            status, 
+            platform, 
+            reporterModel, 
+            category      // 👈 Free-form search or filter
+        } = req.query;
 
         const query = {};
 
-        if (status && status !== 'ALL') {
-            query.status = status.toUpperCase();
+        if (status && status !== 'ALL') query.status = status.toUpperCase();
+        if (platform && platform !== 'ALL') query.platform = platform;
+        if (reporterModel && reporterModel !== 'ALL') query.reporterModel = reporterModel;
+
+        // Dynamic category filter (case-insensitive regex)
+        if (category && category !== 'ALL' && category.trim() !== '') {
+            query.category = { $regex: category.trim(), $options: 'i' };
         }
 
-        if (search && search.trim() !== "") {
+        if (search.trim() !== "") {
             query.$or = [
                 { title: { $regex: search.trim(), $options: 'i' } },
+                { ticketId: { $regex: search.trim(), $options: 'i' } },
+                { category: { $regex: search.trim(), $options: 'i' } },
                 { detailedDescription: { $regex: search.trim(), $options: 'i' } }
             ];
         }
@@ -74,8 +42,8 @@ const getAllIssues = async (req, res) => {
 
         const [issues, total] = await Promise.all([
             Issue.find(query)
-                .populate('resolvedBy', 'name email role')
-                .populate('createdBy', 'name email')
+                .populate('reporterId', 'name email phone profileImage profilePic')
+                .populate('resolutionDetails.resolvedBy', 'name email role')
                 .sort({ issueNumber: 1 })
                 .skip(skip)
                 .limit(Number(limit))
@@ -85,74 +53,133 @@ const getAllIssues = async (req, res) => {
 
         const formattedData = issues.map(item => ({
             _id: item._id,
-            displayId: `#${item.issueNumber || 1}`,
-            issueNumber: item.issueNumber || 1,
+            displayId: `#${item.issueNumber}`,
+            ticketId: item.ticketId,
+            platform: item.platform,
+            appVersion: item.appVersion || null,
             title: item.title,
             detailedDescription: item.detailedDescription,
-            category: item.category,
-            loggedDateFormatted: moment(item.loggedDate).format('YYYY-MM-DD'),
+            category: item.category || "General", // 👈 Returns custom category string
+            priority: item.priority,
+            loggedDateFormatted: moment(item.createdAt).format('YYYY-MM-DD'),
             status: item.status,
-            resolvedByAdmin: item.resolvedBy ? item.resolvedBy.name : null,
-            resolvedAt: item.resolvedAt,
-            createdAt: item.createdAt
+            reporter: {
+                id: item.reporterId?._id || null,
+                name: item.reporterId?.name || "Anonymous",
+                email: item.reporterId?.email || "N/A",
+                phone: item.reporterId?.phone || "N/A",
+                role: item.reporterModel
+            },
+            attachments: item.attachments,
+            resolvedByAdmin: item.resolutionDetails?.resolvedBy?.name || null,
+            resolvedAt: item.resolutionDetails?.resolvedAt || null,
+            timeline: item.timeline
         }));
 
-        return res.status(200).json({
+        // Overview KPI Cards
+        const [totalOpen, totalInProgress, totalResolved, totalWebIssues, totalAppIssues] = await Promise.all([
+            Issue.countDocuments({ status: { $in: ['OPEN', 'UNDER REVIEW'] } }),
+            Issue.countDocuments({ status: 'IN PROGRESS' }),
+            Issue.countDocuments({ status: 'RESOLVED' }),
+            Issue.countDocuments({ platform: 'Web' }),
+            Issue.countDocuments({ platform: { $in: ['App', 'Android', 'iOS'] } })
+        ]);
+
+        res.status(200).json({
             success: true,
             totalRecords: total,
             totalPages: Math.ceil(total / Number(limit)),
             currentPage: Number(page),
             pageSize: Number(limit),
+            overview: {
+                totalOpen,
+                totalInProgress,
+                totalResolved,
+                totalWebIssues,
+                totalAppIssues
+            },
             data: formattedData
         });
+
     } catch (error) {
-        console.error("❌ [GET ISSUES ERROR]:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        console.error("Admin Get Issues Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// ==========================================
-// 3. EDIT ISSUE
-// ==========================================
-const updateIssue = async (req, res) => {
+// =========================================================================
+// 2. UPDATE ISSUE STATUS & ADD TIMELINE EVENT (Admin Action)
+// =========================================================================
+const updateIssueStatusByAdmin = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, detailedDescription, category, loggedDate, status } = req.body;
+        const { status, note, resolutionNote } = req.body;
+        const adminId = req.user._id;
+        const adminName = req.user.name || "Super Admin";
 
-        const updatePayload = {};
-        if (title) updatePayload.title = title.trim();
-        if (detailedDescription !== undefined) updatePayload.detailedDescription = detailedDescription;
-        if (category) updatePayload.category = category;
-        if (loggedDate) updatePayload.loggedDate = new Date(loggedDate);
-        if (status) updatePayload.status = status;
-
-        const updatedIssue = await Issue.findByIdAndUpdate(
-            id,
-            { $set: updatePayload },
-            { new: true }
-        ).populate('resolvedBy', 'name email');
-
-        if (!updatedIssue) {
+        const issue = await Issue.findById(id);
+        if (!issue) {
             return res.status(404).json({ success: false, message: "Issue not found." });
         }
 
-        return res.status(200).json({
-            success: true,
-            message: "Issue updated successfully.",
-            data: updatedIssue
+        const validStatuses = ['OPEN', 'UNDER REVIEW', 'IN PROGRESS', 'RESOLVED', 'REJECTED', 'CLOSED'];
+        if (status && !validStatuses.includes(status)) {
+            return res.status(400).json({ success: false, message: "Invalid status value." });
+        }
+
+        const newStatus = status || issue.status;
+        issue.status = newStatus;
+
+        issue.timeline.push({
+            status: newStatus,
+            note: note || `Status updated to ${newStatus} by Admin (${adminName}).`,
+            updatedBy: adminId,
+            updatedByName: adminName,
+            updatedByRole: 'Admin',
+            timestamp: new Date()
         });
+
+        if (newStatus === 'RESOLVED') {
+            issue.resolutionDetails = {
+                resolvedBy: adminId,
+                resolutionNote: resolutionNote || note || "Issue has been resolved successfully.",
+                resolvedAt: new Date()
+            };
+        }
+
+        await issue.save();
+
+        // 🔔 Push Notification
+        try {
+            const recipientType = issue.reporterModel.toLowerCase();
+            await sendPushNotification(
+                issue.reporterId,
+                recipientType,
+                `Issue #${issue.ticketId} Update: ${newStatus}`,
+                note || `Your reported [${issue.platform}] issue "${issue.title}" is now marked as ${newStatus}.`,
+                { issueId: issue._id.toString(), status: newStatus, type: 'issue_status_updated' }
+            );
+        } catch (e) {}
+
+        res.status(200).json({
+            success: true,
+            message: `Issue status updated to ${newStatus}.`,
+            data: issue
+        });
+
     } catch (error) {
-        return res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// ==========================================
-// 4. QUICK RESOLVE (Checkmark)
-// ==========================================
-const resolveIssue = async (req, res) => {
+// =========================================================================
+// 3. QUICK RESOLVE BUTTON (Green Checkmark on Admin Screenshot)
+// =========================================================================
+const quickResolveIssueByAdmin = async (req, res) => {
     try {
         const { id } = req.params;
-        const resolvingAdminId = req.user?._id;
+        const adminId = req.user._id;
+        const adminName = req.user.name || "Super Admin";
 
         const issue = await Issue.findById(id);
         if (!issue) {
@@ -160,54 +187,57 @@ const resolveIssue = async (req, res) => {
         }
 
         issue.status = 'RESOLVED';
-        issue.resolvedBy = resolvingAdminId;
-        issue.resolvedAt = new Date();
+        issue.timeline.push({
+            status: 'RESOLVED',
+            note: `Quick resolved by ${adminName}.`,
+            updatedBy: adminId,
+            updatedByName: adminName,
+            updatedByRole: 'Admin',
+            timestamp: new Date()
+        });
+        issue.resolutionDetails = {
+            resolvedBy: adminId,
+            resolutionNote: "Issue resolved directly by Admin.",
+            resolvedAt: new Date()
+        };
+
         await issue.save();
 
-        const populatedIssue = await Issue.findById(id).populate('resolvedBy', 'name email role');
-
-        return res.status(200).json({
+        res.status(200).json({
             success: true,
-            message: `Issue marked as RESOLVED by ${req.user?.name || 'Admin'}.`,
-            data: {
-                _id: populatedIssue._id,
-                displayId: `#${populatedIssue.issueNumber}`,
-                title: populatedIssue.title,
-                status: populatedIssue.status,
-                resolvedByAdmin: populatedIssue.resolvedBy?.name || "Admin",
-                resolvedAt: populatedIssue.resolvedAt
-            }
+            message: `Issue marked as RESOLVED by ${adminName}.`,
+            data: issue
         });
+
     } catch (error) {
-        return res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // ==========================================
-// 5. DELETE ISSUE
+// 4. DELETE ISSUE (Red Cross Button)
 // ==========================================
-const deleteIssue = async (req, res) => {
+const deleteIssueByAdmin = async (req, res) => {
     try {
         const { id } = req.params;
+        const deleted = await Issue.findByIdAndDelete(id);
 
-        const deletedIssue = await Issue.findByIdAndDelete(id);
-        if (!deletedIssue) {
+        if (!deleted) {
             return res.status(404).json({ success: false, message: "Issue not found." });
         }
 
-        return res.status(200).json({
+        res.status(200).json({
             success: true,
-            message: `Issue #${deletedIssue.issueNumber || ''} deleted successfully.`
+            message: `Issue #${deleted.issueNumber} deleted successfully.`
         });
     } catch (error) {
-        return res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 module.exports = {
-    createIssue,
-    getAllIssues,
-    updateIssue,
-    resolveIssue,
-    deleteIssue
+    getAllIssuesForAdmin,
+    updateIssueStatusByAdmin,
+    quickResolveIssueByAdmin,
+    deleteIssueByAdmin
 };

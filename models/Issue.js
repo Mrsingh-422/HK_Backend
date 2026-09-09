@@ -1,53 +1,69 @@
 const mongoose = require('mongoose');
 
 const issueSchema = new mongoose.Schema({
-    issueNumber: { 
-        type: Number, 
-        index: true 
+    issueNumber: { type: Number, index: true },
+    ticketId: { type: String, unique: true },
+
+    reporterId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        required: true, 
+        refPath: 'reporterModel' 
     },
-    title: { 
+    reporterModel: { 
         type: String, 
-        required: [true, "Issue title is required"], 
-        trim: true 
+        required: true, 
+        enum: [
+            'User', 'Doctor', 'Hospital', 'Lab', 'Pharmacy', 'Nurse', 'Ambulance', 'Driver',
+            'FireHQ', 'FireStation', 'FireStaff',
+            'PoliceHQ', 'PoliceStation', 'PoliceStaff'
+        ] 
     },
-    detailedDescription: { 
-        type: String, 
-        default: "" 
-    },
-    category: {
+
+    platform: {
         type: String,
-        default: 'Other'
+        enum: ['Web', 'App', 'Android', 'iOS'],
+        default: 'App',
+        required: true
     },
+    appVersion: { type: String, default: "" },
+
+    title: { type: String, required: true, trim: true },
+    detailedDescription: { type: String, required: true },
+    category: { type: String, trim: true, default: 'General' },
+    priority: { type: String, enum: ['Low', 'Medium', 'High', 'Urgent'], default: 'Medium' },
+    attachments: [{ type: String }],
+
     status: {
         type: String,
-        enum: ['IN PROGRESS', 'RESOLVED'],
-        default: 'IN PROGRESS'
+        enum: ['OPEN', 'UNDER REVIEW', 'IN PROGRESS', 'RESOLVED', 'REJECTED', 'CLOSED'],
+        default: 'OPEN'
     },
-    loggedDate: { 
-        type: Date, 
-        default: Date.now 
-    },
-    resolvedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Admin',
-        default: null
-    },
-    resolvedAt: {
-        type: Date,
-        default: null
-    },
-    createdBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Admin',
-        default: null
+
+    timeline: [{
+        status: { type: String, required: true },
+        note: { type: String, default: "" },
+        updatedBy: { type: mongoose.Schema.Types.ObjectId, default: null },
+        updatedByName: { type: String, default: "System" },
+        updatedByRole: { type: String, default: "Admin" },
+        timestamp: { type: Date, default: Date.now }
+    }],
+
+    resolutionDetails: {
+        resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null },
+        resolutionNote: { type: String, default: "" },
+        resolvedAt: { type: Date, default: null }
     }
 }, { timestamps: true });
 
-// 🚀 Fixed & Safe Async Auto-Increment Hook (No next() conflict)
 issueSchema.pre('save', async function() {
-    if (this.isNew && !this.issueNumber) {
-        const lastIssue = await this.constructor.findOne().sort({ issueNumber: -1 });
-        this.issueNumber = (lastIssue && lastIssue.issueNumber) ? lastIssue.issueNumber + 1 : 1;
+    if (this.isNew) {
+        if (!this.issueNumber) {
+            const lastIssue = await this.constructor.findOne().sort({ issueNumber: -1 });
+            this.issueNumber = (lastIssue && lastIssue.issueNumber) ? lastIssue.issueNumber + 1 : 1;
+        }
+        if (!this.ticketId) {
+            this.ticketId = `HK-ISS-${Date.now().toString().slice(-6)}`;
+        }
     }
 });
 

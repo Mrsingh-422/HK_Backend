@@ -944,6 +944,22 @@ const maintenanceUpload = multer({
     limits: { fileSize: 2 * 1024 * 1024 } // 2MB Limit as shown in Figma
 }).single('heroImage'); // Field key: 'heroImage'
 
+// ==========================================
+// 48. MAINTENANCE ISSUE UPLOAD (Figma Screen: Maintenance Page)
+// ==========================================
+const issueDir = 'public/uploads/issues';
+ensureDir(issueDir);
+
+const issueUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, issueDir),
+        filename: (req, file, cb) => cb(null, `issue-${Date.now()}-${file.originalname}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB per file
+}).array('attachments', 5); // Allows up to 5 screenshots/files
+
+
 
 module.exports = { 
     hospitalUploads,
@@ -994,6 +1010,7 @@ module.exports = {
     labReportUpload,
     docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,insuranceCardUploads,
     insuranceApprovalUpload,
-    maintenanceUpload
+    maintenanceUpload,
+    issueUploads
 
 };  

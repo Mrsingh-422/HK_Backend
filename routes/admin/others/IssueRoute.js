@@ -2,19 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const {
-    createIssue,
-    getAllIssues,
-    updateIssue,
-    resolveIssue,
-    deleteIssue
+    getAllIssuesForAdmin,
+    updateIssueStatusByAdmin,
+    quickResolveIssueByAdmin,
+    deleteIssueByAdmin
 } = require('../../../controllers/admin/others/IssueController');
 
 // Base URL: /admin/issues
-
-router.get('/', protect('admin'), getAllIssues);                 // Search & Table list
-router.post('/create', protect('admin'), createIssue);           // "+ ADD ISSUE" Modal
-router.put('/update/:id', protect('admin'), updateIssue);        // Edit button
-router.patch('/resolve/:id', protect('admin'), resolveIssue);    // Checkmark button (Quick Resolve)
-router.delete('/delete/:id', protect('admin'), deleteIssue);     // Cross button (Delete)
+router.get('/', protect('admin'), getAllIssuesForAdmin);
+router.patch('/update-status/:id', protect('admin'), updateIssueStatusByAdmin);
+router.patch('/resolve/:id', protect('admin'), quickResolveIssueByAdmin);
+router.delete('/delete/:id', protect('admin'), deleteIssueByAdmin);
 
 module.exports = router;
