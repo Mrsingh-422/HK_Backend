@@ -412,6 +412,7 @@ const getCheckoutSummary = async (req, res) => {
     }
 };
 
+
 // --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY ORDER CREATION) ---
 // Mapped only for Independent Doctors (Role check added) [1]
 // --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY & COD LOCKS) ---
