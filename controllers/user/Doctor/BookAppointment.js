@@ -8,6 +8,7 @@ const Coupon = require('../../../models/Coupon'); // For coupons
 const DeliveryCharge = require('../../../models/DeliveryCharge'); // For home visit charges
 const User = require('../../../models/User');
 const DocRescheduleLimit = require("../../../models/DocRescheduleLimit"); 
+const UserSubscription = require('../../../models/UserSubscription');
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
@@ -270,73 +271,7 @@ const validateCoupon = async (req, res) => {
     }
 };
 
-// GET CHECKOUT SUMMARY
-// const getCheckoutSummary = async (req, res) => {
-//     try {
-//         const { 
-//             doctorId, consultationType, couponCode, 
-//             distance = 0, timeSlot, appointmentDate, 
-//             specialServices = [], patients = [], address = null 
-//         } = req.body;
 
-//         const doctor = await Doctor.findById(doctorId);
-//         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
-
-//         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
-//         let baseFee = doctor.fees[typeMap[consultationType]] || 0;
-
-//         // 🚨 SUBSCRIPTION CHECK: Free Doctor Consultations check karein
-//         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
-//         baseFee = docBenefit.amount; // Benefit active hone par baseFee 0 ho jayegi
-
-//         let visitCharge = 0;
-//         if (consultationType === 'Home Visit') {
-//             if (!address) return res.status(400).json({ message: "Address required for Home Visit" });
-
-//             const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-            
-//             if (chargeConfig) {
-//                 visitCharge = chargeConfig.fixedPrice; 
-//                 if (distance > chargeConfig.fixedDistance) {
-//                     visitCharge += (distance - chargeConfig.fixedDistance) * chargeConfig.pricePerKM;
-//                 }
-//             } else {
-//                 visitCharge = 100; 
-//             }
-//         }
-
-//         let premiumFee = 0;
-//         const avail = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-//         const slot = avail?.premiumSlots.find(s => s.time === timeSlot);
-//         if (slot) premiumFee = slot.extraFee;
-
-//         const servicesTotal = specialServices.reduce((sum, s) => sum + (s.price || 0), 0);
-//         let subtotal = baseFee + visitCharge + premiumFee + servicesTotal;
-
-//         let discount = 0;
-//         if (couponCode) {
-//             const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-//             if (coupon && subtotal >= coupon.minOrderAmount) {
-//                 discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
-//             }
-//         }
-
-//         res.json({
-//             success: true,
-//             data: {
-//                 baseFee,
-//                 visitCharge, 
-//                 premiumFee,
-//                 servicesTotal,
-//                 discount,
-//                 subtotal,
-//                 totalPayable: subtotal - discount,
-//                 patients,
-//                 address: consultationType === 'Home Visit' ? address : null
-//             }
-//         });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
 
 // for condtional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
 // --- GET CHECKOUT SUMMARY (Updated with COD Check) ---

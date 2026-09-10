@@ -3,6 +3,7 @@ const SubscriptionDisease = require('../../../models/SubscriptionDisease');
 const SubscriptionPlan = require('../../../models/SubscriptionPlan');
 const UserSubscription = require('../../../models/UserSubscription');
 const User = require('../../../models/User');
+const mongoose = require('mongoose');
 
 // =========================================================================
 // 📂 1. CATEGORY MANAGEMENT
@@ -12,26 +13,42 @@ const createCategory = async (req, res) => {
     try {
         const { name, description, iconImage, isDiseaseSpecific, displayOrder } = req.body;
 
-        if (!name || name.trim() === "") {
+        if (!name || String(name).trim() === "") {
             return res.status(400).json({ success: false, message: "Category name is required." });
         }
 
-        const existing = await SubscriptionCategory.findOne({ name: name.trim() });
+        const cleanName = String(name).trim();
+        const autoSlug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+        const existing = await SubscriptionCategory.findOne({
+            $or: [
+                { name: { $regex: new RegExp(`^${cleanName}$`, 'i') } },
+                { slug: autoSlug }
+            ]
+        });
+
         if (existing) {
-            return res.status(400).json({ success: false, message: "Category with this name already exists." });
+            return res.status(400).json({ success: false, message: `Category '${cleanName}' already exists.` });
         }
 
         const category = await SubscriptionCategory.create({
-            name: name.trim(),
+            name: cleanName,
+            slug: autoSlug,
             description: description || "",
             iconImage: iconImage || null,
             isDiseaseSpecific: isDiseaseSpecific === 'true' || isDiseaseSpecific === true,
-            displayOrder: Number(displayOrder) || 0
+            displayOrder: Number(displayOrder) || 0,
+            isActive: true
         });
 
-        res.status(201).json({ success: true, message: "Category created.", data: category });
+        return res.status(201).json({ 
+            success: true, 
+            message: "Category created successfully.", 
+            data: category 
+        });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("❌ [CREATE CATEGORY ERROR]:", error);
+        return res.status(500).json({ success: false, message: error.message || "Failed to create category" });
     }
 };
 
@@ -73,7 +90,7 @@ const updateCategory = async (req, res) => {
         const updateData = {};
         if (name) {
             updateData.name = name.trim();
-            updateData.slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+            updateData.slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
         }
         if (description !== undefined) updateData.description = description;
         if (iconImage !== undefined) updateData.iconImage = iconImage;
@@ -112,35 +129,79 @@ const deleteCategory = async (req, res) => {
 };
 
 // =========================================================================
-// 🩺 2. DISEASE MANAGEMENT
+// 🩺 2. DISEASE MANAGEMENT (Fixed: 500 Error Crash-Proof & Smart Lookup)
 // =========================================================================
 
 const createDisease = async (req, res) => {
     try {
         const { categoryId, name, description, iconImage } = req.body;
 
-        if (!categoryId || !name) {
-            return res.status(400).json({ success: false, message: "categoryId and disease name are required." });
+        if (!categoryId || !name || String(name).trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "categoryId and disease name are required." 
+            });
         }
 
-        const category = await SubscriptionCategory.findById(categoryId);
-        if (!category) return res.status(404).json({ success: false, message: "Parent category not found." });
+        // 🔍 Smart Category Lookup (Supports ObjectId, Slug, or Name!)
+        let category = null;
+        if (mongoose.isValidObjectId(categoryId)) {
+            category = await SubscriptionCategory.findById(categoryId);
+        } else {
+            category = await SubscriptionCategory.findOne({
+                $or: [
+                    { slug: String(categoryId).toLowerCase().trim() },
+                    { name: { $regex: new RegExp(`^${String(categoryId).trim()}$`, 'i') } }
+                ]
+            });
+        }
 
-        const existing = await SubscriptionDisease.findOne({ categoryId, name: name.trim() });
+        if (!category) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `Parent Category not found for '${categoryId}'. Please provide a valid category ObjectId, slug or name.` 
+            });
+        }
+
+        const cleanName = String(name).trim();
+        const autoSlug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+        // Check if disease already exists under this category (case-insensitive)
+        const existing = await SubscriptionDisease.findOne({ 
+            categoryId: category._id, 
+            name: { $regex: new RegExp(`^${cleanName}$`, 'i') } 
+        });
+
         if (existing) {
-            return res.status(400).json({ success: false, message: "Disease already exists under this category." });
+            return res.status(400).json({ 
+                success: false, 
+                message: `Disease '${cleanName}' is already added under category '${category.name}'.` 
+            });
         }
 
         const disease = await SubscriptionDisease.create({
-            categoryId,
-            name: name.trim(),
+            categoryId: category._id,
+            name: cleanName,
+            slug: autoSlug,
             description: description || "",
-            iconImage: iconImage || null
+            iconImage: iconImage || null,
+            isActive: true
         });
 
-        res.status(201).json({ success: true, message: "Disease added successfully.", data: disease });
+        const populated = await SubscriptionDisease.findById(disease._id).populate('categoryId', 'name slug isDiseaseSpecific');
+
+        return res.status(201).json({ 
+            success: true, 
+            message: "Disease added successfully.", 
+            data: populated 
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("❌ [CREATE DISEASE ERROR]:", error);
+        if (error.code === 11000) {
+            return res.status(400).json({ success: false, message: "A disease with this name already exists under this category." });
+        }
+        return res.status(500).json({ success: false, message: error.message || "Failed to create disease" });
     }
 };
 
@@ -149,7 +210,17 @@ const getDiseases = async (req, res) => {
         const { categoryId, search, isActive } = req.query;
         const query = {};
 
-        if (categoryId) query.categoryId = categoryId;
+        if (categoryId) {
+            if (mongoose.isValidObjectId(categoryId)) {
+                query.categoryId = categoryId;
+            } else {
+                const cat = await SubscriptionCategory.findOne({
+                    $or: [{ slug: categoryId.toLowerCase() }, { name: categoryId }]
+                });
+                if (cat) query.categoryId = cat._id;
+            }
+        }
+
         if (isActive !== undefined && isActive !== 'All') {
             query.isActive = (isActive === 'true' || isActive === true);
         }
@@ -176,14 +247,16 @@ const updateDisease = async (req, res) => {
         const updateData = {};
         if (name) {
             updateData.name = name.trim();
-            updateData.slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+            updateData.slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
         }
         if (description !== undefined) updateData.description = description;
         if (iconImage !== undefined) updateData.iconImage = iconImage;
-        if (categoryId) updateData.categoryId = categoryId;
+        if (categoryId && mongoose.isValidObjectId(categoryId)) updateData.categoryId = categoryId;
         if (isActive !== undefined) updateData.isActive = isActive;
 
-        const updated = await SubscriptionDisease.findByIdAndUpdate(id, { $set: updateData }, { new: true });
+        const updated = await SubscriptionDisease.findByIdAndUpdate(id, { $set: updateData }, { new: true })
+            .populate('categoryId', 'name slug');
+
         if (!updated) return res.status(404).json({ success: false, message: "Disease not found." });
 
         res.status(200).json({ success: true, message: "Disease updated.", data: updated });
@@ -212,14 +285,14 @@ const deleteDisease = async (req, res) => {
 };
 
 // =========================================================================
-// 📦 3. PLAN MANAGEMENT (With Multi-Disease & COD Always Open Guarantee)
+// 📦 3. MASTER PLANS MANAGEMENT
 // =========================================================================
 
 const createSubscriptionPlanByAdmin = async (req, res) => {
     try {
         const { 
             categoryId, 
-            diseaseIds, // 👈 Array of disease IDs or single ID
+            diseaseIds,        // 👈 Optional for Elder Care, Required ONLY for Condition Management
             name, 
             validityInDays, 
             price, 
@@ -236,34 +309,55 @@ const createSubscriptionPlanByAdmin = async (req, res) => {
             });
         }
 
-        const category = await SubscriptionCategory.findById(categoryId);
+        // 1. Resolve Category
+        let category = null;
+        if (mongoose.isValidObjectId(categoryId)) {
+            category = await SubscriptionCategory.findById(categoryId);
+        } else {
+            category = await SubscriptionCategory.findOne({
+                $or: [{ slug: String(categoryId).toLowerCase() }, { name: String(categoryId) }]
+            });
+        }
+
         if (!category) {
             return res.status(404).json({ success: false, message: "Selected category not found." });
         }
 
-        // Format disease IDs array
-        let parsedDiseaseIds = [];
-        if (diseaseIds) {
-            parsedDiseaseIds = Array.isArray(diseaseIds) ? diseaseIds : [diseaseIds];
+        // =========================================================================
+        // 🎯 2. DISEASE REQUIREMENT CHECK (Category ke flag ke hisaab se)
+        // =========================================================================
+        let finalDiseaseIds = [];
+
+        if (category.isDiseaseSpecific === true) {
+            // 🟢 CASE A: Condition Management Category -> At least 1 Disease is COMPULSORY
+            let parsed = [];
+            if (diseaseIds) {
+                parsed = Array.isArray(diseaseIds) ? diseaseIds : [diseaseIds];
+            }
+
+            if (parsed.length === 0) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Category '${category.name}' is disease-specific. Please select at least 1 Disease / Condition for this plan.` 
+                });
+            }
+            finalDiseaseIds = parsed;
+        } else {
+            // 🟢 CASE B: Elder Care / General Categories -> NO DISEASE NEEDED!
+            finalDiseaseIds = []; // Always empty array for Elder Care
         }
 
-        if (category.isDiseaseSpecific && parsedDiseaseIds.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Category '${category.name}' requires selecting at least 1 Disease / Condition.` 
-            });
-        }
-
-        // Auto-include COD guarantee in features list if not already there
+        // 3. Auto-add Unlimited COD benefit
         let planFeatures = Array.isArray(features) ? features : (features ? features.split(',').map(f => f.trim()) : []);
         const codFeatureText = "Unlimited Cash on Delivery (COD) Access on All Bookings";
         if (!planFeatures.includes(codFeatureText)) {
             planFeatures.unshift(codFeatureText);
         }
 
+        // 4. Create Plan
         const newPlan = await SubscriptionPlan.create({
-            categoryId,
-            diseaseIds: category.isDiseaseSpecific ? parsedDiseaseIds : [],
+            categoryId: category._id,
+            diseaseIds: finalDiseaseIds, // Elder care me [] save hoga, Condition me [diseaseId1, diseaseId2]
             name: name.trim(),
             validityInDays: Number(validityInDays),
             price: Number(price),
@@ -271,7 +365,7 @@ const createSubscriptionPlanByAdmin = async (req, res) => {
             termsAndConditions: termsAndConditions || "",
             features: planFeatures,
             benefits: {
-                unlimitedCodAccess: true, // 👈 Always guaranteed
+                unlimitedCodAccess: true,
                 freeDoctorAppointmentsCount: Number(benefits?.freeDoctorAppointmentsCount || 0),
                 freeNurseVisitsCount: Number(benefits?.freeNurseVisitsCount || 0),
                 freeLabDeliveriesCount: Number(benefits?.freeLabDeliveriesCount || 0),
@@ -285,8 +379,14 @@ const createSubscriptionPlanByAdmin = async (req, res) => {
             .populate('categoryId', 'name slug isDiseaseSpecific')
             .populate('diseaseIds', 'name slug');
 
-        res.status(201).json({ success: true, message: "Subscription plan created successfully.", data: populated });
+        res.status(201).json({ 
+            success: true, 
+            message: `Plan '${newPlan.name}' created successfully under '${category.name}'.`, 
+            data: populated 
+        });
+
     } catch (error) {
+        console.error("Create Plan Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -426,7 +526,7 @@ const deleteSubscriptionPlanByAdmin = async (req, res) => {
 };
 
 // =========================================================================
-// 👥 4. SUBSCRIBERS LIST
+// 👥 4. SUBSCRIBERS LIST & DETAILS
 // =========================================================================
 
 const getAllSubscribersForAdmin = async (req, res) => {
@@ -496,6 +596,40 @@ const getAllSubscribersForAdmin = async (req, res) => {
     }
 };
 
+const getSubscriberDetailForAdmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!mongoose.isValidObjectId(id)) {
+            return res.status(400).json({ success: false, message: "Invalid ID format." });
+        }
+
+        const subscription = await UserSubscription.findOne({
+            $or: [
+                { _id: new mongoose.Types.ObjectId(id) },
+                { userId: new mongoose.Types.ObjectId(id) }
+            ]
+        })
+        .populate('userId', 'name email phone countryCode profilePic gender dob userAddress conditionStatus')
+        .populate({
+            path: 'planId',
+            populate: [
+                { path: 'categoryId' },
+                { path: 'diseaseIds' }
+            ]
+        });
+
+        if (!subscription) {
+            return res.status(404).json({ success: false, message: "Subscription record not found for this ID." });
+        }
+
+        res.status(200).json({ success: true, data: subscription });
+    } catch (error) {
+        console.error("Get Subscriber Detail Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     createCategory,
     getCategories,
@@ -510,5 +644,6 @@ module.exports = {
     getSubscriptionPlanByIdByAdmin,
     updateSubscriptionPlanByAdmin,
     deleteSubscriptionPlanByAdmin,
-    getAllSubscribersForAdmin
+    getAllSubscribersForAdmin,
+    getSubscriberDetailForAdmin
 };

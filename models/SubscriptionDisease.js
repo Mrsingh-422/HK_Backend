@@ -4,29 +4,41 @@ const subscriptionDiseaseSchema = new mongoose.Schema({
     categoryId: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'SubscriptionCategory', 
-        required: [true, "Parent Category ID is required"] 
+        required: [true, "Parent Category ID is required"],
+        index: true
     },
     name: { 
         type: String, 
-        required: [true, "Disease name is required"], 
+        required: [true, "Disease / Condition name is required"], 
         trim: true 
-    }, // e.g., "Dementia", "Dialysis", "Cancer", "Diabetes & Heart Care"
+    },
     slug: { 
         type: String, 
-        unique: true, 
         lowercase: true, 
         trim: true 
     },
-    description: { type: String, default: "" },
-    iconImage: { type: String, default: null },
-    isActive: { type: Boolean, default: true }
+    description: { 
+        type: String, 
+        default: "" 
+    },
+    iconImage: { 
+        type: String, 
+        default: null 
+    },
+    isActive: { 
+        type: Boolean, 
+        default: true 
+    }
 }, { timestamps: true });
 
-subscriptionDiseaseSchema.pre('validate', function(next) {
+// 🚀 Compound Index: Ek category ke under duplicate disease name nahi banega
+subscriptionDiseaseSchema.index({ categoryId: 1, name: 1 }, { unique: true });
+
+// 🚀 Safe Auto-Slug Generation (No next() conflict)
+subscriptionDiseaseSchema.pre('save', function() {
     if (this.name && !this.slug) {
         this.slug = this.name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     }
-    next();
 });
 
 module.exports = mongoose.model('SubscriptionDisease', subscriptionDiseaseSchema);
