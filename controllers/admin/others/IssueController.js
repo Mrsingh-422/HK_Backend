@@ -15,7 +15,7 @@ const getAllIssuesForAdmin = async (req, res) => {
             status, 
             platform, 
             reporterModel, 
-            category      // 👈 Free-form search or filter
+            category 
         } = req.query;
 
         const query = {};
@@ -24,7 +24,6 @@ const getAllIssuesForAdmin = async (req, res) => {
         if (platform && platform !== 'ALL') query.platform = platform;
         if (reporterModel && reporterModel !== 'ALL') query.reporterModel = reporterModel;
 
-        // Dynamic category filter (case-insensitive regex)
         if (category && category !== 'ALL' && category.trim() !== '') {
             query.category = { $regex: category.trim(), $options: 'i' };
         }
@@ -42,7 +41,8 @@ const getAllIssuesForAdmin = async (req, res) => {
 
         const [issues, total] = await Promise.all([
             Issue.find(query)
-                .populate('reporterId', 'name email phone profileImage profilePic')
+                // 🚀 Populates all possible name fields across User, Vendors, Fire & Police
+                .populate('reporterId', 'name fullName hqName headquarterName stationName fireStationName policeStationName labName pharmacyName email phone profileImage profilePic')
                 .populate('resolutionDetails.resolvedBy', 'name email role')
                 .sort({ issueNumber: 1 })
                 .skip(skip)
@@ -51,32 +51,40 @@ const getAllIssuesForAdmin = async (req, res) => {
             Issue.countDocuments(query)
         ]);
 
-        const formattedData = issues.map(item => ({
-            _id: item._id,
-            displayId: `#${item.issueNumber}`,
-            ticketId: item.ticketId,
-            platform: item.platform,
-            appVersion: item.appVersion || null,
-            title: item.title,
-            detailedDescription: item.detailedDescription,
-            category: item.category || "General", // 👈 Returns custom category string
-            priority: item.priority,
-            loggedDateFormatted: moment(item.createdAt).format('YYYY-MM-DD'),
-            status: item.status,
-            reporter: {
-                id: item.reporterId?._id || null,
-                name: item.reporterId?.name || "Anonymous",
-                email: item.reporterId?.email || "N/A",
-                phone: item.reporterId?.phone || "N/A",
-                role: item.reporterModel
-            },
-            attachments: item.attachments,
-            resolvedByAdmin: item.resolutionDetails?.resolvedBy?.name || null,
-            resolvedAt: item.resolutionDetails?.resolvedAt || null,
-            timeline: item.timeline
-        }));
+        const formattedData = issues.map(item => {
+            const rep = item.reporterId;
+            const reporterDisplayName = rep ? (
+                rep.name || rep.fullName || rep.hqName || rep.headquarterName ||
+                rep.stationName || rep.fireStationName || rep.policeStationName ||
+                rep.labName || rep.pharmacyName || rep.email || item.reporterModel
+            ) : "Anonymous";
 
-        // Overview KPI Cards
+            return {
+                _id: item._id,
+                displayId: `#${item.issueNumber}`,
+                ticketId: item.ticketId,
+                platform: item.platform,
+                appVersion: item.appVersion || null,
+                title: item.title,
+                detailedDescription: item.detailedDescription,
+                category: item.category || "General",
+                priority: item.priority,
+                loggedDateFormatted: moment(item.createdAt).format('YYYY-MM-DD'),
+                status: item.status,
+                reporter: {
+                    id: rep?._id || null,
+                    name: reporterDisplayName, // 👈 Exact FireHQ / Station name
+                    email: rep?.email || "N/A",
+                    phone: rep?.phone || "N/A",
+                    role: item.reporterModel
+                },
+                attachments: item.attachments,
+                resolvedByAdmin: item.resolutionDetails?.resolvedBy?.name || null,
+                resolvedAt: item.resolutionDetails?.resolvedAt || null,
+                timeline: item.timeline
+            };
+        });
+
         const [totalOpen, totalInProgress, totalResolved, totalWebIssues, totalAppIssues] = await Promise.all([
             Issue.countDocuments({ status: { $in: ['OPEN', 'UNDER REVIEW'] } }),
             Issue.countDocuments({ status: 'IN PROGRESS' }),

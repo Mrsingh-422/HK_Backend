@@ -8,6 +8,7 @@ const { isNurseAvailable, generateNurseSlots } = require('../../../utils/timeSlo
 const NurseConsumable = require('../../../models/MasterConsumable');
 const Coupon = require('../../../models/Coupon');
 const Review = require('../../../models/Review');
+const UserSubscription = require('../../../models/UserSubscription');
 
 // const { generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const mongoose = require('mongoose');
@@ -507,7 +508,9 @@ const checkoutNurseBooking = async (req, res) => {
 
         if (!item) return res.status(404).json({ message: "Service/Package not found" });
         const pCount = Number(patientCount) || 1;
-        const isCodAllowed = await isCodEnabled('Nurse');
+        
+        // 🚀 SMART COD CHECK: Passes req.user.id
+        const isCodAllowed = await isCodEnabled('Nurse', req.user ? req.user.id : null);
 
         let basePrice = 0;
         let slotSurcharge = 0;
@@ -549,15 +552,17 @@ const checkoutNurseBooking = async (req, res) => {
             basePrice = 0; 
             isSubscriptionApplied = true;
 
-            const UserSubscription = require('../../../models/UserSubscription');
             const activeSub = await UserSubscription.findOne({
                 userId: req.user.id,
                 status: 'Active',
                 endDate: { $gt: new Date() }
-            }).populate('planId', 'name');
+            }).populate({
+                path: 'planId',
+                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+            });
 
-            if (activeSub) {
-                planName = activeSub.planId?.name || "Premium Care Plan";
+            if (activeSub && activeSub.planId) {
+                planName = activeSub.planId.name || "Premium Care Plan";
                 userSubscriptionId = activeSub._id;
             }
         }
@@ -572,7 +577,7 @@ const checkoutNurseBooking = async (req, res) => {
                 couponName: couponCode.toUpperCase(),
                 isActive: true,
                 expiryDate: { $gte: new Date() },
-                vendorType: { $in: ['Nurse', 'All'] }, // Root level check
+                vendorType: { $in: ['Nurse', 'All'] },
                 $or: [
                     { isAdminCreated: true }, 
                     { vendorId: nurseId } 
@@ -616,7 +621,7 @@ const checkoutNurseBooking = async (req, res) => {
                 couponDiscount: couponDiscount, 
                 fasterServiceCharge: fasterCharge,
                 taxAmount: Math.round(tax),
-                totalPrice: Math.round(totalAfterDiscount + tax),
+                totalPrice: Math.max(0, Math.round(totalAfterDiscount + tax)),
                 units,
                 pCount,
                 appliedCoupon: couponInfo
@@ -627,9 +632,7 @@ const checkoutNurseBooking = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-
-// 5. PLACE BOOKING (Replacing placeNurseBooking with Razorpay payload creation)
-// 5. PLACE BOOKING (Updated with COD and Subscription Check)
+// --- 2. placeNurseBooking ---
 const placeNurseBooking = async (req, res) => {
     try {
         const { 
@@ -640,8 +643,9 @@ const placeNurseBooking = async (req, res) => {
         
         const activePaymentMethod = paymentMethod || 'COD';
 
+        // 🚀 SMART COD VALIDATION: Passes req.user.id
         if (activePaymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Nurse');
+            const isCodAllowed = await isCodEnabled('Nurse', req.user.id);
             if (!isCodAllowed) {
                 return res.status(400).json({
                     success: false,
@@ -674,15 +678,17 @@ const placeNurseBooking = async (req, res) => {
 
         if (priceBreakdown.baseServicePrice === 0) {
             isSubscriptionApplied = true;
-            const UserSubscription = require('../../../models/UserSubscription');
             const activeSub = await UserSubscription.findOne({
                 userId: req.user.id,
                 status: 'Active',
                 endDate: { $gt: new Date() }
-            }).populate('planId', 'name');
+            }).populate({
+                path: 'planId',
+                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+            });
 
-            if (activeSub) {
-                planName = activeSub.planId?.name || "Premium Care Plan";
+            if (activeSub && activeSub.planId) {
+                planName = activeSub.planId.name || "Premium Care Plan";
                 userSubscriptionId = activeSub._id;
             }
         }
@@ -727,7 +733,7 @@ const placeNurseBooking = async (req, res) => {
 
         if (activePaymentMethod === 'COD') {
             if (appliedCoupon && appliedCoupon.couponId) {
-                const coupon = await Coupon.findOne({ _id: appliedCoupon.couponId, vendorType: { $in: ['Nurse', 'All'] } }); // Root level check
+                const coupon = await Coupon.findOne({ _id: appliedCoupon.couponId, vendorType: { $in: ['Nurse', 'All'] } });
                 if (coupon) {
                     const userIndex = coupon.usedBy.findIndex(u => u.userId.toString() === req.user.id.toString());
                     if (userIndex > -1) {

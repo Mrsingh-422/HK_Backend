@@ -1,8 +1,75 @@
 const Issue = require('../../models/Issue');
 const { notifyAdminsAndVendor } = require('../../utils/notification');
 
+// Helper: Determine Model from authenticated req.user
+const getReporterModel = (user) => {
+    if (!user) return 'User';
+    const role = user.role;
+
+    if (role === 'user') return 'User';
+    if (role === 'doctor' || role === 'hospital-doctor') return 'Doctor';
+    if (role === 'hospital') return 'Hospital';
+    if (role === 'lab') return 'Lab';
+    if (role === 'pharmacy') return 'Pharmacy';
+    if (role === 'nurse') return 'Nurse';
+    if (role === 'ambulance' || role === 'hospital-ambulance') return 'Ambulance';
+    if (role === 'driver') return 'Driver';
+
+    // Provider Role (Lab / Pharmacy / Nurse)
+    if (role === 'provider' || !role) {
+        if (user.labName || user.testsOffered !== undefined) return 'Lab';
+        if (user.pharmacyName || user.drugLicenseNumber !== undefined) return 'Pharmacy';
+        if (user.nursingCertificates || user.speciality !== undefined) return 'Nurse';
+    }
+
+    // 🚒 Fire Models
+    if (role === 'fire-hq' || user.fireStations !== undefined) return 'FireHQ';
+    if (role === 'fire-station' || user.stationId !== undefined) return 'FireStation';
+    if (role === 'fire-staff' || user.badgeNumber !== undefined) return 'FireStaff';
+
+    // 🚓 Police Models
+    if (role === 'police-hq' || user.policeStations !== undefined) return 'PoliceHQ';
+    if (role === 'police-station' || user.jurisdictionArea !== undefined) return 'PoliceStation';
+    if (role === 'police-staff' || user.officerRank !== undefined) return 'PoliceStaff';
+
+    return 'User';
+};
+
+// 🚀 SMART HELPER: Extracts exact display name across ALL models
+const getReporterDisplayName = (user, reporterModel) => {
+    if (!user) return reporterModel || 'Reporter';
+
+    // 1. Direct name fields
+    if (user.name && user.name.trim() !== "") return user.name.trim();
+    if (user.fullName && user.fullName.trim() !== "") return user.fullName.trim();
+
+    // 2. Fire Models (Headquarter / Station / Staff)
+    if (user.hqName) return user.hqName.trim();
+    if (user.headquarterName) return user.headquarterName.trim();
+    if (user.fireHqName) return user.fireHqName.trim();
+    if (user.stationName) return user.stationName.trim();
+    if (user.fireStationName) return user.fireStationName.trim();
+    if (user.staffName) return user.staffName.trim();
+
+    // 3. Police Models (HQ / Station / Staff)
+    if (user.policeHqName) return user.policeHqName.trim();
+    if (user.policeStationName) return user.policeStationName.trim();
+
+    // 4. Vendors (Lab, Pharmacy, Hospital, Ambulance)
+    if (user.labName) return user.labName.trim();
+    if (user.pharmacyName) return user.pharmacyName.trim();
+    if (user.hospitalName) return user.hospitalName.trim();
+    if (user.driverInfo?.fullName) return user.driverInfo.fullName.trim();
+
+    // 5. Fallbacks (Email / Phone)
+    if (user.email) return user.email.trim();
+    if (user.phone) return user.phone.trim();
+
+    return reporterModel || "Reporter";
+};
+
 // ==========================================
-// 1. CREATE ISSUE (User / Lab / Doctor / Fire / Police)
+// 1. CREATE ISSUE (User / Vendor / Fire / Police)
 // ==========================================
 const createIssueByUserOrVendor = async (req, res) => {
     try {
@@ -15,9 +82,11 @@ const createIssueByUserOrVendor = async (req, res) => {
             appVersion 
         } = req.body;
 
-        // 🎯 Exact Model Auto-detected from Middleware ('Lab', 'Doctor', 'User', etc.)
-        const reporterModel = req.reporterModel || req.user?.constructor?.modelName || 'User';
+        const reporterModel = req.reporterModel || getReporterModel(req.user);
         const reporterId = req.user._id;
+
+        // 🎯 Auto-extract exact dynamic display name (e.g. "Mohali Fire HQ", "Dr. Rajesh", etc.)
+        const reporterDisplayName = getReporterDisplayName(req.user, reporterModel);
 
         if (!title || !detailedDescription) {
             return res.status(400).json({ 
@@ -34,7 +103,7 @@ const createIssueByUserOrVendor = async (req, res) => {
 
         const newIssue = await Issue.create({
             reporterId,
-            reporterModel, // 👈 Ab yahan 100% 'Lab' save hoga
+            reporterModel,
             platform: targetPlatform,
             appVersion: appVersion || "",
             title: title.trim(),
@@ -45,21 +114,21 @@ const createIssueByUserOrVendor = async (req, res) => {
             status: 'OPEN',
             timeline: [{
                 status: 'OPEN',
-                note: `Issue reported from ${targetPlatform} by ${req.user.name || reporterModel}. Category: [${customCategory}]`,
+                note: `Issue reported from ${targetPlatform} by ${reporterDisplayName} (${reporterModel}). Category: [${customCategory}]`,
                 updatedBy: reporterId,
-                updatedByName: req.user.name || "Reporter",
-                updatedByRole: reporterModel, // 👈 Timeline me bhi 'Lab' aayega
+                updatedByName: reporterDisplayName, // 👈 Exact FireHQ / Station name aayega
+                updatedByRole: reporterModel,
                 timestamp: new Date()
             }]
         });
 
-        // 🔔 Notify Admins
+        // 🔔 Notify Admins with Actual Name
         try {
             await notifyAdminsAndVendor(
                 null,
                 'admin',
                 `🚨 New [${reporterModel}] Issue Reported!`,
-                `Ticket #${newIssue.ticketId}: ${newIssue.title} [${targetPlatform}] reported by ${reporterModel} (${req.user.name || ''}).`,
+                `Ticket #${newIssue.ticketId}: ${newIssue.title} [${targetPlatform}] reported by ${reporterDisplayName} (${reporterModel}).`,
                 { issueId: newIssue._id.toString(), platform: targetPlatform, type: 'new_issue_reported' }
             );
         } catch (e) {}
@@ -75,6 +144,7 @@ const createIssueByUserOrVendor = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 2. GET MY ISSUES LIST

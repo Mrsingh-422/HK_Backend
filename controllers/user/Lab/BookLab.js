@@ -11,6 +11,7 @@ const MasterLabPackage = require('../../../models/MasterLabPackage');
 const MasterRequest = require('../../../models/MasterRequest');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
 const Review = require('../../../models/Review'); // 👈 Import the polymorphic Review model
+const UserSubscription = require('../../../models/UserSubscription');
 
 const Cart = require('../../../models/Cart'); // Import check karein
 const User = require('../../../models/User');
@@ -1207,8 +1208,8 @@ const checkoutLabBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cart is empty" });
         }
 
-        // 🚨 STRICTOR COD VALIDATION [cite: 2.1]
-        const isCodAllowed = await isCodEnabled('Lab');
+        // 🚀 SMART COD VALIDATION: Passes req.user.id
+        const isCodAllowed = await isCodEnabled('Lab', req.user ? req.user.id : null);
         if (paymentMethod === 'COD' && !isCodAllowed) {
             return res.status(400).json({
                 success: false,
@@ -1216,7 +1217,6 @@ const checkoutLabBooking = async (req, res) => {
             });
         }
 
-        // Radiology Home Collection Safeguard [cite: 2.1]
         if (collectionType === 'Home Collection') {
             if (cart.labCart.categoryType && cart.labCart.categoryType.toLowerCase() === 'radiology') {
                 return res.status(400).json({ 
@@ -1244,9 +1244,6 @@ const checkoutLabBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "User account not found." });
         }
 
-        // =========================================================================
-        // CASE A: NEW FLOW (Patient-specific addresses & test assignments)
-        // =========================================================================
         if (patientMappings && Array.isArray(patientMappings) && patientMappings.length > 0) {
             bill = await calculateStructuredBill(
                 cart.labCart.labId,
@@ -1262,7 +1259,6 @@ const checkoutLabBooking = async (req, res) => {
                 let patientInfo = {};
                 
                 if (mapping.patientId === 'Self') {
-                    // 🚨 Dynamic age calculation for Self using User main profile dob [cite: 2.1]
                     let selfAge = 25;
                     if (userProfile.dob) {
                         selfAge = moment().diff(moment(userProfile.dob), 'years') || 25;
@@ -1276,7 +1272,6 @@ const checkoutLabBooking = async (req, res) => {
                 } else {
                     const member = userProfile.familyMember.id(mapping.patientId);
                     if (member) {
-                        // 🚨 Dynamic age calculation for family member using dob string [cite: 2.1]
                         let memberAge = 25;
                         if (member.dob) {
                             memberAge = moment().diff(moment(member.dob, 'DD-MM-YYYY'), 'years') || 25;
@@ -1334,11 +1329,7 @@ const checkoutLabBooking = async (req, res) => {
                     assignedItems: assignedItems
                 });
             }
-        } 
-        // =========================================================================
-        // CASE B: OLD FLOW FALLBACK
-        // =========================================================================
-        else {
+        } else {
             bill = await calculateBillHelper(
                 cart.labCart.labId, 
                 cart.labCart, 
@@ -1367,7 +1358,6 @@ const checkoutLabBooking = async (req, res) => {
         const tempBookingId = `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
 
-        // 🚨 ONLY trigger Razorpay if payment method is NOT COD and amount is strictly greater than 0! [cite: 2.1]
         if (paymentMethod !== 'COD' && bill.totalAmount > 0) {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
         }
@@ -1390,7 +1380,6 @@ const checkoutLabBooking = async (req, res) => {
             billSummary: bill, 
             paymentMethod,
             isRapid: isRapid || false,
-            // 🚨 IF TOTAL AMOUNT IS 0 (Free booking), bypass and set Confirmed state [cite: 2.1]
             status: (paymentMethod === 'COD' || bill.totalAmount === 0) ? 'Confirmed' : 'Pending',
             paymentStatus: bill.totalAmount === 0 ? 'Done' : 'Pending',
             tracking: {
@@ -1398,11 +1387,10 @@ const checkoutLabBooking = async (req, res) => {
             }
         });
 
-        // 🚨 IF COD OR FREE BOOKING (totalAmount === 0), flush the cart, reset variables, and return dynamic success [cite: 2.1]
         if (paymentMethod === 'COD' || bill.totalAmount === 0) {
             await Cart.findOneAndUpdate(
                 { userId: req.user.id }, 
-                { $set: { "labCart.items": [], "labCart.labId": null, "labCart.selectedPatients": [] } } // Also flushes selections
+                { $set: { "labCart.items": [], "labCart.labId": null, "labCart.selectedPatients": [] } }
             );
 
             if (collectionType === 'Home Collection') {
@@ -1468,10 +1456,8 @@ async function mapPatients(userId, pids) {
 // --- 4. INITIATE BOOKING (Direct Booking - Supporting COD checks) ---
 const bookLabTest = async (req, res) => {
     try {
-        console.log("Incoming Direct Lab Booking Request:", req.body);
         let body = { ...req.body };
 
-        // Safe parsing for multipart/form-data payloads
         if (typeof body.patientMappings === 'string') {
             try { body.patientMappings = JSON.parse(body.patientMappings); } catch (e) { body.patientMappings = []; }
         }
@@ -1493,7 +1479,6 @@ const bookLabTest = async (req, res) => {
             items            
         } = body;
 
-        // 1. Validate mandatory fields
         if (!labId || !appointmentDate || !appointmentTime || !collectionType) {
             return res.status(400).json({ 
                 success: false, 
@@ -1501,7 +1486,6 @@ const bookLabTest = async (req, res) => {
             });
         }
 
-        // Validate Payment Method Enum
         const allowedPaymentMethods = ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
         if (paymentMethod && !allowedPaymentMethods.includes(paymentMethod)) {
             return res.status(400).json({ 
@@ -1510,9 +1494,9 @@ const bookLabTest = async (req, res) => {
             });
         }
 
-        // 🚨 STRICTOR COD VALIDATION [cite: 2.1]
+        // 🚀 SMART COD VALIDATION: Passes req.user.id
         if (paymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Lab');
+            const isCodAllowed = await isCodEnabled('Lab', req.user ? req.user.id : null);
             if (!isCodAllowed) {
                 return res.status(400).json({
                     success: false,
@@ -1521,7 +1505,6 @@ const bookLabTest = async (req, res) => {
             }
         }
 
-        // 2. CRITICAL RADIOLOGY HOME COLLECTION WALK-IN VALIDATIONS [cite: 2.1]
         if (collectionType === 'Home Collection') {
             if (patientMappings && Array.isArray(patientMappings)) {
                 for (let mapping of patientMappings) {
@@ -1561,9 +1544,6 @@ const bookLabTest = async (req, res) => {
         const globalUniqueTests = new Set();
         const globalUniquePackages = new Set();
 
-        // =========================================================================
-        // CASE A: NEW FLOW (Patient-specific addresses & test assignments)
-        // =========================================================================
         if (patientMappings && Array.isArray(patientMappings) && patientMappings.length > 0) {
             bill = await calculateStructuredBill(
                 labId,
@@ -1579,7 +1559,6 @@ const bookLabTest = async (req, res) => {
                 let patientInfo = {};
                 
                 if (mapping.patientId === 'Self') {
-                    // 🚨 Dynamic age calculation for Self [cite: 2.1]
                     let selfAge = 25;
                     if (userProfile.dob) {
                         selfAge = moment().diff(moment(userProfile.dob), 'years') || 25;
@@ -1593,7 +1572,6 @@ const bookLabTest = async (req, res) => {
                 } else {
                     const member = userProfile.familyMember.id(mapping.patientId);
                     if (member) {
-                        // 🚨 Dynamic age calculation for family member [cite: 2.1]
                         let memberAge = 25;
                         if (member.dob) {
                             memberAge = moment().diff(moment(member.dob, 'DD-MM-YYYY'), 'years') || 25;
@@ -1651,11 +1629,7 @@ const bookLabTest = async (req, res) => {
                     assignedItems: assignedItems
                 });
             }
-        } 
-        // =========================================================================
-        // CASE B: OLD FLOW FALLBACK
-        // =========================================================================
-        else {
+        } else {
             bill = await calculateBill(
                 labId, 
                 items, 
@@ -1683,7 +1657,6 @@ const bookLabTest = async (req, res) => {
         const tempBookingId = `ORD-${Date.now().toString().slice(-6)}${crypto.randomInt(100, 999)}`;
         let rzpOrder = null;
 
-        // 🚨 ONLY trigger Razorpay if payment method is NOT COD and amount is strictly greater than 0! [cite: 2.1]
         if (paymentMethod !== 'COD' && bill.totalAmount > 0) {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
         }
@@ -1705,7 +1678,6 @@ const bookLabTest = async (req, res) => {
             appointmentTime,
             billSummary: bill,
             paymentMethod: paymentMethod || 'Online',
-            // 🚨 IF TOTAL AMOUNT IS 0 (Free booking), bypass and set Confirmed state [cite: 2.1]
             paymentStatus: bill.totalAmount === 0 ? 'Done' : 'Pending',
             status: (paymentMethod === 'COD' || bill.totalAmount === 0) ? 'Confirmed' : 'Pending',
             tracking: {
@@ -1713,7 +1685,6 @@ const bookLabTest = async (req, res) => {
             }
         });
 
-        // 🚨 IF COD OR FREE BOOKING (totalAmount === 0), complete the flow immediately [cite: 2.1]
         if (paymentMethod === 'COD' || bill.totalAmount === 0) {
             if (collectionType === 'Home Collection') {
                 await deductBenefitCount(req.user.id, 'freeLabDeliveriesCount');

@@ -379,7 +379,6 @@ const getHospitalCheckoutSummary = async (req, res) => {
     try {
         let body = { ...req.body };
 
-        // 1. SAFE MULTIPART PARSER
         if (typeof body.patients === 'string') {
             try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
         }
@@ -401,7 +400,6 @@ const getHospitalCheckoutSummary = async (req, res) => {
             specialServices = []
         } = body;
 
-        // 2. Mandatory parameters validation check
         if (!hospitalId || !bedId || !startDate || !endDate) {
             return res.status(400).json({ 
                 success: false, 
@@ -409,16 +407,14 @@ const getHospitalCheckoutSummary = async (req, res) => {
             });
         }
 
-        // Fetch dynamic COD toggle state from admin panel
-        const isCodAllowed = await isCodEnabled('Hospital');
+        // 🚀 SMART COD CHECK: Passes req.user.id (Subscribers get COD always true)
+        const isCodAllowed = await isCodEnabled('Hospital', req.user ? req.user.id : null);
 
-        // 3. Fetch Bed and prevent null reference crashes
         const bed = await Bed.findById(bedId);
         if (!bed) {
             return res.status(404).json({ success: false, message: "Selected Bed not found in the system." });
         }
 
-        // 4. Safe stay duration calculation using moment
         const start = moment(startDate).startOf('day');
         const end = moment(endDate).endOf('day');
         const stayDuration = end.diff(start, 'days') + 1;
@@ -439,32 +435,32 @@ const getHospitalCheckoutSummary = async (req, res) => {
         let planName = "";
         let userSubscriptionId = null;
 
-        // 5. Subscription benefit check
+        // 🚀 Dynamic Subscription benefit check
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const admissionBenefit = await checkAndApplyBenefit(req.user.id, 'freeHospitalStaysCount', baseFee);
         
         if (admissionBenefit.isApplied) {
-            finalBaseFee = 0; // 🚀 TYPO FIXED: Properly waives the base fee
+            finalBaseFee = 0;
             isSubscriptionApplied = true;
 
-            const UserSubscription = require('../../../models/UserSubscription');
             const activeSub = await UserSubscription.findOne({
                 userId: req.user.id,
                 status: 'Active',
                 endDate: { $gt: new Date() }
-            }).populate('planId', 'name');
+            }).populate({
+                path: 'planId',
+                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+            });
 
-            if (activeSub) {
-                planName = activeSub.planId?.name || "Premium Care Plan";
+            if (activeSub && activeSub.planId) {
+                planName = activeSub.planId.name || "Premium Care Plan";
                 userSubscriptionId = activeSub._id;
             }
         }
 
-        // 6. Compute Special services if selected
         const servicesTotal = specialServices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
         let subtotal = finalBaseFee + servicesTotal;
 
-        // 7. Calculate dynamic coupon discount
         let discount = 0;
         if (couponCode) {
             const coupon = await Coupon.findOne({ 
@@ -485,11 +481,11 @@ const getHospitalCheckoutSummary = async (req, res) => {
                 servicesTotal,
                 discount: Math.round(discount),
                 subtotal: Math.round(subtotal),
-                totalPayable: Math.round(subtotal - discount),
+                totalPayable: Math.max(0, Math.round(subtotal - discount)),
                 stayDuration,
                 patients,
                 address,
-                isCodAvailable: isCodAllowed,
+                isCodAvailable: isCodAllowed, // 👈 Always true for subscribers
                 subscriptionDetails: {
                     isSubscriptionApplied,
                     userSubscriptionId,
@@ -526,8 +522,9 @@ const finalHospitalBooking = async (req, res) => {
 
         const userId = req.user.id;
 
+        // 🚀 SMART COD VALIDATION: Passes userId (Subscribers bypassed)
         if (paymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Hospital');
+            const isCodAllowed = await isCodEnabled('Hospital', userId);
             if (!isCodAllowed) {
                 return res.status(400).json({
                     success: false,
@@ -536,7 +533,6 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        // 1. Process and resolve Insurance Details
         let finalInsuranceData = {
             hasInsurance: false,
             insuranceNumber: "",
@@ -573,7 +569,6 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        // 2. Fetch Target Bed
         const bed = await Bed.findById(bedId);
         if (!bed) {
             return res.status(404).json({ success: false, message: "Selected Bed not found in the system." });
@@ -585,7 +580,6 @@ const finalHospitalBooking = async (req, res) => {
         const ward = await Ward.findById(bed.wardId);
         const wardName = ward ? ward.name : "N/A";
 
-        // 3. Dates validation & Overlapping booking check
         const start = moment(startDate).startOf('day').toDate();
         const end = moment(endDate).endOf('day').toDate();
         const stayDuration = moment(end).diff(moment(start), 'days') + 1;
@@ -610,7 +604,6 @@ const finalHospitalBooking = async (req, res) => {
             });
         }
 
-        // 4. Base Price Calculation
         const basePrice = bed.pricePerDay * stayDuration;
         let originalBasePrice = basePrice;
         let finalBasePrice = basePrice;
@@ -618,25 +611,26 @@ const finalHospitalBooking = async (req, res) => {
         let planName = "";
         let userSubscriptionId = null;
 
-        // 5. Subscription benefit check
         const admissionBenefit = await checkAndApplyBenefit(userId, 'freeHospitalStaysCount', basePrice);
         if (admissionBenefit.isApplied) {
-            finalBasePrice = 0; // Price waived
+            finalBasePrice = 0;
             isSubscriptionApplied = true;
 
             const activeSub = await UserSubscription.findOne({
                 userId,
                 status: 'Active',
                 endDate: { $gt: new Date() }
-            }).populate('planId', 'name');
+            }).populate({
+                path: 'planId',
+                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+            });
 
-            if (activeSub) {
-                planName = activeSub.planId?.name || "Premium Care Plan";
+            if (activeSub && activeSub.planId) {
+                planName = activeSub.planId.name || "Premium Care Plan";
                 userSubscriptionId = activeSub._id;
             }
         }
 
-        // 6. Coupon Processing
         let couponDiscount = 0;
         let couponDetailsObj = null;
 
@@ -669,22 +663,17 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        const totalAmount = finalBasePrice - couponDiscount;
-
-        // 7. Generate Unique Booking ID
+        const totalAmount = Math.max(0, finalBasePrice - couponDiscount);
         const tempBookingId = `HKH-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
 
-        // 8. Handle Online Payments via Razorpay
         let rzpOrder = null;
         if (paymentMethod !== 'COD' && totalAmount > 0) {
             rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
         }
 
-        // 9. Parse patients and address inputs
         const parsedPatients = typeof patients === 'string' ? JSON.parse(patients) : patients;
         const parsedAddress = typeof address === 'string' ? JSON.parse(address) : address;
 
-        // 10. Save Admission Booking
         const booking = await Appointment.create({
             bookingId: tempBookingId,
             userId,
@@ -723,7 +712,6 @@ const finalHospitalBooking = async (req, res) => {
             }]
         });
 
-        // 11. Handle COD / Free bypass flow directly
         if (paymentMethod === 'COD' || totalAmount === 0) {
             if (isSubscriptionApplied) {
                 await deductBenefitCount(userId, 'freeHospitalStaysCount');
@@ -735,8 +723,6 @@ const finalHospitalBooking = async (req, res) => {
                 });
             }
 
-            // 🚀 SYNC FIX 1: Lock bed status to 'Reserved' during booking, not premature 'Occupied'
-            // 🚀 SYNC FIX 2: Decrement Ward capacity ONLY if previous status was 'Available' to prevent leakage
             if (bed.status === 'Available') {
                 await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
             }

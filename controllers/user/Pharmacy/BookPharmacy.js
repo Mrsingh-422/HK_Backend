@@ -1124,7 +1124,7 @@ const getMedicineVendors = async (req, res) => {
         const masterMedicine = await Medicine.findById(medObjectId).lean();
         if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        const isPharmacyCodAvailable = await isCodEnabled('Pharmacy');
+        const isPharmacyCodAvailable = await isCodEnabled('Pharmacy', req?.user ? req.user.id : null);
 
         // Dynamic Alternate Brands Enrichment
         if (masterMedicine.salt_composition) {
@@ -1612,9 +1612,10 @@ const checkoutMedicineOrder = async (req, res) => {
         }
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
-        const isCodAllowed = await isCodEnabled('Pharmacy');
+        
+        // 🚀 SMART COD CHECK: Passes userId
+        const isCodAllowed = await isCodEnabled('Pharmacy', userId);
 
-        // B. Cumulative Stock Validation across all batches [cite: 1.1.2]
         const validatedItems = [];
         for (const item of cart.pharmacyCart.items) {
             const activeInventories = await MedicineInventory.find({
@@ -1623,7 +1624,6 @@ const checkoutMedicineOrder = async (req, res) => {
                 is_available: true
             });
 
-            // Calculate total in-stock units across all batches of this medicine
             const totalAvailableStock = activeInventories.reduce((sum, inv) => sum + (inv.stock_quantity || 0), 0);
 
             if (totalAvailableStock < item.quantity) {
@@ -1665,7 +1665,7 @@ const checkoutMedicineOrder = async (req, res) => {
                 orderRestrictions: {
                     canPlaceOrder: true,
                     needsPrescription: rxMandatory,
-                    isCodAvailable: isCodAllowed
+                    isCodAvailable: isCodAllowed // 👈 Always true for active subscribers
                 }
             }
         });
@@ -1691,14 +1691,15 @@ const placeOrder = async (req, res) => {
         const activePaymentMethod = paymentMethod || 'COD';
 
         if (activePaymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Pharmacy');
-            if (!isCodAllowed) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Cash on Delivery is currently disabled for medicine orders. Please pay online to complete your checkout."
-                });
-            }
-        }
+    // 🚀 SMART COD CHECK: Passes userId
+    const isCodAllowed = await isCodEnabled('Pharmacy', userId);
+    if (!isCodAllowed) {
+        return res.status(400).json({
+            success: false,
+            message: "Cash on Delivery is currently disabled for medicine orders. Please pay online to complete your checkout."
+        });
+    }
+}
 
         const cart = await Cart.findOne({ userId })
             .populate('pharmacyCart.items.medicineId')
