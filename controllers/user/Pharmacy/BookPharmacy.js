@@ -28,6 +28,7 @@ const PharmacyComboOffer = require('../../../models/PharmacyComboOffer'); // Imp
 const Review = require('../../../models/Review'); // Import Review model for rating functionality
 const ComboOffer = require('../../../models/PharmacyComboOffer'); // Import ComboOffer model
 const HsnMaster = require('../../../models/HsnMaster'); // Import HSN Master model
+const { isCodAllowed } = require('../../../utils/policyHelper');
 
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
@@ -238,13 +239,51 @@ const deductPharmacyStockFEFO = async (pharmacyId, medicineId, quantityToDeduct)
 
 // Helper for mapping patients (Aapke code se uthaya gaya)
 async function mapPatients(userId, pids) {
-    const User = require('../../../models/User');
-    const user = await User.findById(userId);
-    return pids.map(id => {
-        if (id === 'Self') return { patientId: 'Self', name: user.name, age: user.age || 25, gender: user.gender || 'Male', relation: 'Self' };
-        const m = user.familyMember.id(id);
-        return { patientId: id, name: m.memberName, age: m.age, gender: m.gender, relation: m.relation };
-    });
+    try {
+        const User = require('../../../models/User');
+        const user = await User.findById(userId);
+
+        // 🚨 Safe Parser: String array ko safely parse karein
+        let parsedPids = pids;
+        if (typeof pids === 'string') {
+            try { parsedPids = JSON.parse(pids); } catch (e) { parsedPids = [pids]; }
+        }
+        if (!Array.isArray(parsedPids) || parsedPids.length === 0) {
+            parsedPids = ['Self'];
+        }
+
+        return parsedPids.map(id => {
+            if (id === 'Self' || String(id).toLowerCase() === 'self') {
+                return { 
+                    patientId: 'Self', 
+                    name: user ? user.name : "Self", 
+                    age: user?.age || 25, 
+                    gender: user?.gender || 'Male', 
+                    relation: 'Self' 
+                };
+            }
+            const m = user?.familyMember ? user.familyMember.id(id) : null;
+            if (m) {
+                return { 
+                    patientId: id, 
+                    name: m.memberName, 
+                    age: m.age || 25, 
+                    gender: m.gender || 'Other', 
+                    relation: m.relation || 'Family' 
+                };
+            }
+            return { 
+                patientId: id, 
+                name: user ? user.name : "Patient", 
+                age: 25, 
+                gender: 'Other', 
+                relation: 'Self' 
+            };
+        });
+    } catch (err) {
+        console.error("mapPatients Error:", err);
+        return [{ patientId: 'Self', name: "Patient", age: 25, gender: 'Male', relation: 'Self' }];
+    }
 }
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -1613,11 +1652,13 @@ const checkoutMedicineOrder = async (req, res) => {
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
         
-        // 🚀 SMART COD CHECK: Passes userId
-        const isCodAllowed = await isCodEnabled('Pharmacy', userId);
+        // 🚀 SMART COD CHECK: Passes userId (Subscribed users get true automatically)
+        const isCodAvailable = await isCodEnabled('Pharmacy', userId);
 
         const validatedItems = [];
         for (const item of cart.pharmacyCart.items) {
+            if (!item.medicineId) continue;
+
             const activeInventories = await MedicineInventory.find({
                 pharmacyId,
                 medicineId: item.medicineId._id,
@@ -1645,7 +1686,7 @@ const checkoutMedicineOrder = async (req, res) => {
         }
 
         const bill = await calculatePharmacyBillHelper(
-            pharmacyId, validatedItems, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
+            pharmacyId, validatedItems, 1, collectionType, couponCode, isRapid, appointmentTime, userId
         );
 
         res.json({
@@ -1665,7 +1706,7 @@ const checkoutMedicineOrder = async (req, res) => {
                 orderRestrictions: {
                     canPlaceOrder: true,
                     needsPrescription: rxMandatory,
-                    isCodAvailable: isCodAllowed // 👈 Always true for active subscribers
+                    isCodAvailable: isCodAvailable // 👈 FIX: Ab sahi variable pass hoga (100% True for Subscribers)
                 }
             }
         });
@@ -1690,22 +1731,23 @@ const placeOrder = async (req, res) => {
         const userId = req.user.id;
         const activePaymentMethod = paymentMethod || 'COD';
 
+        // 1. COD Check with User Subscription Bypass
         if (activePaymentMethod === 'COD') {
-    // 🚀 SMART COD CHECK: Passes userId
-    const isCodAllowed = await isCodEnabled('Pharmacy', userId);
-    if (!isCodAllowed) {
-        return res.status(400).json({
-            success: false,
-            message: "Cash on Delivery is currently disabled for medicine orders. Please pay online to complete your checkout."
-        });
-    }
-}
+            const isCodAllowed = await isCodEnabled('Pharmacy', userId);
+            if (!isCodAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cash on Delivery is currently disabled for medicine orders. Please pay online to complete your checkout."
+                });
+            }
+        }
 
+        // 2. Fetch User Cart
         const cart = await Cart.findOne({ userId })
             .populate('pharmacyCart.items.medicineId')
             .populate('pharmacyCart.items.comboOfferId');
 
-        if (!cart || !cart.pharmacyCart.items.length) {
+        if (!cart || !cart.pharmacyCart.items || cart.pharmacyCart.items.length === 0) {
             return res.status(400).json({ success: false, message: "Transaction expired. Cart is empty." });
         }
 
@@ -1719,13 +1761,24 @@ const placeOrder = async (req, res) => {
             });
         }
 
-        const rxMandatory = cart.pharmacyCart.items.some(item =>
+        // Filter valid items where medicine exists
+        const validCartItems = cart.pharmacyCart.items.filter(i => i.medicineId);
+        if (validCartItems.length === 0) {
+            return res.status(400).json({ success: false, message: "Items in cart are no longer available." });
+        }
+
+        // 3. Prescription Check
+        const rxMandatory = validCartItems.some(item =>
             item.medicineId?.prescription_required?.toUpperCase() === "YES"
         );
 
         let rxImages = [];
-        if (req.files && req.files['prescriptionImages']) {
-            rxImages = req.files['prescriptionImages'].map(f => f.path);
+        if (req.files) {
+            if (Array.isArray(req.files)) {
+                rxImages = req.files.map(f => f.path.replace(/\\/g, "/"));
+            } else if (req.files['prescriptionImages']) {
+                rxImages = req.files['prescriptionImages'].map(f => f.path.replace(/\\/g, "/"));
+            }
         }
 
         if (rxMandatory && rxImages.length === 0) {
@@ -1737,26 +1790,27 @@ const placeOrder = async (req, res) => {
 
         const isPrescriptionOrder = rxMandatory || rxImages.length > 0;
 
+        // 4. Calculate Bill Summary
         const bill = await calculatePharmacyBillHelper(
-            pharmacyId, cart.pharmacyCart.items, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
+            pharmacyId, validCartItems, 1, collectionType, couponCode, isRapid, appointmentTime, req.user.id
         );
 
-        // --- DYNAMIC GST INVOICING ITEM MAPPER [1] ---
+        // 5. Dynamic GST Item Mapping
         const mappedOrderItems = [];
-        for (const item of cart.pharmacyCart.items) {
+        for (const item of validCartItems) {
             const orderedQty = Number(item.quantity || 1);
+            const medId = item.medicineId._id;
 
             const activeBatch = await MedicineInventory.findOne({
                 pharmacyId,
-                medicineId: item.medicineId._id,
+                medicineId: medId,
                 is_available: true,
                 stock_quantity: { $gt: 0 }
             }).sort({ expiry_date: 1 });
 
-            const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId ? Number(item.medicineId.mrp || 0) : 0);
+            const batchMrp = activeBatch ? activeBatch.mrp : Number(item.medicineId.mrp || 0);
             const batchHsn = activeBatch ? activeBatch.hsn_number : null;
 
-            // Dynamic GST Check
             let cgstPercent = 0;
             let sgstPercent = 0;
             if (batchHsn && batchHsn.trim() !== "" && batchHsn.toUpperCase() !== "N/A") {
@@ -1788,24 +1842,22 @@ const placeOrder = async (req, res) => {
             }
 
             mappedOrderItems.push({
-                medicineId: item.medicineId._id,
-                name: item.name,
+                medicineId: medId,
+                name: item.name || item.medicineId.name,
                 mrp: batchMrp,
                 price: item.price,
                 quantity: orderedQty,
-                duration: item.duration,
-                startDate: item.startDate,
+                duration: item.duration || "Full Course",
+                startDate: item.startDate || new Date(),
                 isComboApplied,
                 comboOfferId,
                 freeQuantity,
-
-                hsn_number: batchHsn || "", // Empty string fallback
+                hsn_number: batchHsn || "",
                 taxableAmount: Number(itemTaxableAmount.toFixed(2)),
                 cgstPercent,
                 sgstPercent,
                 cgstAmount: Number(itemCgstAmount.toFixed(2)),
                 sgstAmount: Number(itemSgstAmount.toFixed(2)),
-                // 🚨 Freeze Vendor's return/replacement settings into order history
                 isReturnAllowed: activeBatch ? Boolean(activeBatch.isReturnAllowed) : false,
                 isReplacementAllowed: activeBatch ? Boolean(activeBatch.isReplacementAllowed) : false
             });
@@ -1814,27 +1866,36 @@ const placeOrder = async (req, res) => {
         const tempOrderId = `MED-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         let rzpOrder = null;
 
-        if (activePaymentMethod !== 'COD') {
+        // 6. Online Payment vs COD Flow
+        if (activePaymentMethod !== 'COD' && bill.totalAmount > 0) {
             rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempOrderId}`);
         } else {
-            for (const item of cart.pharmacyCart.items) {
-                const isDeducted = await deductPharmacyStockFEFO(pharmacyId, item.medicineId._id, item.quantity);
-                if (!isDeducted) {
-                    return res.status(400).json({ success: false, message: `Stock mismatch for ${item.name}. Please refresh cart.` });
-                }
+            for (const item of validCartItems) {
+                await deductPharmacyStockFEFO(pharmacyId, item.medicineId._id, item.quantity);
             }
         }
 
+        // 🚨 Safe Address parsing
+        let finalAddress = {};
+        if (typeof address === 'string') {
+            try { finalAddress = JSON.parse(address); } catch (e) { finalAddress = { addressLine: address }; }
+        } else if (typeof address === 'object' && address !== null) {
+            finalAddress = address;
+        }
+
+        const resolvedPatients = await mapPatients(userId, selectedPatientIds || ['Self']);
+
+        // 7. Create Order in Database
         const booking = await PharmacyBooking.create({
             orderId: tempOrderId,
             userId,
             pharmacyId,
-            patients: await mapPatients(userId, selectedPatientIds || ['Self']),
+            patients: resolvedPatients,
             items: mappedOrderItems,
-            collectionType,
-            address: typeof address === 'string' ? JSON.parse(address) : address,
-            appointmentDate,
-            appointmentTime,
+            collectionType: collectionType || 'Home Delivery',
+            address: finalAddress,
+            appointmentDate: appointmentDate || new Date(),
+            appointmentTime: appointmentTime || 'Immediate',
             billSummary: bill,
             paymentMethod: activePaymentMethod,
             orderType: isPrescriptionOrder ? 'Prescription' : 'General',
@@ -1846,7 +1907,8 @@ const placeOrder = async (req, res) => {
             deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString()
         });
 
-        if (activePaymentMethod === 'COD') {
+        // 8. COD Immediate Success Return
+        if (activePaymentMethod === 'COD' || bill.totalAmount === 0) {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
             if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
@@ -1861,20 +1923,22 @@ const placeOrder = async (req, res) => {
                 { bookingId: booking._id.toString(), type: 'new_pharmacy_booking' }
             );
 
-            return res.status(201).json({ success: true, data: booking });
+            return res.status(201).json({ success: true, message: "Order placed successfully!", data: booking });
         }
 
+        // 9. Razorpay Response for Online Payment
         res.status(201).json({
             success: true,
             message: "Razorpay order created for pharmacy checkout.",
             key_id: process.env.RAZORPAY_KEY_ID,
             amount: rzpOrder.amount,
             razorpayOrderId: rzpOrder.id,
-            appointmentId: booking._id
+            appointmentId: booking._id,
+            bookingId: tempOrderId
         });
 
     } catch (error) {
-        console.error("placeOrder Error:", error);
+        console.error("placeOrder Fatal Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

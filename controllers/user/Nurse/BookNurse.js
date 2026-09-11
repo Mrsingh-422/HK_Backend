@@ -1,7 +1,7 @@
 const Nurse = require('../../../models/Nurse');
 const NurseBooking = require('../../../models/NurseBooking');
 const NurseService = require('../../../models/NurseService');
-const NursePackage = require('../../../models/NursePackage'); 
+const NursePackage = require('../../../models/NursePackage');
 const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const { isNurseAvailable, generateNurseSlots } = require('../../../utils/timeSlotHelper');
@@ -15,9 +15,9 @@ const mongoose = require('mongoose');
 const moment = require('moment');
 const crypto = require('crypto');
 
-const { createRazorpayOrder, verifyRazorpaySignature , fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
-const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
 
@@ -27,10 +27,10 @@ const { isCodEnabled } = require('../../../utils/policyHelper');
 const getNurses = async (req, res) => {
     try {
         const { city, search, speciality } = req.body;
-        
+
         // Strictly filters: Only APPROVED and ACTIVE (isActive: true) nurses
         let query = { profileStatus: 'Approved', isActive: true };
-        
+
         if (city) query.city = new RegExp(city, 'i');
         if (search) query.name = new RegExp(search, 'i');
         if (speciality) query.speciality = speciality;
@@ -51,7 +51,7 @@ const getNurses = async (req, res) => {
                 const validPrices = services
                     .map(s => (s.pricing && s.pricing.oneDay ? s.pricing.oneDay.final : 0))
                     .filter(p => p > 0);
-                
+
                 minPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
                 serviceTitles = services.slice(0, 2).map(s => s.title);
             }
@@ -64,19 +64,19 @@ const getNurses = async (req, res) => {
                 rating: nurse.rating || 0,
                 city: nurse.city,
                 experienceYears: nurse.experienceYears || 0,
-                startingPrice: minPrice || 0, 
+                startingPrice: minPrice || 0,
                 topServices: serviceTitles,
                 location: nurse.location,
                 profileStatus: nurse.profileStatus,
                 isOnline: nurse.isOnline ?? true // Passes isOnline state to frontend
             });
         }
-        
+
         res.json({ success: true, count: data.length, data });
 
-    } catch (error) { 
+    } catch (error) {
         console.error("getNurses Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -86,21 +86,21 @@ const getNurseDetails = async (req, res) => {
         if (!nurseId) return res.status(400).json({ message: "Nurse ID required" });
 
         const nurse = await Nurse.findById(nurseId).lean();
-        
+
         // 🚨 CRITICAL CHECK: Block access if nurse is inactive by Admin
         if (!nurse || nurse.isActive === false) {
             return res.status(404).json({ success: false, message: "Nurse profile is inactive or not found." });
         }
 
-        const reviews = await Review.find({ 
-            targetId: nurseId, 
-            targetType: 'Nurse' 
+        const reviews = await Review.find({
+            targetId: nurseId,
+            targetType: 'Nurse'
         }).select('rating').lean();
 
-        let averageRating = 4.8; 
+        let averageRating = 4.8;
         if (reviews.length > 0) {
             const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-            averageRating = Number((totalRating / reviews.length).toFixed(1)); 
+            averageRating = Number((totalRating / reviews.length).toFixed(1));
         }
 
         const recentReviews = await Review.find({ targetId: nurseId, targetType: 'Nurse' })
@@ -120,22 +120,22 @@ const getNurseDetails = async (req, res) => {
             Availability.findOne({ vendorId: nurseId }).lean()
         ]);
 
-        res.json({ 
-            success: true, 
-            data: { 
-                ...nurse, 
-                rating: averageRating,           
-                totalReviews: reviews.length,    
-                services: services || [], 
-                packages: packages || [], 
+        res.json({
+            success: true,
+            data: {
+                ...nurse,
+                rating: averageRating,
+                totalReviews: reviews.length,
+                services: services || [],
+                packages: packages || [],
                 availability: config || null,
                 recentReviews,
                 isOnline: nurse.isOnline ?? true // Sends online status to UI
-            } 
+            }
         });
-    } catch (e) { 
+    } catch (e) {
         console.error("Critical Details Error:", e);
-        res.status(500).json({ success: false, message: "Server encountered an error loading details" }); 
+        res.status(500).json({ success: false, message: "Server encountered an error loading details" });
     }
 };
 
@@ -166,9 +166,9 @@ const searchNursesAndServices = async (req, res) => {
             isActive: true,
             name: regex
         })
-        .select('name profileImage city speciality experienceYears rating totalReviews isOnline location')
-        .limit(10)
-        .lean();
+            .select('name profileImage city speciality experienceYears rating totalReviews isOnline location')
+            .limit(10)
+            .lean();
 
         // 2. QUERY SERVICES (Populate only if the associated provider is Active & Approved)
         const services = await NurseService.find({
@@ -176,13 +176,13 @@ const searchNursesAndServices = async (req, res) => {
             status: 'Approved',
             isActive: true
         })
-        .populate({
-            path: 'nurseId',
-            match: { profileStatus: 'Approved', isActive: true },
-            select: 'name profileImage rating city experienceYears isOnline'
-        })
-        .limit(10)
-        .lean();
+            .populate({
+                path: 'nurseId',
+                match: { profileStatus: 'Approved', isActive: true },
+                select: 'name profileImage rating city experienceYears isOnline'
+            })
+            .limit(10)
+            .lean();
 
         // Filter out services where the provider is inactive/null due to match conditions
         const validServices = services.filter(s => s.nurseId);
@@ -193,13 +193,13 @@ const searchNursesAndServices = async (req, res) => {
             status: 'Approved',
             isActive: true
         })
-        .populate({
-            path: 'nurseId',
-            match: { profileStatus: 'Approved', isActive: true },
-            select: 'name profileImage rating city experienceYears isOnline'
-        })
-        .limit(10)
-        .lean();
+            .populate({
+                path: 'nurseId',
+                match: { profileStatus: 'Approved', isActive: true },
+                select: 'name profileImage rating city experienceYears isOnline'
+            })
+            .limit(10)
+            .lean();
 
         // Filter out packages where the provider is inactive
         const validPackages = packages.filter(p => p.nurseId);
@@ -209,7 +209,7 @@ const searchNursesAndServices = async (req, res) => {
 
         // Add top matching provider names
         providers.slice(0, 4).forEach(p => suggestions.push(p.name));
-        
+
         // Add top matching service titles
         validServices.slice(0, 4).forEach(s => suggestions.push(s.title));
 
@@ -239,7 +239,7 @@ const searchNursesAndServices = async (req, res) => {
 const getNurseDeliveryConfig = async (req, res) => {
     try {
         const { nurseId } = req.params;
-        
+
         // 1. Database se check karo
         let config = await DeliveryCharge.findOne({ vendorId: nurseId });
 
@@ -268,8 +268,8 @@ const getNurseDeliveryConfig = async (req, res) => {
             success: true,
             data: config
         });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -289,9 +289,9 @@ const checkRangeAvailability = async (req, res) => {
             nurseId,
             status: { $in: ['Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'Service-Started'] },
             $or: [
-                { 
-                    "schedule.startDate": { $lte: reqEnd.toDate() }, 
-                    "schedule.endDate": { $gte: reqStart.toDate() } 
+                {
+                    "schedule.startDate": { $lte: reqEnd.toDate() },
+                    "schedule.endDate": { $gte: reqStart.toDate() }
                 }
             ]
         });
@@ -304,11 +304,11 @@ const checkRangeAvailability = async (req, res) => {
                 type: b.schedule.duration
             }));
 
-            return res.json({ 
-                success: false, 
-                isAvailable: false, 
-                message: "Nurse is busy on some days within this range", 
-                busyDates 
+            return res.json({
+                success: false,
+                isAvailable: false,
+                message: "Nurse is busy on some days within this range",
+                busyDates
             });
         }
 
@@ -320,7 +320,7 @@ const checkRangeAvailability = async (req, res) => {
 const getNurseAvailability = async (req, res) => {
     try {
         const { nurseId } = req.params;
-        const { serviceId, packageId, isPackage, month, year } = req.query; 
+        const { serviceId, packageId, isPackage, month, year } = req.query;
 
         // 1. Pagination Logic: Target Month aur Year set karein
         // Default: Current Month & Current Year
@@ -354,7 +354,7 @@ const getNurseAvailability = async (req, res) => {
 
         while (dayCounter <= endOfMonth) {
             const dateStr = dayCounter.format('YYYY-MM-DD');
-            
+
             // Premium check for this date
             const premDate = config.premiumDates?.find(pd => pd.date === dateStr);
             const extra = premDate ? premDate.extraFee : 0;
@@ -410,7 +410,7 @@ const getAvailableCoupons = async (req, res) => {
         let query = {
             isActive: true,
             expiryDate: { $gte: new Date() },
-            vendorType: { $in: ['Nurse', 'All'] } 
+            vendorType: { $in: ['Nurse', 'All'] }
         };
 
         if (nurseId && mongoose.Types.ObjectId.isValid(nurseId)) {
@@ -494,62 +494,82 @@ const validateCoupon = async (req, res) => {
 // 4. CHECKOUT (Updated with COD and Subscription Checks)
 const checkoutNurseBooking = async (req, res) => {
     try {
-        const { 
-            nurseId, serviceId, packageId, isPackage, selectedType, 
-            startDate, endDate, startTime, endTime, isFasterService, 
-            patientCount, selectedConsumables, couponCode 
-        } = req.body;
+        let body = { ...req.body };
+
+        // 🚨 Safe Multipart / Stringified JSON Parsers
+        if (typeof body.schedule === 'string') {
+            try { body.schedule = JSON.parse(body.schedule); } catch (e) {}
+        }
+        if (typeof body.selectedConsumables === 'string') {
+            try { body.selectedConsumables = JSON.parse(body.selectedConsumables); } catch (e) { body.selectedConsumables = []; }
+        }
+
+        const {
+            nurseId, serviceId, packageId, isPackage, selectedType,
+            startDate, endDate, startTime, endTime, isFasterService,
+            patientCount, selectedConsumables = [], couponCode
+        } = body;
+
+        const isPkg = (isPackage === true || isPackage === 'true');
 
         const [item, config, delivery] = await Promise.all([
-            isPackage ? NursePackage.findById(packageId) : NurseService.findById(serviceId),
+            isPkg ? NursePackage.findById(packageId) : NurseService.findById(serviceId),
             Availability.findOne({ vendorId: nurseId }),
             DeliveryCharge.findOne({ vendorId: nurseId })
         ]);
 
-        if (!item) return res.status(404).json({ message: "Service/Package not found" });
+        if (!item) return res.status(404).json({ success: false, message: "Service/Package not found" });
         const pCount = Number(patientCount) || 1;
-        
-        // 🚀 SMART COD CHECK: Passes req.user.id
+
+        // 🚀 SMART COD CHECK: Passes req.user.id (Subscribers get COD always true)
         const isCodAllowed = await isCodEnabled('Nurse', req.user ? req.user.id : null);
 
         let basePrice = 0;
         let slotSurcharge = 0;
         let units = 1;
 
+        const oneDayFinal = item.pricing?.oneDay?.final || 0;
+        const multipleDaysFinal = item.pricing?.multipleDays?.final || 0;
+        const hourlyFinal = item.pricing?.hourly?.final || 0;
+
         if (selectedType === 'For Multiple Days') {
             units = moment(endDate).diff(moment(startDate), 'days') + 1;
-            basePrice = item.pricing.multipleDays.final * units;
+            if (isNaN(units) || units <= 0) units = 1;
+            basePrice = multipleDaysFinal * units;
+            
             let curr = moment(startDate);
             while (curr <= moment(endDate)) {
-                const p = config.premiumDates?.find(pd => pd.date === curr.format('YYYY-MM-DD'));
-                if (p) slotSurcharge += p.extraFee;
+                const p = config?.premiumDates?.find(pd => pd.date === curr.format('YYYY-MM-DD'));
+                if (p) slotSurcharge += Number(p.extraFee || 0);
                 curr.add(1, 'days');
             }
-        } 
+        }
         else if (selectedType === 'One day One Time') {
-            basePrice = item.pricing.oneDay.final;
-            const pDate = config.premiumDates?.find(pd => pd.date === moment(startDate).format('YYYY-MM-DD'));
-            if (pDate) slotSurcharge += pDate.extraFee;
-            const pSlot = config.premiumSlots?.find(ps => ps.time === startTime);
-            if (pSlot) slotSurcharge += pSlot.extraFee;
-        } 
+            basePrice = oneDayFinal;
+            const pDate = config?.premiumDates?.find(pd => pd.date === moment(startDate).format('YYYY-MM-DD'));
+            if (pDate) slotSurcharge += Number(pDate.extraFee || 0);
+            const pSlot = config?.premiumSlots?.find(ps => ps.time === startTime);
+            if (pSlot) slotSurcharge += Number(pSlot.extraFee || 0);
+        }
         else {
             units = moment(endTime, "HH:mm").diff(moment(startTime, "HH:mm"), 'hours') || 1;
-            basePrice = item.pricing.hourly.final * units;
-            const pSlot = config.premiumSlots?.find(ps => ps.time === startTime);
-            if (pSlot) slotSurcharge = pSlot.extraFee;
+            if (isNaN(units) || units <= 0) units = 1;
+            basePrice = hourlyFinal * units;
+            const pSlot = config?.premiumSlots?.find(ps => ps.time === startTime);
+            if (pSlot) slotSurcharge += Number(pSlot.extraFee || 0);
         }
 
-        let originalBasePrice = basePrice; 
+        let originalBasePrice = basePrice;
         let isSubscriptionApplied = false;
         let planName = "";
         let userSubscriptionId = null;
 
+        // 🚀 SUBSCRIPTION BENEFIT CHECK
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const nurseVisitBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseVisitsCount', basePrice);
-        
+
         if (nurseVisitBenefit.isApplied) {
-            basePrice = 0; 
+            basePrice = 0;
             isSubscriptionApplied = true;
 
             const activeSub = await UserSubscription.findOne({
@@ -579,34 +599,32 @@ const checkoutNurseBooking = async (req, res) => {
                 expiryDate: { $gte: new Date() },
                 vendorType: { $in: ['Nurse', 'All'] },
                 $or: [
-                    { isAdminCreated: true }, 
-                    { vendorId: nurseId } 
+                    { isAdminCreated: true },
+                    { vendorId: nurseId }
                 ]
             });
 
-            if (coupon) {
-                if (subTotalForCoupon >= coupon.minOrderAmount) {
-                    const userUsage = coupon.usedBy.find(u => u.userId.toString() === req.user.id.toString());
-                    const usageCount = userUsage ? userUsage.usageCount : 0;
+            if (coupon && subTotalForCoupon >= Number(coupon.minOrderAmount || 0)) {
+                const userUsage = coupon.usedBy?.find(u => u.userId && u.userId.toString() === req.user.id.toString());
+                const usageCount = userUsage ? userUsage.usageCount : 0;
 
-                    if (usageCount < coupon.maxUsagePerUser) {
-                        let discount = (subTotalForCoupon * coupon.discountPercentage) / 100;
-                        if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
-                        
-                        couponDiscount = Math.round(discount);
-                        couponInfo = { couponId: coupon._id, couponName: coupon.couponName };
-                    }
+                if (usageCount < Number(coupon.maxUsagePerUser || 1)) {
+                    let discount = (subTotalForCoupon * Number(coupon.discountPercentage)) / 100;
+                    if (discount > Number(coupon.maxDiscount)) discount = Number(coupon.maxDiscount);
+
+                    couponDiscount = Math.round(discount);
+                    couponInfo = { couponId: coupon._id, couponName: coupon.couponName };
                 }
             }
         }
 
-        let fasterCharge = isFasterService ? (delivery?.fastDeliveryExtra || 0) : 0;
-        if (isFasterService) {
+        let fasterCharge = (isFasterService === true || isFasterService === 'true') ? (delivery?.fastDeliveryExtra || 0) : 0;
+        if (fasterCharge > 0) {
             const nurseDelivBenefit = await checkAndApplyBenefit(req.user.id, 'freeNurseDeliveriesCount', fasterCharge);
-            fasterCharge = nurseDelivBenefit.amount; 
+            fasterCharge = nurseDelivBenefit.amount;
         }
 
-        const totalAfterDiscount = (subTotalForCoupon - couponDiscount) + fasterCharge;
+        const totalAfterDiscount = Math.max(0, (subTotalForCoupon - couponDiscount)) + fasterCharge;
         let tax = 0;
         if (delivery?.taxPercentage) tax = (totalAfterDiscount * delivery.taxPercentage) / 100;
         if (delivery?.taxInRupees) tax += delivery.taxInRupees;
@@ -615,10 +633,10 @@ const checkoutNurseBooking = async (req, res) => {
             success: true,
             breakdown: {
                 baseServicePrice: Math.round(basePrice * pCount),
-                originalBasePrice: Math.round(originalBasePrice * pCount), 
+                originalBasePrice: Math.round(originalBasePrice * pCount),
                 slotSurcharge: Math.round(slotSurcharge * pCount),
                 consumableTotal: Math.round(consumableTotal * pCount),
-                couponDiscount: couponDiscount, 
+                couponDiscount: couponDiscount,
                 fasterServiceCharge: fasterCharge,
                 taxAmount: Math.round(tax),
                 totalPrice: Math.max(0, Math.round(totalAfterDiscount + tax)),
@@ -626,24 +644,70 @@ const checkoutNurseBooking = async (req, res) => {
                 pCount,
                 appliedCoupon: couponInfo
             },
-            isCodAvailable: isCodAllowed, 
+            isCodAvailable: isCodAllowed,
             subscriptionDetails: { isSubscriptionApplied, userSubscriptionId, planName }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("checkoutNurseBooking Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- 2. placeNurseBooking ---
 const placeNurseBooking = async (req, res) => {
     try {
-        const { 
-            nurseId, serviceId, packageId, isPackage, schedule, priceBreakdown, 
-            patients, address, selectedConsumables, assessmentLocation, 
-            appliedCoupon, paymentMethod, isFasterService 
-        } = req.body;
-        
+        let body = { ...req.body };
+
+        // 🚨 1. Safe JSON Parsers for FormData / Postman Payloads
+        if (typeof body.schedule === 'string') {
+            try { body.schedule = JSON.parse(body.schedule); } catch (e) { body.schedule = {}; }
+        }
+        if (typeof body.priceBreakdown === 'string') {
+            try { body.priceBreakdown = JSON.parse(body.priceBreakdown); } catch (e) { body.priceBreakdown = {}; }
+        }
+        if (typeof body.patients === 'string') {
+            try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
+        }
+        if (typeof body.address === 'string') {
+            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
+        }
+        if (typeof body.selectedConsumables === 'string') {
+            try { body.selectedConsumables = JSON.parse(body.selectedConsumables); } catch (e) { body.selectedConsumables = []; }
+        }
+        if (typeof body.appliedCoupon === 'string') {
+            try { body.appliedCoupon = JSON.parse(body.appliedCoupon); } catch (e) { body.appliedCoupon = null; }
+        }
+
+        const {
+            nurseId, serviceId, packageId, isPackage, schedule = {}, priceBreakdown = {},
+            patients = [], address, selectedConsumables = [], assessmentLocation,
+            appliedCoupon, paymentMethod, isFasterService
+        } = body;
+
+        // 🚨 2. Safe assessmentLocation Resolver (Prevents required validation crash)
+        let resolvedAssessmentLocation = "Home Location";
+        if (assessmentLocation && typeof assessmentLocation === 'string' && assessmentLocation.trim() !== "") {
+            resolvedAssessmentLocation = assessmentLocation.trim();
+        } else if (address) {
+            if (typeof address === 'string' && address.trim() !== "") {
+                resolvedAssessmentLocation = address.trim();
+            } else if (typeof address === 'object') {
+                resolvedAssessmentLocation = `${address.houseNo || ''} ${address.city || ''}`.trim() || "Home Address";
+            }
+        }
+
+        const cleanNurseId = (nurseId && mongoose.isValidObjectId(nurseId)) ? nurseId : null;
+        const cleanServiceId = (serviceId && mongoose.isValidObjectId(serviceId)) ? serviceId : null;
+        const cleanPackageId = (packageId && mongoose.isValidObjectId(packageId)) ? packageId : null;
+        const isPkg = (isPackage === true || isPackage === 'true');
+
+        if (!cleanNurseId) {
+            return res.status(400).json({ success: false, message: "Valid nurseId is required." });
+        }
+
         const activePaymentMethod = paymentMethod || 'COD';
 
-        // 🚀 SMART COD VALIDATION: Passes req.user.id
+        // 🚀 SMART COD CHECK: Passes req.user.id
         if (activePaymentMethod === 'COD') {
             const isCodAllowed = await isCodEnabled('Nurse', req.user.id);
             if (!isCodAllowed) {
@@ -654,8 +718,8 @@ const placeNurseBooking = async (req, res) => {
             }
         }
 
-        const nurse = await Nurse.findById(nurseId);
-        if (!nurse) return res.status(404).json({ message: "Nurse provider not found." });
+        const nurse = await Nurse.findById(cleanNurseId);
+        if (!nurse) return res.status(404).json({ success: false, message: "Nurse provider not found." });
 
         if (nurse.isOnline === false) {
             return res.status(400).json({
@@ -664,102 +728,176 @@ const placeNurseBooking = async (req, res) => {
             });
         }
 
-        const item = isPackage ? await NursePackage.findById(packageId) : await NurseService.findById(serviceId);
-        const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const targetItemId = isPkg ? cleanPackageId : cleanServiceId;
+        const item = isPkg ? await NursePackage.findById(targetItemId) : await NurseService.findById(targetItemId);
 
-        let rzpOrder = null;
-        if (activePaymentMethod !== 'COD') {
-            rzpOrder = await createRazorpayOrder(priceBreakdown.totalPrice, `receipt_${bId}`);
+        if (!item) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `Selected Nursing ${isPkg ? 'Package' : 'Service'} not found in database.` 
+            });
         }
+
+        const bId = `HKN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const finalPayable = Number(priceBreakdown.totalPrice || 0);
 
         let isSubscriptionApplied = false;
         let planName = "";
         let userSubscriptionId = null;
 
-        if (priceBreakdown.baseServicePrice === 0) {
+        // Subscription Benefit Check
+        if (Number(priceBreakdown.baseServicePrice || 0) === 0) {
             isSubscriptionApplied = true;
-            const activeSub = await UserSubscription.findOne({
+            try {
+                const UserSubscription = require('../../../models/UserSubscription');
+                const activeSub = await UserSubscription.findOne({
+                    userId: req.user.id,
+                    status: 'Active',
+                    endDate: { $gt: new Date() }
+                }).populate({
+                    path: 'planId',
+                    populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+                });
+
+                if (activeSub && activeSub.planId) {
+                    planName = activeSub.planId.name || "Premium Care Plan";
+                    userSubscriptionId = activeSub._id;
+                }
+            } catch (e) {}
+        }
+
+        // Clean Coupon Details
+        let safeAppliedCoupon = null;
+        if (appliedCoupon && appliedCoupon.couponId && mongoose.isValidObjectId(appliedCoupon.couponId)) {
+            safeAppliedCoupon = {
+                couponId: appliedCoupon.couponId,
+                discountAmount: Number(priceBreakdown.couponDiscount || 0),
+                couponName: appliedCoupon.couponName || "COUPON"
+            };
+        }
+
+        // =========================================================================
+        // CASE A: FREE BOOKING (via Subscription) OR COD BOOKING
+        // =========================================================================
+        if (finalPayable === 0 || activePaymentMethod === 'COD') {
+            const booking = await NurseBooking.create({
                 userId: req.user.id,
-                status: 'Active',
-                endDate: { $gt: new Date() }
-            }).populate({
-                path: 'planId',
-                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+                nurseId: cleanNurseId,
+                serviceId: isPkg ? null : cleanServiceId,
+                packageId: isPkg ? cleanPackageId : null,
+                bookingId: bId,
+                serviceDetails: {
+                    title: isPkg ? (item.packageName || "Package Bundle") : (item.title || "Daily Care"),
+                    type: isPkg ? "Package Bundle" : (item.type || "Daily Care"),
+                    duration: schedule?.duration || "One day One Time",
+                    basePrice: item.pricing?.oneDay?.final || 0
+                },
+                priceBreakdown: {
+                    baseServicePrice: Number(priceBreakdown.baseServicePrice || 0),
+                    originalBasePrice: Number(priceBreakdown.originalBasePrice || 0),
+                    slotSurcharge: Number(priceBreakdown.slotSurcharge || 0),
+                    consumableTotal: Number(priceBreakdown.consumableTotal || 0),
+                    couponDiscount: Number(priceBreakdown.couponDiscount || 0),
+                    fasterServiceCharge: Number(priceBreakdown.fasterServiceCharge || 0),
+                    taxAmount: Number(priceBreakdown.taxAmount || 0),
+                    totalPrice: finalPayable
+                },
+                appliedCoupon: safeAppliedCoupon,
+                patients,
+                schedule,
+                address,
+                assessmentLocation: resolvedAssessmentLocation, // 👈 Never undefined!
+                selectedConsumables,
+                paymentMethod: activePaymentMethod,
+                paymentStatus: finalPayable === 0 ? 'Paid' : 'Pending',
+                status: 'Confirmed',
+                subscriptionDetails: { isSubscriptionApplied, userSubscriptionId, planName }
             });
 
-            if (activeSub && activeSub.planId) {
-                planName = activeSub.planId.name || "Premium Care Plan";
-                userSubscriptionId = activeSub._id;
+            // Update Coupon Usage
+            if (safeAppliedCoupon) {
+                try {
+                    const coupon = await Coupon.findById(safeAppliedCoupon.couponId);
+                    if (coupon) {
+                        if (!coupon.usedBy) coupon.usedBy = [];
+                        const userIndex = coupon.usedBy.findIndex(u => u.userId && u.userId.toString() === req.user.id.toString());
+                        if (userIndex > -1) {
+                            coupon.usedBy[userIndex].usageCount += 1;
+                        } else {
+                            coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
+                        }
+                        await coupon.save();
+                    }
+                } catch (e) {}
             }
+
+            // Deduct subscription count if applied
+            if (isSubscriptionApplied) {
+                await deductBenefitCount(req.user.id, 'freeNurseVisitsCount');
+            }
+            if (isFasterService === true || isFasterService === 'true') {
+                await deductBenefitCount(req.user.id, 'freeNurseDeliveriesCount');
+            }
+
+            try {
+                await notifyAdminsAndVendor(
+                    cleanNurseId,
+                    'nurse',
+                    finalPayable === 0 ? "New Nurse Booking Confirmed (Free)!" : "New Nurse Booking Requested (COD)!",
+                    `Nursing service #${bId} has been confirmed.`,
+                    { bookingId: booking._id.toString(), type: 'new_nurse_booking' }
+                );
+            } catch (e) {}
+
+            return res.status(201).json({ success: true, message: "Booking confirmed successfully!", data: booking });
+        }
+
+        // =========================================================================
+        // CASE B: PAID ONLINE BOOKING (RAZORPAY ORDER)
+        // =========================================================================
+        let rzpOrder;
+        try {
+            rzpOrder = await createRazorpayOrder(finalPayable, `receipt_${bId}`);
+        } catch (rzpErr) {
+            return res.status(400).json({
+                success: false,
+                message: `Payment gateway error: ${rzpErr.message || "Failed to initialize Razorpay order."}`
+            });
         }
 
         const booking = await NurseBooking.create({
             userId: req.user.id,
-            nurseId,
-            serviceId: isPackage ? null : serviceId,
-            packageId: isPackage ? packageId : null,
+            nurseId: cleanNurseId,
+            serviceId: isPkg ? null : cleanServiceId,
+            packageId: isPkg ? cleanPackageId : null,
             bookingId: bId,
             serviceDetails: {
-                title: isPackage ? item.packageName : item.title,
-                type: isPackage ? "Package Bundle" : item.type,
-                duration: schedule.duration,
-                basePrice: item.pricing.oneDay.final
+                title: isPkg ? (item.packageName || "Package Bundle") : (item.title || "Daily Care"),
+                type: isPkg ? "Package Bundle" : (item.type || "Daily Care"),
+                duration: schedule?.duration || "One day One Time",
+                basePrice: item.pricing?.oneDay?.final || 0
             },
             priceBreakdown: {
                 baseServicePrice: Number(priceBreakdown.baseServicePrice || 0),
-                originalBasePrice: Number(priceBreakdown.originalBasePrice || 0), 
+                originalBasePrice: Number(priceBreakdown.originalBasePrice || 0),
                 slotSurcharge: Number(priceBreakdown.slotSurcharge || 0),
                 consumableTotal: Number(priceBreakdown.consumableTotal || 0),
                 couponDiscount: Number(priceBreakdown.couponDiscount || 0),
                 fasterServiceCharge: Number(priceBreakdown.fasterServiceCharge || 0),
                 taxAmount: Number(priceBreakdown.taxAmount || 0),
-                totalPrice: Number(priceBreakdown.totalPrice || 0)
+                totalPrice: finalPayable
             },
-            appliedCoupon: appliedCoupon ? {
-                couponId: appliedCoupon.couponId,
-                discountAmount: priceBreakdown.couponDiscount,
-                couponName: appliedCoupon.couponName
-            } : null,
+            appliedCoupon: safeAppliedCoupon,
             patients,
             schedule,
             address,
-            assessmentLocation,
+            assessmentLocation: resolvedAssessmentLocation, // 👈 Never undefined!
             selectedConsumables,
             paymentMethod: activePaymentMethod,
             paymentStatus: 'Pending',
-            status: activePaymentMethod === 'COD' ? 'Confirmed' : 'Pending',
+            status: 'Pending',
             subscriptionDetails: { isSubscriptionApplied, userSubscriptionId, planName }
         });
-
-        if (activePaymentMethod === 'COD') {
-            if (appliedCoupon && appliedCoupon.couponId) {
-                const coupon = await Coupon.findOne({ _id: appliedCoupon.couponId, vendorType: { $in: ['Nurse', 'All'] } });
-                if (coupon) {
-                    const userIndex = coupon.usedBy.findIndex(u => u.userId.toString() === req.user.id.toString());
-                    if (userIndex > -1) {
-                        coupon.usedBy[userIndex].usageCount += 1;
-                    } else {
-                        coupon.usedBy.push({ userId: req.user.id, usageCount: 1 });
-                    }
-                    await coupon.save();
-                }
-            }
-
-            await deductBenefitCount(req.user.id, 'freeNurseVisitsCount');
-            if (isFasterService) {
-                await deductBenefitCount(req.user.id, 'freeNurseDeliveriesCount');
-            }
-
-            await notifyAdminsAndVendor(
-                nurseId,
-                'nurse',
-                "New Nurse Booking Requested (COD)!",
-                `COD Nursing service #${bId} has been requested.`,
-                { bookingId: booking._id.toString(), type: 'new_nurse_booking' }
-            );
-
-            return res.status(201).json({ success: true, message: "Booking confirmed!", data: booking });
-        }
 
         res.status(201).json({
             success: true,
@@ -770,12 +908,13 @@ const placeNurseBooking = async (req, res) => {
             appointmentId: booking._id,
             bookingId: bId
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+    } catch (error) { 
+        console.error("❌ [PLACE NURSE BOOKING FATAL ERROR]:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal server error" }); 
+    }
 };
 
-
-
-// 🚨 NEW CONTROLLER: VERIFY NURSE BOOKING PAYMENT SIGNATURE
 // endpoint: POST /user/nurse/verify-payment
 const verifyNursePayment = async (req, res) => {
     try {
@@ -798,7 +937,7 @@ const verifyNursePayment = async (req, res) => {
         booking.status = 'Confirmed';
         booking.paymentStatus = 'Paid';
         booking.paymentMethod = 'Online';
-        booking.paymentDetails = rzpDetails; 
+        booking.paymentDetails = rzpDetails;
         await booking.save();
 
         if (booking.appliedCoupon && booking.appliedCoupon.couponId) {
@@ -839,8 +978,6 @@ const verifyNursePayment = async (req, res) => {
     }
 };
 
-
-
 // 6. TRACKING STATUS (Populated Response)
 const getAppointmentStatus = async (req, res) => {
     try {
@@ -852,26 +989,25 @@ const getAppointmentStatus = async (req, res) => {
         if (!booking) return res.status(404).json({ message: "Booking not found" });
 
         // Calculate ETA Simulation (Figma: "On the way • 25 mins arrival")
-        const eta = "25 mins"; 
+        const eta = "25 mins";
         const distance = "3.2 km";
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             data: {
                 ...booking._doc,
                 eta,
                 distance
-            } 
+            }
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
- 
 // 4. UPLOAD PRESCRIPTION (Figma Screen: Add Prescription)
 const uploadBookingPrescription = async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: "Please upload a prescription" });
-        
+
         const booking = await NurseBooking.findByIdAndUpdate(
             req.params.id,
             { prescriptionImage: req.file.path },
@@ -881,15 +1017,12 @@ const uploadBookingPrescription = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-
-
-
 const getMyNurseBookings = async (req, res) => {
     try {
         // Query params se page aur limit lein (Default: page 1, limit 10)
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
-        
+
         // Skip calculate karein (ex: page 2 pe jana hai to 10 records skip honge)
         const skip = (page - 1) * limit;
 
@@ -902,21 +1035,18 @@ const getMyNurseBookings = async (req, res) => {
             .skip(skip)
             .limit(limit);
 
-        res.json({ 
-            success: true, 
-            count: bookings.length, 
+        res.json({
+            success: true,
+            count: bookings.length,
             totalItems: total, // Total kitne records hain
             totalPages: Math.ceil(total / limit), // Kitne total pages banenge
             currentPage: page,
-            data: bookings 
+            data: bookings
         });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+    } catch (error) {
+        res.status(500).json({ message: error.message });
     }
 };
-
-
-
 
 const rateNurseService = async (req, res) => {
     try {
@@ -944,8 +1074,6 @@ const rateNurseService = async (req, res) => {
         res.json({ success: true, message: "Thank you for your feedback!" });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-
-
 
 // 1. SEARCH/FILTER NURSES (Figma: Nursing Care/Nurse list)
 // POST /user/nurse/search
@@ -1092,11 +1220,11 @@ const getNursePackagesList = async (req, res) => {
     try {
         const { nurseId } = req.query; // Optional filter by specific Nurse bureau
         let query = { status: 'Approved', isActive: true };
-        
+
         if (nurseId) {
             query.nurseId = nurseId;
         }
-        
+
         // 🌟 optimization: Select only required fields to match Figma card
         const packages = await NursePackage.find(query)
             .select('_id packageName includedServices') // pricing aur bakis keys remove kar di hain
@@ -1105,11 +1233,11 @@ const getNursePackagesList = async (req, res) => {
                 select: 'description' // Figma bullet points ke liye sirf description select kiya hai
             })
             .lean();
-            
-        res.json({ 
-            success: true, 
-            count: packages.length, 
-            data: packages 
+
+        res.json({
+            success: true,
+            count: packages.length,
+            data: packages
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -1121,17 +1249,17 @@ const getNursePackagesList = async (req, res) => {
 const getNursePackageDetails = async (req, res) => {
     try {
         const { packageId } = req.params;
-        
+
         const nursePackage = await NursePackage.findById(packageId)
             .populate('nurseId', 'name profileImage rating city address location speciality experienceYears')
             .populate('includedServices')
             .populate('consumablesUsed.masterItemId')
             .lean();
-            
+
         if (!nursePackage || nursePackage.status !== 'Approved') {
             return res.status(404).json({ success: false, message: "Package not found or inactive by admin." });
         }
-        
+
         res.json({ success: true, data: nursePackage });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -1146,7 +1274,7 @@ const getMedicalConditions = async (req, res) => {
         const specialities = await Nurse.distinct('speciality', {
             profileStatus: 'Approved',
             isActive: true,
-            speciality: { $nin: [null, ""] } 
+            speciality: { $nin: [null, ""] }
         });
 
         // Filter out empty/null values
@@ -1184,9 +1312,9 @@ const getGlobalServicesList = async (req, res) => {
             .lean();
 
         // Step 1: Filter only those services whose associated Nurse is Approved & Active
-        const validServices = services.filter(service => 
-            service.nurseId && 
-            service.nurseId.profileStatus === 'Approved' && 
+        const validServices = services.filter(service =>
+            service.nurseId &&
+            service.nurseId.profileStatus === 'Approved' &&
             service.nurseId.isActive === true &&
             (service.status === 'Approved' || !service.status)
         );
@@ -1196,7 +1324,7 @@ const getGlobalServicesList = async (req, res) => {
         validServices.forEach(s => {
             const title = s.title;
             const price = s.pricing?.oneDay?.final || 0;
-            
+
             if (!uniqueMap[title]) {
                 uniqueMap[title] = {
                     _id: s._id,
@@ -1215,9 +1343,9 @@ const getGlobalServicesList = async (req, res) => {
 
         res.json({ success: true, count: data.length, data });
 
-    } catch (error) { 
+    } catch (error) {
         console.error("getGlobalServicesList Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1236,12 +1364,12 @@ const getProvidersForService = async (req, res) => {
             title: new RegExp(`^${serviceTitle.trim()}$`, 'i'),
             status: 'Approved' // Assures service is approved by admin
         })
-        .populate({
-            path: 'nurseId',
-            match: { profileStatus: 'Approved', isActive: true }, // Assures provider is active & approved
-            select: 'name profileImage rating city experienceYears location isOnline'
-        })
-        .lean();
+            .populate({
+                path: 'nurseId',
+                match: { profileStatus: 'Approved', isActive: true }, // Assures provider is active & approved
+                select: 'name profileImage rating city experienceYears location isOnline'
+            })
+            .lean();
 
         // Filter and map valid active providers
         const validProviders = serviceProviders
@@ -1261,15 +1389,15 @@ const getProvidersForService = async (req, res) => {
                 }
             }));
 
-        res.json({ 
-            success: true, 
-            count: validProviders.length, 
-            data: validProviders 
+        res.json({
+            success: true,
+            count: validProviders.length,
+            data: validProviders
         });
 
-    } catch (error) { 
+    } catch (error) {
         console.error("getProvidersForService Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1293,7 +1421,7 @@ const cancelNurseBooking = async (req, res) => {
 
         booking.status = 'Cancelled';
         booking.cancelReason = reason || "Cancelled by User";
-        
+
         booking.priceBreakdown.cancellationFeeApplied = policyResult.cancellationFee;
         booking.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
 
@@ -1323,8 +1451,10 @@ const cancelNurseBooking = async (req, res) => {
 
 
 
-module.exports = { getNurses,getNurseDetails,searchNursesAndServices,searchNurses,checkoutNurseBooking, placeNurseBooking,verifyNursePayment,checkRangeAvailability, getNurseAvailability,getMyNurseBookings, rateNurseService, rateNurseBooking,
-    getAppointmentStatus, 
-    uploadBookingPrescription,getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon,getNursePackagesList,
-    getNursePackageDetails,getMedicalConditions,
-getGlobalServicesList,getProvidersForService,cancelNurseBooking };
+module.exports = {
+    getNurses, getNurseDetails, searchNursesAndServices, searchNurses, checkoutNurseBooking, placeNurseBooking, verifyNursePayment, checkRangeAvailability, getNurseAvailability, getMyNurseBookings, rateNurseService, rateNurseBooking,
+    getAppointmentStatus,
+    uploadBookingPrescription, getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons, validateCoupon, getNursePackagesList,
+    getNursePackageDetails, getMedicalConditions,
+    getGlobalServicesList, getProvidersForService, cancelNurseBooking
+};

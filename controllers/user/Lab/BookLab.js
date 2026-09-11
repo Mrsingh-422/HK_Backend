@@ -1186,9 +1186,7 @@ const validateLabCoupon = async (req, res) => {
 
 
 // 3. FINAL CHECKOUT (Integrating Delivery, Coupons & Razorpay Payments)
-// Replacing checkoutLabBooking in controllers/user/Lab/BookLab.js
 // --- 3. FINAL CHECKOUT (Supporting Patient-to-Test & Patient-to-Address Mapping) ---
-// --- 3. FINAL CHECKOUT (Updated with COD and Mapped Cart checks) ---
 const checkoutLabBooking = async (req, res) => {
     try {
         const { 
@@ -1438,9 +1436,6 @@ const getUniqueMainCategories = async (req, res) => {
     }
 };
 
-
-
-
 // Helper to map patient IDs to full objects
 async function mapPatients(userId, pids) {
     const user = await User.findById(userId);
@@ -1451,8 +1446,6 @@ async function mapPatients(userId, pids) {
     });
 }
 
-// 4. INITIATE BOOKING (Direct Booking - Replacing bookLabTest)
-// --- 4. INITIATE BOOKING (Direct Booking - Supporting Patient-to-Test & Address Mapping) ---
 // --- 4. INITIATE BOOKING (Direct Booking - Supporting COD checks) ---
 const bookLabTest = async (req, res) => {
     try {

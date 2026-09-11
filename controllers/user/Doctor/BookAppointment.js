@@ -271,10 +271,7 @@ const validateCoupon = async (req, res) => {
     }
 };
 
-
-
 // for condtional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
-// --- GET CHECKOUT SUMMARY (Updated with COD Check) ---
 const getCheckoutSummary = async (req, res) => {
     try {
         let body = { ...req.body };
@@ -299,8 +296,8 @@ const getCheckoutSummary = async (req, res) => {
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) return res.status(404).json({ message: "Doctor not found" });
 
-        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
-        const isCodAllowed = await isCodEnabled('Doctor');
+        // 🚀 FIX: req.user.id pass kiya (Subscribed User ke liye COD hamesha TRUE aayega!)
+        const isCodAllowed = await isCodEnabled('Doctor', req.user ? req.user.id : null);
 
         // FAMILY MEMBERS VERIFICATION LOGIC
         const user = await User.findById(req.user.id).select('familyMember');
@@ -347,10 +344,13 @@ const getCheckoutSummary = async (req, res) => {
                 userId: req.user.id,
                 status: 'Active',
                 endDate: { $gt: new Date() }
-            }).populate('planId', 'name');
+            }).populate({
+                path: 'planId',
+                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+            });
 
-            if (activeSub) {
-                planName = activeSub.planId?.name || "Premium Care Plan";
+            if (activeSub && activeSub.planId) {
+                planName = activeSub.planId.name || "Premium Care Plan";
                 userSubscriptionId = activeSub._id;
             }
         }
@@ -396,10 +396,10 @@ const getCheckoutSummary = async (req, res) => {
                 servicesTotal,
                 discount,
                 subtotal,
-                totalPayable: subtotal - discount,
+                totalPayable: Math.max(0, subtotal - discount),
                 patients,
                 address: consultationType === 'Home Visit' ? address : null,
-                isCodAvailable: isCodAllowed, // 👈 Dynamic indicator added
+                isCodAvailable: isCodAllowed, // 👈 Subscribed user ke liye HAMESHA TRUE
                 subscriptionDetails: {
                     isSubscriptionApplied, 
                     userSubscriptionId,
@@ -413,9 +413,7 @@ const getCheckoutSummary = async (req, res) => {
 };
 
 
-// --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY ORDER CREATION) ---
-// Mapped only for Independent Doctors (Role check added) [1]
-// --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY & COD LOCKS) ---
+// 2. BOOK APPOINTMENT (Corrected with req.user.id)
 const bookAppointment = async (req, res) => {
     try {
         console.log("Incoming Appointment Booking Request:", req.body);
@@ -473,9 +471,9 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 🚨 STRICTOR COD VALIDATION
+        // 🚀 FIX: req.user.id pass kiya (Subscribed User ka COD block nahi hoga!)
         if (activePaymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Doctor');
+            const isCodAllowed = await isCodEnabled('Doctor', req.user.id);
             if (!isCodAllowed) {
                 return res.status(400).json({
                     success: false,
@@ -527,6 +525,7 @@ const bookAppointment = async (req, res) => {
         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', rawDoctorFee);
         
         if (docBenefit.isApplied) {
+            baseFee = 0; 
             isSubscriptionApplied = true;
 
             const UserSubscription = require('../../../models/UserSubscription');
@@ -534,10 +533,13 @@ const bookAppointment = async (req, res) => {
                 userId: req.user.id,
                 status: 'Active',
                 endDate: { $gt: new Date() }
-            }).populate('planId', 'name');
+            }).populate({
+                path: 'planId',
+                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+            });
 
-            if (activeSub) {
-                planName = activeSub.planId?.name || "Premium Care Plan";
+            if (activeSub && activeSub.planId) {
+                planName = activeSub.planId.name || "Premium Care Plan";
                 userSubscriptionId = activeSub._id;
             }
         }
@@ -570,8 +572,8 @@ const bookAppointment = async (req, res) => {
                 
                 totalAmount: finalPayable,
                 bookingId: tempBookingId,
-                status: 'Confirmed', // Confirmed instantly on submit
-                paymentStatus: 'Pending',
+                status: 'Confirmed',
+                paymentStatus: finalPayable === 0 ? 'Paid' : 'Pending',
                 transactionId: `FREE-${tempBookingId}`,
                 'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
 
@@ -655,7 +657,6 @@ const bookAppointment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
 
 // --- NEW METHOD: VERIFY PAYMENT AND CONFIRM APPOINTMENT ---
 // endpoint: POST /user/doctors/verify-payment
