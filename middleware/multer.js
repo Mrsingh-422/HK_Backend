@@ -3,6 +3,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+const { backupUploadedFilesToMongo } = require('./storageSync'); // Import the backup function
+
 // Helper to create directory if not exists
 const ensureDir = (dir) => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -961,56 +963,153 @@ const issueUploads = multer({
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+const withAutoBackup = (target) => {
+    if (!target) return target;
+
+    // 1. Agar target Multer instance hai (jisme .single, .fields, .array hote hain)
+    if (typeof target.single === 'function' && typeof target.fields === 'function') {
+        return {
+            single: (fieldName) => withAutoBackup(target.single(fieldName)),
+            array: (fieldName, maxCount) => withAutoBackup(target.array(fieldName, maxCount)),
+            fields: (fieldsArray) => withAutoBackup(target.fields(fieldsArray)),
+            any: () => withAutoBackup(target.any()),
+            none: () => withAutoBackup(target.none())
+        };
+    }
+
+    // 2. Agar target direct middleware function hai (req, res, next)
+    if (typeof target === 'function') {
+        return (req, res, next) => {
+            target(req, res, async (err) => {
+                if (err) return next(err);
+                if (req.file || req.files) {
+                    await backupUploadedFilesToMongo(req);
+                }
+                next();
+            });
+        };
+    }
+
+    return target;
+};
+
+// module.exports = { 
+//     hospitalUploads,
+//     contentUploads,
+//     doctorDocUploads,
+//     userReportUploads,
+//     labDocUploads,         // For Lab Step 2
+//     pharmacyDocUploads,    // For Pharmacy Step 2
+//     nurseDocUploads,       // For Nurse Step 2
+//     ambulanceDocUploads,
+//     labServiceUploads,     // For Lab Tests/Packages
+//     driverDocUploads,
+//     prescriptionUploads,
+//     bannerUploads,
+//     articleUploads,
+//     adUploads,
+//     userProfileUpload,
+//     insuranceUpload,
+//     lockerUpload,
+//     pharmacyPrescriptionUploads,pharmacyReturnProofUploads,
+//     uploadExcel,
+
+//     fireHQUploads,
+//     fireStationUploads,
+//     fireStaffUploads,
+//      policeHQUploads,
+//     policeStationUploads,
+//     policeStaffUploads,
+//     fireCaseUploads,
+//     categoryTestUploads,
+//     nurseServiceUploads,
+//     careCSVUpload,
+//     fireStaffUpdateUploads, // Screen 92: Update Staff Profile
+//     fireStationUpdateUploads, // Screen 21: Update Station Profile
+//     fireEvidenceUploads, // Screen 101: Upload Evidence
+//     fireLeaveUploads, // Screen: New Request
+//     nursePackageUploads, // Screen: New Package
+//     serviceUpload, // Screen: Add Service
+//     termsUpload,
+//     doctorReportUploads,
+//     policeEvidenceUploads,
+//     dietPlanUploads,
+//     comboOfferUploads,
+//     nurseProgressUpload,
+//     pharmacyDeliveryUpload,
+
+//     nursingPrescriptionUploads,
+//     labReportUpload,
+//     docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,insuranceCardUploads,
+//     insuranceApprovalUpload,
+//     maintenanceUpload,
+//     issueUploads
+
+// };  
+
 module.exports = { 
-    hospitalUploads,
-    contentUploads,
-    doctorDocUploads,
-    userReportUploads,
-    labDocUploads,         // For Lab Step 2
-    pharmacyDocUploads,    // For Pharmacy Step 2
-    nurseDocUploads,       // For Nurse Step 2
-    ambulanceDocUploads,
-    labServiceUploads,     // For Lab Tests/Packages
-    driverDocUploads,
-    prescriptionUploads,
-    bannerUploads,
-    articleUploads,
-    adUploads,
-    userProfileUpload,
-    insuranceUpload,
-    lockerUpload,
-    pharmacyPrescriptionUploads,pharmacyReturnProofUploads,
-    uploadExcel,
-
-    fireHQUploads,
-    fireStationUploads,
-    fireStaffUploads,
-     policeHQUploads,
-    policeStationUploads,
-    policeStaffUploads,
-    fireCaseUploads,
-    categoryTestUploads,
-    nurseServiceUploads,
-    careCSVUpload,
-    fireStaffUpdateUploads, // Screen 92: Update Staff Profile
-    fireStationUpdateUploads, // Screen 21: Update Station Profile
-    fireEvidenceUploads, // Screen 101: Upload Evidence
-    fireLeaveUploads, // Screen: New Request
-    nursePackageUploads, // Screen: New Package
-    serviceUpload, // Screen: Add Service
-    termsUpload,
-    doctorReportUploads,
-    policeEvidenceUploads,
-    dietPlanUploads,
-    comboOfferUploads,
-    nurseProgressUpload,
-    pharmacyDeliveryUpload,
-
-    nursingPrescriptionUploads,
-    labReportUpload,
-    docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,insuranceCardUploads,
-    insuranceApprovalUpload,
-    maintenanceUpload,
-    issueUploads
-
-};  
+    hospitalUploads: withAutoBackup(hospitalUploads),
+    contentUploads: withAutoBackup(contentUploads),
+    doctorDocUploads: withAutoBackup(doctorDocUploads),
+    userReportUploads: withAutoBackup(userReportUploads),
+    labDocUploads: withAutoBackup(labDocUploads),
+    pharmacyDocUploads: withAutoBackup(pharmacyDocUploads),
+    nurseDocUploads: withAutoBackup(nurseDocUploads),
+    ambulanceDocUploads: withAutoBackup(ambulanceDocUploads),
+    labServiceUploads: withAutoBackup(labServiceUploads),
+    driverDocUploads: withAutoBackup(driverDocUploads),
+    prescriptionUploads: withAutoBackup(prescriptionUploads),
+    bannerUploads: withAutoBackup(bannerUploads),
+    articleUploads: withAutoBackup(articleUploads),
+    adUploads: withAutoBackup(adUploads),
+    userProfileUpload: withAutoBackup(userProfileUpload),
+    insuranceUpload: withAutoBackup(insuranceUpload),
+    lockerUpload: withAutoBackup(lockerUpload),
+    pharmacyPrescriptionUploads: withAutoBackup(pharmacyPrescriptionUploads),
+    pharmacyReturnProofUploads: withAutoBackup(pharmacyReturnProofUploads),
+    uploadExcel: uploadExcel, // Excel ko compress nahi karna
+    fireHQUploads: withAutoBackup(fireHQUploads),
+    fireStationUploads: withAutoBackup(fireStationUploads),
+    fireStaffUploads: withAutoBackup(fireStaffUploads),
+    policeHQUploads: withAutoBackup(policeHQUploads),
+    policeStationUploads: withAutoBackup(policeStationUploads),
+    policeStaffUploads: withAutoBackup(policeStaffUploads),
+    fireCaseUploads: withAutoBackup(fireCaseUploads),
+    categoryTestUploads: withAutoBackup(categoryTestUploads),
+    nurseServiceUploads: withAutoBackup(nurseServiceUploads),
+    careCSVUpload: careCSVUpload,
+    fireStaffUpdateUploads: withAutoBackup(fireStaffUpdateUploads),
+    fireStationUpdateUploads: withAutoBackup(fireStationUpdateUploads),
+    fireEvidenceUploads: withAutoBackup(fireEvidenceUploads),
+    fireLeaveUploads: withAutoBackup(fireLeaveUploads),
+    nursePackageUploads: withAutoBackup(nursePackageUploads),
+    serviceUpload: withAutoBackup(serviceUpload),
+    termsUpload: termsUpload,
+    doctorReportUploads: withAutoBackup(doctorReportUploads),
+    policeEvidenceUploads: withAutoBackup(policeEvidenceUploads),
+    dietPlanUploads: withAutoBackup(dietPlanUploads),
+    comboOfferUploads: withAutoBackup(comboOfferUploads),
+    nurseProgressUpload: withAutoBackup(nurseProgressUpload),
+    pharmacyDeliveryUpload: withAutoBackup(pharmacyDeliveryUpload),
+    nursingPrescriptionUploads: withAutoBackup(nursingPrescriptionUploads),
+    labReportUpload: withAutoBackup(labReportUpload),
+    docPrescriptionUpload: withAutoBackup(docPrescriptionUpload),
+    hospitalPrescriptionUploads: withAutoBackup(hospitalPrescriptionUploads),
+    hospitalDischargeFieldsUpload: withAutoBackup(hospitalDischargeFieldsUpload),
+    insuranceCardUploads: withAutoBackup(insuranceCardUploads),
+    insuranceApprovalUpload: withAutoBackup(insuranceApprovalUpload),
+    maintenanceUpload: withAutoBackup(maintenanceUpload),
+    issueUploads: withAutoBackup(issueUploads)
+};

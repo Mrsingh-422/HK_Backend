@@ -11,6 +11,8 @@ const socketIo = require('socket.io');
 const rateLimit = require('express-rate-limit');
 const chatSocketHandler = require('./utils/chatSocket');
 
+const { serveAndSyncFiles } = require('./middleware/storageSync');
+
 
 ///////// For bypassing the Windows DNS bug //////////
 const dns = require('node:dns/promises'); // For bypassing the Windows DNS bug
@@ -243,8 +245,8 @@ const autoSyncFromRender = async (req, res, next) => {
 };
 
 // Static & Auto-sync Routes
-app.use('/public/uploads', autoSyncFromRender);
-app.use('/uploads', autoSyncFromRender);
+app.use('/public/uploads', serveAndSyncFiles);
+app.use('/uploads', serveAndSyncFiles);
 app.use('/public', express.static(path.join(__dirname, 'public')));
 // =========================================================================
 
