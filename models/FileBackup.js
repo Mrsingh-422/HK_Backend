@@ -10,7 +10,7 @@ const fileBackupSchema = new mongoose.Schema({
     fileName: { type: String, required: true },
     mimeType: { type: String, required: true },
     fileData: { type: Buffer, required: true }, // Binary file data
-    size: { type: Number }
+    size: { type: Number }, // File size in bytes
 }, { timestamps: true });
 
 module.exports = mongoose.model('FileBackup', fileBackupSchema);
