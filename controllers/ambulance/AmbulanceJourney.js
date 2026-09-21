@@ -1,26 +1,41 @@
 const Appointment = require('../../models/Appointment');
+const Booking = require('../../models/AmbulanceBooking');
 const Ambulance = require('../../models/Ambulance');
 
 // --- 1. START RIDE (Screenshot 37) ---
 const startAmbulanceRide = async (req, res) => {
     try {
-        const { appointmentId } = req.body;
+        const { bookingId } = req.body;
+        const driverId = req.user.id;
         
-        const appointment = await Appointment.findById(appointmentId);
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Appointment/Trip record not found." });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = isObjectId ? { _id: bookingId } : { bookingId };
+
+        const booking = await Booking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Ambulance trip record not found." });
         }
 
-        if (!appointment.tracking) appointment.tracking = {};
-        appointment.tracking.status = 'Ride Started';
-        appointment.tracking.rideStartTime = new Date();
-        appointment.status = 'In-Progress';
+        booking.status = 'En-Route';
+        booking.trackingTimeline.push({
+            status: 'En-Route',
+            timestamp: new Date(),
+            note: "Ambulance driver started the journey to hospital."
+        });
         
-        // Mark ambulance as On Duty (Busy)
-        await Ambulance.findByIdAndUpdate(req.user.id, { $set: { availableForEmergency: false } });
+        // Driver busy
+        await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: false } });
+        await booking.save();
 
-        await appointment.save();
-        res.json({ success: true, message: "Ride started. Patient and Fleet tracking active.", data: appointment });
+        // Sync linked hospital appointment if exists
+        if (booking.bookingId) {
+            await Appointment.findOneAndUpdate(
+                { transactionId: booking.bookingId },
+                { $set: { 'tracking.status': 'En-Route', 'tracking.rideStartTime': new Date() } }
+            );
+        }
+
+        res.json({ success: true, message: "Ride started. Live patient and fleet tracking active.", data: booking });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
@@ -58,7 +73,7 @@ const completeAmbulanceRide = async (req, res) => {
 */
 const updateAmbulanceGPS = async (req, res) => {
     try {
-        const { lat, lng, appointmentId, bookingId } = req.body;
+        const { lat, lng, bookingId } = req.body;
         const driverId = req.user.id;
 
         if (!lat || !lng) {
@@ -73,25 +88,34 @@ const updateAmbulanceGPS = async (req, res) => {
             $set: { location: { lat: numericLat, lng: numericLng } }
         });
 
-        const activeRef = appointmentId || bookingId;
+        // B. Update trip-specific position in AmbulanceBooking
+        if (bookingId) {
+            const isObjectId = mongoose.isValidObjectId(bookingId);
+            const query = isObjectId ? { _id: bookingId } : { bookingId };
 
-        // B. Update trip-specific position (CastError-Proof hybrid lookup)
-        if (activeRef) {
-            const isObjectId = mongoose.isValidObjectId(activeRef);
-            const query = isObjectId ? { _id: activeRef } : { transactionId: activeRef };
-
-            await Appointment.findOneAndUpdate(query, {
+            await Booking.findOneAndUpdate(query, {
                 $set: {
-                    'tracking.liveLocation': {
-                        lat: numericLat,
-                        lng: numericLng,
-                        lastUpdated: new Date()
-                    }
+                    'pickupLocation.lat': numericLat,
+                    'pickupLocation.lng': numericLng
                 }
             });
+
+            // Also update linked hospital admission if exists
+            await Appointment.findOneAndUpdate(
+                { transactionId: bookingId },
+                {
+                    $set: {
+                        'tracking.liveLocation': {
+                            lat: numericLat,
+                            lng: numericLng,
+                            lastUpdated: new Date()
+                        }
+                    }
+                }
+            );
         }
 
-        res.json({ success: true, message: "Real-time location synced with System & User" });
+        res.json({ success: true, message: "Real-time GPS location synced with fleet and patient." });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }

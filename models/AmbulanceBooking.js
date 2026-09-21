@@ -60,7 +60,7 @@ const ambulanceBookingSchema = new mongoose.Schema({
     // Tracking
     status: { 
         type: String, 
-        enum: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route', 'Delivered', 'Cancelled'], 
+        enum: ['Searching','Pending', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route', 'Delivered', 'Cancelled'], 
         default: 'Searching' 
     },
     
@@ -114,7 +114,7 @@ const ambulanceBookingSchema = new mongoose.Schema({
     // 👇 NEW: Payment Lifecycle
     paymentStatus: { 
     type: String, 
-    enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], // 👈 'Refund-Initiated' added
+    enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'],
     default: 'Pending' 
 },
     paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'Online' },

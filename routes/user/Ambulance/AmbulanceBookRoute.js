@@ -10,7 +10,8 @@ const {
     getUserNumbers, uploadIncidentPhoto, getLiveTracking,
     getMyAmbulanceBookings, cancelAmbulanceBooking,
     getAmbulanceReviewsList,rateAmbulanceBooking,
-    shortRegisterAndBookAccidental
+    shortRegisterAndBookAccidental,
+    escalateAccidentalSos
     
 } = require('../../../controllers/user/Ambulance/AmbulanceBook');
 
@@ -66,6 +67,8 @@ router.get('/reviews/:id', getAmbulanceReviewsList);
 router.post('/rate', protect('user'), rateAmbulanceBooking);
 
 router.post('/accidental/short-book', shortRegisterAndBookAccidental);
+
+router.post('/sos/escalate/:bookingId', protect('user'), escalateAccidentalSos);
 
 
 module.exports = router;

@@ -1,24 +1,35 @@
 // utils/cronJobs.js
 const cron = require('node-cron');
 const NursingPrescriptionRequest = require('../models/NursingPrescriptionRequest');
+const UserSubscription = require('../models/UserSubscription');
 
 const initCronJobs = () => {
-    // Ye cron scheduler har ghante (at minute 0) run karega
+    // 1. Hourly check for expired prescription requests
     cron.schedule('0 * * * *', async () => {
         try {
             const now = new Date();
-            
-            // Un sabhi entries ko 'Expired' mark karega jinka 6 hours time nikal chuka hai
-            const result = await NursingPrescriptionRequest.updateMany(
+            await NursingPrescriptionRequest.updateMany(
                 { status: 'Broadcasted', expiresAt: { $lte: now } },
                 { $set: { status: 'Expired' } }
             );
-            
+        } catch (error) {
+            console.error("[Cron Job Error]:", error);
+        }
+    });
+
+    // 🚀 2. Daily Midnight check: Mark ended subscriptions as 'Expired'
+    cron.schedule('0 0 * * *', async () => {
+        try {
+            const now = new Date();
+            const result = await UserSubscription.updateMany(
+                { status: 'Active', endDate: { $lte: now } },
+                { $set: { status: 'Expired' } }
+            );
             if (result.modifiedCount > 0) {
-                console.log(`[Cron Job]: Archived ${result.modifiedCount} expired prescription requests.`);
+                console.log(`\x1b[33m[Cron Job]: Archived ${result.modifiedCount} expired user subscriptions.\x1b[0m`);
             }
         } catch (error) {
-            console.error("[Cron Job Error]: Failed to update expired requests:", error);
+            console.error("[Subscription Cron Job Error]:", error);
         }
     });
 };
