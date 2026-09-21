@@ -75,54 +75,81 @@ const getNearbyHospitals = async (req, res) => {
 };
 
 
-// --- 3. FIND NEAREST AMBULANCES (POST with Distance) ---
+// =========================================================================
+// 📞 REUSABLE HELPER: GOVERNMENT EMERGENCY HELPLINES DICTIONARY
+// =========================================================================
+const getEmergencyHelplinesData = () => ({
+    govtAmbulance: {
+        number: "108",
+        title: "Government Free Emergency Ambulance (108)",
+        description: "Direct line to State Emergency Medical Response"
+    },
+    nationalEmergency: {
+        number: "112",
+        title: "National Emergency Control Room (112)",
+        description: "All-in-One Police, Fire & Medical Helpline"
+    },
+    policeControlRoom: {
+        number: "100",
+        title: "Police Control Room (100)",
+        description: "Highway patrol & traffic emergency unit"
+    },
+    healthKangarooHelpline: {
+        number: "+919876543210",
+        title: "Health Kangaroo 24/7 Support Desk",
+        description: "Fleet Management & Escalation Control"
+    }
+});
+
+// =========================================================================
+// 1. GET NEAREST AMBULANCES (With 0-Availability Helpline Fallback)
+// =========================================================================
 const getNearestAmbulances = async (req, res) => {
     try {
         const { lat, lng, serviceType, vehicleType } = req.body; 
 
-        // 🚨 LAYER 1: Strictly query ONLY Approved, Active, Online & Free Drivers
         let query = { 
             isActive: true, 
             profileStatus: 'Approved',
-            isOnline: true,               // 👈 Driver Duty par Online hona chahiye
-            availableForEmergency: true   // 👈 Driver kisi ride par busy nahi hona chahiye
+            isOnline: true,
+            availableForEmergency: true
         };
         
         if (vehicleType && vehicleType !== 'All') {
             query.vehicleType = vehicleType;
         }
 
-        // 🚨 LAYER 2: Exclude ambulances that currently have an ongoing active trip
-        const busyAmbulanceBookings = await Booking.find({
+        // Exclude busy ambulances
+        const busyBookings = await Booking.find({
             status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
         }).select('ambulanceId').lean();
 
-        const busyAmbulanceIds = busyAmbulanceBookings
-            .filter(b => b.ambulanceId)
-            .map(b => b.ambulanceId.toString());
-
-        if (busyAmbulanceIds.length > 0) {
-            query._id = { $nin: busyAmbulanceIds }; // Busy drivers ko list se hata do
+        const busyIds = busyBookings.filter(b => b.ambulanceId).map(b => b.ambulanceId.toString());
+        if (busyIds.length > 0) {
+            query._id = { $nin: busyIds };
         }
 
         const ambulances = await Ambulance.find(query).lean();
 
+        // 🚨 AGAR 1 BHI AMBULANCE NAHI MILI
+        if (!ambulances || ambulances.length === 0) {
+            return res.json({
+                success: true,
+                isServiceAvailable: false,
+                count: 0,
+                message: "No ambulances are currently available or online in your area.",
+                emergencyHelplines: getEmergencyHelplinesData(),
+                data: []
+            });
+        }
+
         const data = await Promise.all(ambulances.map(async (amb) => {
             let distance = 0;
             if (lat && lng && amb.location?.lat && amb.location?.lng) {
-                distance = await getDistance(
-                    Number(lat), 
-                    Number(lng), 
-                    Number(amb.location.lat), 
-                    Number(amb.location.lng)
-                );
+                distance = await getDistance(Number(lat), Number(lng), Number(amb.location.lat), Number(amb.location.lng));
             }
             
-            const reviews = await Review.find({ 
-                targetId: amb._id, 
-                targetType: 'Ambulance' 
-            }).select('rating').lean();
-
+            const reviews = await Review.find({ targetId: amb._id, targetType: 'Ambulance' }).select('rating').lean();
             let averageRating = amb.averageRating > 0 ? amb.averageRating : 5.0; 
             if (reviews.length > 0) {
                 const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
@@ -130,40 +157,31 @@ const getNearestAmbulances = async (req, res) => {
             }
 
             let displayPrice = amb.pricing?.fixedPrice || 2000;
-            let isFree = false;
-
-            if (serviceType === 'Accident emergency') {
-                displayPrice = 0;
-                isFree = true;
-            } else if (serviceType === 'Medical Ambulance' && amb.freeServices?.emergency) {
-                displayPrice = 0;
-                isFree = true;
-            } else if (serviceType === 'Referral Ambulance' && amb.freeServices?.referral) {
-                displayPrice = 0;
-                isFree = true;
-            }
+            let isFree = (serviceType === 'Accident emergency');
+            if (serviceType === 'Medical Ambulance' && amb.freeServices?.emergency) { displayPrice = 0; isFree = true; }
+            if (serviceType === 'Referral Ambulance' && amb.freeServices?.referral) { displayPrice = 0; isFree = true; }
 
             return {
                 ...amb,
                 distance: `${distance} km`,
                 rawDistance: distance,
-                displayPrice: displayPrice, 
+                displayPrice: isFree ? 0 : displayPrice,
                 isFreeCase: isFree,
                 eta: `${Math.max(1, Math.round(distance * 3))} mins`,
-                rating: averageRating,       
+                rating: averageRating,
                 totalReviews: reviews.length,
                 isOnline: true,
-                availableForEmergency: true // Guarantees availability
+                availableForEmergency: true
             };
         }));
 
-        // Sort by nearest distance
         data.sort((a, b) => a.rawDistance - b.rawDistance);
 
-        res.json({ 
-            success: true, 
-            count: data.length, 
-            data 
+        res.json({
+            success: true,
+            isServiceAvailable: true,
+            count: data.length,
+            data
         });
 
     } catch (error) { 
@@ -171,7 +189,6 @@ const getNearestAmbulances = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
 const getAmbulanceDetails = async (req, res) => {
     try {
         const { id } = req.params;
@@ -537,8 +554,6 @@ const confirmAmbulanceBooking = async (req, res) => {
         }
 
         let body = { ...req.body };
-
-        // 🚨 1. Safe JSON Parsing for Multipart FormData strings
         if (typeof body.pricing === 'string') {
             try { body.pricing = JSON.parse(body.pricing); } catch (e) { body.pricing = {}; }
         }
@@ -550,11 +565,9 @@ const confirmAmbulanceBooking = async (req, res) => {
         }
         if (typeof body.staffType === 'string') {
             try {
-                const parsedStaff = JSON.parse(body.staffType);
-                body.staffType = Array.isArray(parsedStaff) ? parsedStaff : body.staffType.split(',');
-            } catch (e) {
-                body.staffType = body.staffType.split(',');
-            }
+                const parsed = JSON.parse(body.staffType);
+                body.staffType = Array.isArray(parsed) ? parsed : body.staffType.split(',');
+            } catch (e) { body.staffType = body.staffType.split(','); }
         }
 
         const { 
@@ -567,20 +580,46 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const isAccidental = (serviceType === 'Accident emergency');
 
-        // 2. Unverified user 1-booking limit for accidental SOS
-        if (isAccidental && !user.isPhoneVerified && user.accidentalBookingCount >= 1) {
-            return res.status(403).json({
-                success: false,
-                requirePhoneVerification: true,
-                message: "Emergency booking limit reached for unverified number. Please verify your phone number via OTP in profile to proceed."
+        // =========================================================================
+        // 🚨 PRE-BOOKING AVAILABILITY CHECK FOR ACCIDENTAL SOS
+        // =========================================================================
+        if (isAccidental) {
+            // Unverified user 1-booking limit
+            if (!user.isPhoneVerified && user.accidentalBookingCount >= 1) {
+                return res.status(403).json({
+                    success: false,
+                    requirePhoneVerification: true,
+                    message: "Free emergency booking limit reached for unverified number. Please verify your phone number via OTP in profile."
+                });
+            }
+
+            // Check if at least 1 driver is active, approved, online & free
+            const busyAmbs = await Booking.find({
+                status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
+            }).select('ambulanceId').lean();
+            const busyIds = busyAmbs.filter(b => b.ambulanceId).map(b => b.ambulanceId.toString());
+
+            const freeDriversCount = await Ambulance.countDocuments({
+                _id: { $nin: busyIds },
+                isActive: true,
+                profileStatus: 'Approved',
+                isOnline: true,
+                availableForEmergency: true
             });
+
+            // ❌ AGAR KOI DRIVER NAHI HAI: Direct reject with 108/112 helpline (No DB dead booking)
+            if (freeDriversCount === 0) {
+                return res.status(200).json({
+                    success: false,
+                    isServiceAvailable: false,
+                    canBook: false,
+                    message: "Our ambulance fleet in your area is currently engaged in critical emergencies. Please dial Government 108 Ambulance or 112 Emergency immediately.",
+                    emergencyHelplines: getEmergencyHelplinesData()
+                });
+            }
         }
 
-        // =========================================================================
-        // 🚨 3. DRIVER PRE-SELECTION RULE:
-        // Accidental SOS: NEVER assign ambulanceId upfront (Broadcast Pool mode)
-        // Medical / Referral: Uses selected target ambulance
-        // =========================================================================
+        // Targeted ambulance for Medical/Referral
         let targetAmbulance = null;
         if (!isAccidental && ambulanceId && mongoose.isValidObjectId(ambulanceId)) {
             targetAmbulance = await Ambulance.findById(ambulanceId);
@@ -588,10 +627,9 @@ const confirmAmbulanceBooking = async (req, res) => {
 
         const cleanHospitalId = (hospitalId && mongoose.isValidObjectId(hospitalId)) ? hospitalId : null;
         const cleanPickupHospitalId = (pickupHospitalId && mongoose.isValidObjectId(pickupHospitalId)) ? pickupHospitalId : null;
-
         const activePaymentMethod = isAccidental ? 'Online' : (body.paymentMethod || 'Online');
 
-        // 4. Smart COD Check (Subscribers get VIP bypass)
+        // COD Policy Check
         if (activePaymentMethod === 'COD' && !isAccidental) {
             const isCodAllowed = await isCodEnabled('Ambulance', userId);
             if (!isCodAllowed) {
@@ -602,12 +640,9 @@ const confirmAmbulanceBooking = async (req, res) => {
             }
         }
 
-        // 5. Calculate final fare safely
         const fare = await getFinalFare(body, userId);
-
         let referralCardPath = req.files?.referralCard ? `/uploads/ambulances/${req.files.referralCard[0].filename}` : null;
         let incidentPhotoPath = req.files?.incidentPhoto ? `/uploads/ambulances/${req.files.incidentPhoto[0].filename}` : null;
-
         const finalReason = reason || referralReason || incidentDescription || patientDetails.emergencyDescription || "";
 
         let finalPickupLocation = { address: "Pickup Location", lat: 30.7046, lng: 76.7179 };
@@ -626,48 +661,25 @@ const confirmAmbulanceBooking = async (req, res) => {
         let staffList = Array.isArray(staffType) ? staffType : [];
         staffList = staffList.map(s => String(s).trim());
 
-        // =========================================================================
-        // 🚨 6. STRICT STATUS MACHINE:
-        // Accidental ➔ Always 'Searching' (Broadcasted to nearby drivers)
-        // Medical/Referral (COD / Free) ➔ 'Confirmed'
-        // Medical/Referral (Paid Online) ➔ 'Pending' (Awaiting Razorpay verification)
-        // =========================================================================
-        let initialStatus = 'Searching';
-        let initialPaymentStatus = 'Pending';
+        let initialStatus = isAccidental ? 'Searching' : ((activePaymentMethod === 'COD' || fare.total === 0) ? 'Confirmed' : 'Pending');
+        let initialPaymentStatus = isAccidental ? 'Paid' : ((activePaymentMethod === 'COD' || fare.total === 0) ? (fare.total === 0 ? 'Paid' : 'Pending') : 'Pending');
 
-        if (isAccidental) {
-            initialStatus = 'Searching';
-            initialPaymentStatus = 'Paid';
-        } else if (activePaymentMethod === 'COD' || fare.total === 0) {
-            initialStatus = 'Confirmed';
-            initialPaymentStatus = fare.total === 0 ? 'Paid' : 'Pending';
-        } else {
-            initialStatus = 'Pending';
-            initialPaymentStatus = 'Pending';
-        }
-
-        // 7. Razorpay Order Generation (Only for Non-Accidental Online Rides with amount > 0)
         let rzpOrder = null;
         if (!isAccidental && !fare.isFree && activePaymentMethod !== 'COD' && fare.total > 0) {
             try {
                 rzpOrder = await createRazorpayOrder(fare.total, `receipt_${tempBookingId}`);
             } catch (rzpErr) {
-                console.error("Razorpay Order Failed:", rzpErr.message);
-                return res.status(400).json({
-                    success: false,
-                    message: `Payment Gateway Error: ${rzpErr.message || "Failed to initialize Razorpay payment."}`
-                });
+                return res.status(400).json({ success: false, message: `Payment gateway error: ${rzpErr.message}` });
             }
         }
 
-        // Accidental me OTP bilkul nahi hota, Medical/Referral me 6-Digit OTP banta hai
         const dynamicPickupOtp = isAccidental ? null : Math.floor(100000 + Math.random() * 900000).toString();
 
         const booking = await Booking.create({
             bookingId: tempBookingId,
             caseReference: generateCaseRef(serviceType || 'Medical Ambulance'),
             userId,
-            ambulanceId: isAccidental ? null : (targetAmbulance ? targetAmbulance._id : null), // 👈 Accidental me hamesha null
+            ambulanceId: isAccidental ? null : (targetAmbulance ? targetAmbulance._id : null),
             hospitalId: cleanHospitalId,
             pickupHospitalId: cleanPickupHospitalId,
             serviceType: serviceType || 'Medical Ambulance',
@@ -713,20 +725,15 @@ const confirmAmbulanceBooking = async (req, res) => {
             trackingTimeline: [{
                 status: initialStatus,
                 timestamp: new Date(),
-                note: isAccidental
-                    ? `Accidental SOS broadcasted. Searching nearest active ambulances.`
-                    : `Booking created under ${serviceType}. Staff: ${staffList.length > 0 ? staffList.join(', ') : 'None'}.`
+                note: isAccidental ? "Accident SOS broadcasted. Searching nearby available ambulances." : `Booking created under ${serviceType}.`
             }]
         });
 
-        // 8. Deduct subscription trip count for Medical/Referral
         if (!isAccidental && fare.isSubscriptionApplied) {
-            try {
-                await deductBenefitCount(userId, 'freeAmbulanceTripsCount');
-            } catch (e) {}
+            try { await deductBenefitCount(userId, 'freeAmbulanceTripsCount'); } catch (e) {}
         }
 
-        // 9. Accidental SOS Notifications (Broadcast to Control Room & All Drivers)
+        // Accidental SOS broadcast
         if (isAccidental) {
             try {
                 user.accidentalBookingCount = (user.accidentalBookingCount || 0) + 1;
@@ -736,23 +743,25 @@ const confirmAmbulanceBooking = async (req, res) => {
                     null,
                     'admin',
                     "🚨 CRITICAL: Emergency Accident Booking Placed!",
-                    `Accidental SOS booking #${tempBookingId} at ${finalPickupLocation.address || 'Spot'}. Searching nearest ambulances.`,
+                    `Accidental SOS booking #${tempBookingId} at ${finalPickupLocation.address || 'Spot'}.`,
                     { bookingId: booking._id.toString(), type: 'emergency_booking_placed' }
                 );
             } catch (e) {}
 
             return res.status(201).json({
                 success: true,
+                isServiceAvailable: true,
+                canBook: true,
                 message: "Accident Emergency SOS Dispatched! Searching nearest ambulances.",
+                timeoutInSeconds: 60, // 👈 Frontend sets 60s timer
                 booking
             });
         }
 
-        // 10. Medical / Referral Targeted Notification
+        // Medical / Referral direct confirm
         if (initialStatus === 'Confirmed' && targetAmbulance) {
             try {
                 await Ambulance.findByIdAndUpdate(targetAmbulance._id, { $set: { availableForEmergency: false } });
-                
                 await sendPushNotification(
                     targetAmbulance._id,
                     'ambulance',
@@ -763,16 +772,10 @@ const confirmAmbulanceBooking = async (req, res) => {
             } catch (e) {}
         }
 
-        // Return for COD / Free Rides (Medical / Referral)
         if (activePaymentMethod === 'COD' || fare.total === 0) {
-            return res.status(201).json({ 
-                success: true, 
-                message: "Ambulance Booked & Confirmed Successfully!", 
-                booking 
-            });
+            return res.status(201).json({ success: true, message: "Ambulance Booked & Confirmed Successfully!", booking });
         }
 
-        // Return Razorpay Order for Online Paid Rides (Medical / Referral)
         res.status(201).json({
             success: true,
             message: "Razorpay order created for ambulance. Complete payment to confirm booking.",
@@ -1403,35 +1406,54 @@ const shortRegisterAndBookAccidental = async (req, res) => {
         const cleanPhone = String(phone).trim().replace(/\D/g, "").slice(-10);
         const fullPhone = countryCode ? `${countryCode}${cleanPhone}` : `+91${cleanPhone}`;
 
-        // 1. Check if user already exists
+        // 🚨 PRE-CHECK: Check if at least 1 driver is active, online & free
+        const busyAmbs = await Booking.find({
+            status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
+        }).select('ambulanceId').lean();
+        const busyIds = busyAmbs.filter(b => b.ambulanceId).map(b => b.ambulanceId.toString());
+
+        const freeDriversCount = await Ambulance.countDocuments({
+            _id: { $nin: busyIds },
+            isActive: true,
+            profileStatus: 'Approved',
+            isOnline: true,
+            availableForEmergency: true
+        });
+
+        // ❌ AGAR KOI DRIVER NAHI HAI: Direct reject with 108/112 (No dead user/booking created)
+        if (freeDriversCount === 0) {
+            return res.status(200).json({
+                success: false,
+                isServiceAvailable: false,
+                canBook: false,
+                message: "Our ambulance fleet in your area is currently engaged in critical emergencies. Please dial Government 108 Ambulance or 112 Emergency immediately.",
+                emergencyHelplines: getEmergencyHelplinesData()
+            });
+        }
+
         let user = await User.findOne({ phone: cleanPhone });
         let isNewUser = false;
 
         if (user) {
-            // Check if user is banned
             if (user.isActive === false || user.isBanned === true) {
                 return res.status(403).json({
                     success: false,
                     isBanned: true,
-                    message: user.banReason || "Your account has been suspended. Please contact Admin/Support to unban."
+                    message: user.banReason || "Your account has been suspended. Please contact Admin."
                 });
             }
 
-            // 🚨 STRICT 1-TIME RESTRICTION RULE:
-            // Agar phone OTP verified nahi hai aur pehle 1 baar accidental book kar chuka hai -> BLOCK!
             if (!user.isPhoneVerified && user.accidentalBookingCount >= 1) {
                 return res.status(403).json({
                     success: false,
                     requirePhoneVerification: true,
-                    message: "Free emergency booking limit reached for unverified number. Please verify your mobile number via OTP in profile to book again."
+                    message: "Free emergency booking limit reached for unverified number. Please verify your phone number via OTP."
                 });
             }
 
-            // Increment accidental count
             user.accidentalBookingCount = (user.accidentalBookingCount || 0) + 1;
             await user.save();
         } else {
-            // 2. Create Temporary User without OTP (Password auto-generated)
             isNewUser = true;
             const tempPassword = await bcrypt.hash(`HKEmergency@${cleanPhone.slice(-4)}`, 10);
             user = await User.create({
@@ -1439,20 +1461,17 @@ const shortRegisterAndBookAccidental = async (req, res) => {
                 phone: cleanPhone,
                 countryCode: countryCode || "+91",
                 password: tempPassword,
-                isPhoneVerified: false,       // 👈 Unverified (allowed only 1 time)
+                isPhoneVerified: false,
                 isShortRegistered: true,
-                accidentalBookingCount: 1,     // 👈 First use recorded
+                accidentalBookingCount: 1,
                 role: 'user',
                 profileStatus: 'Approved'
             });
         }
 
-        // Generate Session Token for live tracking
         const token = generateToken(user._id, 'user');
-
         const tempBookingId = `HK-ACC-${Date.now().toString().slice(-6)}`;
 
-        // 3. Create Accidental Booking (100% Free SOS, Real base valuation ₹2000 preserved, NO OTP required)
         const booking = await Booking.create({
             bookingId: tempBookingId,
             caseReference: generateCaseRef('Accident emergency'),
@@ -1476,38 +1495,42 @@ const shortRegisterAndBookAccidental = async (req, res) => {
             },
             pricing: {
                 ambulanceCharge: 0,
-                originalAmbulanceCharge: 2000, // 👈 Real valuation preserved for Admin/Driver
+                originalAmbulanceCharge: 2000,
                 subtotal: 2000,
                 discount: 0,
-                total: 0 // 100% Free for victim
+                total: 0
             },
             isFreeCase: true,
             paymentStatus: 'Paid',
             paymentMethod: 'Online',
             status: 'Searching',
-            otp: null, // 🚨 NO OTP REQUIRED FOR ACCIDENTAL PICKUP
+            otp: null,
             trackingTimeline: [{
                 status: 'Searching',
                 timestamp: new Date(),
-                note: `Accidental 1-Click SOS placed by ${user.name} (${fullPhone}). Searching nearest drivers.`
+                note: `Accidental 1-Click SOS placed by ${user.name}. Searching nearest available drivers.`
             }]
         });
 
-        // 4. Broadcast to all nearby active ambulances
-        await notifyAdminsAndVendor(
-            null,
-            'admin',
-            "🚨 CRITICAL: Accidental 1-Click SOS Dispatched!",
-            `Accident emergency reported at ${pickupAddress || 'Spot'}. Searching nearest ambulances.`,
-            { bookingId: booking._id.toString(), type: 'emergency_sos_broadcast' }
-        );
+        try {
+            await notifyAdminsAndVendor(
+                null,
+                'admin',
+                "🚨 CRITICAL: Accidental 1-Click SOS Dispatched!",
+                `Accident emergency reported at ${pickupAddress || 'Spot'}. Searching nearest ambulances.`,
+                { bookingId: booking._id.toString(), type: 'emergency_sos_broadcast' }
+            );
+        } catch (e) {}
 
         res.status(201).json({
             success: true,
+            isServiceAvailable: true,
+            canBook: true,
             message: "Accidental Ambulance Dispatched! Searching nearest ambulances.",
-            token, // User gets logged in to track live
+            token,
             isNewUser,
             bookingId: tempBookingId,
+            timeoutInSeconds: 60, // 👈 60-Second Timer
             booking
         });
 
@@ -1516,7 +1539,6 @@ const shortRegisterAndBookAccidental = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 
 // =========================================================================
@@ -1538,81 +1560,62 @@ const escalateAccidentalSos = async (req, res) => {
 
         const booking = await Booking.findOne(query);
         if (!booking) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Accident emergency booking record not found." 
-            });
+            return res.status(404).json({ success: false, message: "Accident booking record not found." });
         }
 
-        // Agar driver pehle hi accept kar chuka hai
-        if (booking.status !== 'Searching') {
+        // 🚀 CASE A: Driver accepted within 60s (Race condition check)
+        if (booking.status !== 'Searching' && booking.ambulanceId) {
             return res.json({
                 success: true,
                 isAssigned: true,
-                message: "Ambulance driver has already accepted your request and is on the way!",
+                status: booking.status,
+                message: "An ambulance driver has accepted your request and is en-route!",
                 data: booking
             });
         }
 
-        // Timeline me log karein
+        // 🚨 CASE B: 60 Seconds Over & No Driver Accepted
+        // Database update: Mark as Cancelled by System (Unfulfilled)
+        booking.status = 'Cancelled';
+        booking.cancelledBy = 'System';
+        booking.cancellationReason = "No partner ambulance accepted within 60-second emergency window due to sudden field unavailability.";
+        
         if (!booking.trackingTimeline) booking.trackingTimeline = [];
         booking.trackingTimeline.push({
-            status: '1-Min Timeout Escalated',
+            status: 'Unfulfilled Timeout',
             timestamp: new Date(),
-            note: "1-minute search timeout reached. No nearby private ambulance accepted yet. Government 108/112 emergency hotline numbers displayed to victim while system keeps searching."
+            note: "60-second search window expired. Closed by system to prevent hanging state. Patient prompted with Government 108/112 Emergency helplines."
         });
 
         await booking.save();
 
-        // 🚨 High Priority Alarm to Super Admin Control Room
+        // High priority alarm to Admin Control Room
         try {
             await notifyAdminsAndVendor(
                 null,
                 'admin',
-                "🚨 CRITICAL SOS: 1-MINUTE TIMEOUT (No Driver Claimed)!",
-                `Accidental SOS #${booking.bookingId} at ${booking.pickupLocation.address || 'Spot'} has been searching for 1+ minute with no driver acceptance. Manual dispatch needed.`,
-                { bookingId: booking._id.toString(), type: 'sos_1min_timeout' }
+                "🚨 CRITICAL SOS UNFULFILLED (60s Timeout)!",
+                `Accidental SOS #${booking.bookingId} at ${booking.pickupLocation.address} expired without driver acceptance. Bystander advised to call 108/112.`,
+                { bookingId: booking._id.toString(), type: 'sos_unfulfilled_alert' }
             );
         } catch (e) {}
 
-        // Response with Government & Platform Helplines
+        // Empathic message + Government Helplines response
         res.status(200).json({
             success: true,
             isAssigned: false,
-            message: "Nearby partner ambulances are currently busy on trauma runs. Government 108 ambulance and emergency hotlines are provided below. System is still searching in background.",
+            isCancelled: true,
+            status: "Cancelled",
             bookingId: booking.bookingId,
-            status: "Searching",
-            emergencyHelplines: {
-                govtAmbulance: {
-                    number: "108",
-                    title: "Government Free Emergency Ambulance (108)",
-                    description: "Direct line to State Emergency Medical Services"
-                },
-                nationalEmergency: {
-                    number: "112",
-                    title: "All-in-One National Emergency (112)",
-                    description: "Police, Fire & Medical Control Center"
-                },
-                policeHelpline: {
-                    number: "100",
-                    title: "Police Control Room (100)",
-                    description: "Traffic police & highway patrol dispatch"
-                },
-                healthKangarooControlRoom: {
-                    number: "+919876543210",
-                    title: "Health Kangaroo 24/7 Priority Desk",
-                    description: "Live Control Room Fleet Intervention"
-                }
-            }
+            message: "Our partner ambulance drivers are currently occupied on urgent trauma runs and unable to accept this request due to unforeseen emergency conditions. Please dial Government 108 Ambulance or 112 Emergency immediately.",
+            emergencyHelplines: getEmergencyHelplinesData()
         });
 
     } catch (error) {
         console.error("Escalate SOS Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal server error" });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
-
-
 
 module.exports = {
     getAmbulanceMasterData,

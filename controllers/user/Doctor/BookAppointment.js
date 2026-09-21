@@ -420,7 +420,7 @@ const bookAppointment = async (req, res) => {
 
         let body = { ...req.body };
 
-        // 🚨 SAFE MULTIPART PARSER
+        // 🚨 1. Safe Multipart / Stringified JSON Parsers
         if (typeof body.patients === 'string') {
             try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
         }
@@ -434,44 +434,39 @@ const bookAppointment = async (req, res) => {
         const { 
             doctorId, 
             appointmentDate, 
-            timeSlot,          
+            timeSlot, 
+            appointmentTime: incomingApptTime,
             consultationType, 
-            patients, 
+            patients = [], 
             address,
-            pricingBreakdown,  
+            pricingBreakdown = {},  
             totalAmount        
         } = body;
 
-        const appointmentTime = timeSlot; 
+        // 🚨 2. Safe TimeSlot Resolver (Supports both 'timeSlot' and 'appointmentTime')
+        const appointmentTime = timeSlot || incomingApptTime; 
         const pricingData = pricingBreakdown; 
 
         // 1. Basic Validations
         if (!doctorId || !appointmentDate || !appointmentTime) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Required fields (doctorId, appointmentDate, timeSlot) are missing." 
+                message: "Validation Error: Required fields (doctorId, appointmentDate, timeSlot/appointmentTime) are missing." 
             });
         }
 
-        if (!pricingData || typeof totalAmount === 'undefined') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Pricing details or totalAmount missing." 
-            });
-        }
-
-        // Validate Payment Method Enum
-        const allowedPaymentMethods = ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
-        const activePaymentMethod = body.paymentMethod || "UPI";
+        // 🚨 3. Updated Payment Methods (Includes 'Online')
+        const allowedPaymentMethods = ['Online', 'UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
+        const activePaymentMethod = body.paymentMethod || "Online";
         
         if (!allowedPaymentMethods.includes(activePaymentMethod)) {
             return res.status(400).json({
                 success: false,
-                message: `Invalid paymentMethod. Allowed values are: ${allowedPaymentMethods.join(', ')}`
+                message: `Invalid paymentMethod '${activePaymentMethod}'. Allowed values are: ${allowedPaymentMethods.join(', ')}`
             });
         }
 
-        // 🚀 FIX: req.user.id pass kiya (Subscribed User ka COD block nahi hoga!)
+        // 🚀 SMART COD VALIDATION: Passes req.user.id (Subscribers get VIP bypass)
         if (activePaymentMethod === 'COD') {
             const isCodAllowed = await isCodEnabled('Doctor', req.user.id);
             if (!isCodAllowed) {
@@ -482,7 +477,7 @@ const bookAppointment = async (req, res) => {
             }
         }
 
-        // 2. Strict Independent Doctor Role Validation
+        // 2. Doctor Existence & Online Check
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor not found." });
@@ -501,15 +496,23 @@ const bookAppointment = async (req, res) => {
             });
         }
 
+        // 3. Duplicate Slot Check
+        const queryDate = moment(appointmentDate).startOf('day').toDate();
         const isBooked = await Appointment.findOne({ 
             doctorId, 
-            appointmentDate: new Date(appointmentDate), 
+            appointmentDate: { 
+                $gte: moment(appointmentDate).startOf('day').toDate(),
+                $lte: moment(appointmentDate).endOf('day').toDate()
+            }, 
             appointmentTime, 
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] } 
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] } 
         });
 
         if (isBooked) {
-            return res.status(400).json({ success: false, message: "This slot is already booked." });
+            return res.status(400).json({ 
+                success: false, 
+                message: `This slot (${appointmentTime}) is already booked for this doctor. Please choose another time slot.` 
+            });
         }
 
         // Subscription variables
@@ -521,34 +524,34 @@ const bookAppointment = async (req, res) => {
         let planName = "";
         let userSubscriptionId = null;
 
-        const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
+        // 🚀 Check Subscription Benefit
         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', rawDoctorFee);
         
         if (docBenefit.isApplied) {
-            baseFee = 0; 
             isSubscriptionApplied = true;
+            try {
+                const UserSubscription = require('../../../models/UserSubscription');
+                const activeSub = await UserSubscription.findOne({
+                    userId: req.user.id,
+                    status: 'Active',
+                    endDate: { $gt: new Date() }
+                }).populate({
+                    path: 'planId',
+                    populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+                });
 
-            const UserSubscription = require('../../../models/UserSubscription');
-            const activeSub = await UserSubscription.findOne({
-                userId: req.user.id,
-                status: 'Active',
-                endDate: { $gt: new Date() }
-            }).populate({
-                path: 'planId',
-                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
-            });
-
-            if (activeSub && activeSub.planId) {
-                planName = activeSub.planId.name || "Premium Care Plan";
-                userSubscriptionId = activeSub._id;
-            }
+                if (activeSub && activeSub.planId) {
+                    planName = activeSub.planId.name || "Premium Care Plan";
+                    userSubscriptionId = activeSub._id;
+                }
+            } catch (e) {}
         }
 
         const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        const finalPayable = Number(totalAmount);
+        const finalPayable = Number(totalAmount !== undefined ? totalAmount : (pricingData.subtotal || 0));
 
         // =========================================================================
-        // CASE A: FREE BOOKING & COD BYPASS
+        // CASE A: FREE BOOKING VIA SUBSCRIPTION / COD
         // =========================================================================
         if (finalPayable === 0 || activePaymentMethod === 'COD') {
             const appointment = await Appointment.create({
@@ -558,7 +561,7 @@ const bookAppointment = async (req, res) => {
                 address: consultationType === 'Home Visit' ? address : undefined,
                 appointmentDate: new Date(appointmentDate),
                 appointmentTime, 
-                consultationType,
+                consultationType: consultationType || 'Clinic Visit',
                 paymentMethod: activePaymentMethod,
                 
                 pricingBreakdown: {
@@ -585,17 +588,18 @@ const bookAppointment = async (req, res) => {
             });
 
             if (isSubscriptionApplied) {
-                const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
                 await deductBenefitCount(req.user.id, 'freeDoctorAppointmentsCount');
             }
 
-            await notifyAdminsAndVendor(
-                doctorId,
-                'doctor',
-                "New Appointment Confirmed!",
-                `Appointment scheduled on ${moment(appointmentDate).format('YYYY-MM-DD')} at ${appointmentTime}.`,
-                { appointmentId: appointment._id.toString(), type: 'new_appointment' }
-            );
+            try {
+                await notifyAdminsAndVendor(
+                    doctorId,
+                    'doctor',
+                    "New Appointment Confirmed!",
+                    `Appointment scheduled on ${moment(appointmentDate).format('YYYY-MM-DD')} at ${appointmentTime}.`,
+                    { appointmentId: appointment._id.toString(), type: 'new_appointment' }
+                );
+            } catch (e) {}
 
             return res.status(201).json({
                 success: true,
@@ -605,9 +609,18 @@ const bookAppointment = async (req, res) => {
         }
 
         // =========================================================================
-        // CASE B: PAID ONLINE BOOKING
+        // CASE B: PAID ONLINE APPOINTMENT (RAZORPAY ORDER)
         // =========================================================================
-        const rzpOrder = await createRazorpayOrder(finalPayable, `receipt_${tempBookingId}`);
+        let rzpOrder;
+        try {
+            rzpOrder = await createRazorpayOrder(finalPayable, `receipt_${tempBookingId}`);
+        } catch (rzpErr) {
+            console.error("Razorpay Order Error:", rzpErr.message);
+            return res.status(400).json({
+                success: false,
+                message: `Payment Gateway Error: ${rzpErr.message || "Failed to initialize Razorpay order."}`
+            });
+        }
 
         const appointment = await Appointment.create({
             userId: req.user.id,
@@ -616,7 +629,7 @@ const bookAppointment = async (req, res) => {
             address: consultationType === 'Home Visit' ? address : undefined,
             appointmentDate: new Date(appointmentDate),
             appointmentTime, 
-            consultationType,
+            consultationType: consultationType || 'Clinic Visit',
             paymentMethod: activePaymentMethod,
             
             pricingBreakdown: {
@@ -654,7 +667,7 @@ const bookAppointment = async (req, res) => {
 
     } catch (error) { 
         console.error("Critical Booking Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        res.status(500).json({ success: false, message: error.message || "Internal server error" }); 
     }
 };
 

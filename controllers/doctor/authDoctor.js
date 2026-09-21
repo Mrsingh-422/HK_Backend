@@ -211,84 +211,112 @@ const uploadDocuments = async (req, res) => {
 // ==========================================
 const loginDoctor = async (req, res) => {
     try {
-        const { email, phone, password } = req.body;
-        
-        let query = email ? { email: email.toLowerCase().trim() } : { phone: phone ? phone.trim() : null };
-        const doctor = await Doctor.findOne(query).select('+password');
+        const { email, phone, password, fcmToken } = req.body;
 
-        if (!doctor || !(await bcrypt.compare(String(password), doctor.password))) {
-            return res.status(400).json({ success: false, message: 'Invalid Credentials' });
-        }
-
-        if (doctor.isActive === false) {
-            return res.status(403).json({ 
+        if ((!email && !phone) || !password) {
+            return res.status(400).json({ 
                 success: false, 
-                message: "Access Denied: Your account is deactivated. Please contact support." 
+                message: "Please provide Email or Phone number and Password." 
             });
         }
 
+        const cleanEmail = email ? email.toLowerCase().trim() : null;
+        const cleanPhone = phone ? String(phone).trim().replace(/\D/g, "").slice(-10) : null;
+
+        const query = [];
+        if (cleanEmail) query.push({ email: cleanEmail });
+        if (cleanPhone) query.push({ phone: cleanPhone });
+
+        // 1. Find Doctor by Email or Phone
+        const doctor = await Doctor.findOne({ $or: query }).select('+password');
+
+        if (!doctor) {
+            return res.status(400).json({ success: false, message: "Invalid Credentials. Doctor not found." });
+        }
+
+        // 2. Verify Password
+        const isMatch = await bcrypt.compare(String(password), doctor.password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, message: "Invalid Credentials. Password does not match." });
+        }
+
+        // =========================================================================
+        // 🚨 3. STRICT ROLE CHECK: Block Hospital Doctors from Independent Login
+        // =========================================================================
+        if (doctor.role === 'hospital-doctor') {
+            return res.status(403).json({
+                success: false,
+                isHospitalDoctor: true,
+                message: "Access Denied: You are registered as a Hospital Doctor under a hospital. Please login through the Hospital Doctor portal."
+            });
+        }
+
+        // 4. Deactivation Check
+        if (doctor.isActive === false) {
+            return res.status(403).json({
+                success: false,
+                isDeactivated: true,
+                message: "Access Denied: Your doctor account has been deactivated. Please contact Admin."
+            });
+        }
+
+        // 5. Approval Status Checks
         if (doctor.profileStatus === 'Pending') {
-            return res.status(200).json({ 
-                success: true, 
+            return res.status(200).json({
+                success: true,
                 fullAccess: false,
-                role: doctor.role, 
                 profileStatus: 'Pending',
-                message: 'Profile under review. Please wait for Admin approval.' 
+                message: "Profile under review. Waiting for Admin approval."
             });
         }
 
         if (doctor.profileStatus === 'Incomplete') {
-            const token = doctor.token || generateToken(doctor._id, doctor.role);
-            if (!doctor.token) { doctor.token = token; await doctor.save(); }
-            
-            return res.status(200).json({ 
-                success: true, 
-                fullAccess: false, 
-                token, 
-                role: doctor.role,
+            const token = generateToken(doctor._id, doctor.role);
+            return res.status(200).json({
+                success: true,
+                fullAccess: false,
+                token,
                 profileStatus: 'Incomplete',
-                message: 'Please complete your profile by uploading documents.' 
+                message: "Profile incomplete. Please upload your medical degree & license documents."
             });
         }
 
         if (doctor.profileStatus === 'Rejected') {
-            const token = doctor.token || generateToken(doctor._id, doctor.role);
-            return res.status(200).json({ 
-                success: true, 
-                fullAccess: false, 
-                token, 
-                role: doctor.role,
+            const token = generateToken(doctor._id, doctor.role);
+            return res.status(200).json({
+                success: true,
+                fullAccess: false,
+                token,
                 profileStatus: 'Rejected',
-                rejectionReason: doctor.rejectionReason,
-                message: `Application Rejected: ${doctor.rejectionReason || "Please re-upload documents."}` 
+                rejectionReason: doctor.rejectionReason || "Documents rejected by Admin.",
+                message: `Profile Rejected: ${doctor.rejectionReason || "Please re-upload documents."}`
             });
         }
 
-        let token = null;
-        if (process.env.NODE_ENV === 'development' && doctor.token) {
-            try {
-                jwt.verify(doctor.token, process.env.JWT_SECRET);
-                token = doctor.token;
-            } catch (err) { token = null; }
-        }
+        // 6. Generate Session Token & Save FCM Push Token
+        const token = generateToken(doctor._id, doctor.role);
+        doctor.token = token;
 
-        if (!token) {
-            token = generateToken(doctor._id, doctor.role);
-            doctor.token = token;
-            await doctor.save();
+        if (fcmToken) {
+            doctor.fcmToken = fcmToken;
         }
+        doctor.isOnline = true;
+        await doctor.save();
 
         doctor.password = undefined;
-        res.json({ 
-            success: true, 
-            fullAccess: true, 
-            token, 
-            role: doctor.role, 
-            profileStatus: 'Approved', 
-            data: doctor 
+
+        res.status(200).json({
+            success: true,
+            fullAccess: true,
+            message: "Doctor Logged in Successfully!",
+            token,
+            profileStatus: 'Approved',
+            role: doctor.role, // 👈 'doctor'
+            data: doctor
         });
 
     } catch (error) {
+        console.error("Doctor Login Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
