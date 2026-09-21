@@ -13,7 +13,6 @@ const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Availability = require('../../../models/Availability');
 const Coupon = require('../../../models/Coupon');
 const Prescription = require('../../../models/Prescription');
-const MedicineOrder = require('../../../models/PharmacyBooking');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
@@ -76,9 +75,13 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     const today = new Date();
 
     for (const item of items) {
-        const pricePerUnit = Number(item.price || item.pricePerUnit || 0);
-        const orderedQty = Number(item.quantity || 1);
-        const medicineId = item.medicineId._id || item.medicineId;
+        const rawPrice = item.price ?? item.pricePerUnit ?? 0;
+        const pricePerUnit = (!isNaN(Number(rawPrice)) && rawPrice !== null && rawPrice !== "") ? Number(rawPrice) : 0;
+        
+        const rawQty = item.quantity ?? 1;
+        const orderedQty = (!isNaN(Number(rawQty)) && rawQty !== null && rawQty !== "") ? Math.max(1, Number(rawQty)) : 1;
+        
+        const medicineId = item.medicineId?._id || item.medicineId;
 
         const activeBatch = await MedicineInventory.findOne({
             pharmacyId,
@@ -87,8 +90,15 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
             stock_quantity: { $gt: 0 }
         }).sort({ expiry_date: 1 });
 
-        const batchMrp = activeBatch ? activeBatch.mrp : (item.medicineId?.mrp ? Number(item.medicineId.mrp) : 0);
-        const batchHsn = activeBatch ? activeBatch.hsn_number : null;
+        // Safe MRP extraction (fallback to pricePerUnit if MRP is invalid/NaN)
+        let batchMrp = 0;
+        if (activeBatch && !isNaN(Number(activeBatch.mrp)) && activeBatch.mrp !== null) {
+            batchMrp = Number(activeBatch.mrp);
+        } else if (item.medicineId?.mrp && !isNaN(Number(item.medicineId.mrp))) {
+            batchMrp = Number(item.medicineId.mrp);
+        } else {
+            batchMrp = pricePerUnit;
+        }
 
         rawItemTotalWithoutPromo += (batchMrp * orderedQty);
 
@@ -103,8 +113,8 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
             });
 
             if (activePromo) {
-                const X = activePromo.buyQty;
-                const Y = activePromo.getFreeQty;
+                const X = activePromo.buyQty || 2;
+                const Y = activePromo.getFreeQty || 1;
                 const bundleSize = X + Y;
                 const fullBundles = Math.floor(orderedQty / bundleSize);
                 const remainingUnits = orderedQty % bundleSize;
@@ -120,15 +130,16 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
 
         promoDeductedTotal += finalItemPrice;
 
-        // 🚨 LIVE MASTER HSN TAX RESOLUTION (No hardcoding)
+        // Dynamic GST Calculation
         let cgstPercent = 0;
         let sgstPercent = 0;
+        const batchHsn = activeBatch ? activeBatch.hsn_number : null;
 
-        if (batchHsn && batchHsn.trim() !== "") {
+        if (batchHsn && batchHsn.trim() !== "" && batchHsn.toUpperCase() !== "N/A") {
             const hsnConfig = await HsnMaster.findOne({ hsnCode: batchHsn.trim(), isActive: true });
             if (hsnConfig) {
-                const totalGst = hsnConfig.totalGstPercent;
-                cgstPercent = totalGst / 2; // Intrastate splits 50/50
+                const totalGst = Number(hsnConfig.totalGstPercent || 0);
+                cgstPercent = totalGst / 2;
                 sgstPercent = totalGst / 2;
             }
         }
@@ -138,12 +149,13 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
         const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
         const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
 
-        taxableTotal += itemTaxableAmount;
-        cgstTotal += itemCgstAmount;
-        sgstTotal += itemSgstAmount;
+        taxableTotal += isNaN(itemTaxableAmount) ? 0 : itemTaxableAmount;
+        cgstTotal += isNaN(itemCgstAmount) ? 0 : itemCgstAmount;
+        sgstTotal += isNaN(itemSgstAmount) ? 0 : itemSgstAmount;
     }
 
-    const comboSavings = rawItemTotalWithoutPromo - promoDeductedTotal;
+    const safeOriginalTotal = isNaN(rawItemTotalWithoutPromo) ? promoDeductedTotal : rawItemTotalWithoutPromo;
+    const comboSavings = Math.max(0, safeOriginalTotal - promoDeductedTotal);
 
     let deliveryCharge = 0;
     let rapidCharge = 0;
@@ -153,51 +165,49 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     const charges = await DeliveryCharge.findOne({ vendorId: cleanPharmaId });
 
     if (collectionType === 'Home Delivery' || collectionType === 'Home Collection') {
-        let standardFee = charges ? Number(charges.fixedPrice) : 40;
+        let standardFee = charges ? Number(charges.fixedPrice || 40) : 40;
         const pharmDeliveryBenefit = await checkAndApplyBenefit(userId, 'freePharmacyDeliveriesCount', standardFee);
-        deliveryCharge = pharmDeliveryBenefit.amount;
+        deliveryCharge = Number(pharmDeliveryBenefit.amount || 0);
     }
 
     if (isRapid && (!appointmentTime || appointmentTime === 'Immediate')) {
-        rapidCharge = charges ? Number(charges.fastDeliveryExtra) : 29;
-    } else {
-        rapidCharge = 0;
+        rapidCharge = charges ? Number(charges.fastDeliveryExtra || 29) : 29;
     }
 
-    if (appointmentTime && appointmentTime !== 'Immediate') {
+    if (appointmentTime && appointmentTime !== 'Immediate' && appointmentTime !== 'undefined') {
         const availConfig = await Availability.findOne({ vendorId: cleanPharmaId });
         if (availConfig && availConfig.premiumSlots) {
             const selectedTimeClean = appointmentTime.trim();
-            const premiumSlot = availConfig.premiumSlots.find(ps => ps.time.trim() === selectedTimeClean);
+            const premiumSlot = availConfig.premiumSlots.find(ps => ps.time && ps.time.trim() === selectedTimeClean);
             if (premiumSlot) slotCharge = Number(premiumSlot.extraFee) || 0;
         }
     }
 
     let couponDiscount = 0;
     let couponId = null;
-    if (couponCode) {
-        const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+    if (couponCode && couponCode !== 'undefined' && couponCode !== 'null') {
+        const coupon = await Coupon.findOne({ couponName: couponCode.trim().toUpperCase(), isActive: true });
         if (coupon && promoDeductedTotal >= coupon.minOrderAmount) {
             couponDiscount = Math.min((promoDeductedTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
             couponId = coupon._id;
         }
     }
 
-    const totalAmount = (promoDeductedTotal - couponDiscount) + deliveryCharge + rapidCharge + slotCharge;
+    const totalAmount = Math.max(0, (promoDeductedTotal - couponDiscount) + deliveryCharge + rapidCharge + slotCharge);
 
     return {
-        itemTotal: Math.round(promoDeductedTotal),
-        originalItemTotal: Math.round(rawItemTotalWithoutPromo),
-        comboSavings: Math.round(comboSavings),
-        taxableTotal: Number(taxableTotal.toFixed(2)),
-        cgstTotal: Number(cgstTotal.toFixed(2)),
-        sgstTotal: Number(sgstTotal.toFixed(2)),
-        couponDiscount: Math.round(couponDiscount),
+        itemTotal: Math.round(promoDeductedTotal) || 0,
+        originalItemTotal: Math.round(safeOriginalTotal) || 0,
+        comboSavings: Math.round(comboSavings) || 0,
+        taxableTotal: Number((taxableTotal || 0).toFixed(2)),
+        cgstTotal: Number((cgstTotal || 0).toFixed(2)),
+        sgstTotal: Number((sgstTotal || 0).toFixed(2)),
+        couponDiscount: Math.round(couponDiscount) || 0,
         couponId,
-        deliveryCharge,
-        rapidDeliveryCharge: rapidCharge,
-        slotCharge,
-        totalAmount: Math.round(totalAmount)
+        deliveryCharge: Number(deliveryCharge) || 0,
+        rapidDeliveryCharge: Number(rapidCharge) || 0,
+        slotCharge: Number(slotCharge) || 0,
+        totalAmount: Math.round(totalAmount) || 0
     };
 };
 
@@ -1761,7 +1771,6 @@ const placeOrder = async (req, res) => {
             });
         }
 
-        // Filter valid items where medicine exists
         const validCartItems = cart.pharmacyCart.items.filter(i => i.medicineId);
         if (validCartItems.length === 0) {
             return res.status(400).json({ success: false, message: "Items in cart are no longer available." });
@@ -1798,7 +1807,8 @@ const placeOrder = async (req, res) => {
         // 5. Dynamic GST Item Mapping
         const mappedOrderItems = [];
         for (const item of validCartItems) {
-            const orderedQty = Number(item.quantity || 1);
+            const rawQty = item.quantity ?? 1;
+            const orderedQty = (!isNaN(Number(rawQty)) && rawQty !== null && rawQty !== "") ? Math.max(1, Number(rawQty)) : 1;
             const medId = item.medicineId._id;
 
             const activeBatch = await MedicineInventory.findOne({
@@ -1808,7 +1818,15 @@ const placeOrder = async (req, res) => {
                 stock_quantity: { $gt: 0 }
             }).sort({ expiry_date: 1 });
 
-            const batchMrp = activeBatch ? activeBatch.mrp : Number(item.medicineId.mrp || 0);
+            let batchMrp = 0;
+            if (activeBatch && !isNaN(Number(activeBatch.mrp)) && activeBatch.mrp !== null) {
+                batchMrp = Number(activeBatch.mrp);
+            } else if (item.medicineId?.mrp && !isNaN(Number(item.medicineId.mrp))) {
+                batchMrp = Number(item.medicineId.mrp);
+            } else {
+                batchMrp = Number(item.price || 0);
+            }
+
             const batchHsn = activeBatch ? activeBatch.hsn_number : null;
 
             let cgstPercent = 0;
@@ -1820,7 +1838,8 @@ const placeOrder = async (req, res) => {
             }
 
             const totalGstPercent = cgstPercent + sgstPercent;
-            const finalPrice = Number(item.price || 0) * orderedQty;
+            const itemPrice = Number(item.price || 0);
+            const finalPrice = itemPrice * orderedQty;
             const itemTaxableAmount = finalPrice / (1 + (totalGstPercent / 100));
             const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
             const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
@@ -1845,7 +1864,7 @@ const placeOrder = async (req, res) => {
                 medicineId: medId,
                 name: item.name || item.medicineId.name,
                 mrp: batchMrp,
-                price: item.price,
+                price: itemPrice,
                 quantity: orderedQty,
                 duration: item.duration || "Full Course",
                 startDate: item.startDate || new Date(),
@@ -1853,11 +1872,11 @@ const placeOrder = async (req, res) => {
                 comboOfferId,
                 freeQuantity,
                 hsn_number: batchHsn || "",
-                taxableAmount: Number(itemTaxableAmount.toFixed(2)),
+                taxableAmount: Number((itemTaxableAmount || 0).toFixed(2)),
                 cgstPercent,
                 sgstPercent,
-                cgstAmount: Number(itemCgstAmount.toFixed(2)),
-                sgstAmount: Number(itemSgstAmount.toFixed(2)),
+                cgstAmount: Number((itemCgstAmount || 0).toFixed(2)),
+                sgstAmount: Number((itemSgstAmount || 0).toFixed(2)),
                 isReturnAllowed: activeBatch ? Boolean(activeBatch.isReturnAllowed) : false,
                 isReplacementAllowed: activeBatch ? Boolean(activeBatch.isReplacementAllowed) : false
             });
@@ -1877,11 +1896,25 @@ const placeOrder = async (req, res) => {
 
         // 🚨 Safe Address parsing
         let finalAddress = {};
-        if (typeof address === 'string') {
+        if (typeof address === 'string' && address !== 'undefined' && address !== 'null') {
             try { finalAddress = JSON.parse(address); } catch (e) { finalAddress = { addressLine: address }; }
         } else if (typeof address === 'object' && address !== null) {
             finalAddress = address;
         }
+
+        // 🚨 Safe Date resolution (handles literal "undefined", "null", or empty strings)
+        let resolvedDate = new Date();
+        if (appointmentDate && appointmentDate !== "undefined" && appointmentDate !== "null" && String(appointmentDate).trim() !== "") {
+            const parsed = new Date(appointmentDate);
+            if (!isNaN(parsed.getTime())) {
+                resolvedDate = parsed;
+            }
+        }
+
+        // 🚨 Safe Time resolution
+        const resolvedTime = (appointmentTime && appointmentTime !== "undefined" && appointmentTime !== "null" && String(appointmentTime).trim() !== "") 
+            ? String(appointmentTime).trim() 
+            : 'Immediate';
 
         const resolvedPatients = await mapPatients(userId, selectedPatientIds || ['Self']);
 
@@ -1892,10 +1925,10 @@ const placeOrder = async (req, res) => {
             pharmacyId,
             patients: resolvedPatients,
             items: mappedOrderItems,
-            collectionType: collectionType || 'Home Delivery',
+            collectionType: collectionType && collectionType !== 'undefined' ? collectionType : 'Home Delivery',
             address: finalAddress,
-            appointmentDate: appointmentDate || new Date(),
-            appointmentTime: appointmentTime || 'Immediate',
+            appointmentDate: resolvedDate,
+            appointmentTime: resolvedTime,
             billSummary: bill,
             paymentMethod: activePaymentMethod,
             orderType: isPrescriptionOrder ? 'Prescription' : 'General',
@@ -2176,7 +2209,6 @@ const getOrderHistory = async (req, res) => {
 };
 
 
-
 const trackOrder = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -2351,8 +2383,6 @@ const trackOrder = async (req, res) => {
 };
 
 
-
-
 const getLatestAddedMedicines = async (req, res) => {
     try {
         const latestMeds = await MedicineInventory.aggregate([
@@ -2455,7 +2485,6 @@ const getLatestAddedMedicines = async (req, res) => {
     }
 };
 
-// GET OTC / NON-PRESCRIPTION MEDICINES (PRESCRIPTION REQUIRED: NO)
 // GET OTC MEDICINES WITH OPTIONAL CATEGORY FILTER
 const getNonPrescriptionMedicines = async (req, res) => {
     try {
