@@ -765,24 +765,32 @@ const verifyTrackingOTP = async (req, res) => {
     }
 };
 
-// 5. GET USER APPOINTMENTS (Figma: My Bookings)
+// 5. GET USER APPOINTMENTS (Figma: My Bookings with Pagination)
+// endpoint: GET /user/doctors/my-appointments?page=1&limit=10&status=Confirmed
 const getUserAppointments = async (req, res) => {
     try {
-        const { status } = req.query; 
+        const { status, page = 1, limit = 10 } = req.query; 
         const query = { 
             userId: req.user.id, 
             bookingType: 'Appointment' 
         };        
         if (status) query.status = status; 
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
         
         const globalConfig = await DocRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
+        const total = await Appointment.countDocuments(query);
+
         const appointments = await Appointment.find(query)
             .populate('doctorId', 'name speciality profileImage profileStatus role')
-            .sort({ appointmentDate: -1 });
+            .sort({ appointmentDate: -1 })
+            .skip(skip)
+            .limit(limitNum);
 
-        // 🚀 SYNC FIX: Map through appointments and dynamically inject remaining counts for frontend rendering
         const formattedAppointments = appointments.map(app => {
             const appObj = app.toObject ? app.toObject() : { ...app };
             const currentRescheduleCount = appObj.rescheduleCount || 0;
@@ -795,6 +803,9 @@ const getUserAppointments = async (req, res) => {
 
         res.json({ 
             success: true, 
+            total,
+            currentPage: pageNum,
+            totalPages: Math.ceil(total / limitNum),
             count: formattedAppointments.length, 
             maxRescheduleLimit: maxLimit, 
             data: formattedAppointments 

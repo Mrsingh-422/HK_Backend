@@ -65,12 +65,12 @@ const getVendorDashboard = async (req, res) => {
             }
         ]);
 
-        // 4. RECENT APPOINTMENTS (Last 5)
+        // 4. RECENT APPOINTMENTS (Last 5) - Added paymentMethod & paymentStatus for UI badges
         const recentAppointments = await Appointment.find({ doctorId, bookingType: 'Appointment' })
             .populate('userId', 'name profileImage')
             .sort({ createdAt: -1 })
             .limit(5)
-            .select('patients appointmentDate appointmentTime status totalAmount consultationType');
+            .select('patients appointmentDate appointmentTime status totalAmount consultationType paymentMethod paymentStatus subscriptionDetails');
 
         // 5. DOCTOR PROFILE INFO (Rating & Status)
         const doctorInfo = await Doctor.findById(doctorId).select('averageRating totalReviews dutyStatus profileStatus');
@@ -93,7 +93,7 @@ const getVendorDashboard = async (req, res) => {
                     dutyStatus: doctorInfo.dutyStatus,
                     profileStatus: doctorInfo.profileStatus
                 },
-                consultationBreakdown: breakdown, // Useful for Pie Charts
+                consultationBreakdown: breakdown,
                 recentActivity: recentAppointments
             }
         });
@@ -104,11 +104,11 @@ const getVendorDashboard = async (req, res) => {
 };
 
 
-// 1. GET ALL INDEPENDENT DOCTOR BOOKINGS (Only Appointments)
+// 1. GET ALL INDEPENDENT DOCTOR BOOKINGS (Only Appointments with Pagination)
 // endpoint: GET /doctor/appointments/patient-bookings
 const getDoctorBookings = async (req, res) => {
     try {
-        const { status, consultationType } = req.query;
+        const { status, consultationType, page = 1, limit = 10 } = req.query;
         
         if (req.user.role !== 'doctor') {
             return res.status(403).json({ message: "Access denied. Not an independent doctor." });
@@ -134,15 +134,24 @@ const getDoctorBookings = async (req, res) => {
             }
         }
 
+        // Pagination Calculations
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
+
+        const total = await Appointment.countDocuments(query);
+
         const appointments = await Appointment.find(query)
-            .populate('userId', 'name phone email')
-            .sort({ appointmentDate: -1, appointmentTime: -1 });
+            .populate('userId', 'name phone email profilePic')
+            .sort({ appointmentDate: -1, appointmentTime: -1 })
+            .skip(skip)
+            .limit(limitNum);
 
         // Fetch platform global limits configuration (fallback is 2)
         const globalConfig = await DocReschleduleLimit.findOne() || { maxLimit: 2 };
         const maxLimit = globalConfig.maxLimit || 2;
 
-        // 🚀 SYNC FIX: Inject dynamic limits into the doctor's patient cards list response
+        // 🚀 SYNC: Inject dynamic remaining counts into list response
         const formattedData = appointments.map(app => {
             const appObj = app.toObject ? app.toObject() : { ...app };
             const currentRescheduleCount = appObj.rescheduleCount || 0;
@@ -153,7 +162,15 @@ const getDoctorBookings = async (req, res) => {
             return appObj;
         });
 
-        res.json({ success: true, count: formattedData.length, data: formattedData });
+        res.json({ 
+            success: true, 
+            total,
+            currentPage: pageNum,
+            totalPages: Math.ceil(total / limitNum),
+            count: formattedData.length, 
+            maxRescheduleLimit: maxLimit, 
+            data: formattedData 
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -398,10 +415,10 @@ const rescheduleAppointment = async (req, res) => {
 };
 // ---------------------------------
 // 1. GET ALL PRESCRIPTIONS (Figma: Screen 1 - List View)
-// endpoint: GET /doctor/prescriptions?filter=all OR ?filter=today
+// endpoint: GET /doctor/appointments/all-prescription?filter=all&page=1&limit=10
 const getAllPrescriptions = async (req, res) => {
     try {
-        const { filter } = req.query;
+        const { filter, page = 1, limit = 10 } = req.query;
         let query = { doctorId: req.user.id };
  
         // Today's filter logic
@@ -410,14 +427,22 @@ const getAllPrescriptions = async (req, res) => {
             const endDay = moment().endOf('day').toDate();
             query.createdAt = { $gte: startDay, $lte: endDay };
         }
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
+
+        const total = await Prescription.countDocuments(query);
  
         const prescriptions = await Prescription.find(query)
             .populate('userId', 'name phone profileImage')
             .populate({
                 path: 'appointmentId',
-                select: 'patients appointmentTime status'
+                select: 'patients appointmentTime status paymentMethod paymentStatus totalAmount'
             })
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
  
         // Formatting for Figma UI
         const formattedData = prescriptions.map(p => ({
@@ -425,16 +450,22 @@ const getAllPrescriptions = async (req, res) => {
             patientName: p.appointmentId?.patients[0]?.patientName || p.userId?.name,
             phone: p.userId?.phone,
             symptoms: p.diagnosis.join(', '),
-            
-            // 🚀 SYNC FIX: Explicitly shift parsed UTC datetime to Indian Standard Time (IST)
             date: moment(p.createdAt).utcOffset("+05:30").format('DD MMM, hh:mm A'),
-            
-            status: 'Sent', // Figma UI badge
+            status: 'Sent',
             pdfUrl: p.pdfUrl || null,
-            vitals: p.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+            vitals: p.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
+            paymentMethod: p.appointmentId?.paymentMethod || "Online",
+            paymentStatus: p.appointmentId?.paymentStatus || "Paid"
         }));
  
-        res.json({ success: true, count: prescriptions.length, data: formattedData });
+        res.json({ 
+            success: true, 
+            total,
+            currentPage: pageNum,
+            totalPages: Math.ceil(total / limitNum),
+            count: formattedData.length, 
+            data: formattedData 
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -677,9 +708,8 @@ const createPrescription = async (req, res) => {
             additionalNotes
         } = req.body;
 
-        let targetUserId = userId; // Base assignment
+        let targetUserId = userId;
 
-        // Secure ObjectId Validation for appointmentId to prevent CastError crashes
         const isValidApptId = appointmentId && mongoose.Types.ObjectId.isValid(appointmentId);
 
         if ((!targetUserId || targetUserId === "null" || targetUserId === "undefined") && isValidApptId) {
@@ -689,7 +719,6 @@ const createPrescription = async (req, res) => {
             }
         }
 
-        // Validate final targetUserId format before querying database
         const isValidUserId = targetUserId && mongoose.Types.ObjectId.isValid(targetUserId);
         if (!isValidUserId) {
             return res.status(400).json({ success: false, message: "Validation Blocked: A valid User/Patient ID is required." });
@@ -699,7 +728,7 @@ const createPrescription = async (req, res) => {
             return res.status(400).json({ success: false, message: "Compiled prescription PDF file is missing." });
         }
 
-        // SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
+        // OTP LOCK CHECK for Video Calls
         if (isValidApptId) {
             const appointment = await Appointment.findById(appointmentId);
             if (appointment && appointment.consultationType === 'Video Consult') {
@@ -712,44 +741,35 @@ const createPrescription = async (req, res) => {
             }
         }
 
-        // Try-Catch wrapper on medicines JSON parsing to prevent SyntaxError crashes
         let parsedMedicines = [];
         if (medicines) {
             try {
                 parsedMedicines = typeof medicines === 'string' ? JSON.parse(medicines) : medicines;
             } catch (e) {
-                console.error("SyntaxError: Failed to parse medicines JSON:", e.message);
-                parsedMedicines = []; // Safe fallback
+                parsedMedicines = [];
             }
         }
 
-        // Try-Catch wrapper on diagnosis JSON parsing to prevent SyntaxError crashes
         let parsedDiagnosis = [];
         if (diagnosis) {
             try {
                 parsedDiagnosis = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : diagnosis;
             } catch (e) {
-                console.error("SyntaxError: Failed to parse diagnosis JSON:", e.message);
-                parsedDiagnosis = []; // Safe fallback
+                parsedDiagnosis = [];
             }
         }
 
-        // Robust Vitals Parser 
         let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
-
-        // Option A: Direct Flat Keys
         if (req.body.bp !== undefined) finalVitals.bp = req.body.bp;
         if (req.body.pulse !== undefined) finalVitals.pulse = req.body.pulse;
         if (req.body.temp !== undefined) finalVitals.temp = req.body.temp;
         if (req.body.spo2 !== undefined) finalVitals.spo2 = req.body.spo2;
 
-        // Option B: Flutter Multipart Nested Keys
         if (req.body['vitals[bp]'] !== undefined) finalVitals.bp = req.body['vitals[bp]'];
         if (req.body['vitals[pulse]'] !== undefined) finalVitals.pulse = req.body['vitals[pulse]'];
         if (req.body['vitals[temp]'] !== undefined) finalVitals.temp = req.body['vitals[temp]'];
         if (req.body['vitals[spo2]'] !== undefined) finalVitals.spo2 = req.body['vitals[spo2]'];
 
-        // Option C: JSON stringified or raw nested Object
         if (req.body.vitals) {
             try {
                 const parsedVitals = typeof req.body.vitals === 'string' 
@@ -762,19 +782,15 @@ const createPrescription = async (req, res) => {
                     if (parsedVitals.temp !== undefined) finalVitals.temp = parsedVitals.temp;
                     if (parsedVitals.spo2 !== undefined) finalVitals.spo2 = parsedVitals.spo2;
                 }
-            } catch (e) {
-                console.error("Error parsing vitals object:", e.message);
-            }
+            } catch (e) {}
         }
 
-        // 🚀 SYNC FIX: Check if a prescription already exists for this appointmentId to prevent double entries
         let prescription = null;
         if (isValidApptId) {
             prescription = await Prescription.findOne({ appointmentId });
         }
 
         if (prescription) {
-            // Update the existing record instead of saving a new duplicate
             prescription.userId = targetUserId;
             prescription.chiefComplaints = chiefComplaints || prescription.chiefComplaints || "";
             prescription.diagnosis = parsedDiagnosis || prescription.diagnosis || [];
@@ -786,11 +802,8 @@ const createPrescription = async (req, res) => {
             prescription.additionalNotes = additionalNotes || prescription.additionalNotes || "";
             prescription.pdfUrl = `/uploads/doctor_prescriptions/${req.file.filename}`;
             prescription.vitals = finalVitals;
-
             await prescription.save();
-            console.log(`[Self-Healed Prescription] Duplicate prevented. Updated existing prescription ID: ${prescription._id}`);
         } else {
-            // Create new prescription document if no previous record exists
             prescription = new Prescription({
                 doctorId: req.user.id,
                 userId: targetUserId, 
@@ -807,19 +820,20 @@ const createPrescription = async (req, res) => {
                 pdfUrl: `/uploads/doctor_prescriptions/${req.file.filename}`,
                 vitals: finalVitals 
             });
-
             await prescription.save();
         }
 
+        // 🚨 AUTO COD PAYMENT CONFIRMATION ON COMPLETION:
         if (isValidApptId) {
             await Appointment.findByIdAndUpdate(appointmentId, {
-                status: 'Completed'
+                status: 'Completed',
+                paymentStatus: 'Paid' // Auto-marks COD cash collected upon prescription delivery
             });
         }
 
         res.status(201).json({
             success: true,
-            message: "Prescription successfully generated and saved!",
+            message: "Prescription successfully generated, saved, and consultation completed!",
             data: prescription
         });
 
@@ -829,7 +843,7 @@ const createPrescription = async (req, res) => {
     }
 };
 
-// --- COMPLETE WITH PRESCRIPTION (Direct API fallback) ---
+// --- COMPLETE WITH PRESCRIPTION (Fallback) ---
 const completeWithPrescription = async (req, res) => {
     try {
         const { appointmentId, diagnosis, medicines, additionalNotes } = req.body;
@@ -838,7 +852,6 @@ const completeWithPrescription = async (req, res) => {
         const appointment = await Appointment.findOne({ _id: targetId, bookingType: 'Appointment' });
         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
 
-        // SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
         if (appointment.consultationType === 'Video Consult') {
             if (appointment.tracking?.isOtpVerified !== true) {
                 return res.status(400).json({ 
@@ -848,22 +861,17 @@ const completeWithPrescription = async (req, res) => {
             }
         }
 
-        // Robust Vitals Parser
         let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
-
-        // Option A: Direct Flat Keys
         if (req.body.bp !== undefined) finalVitals.bp = req.body.bp;
         if (req.body.pulse !== undefined) finalVitals.pulse = req.body.pulse;
         if (req.body.temp !== undefined) finalVitals.temp = req.body.temp;
         if (req.body.spo2 !== undefined) finalVitals.spo2 = req.body.spo2;
 
-        // Option B: Flutter Multipart Nested Keys
         if (req.body['vitals[bp]'] !== undefined) finalVitals.bp = req.body['vitals[bp]'];
         if (req.body['vitals[pulse]'] !== undefined) finalVitals.pulse = req.body['vitals[pulse]'];
         if (req.body['vitals[temp]'] !== undefined) finalVitals.temp = req.body['vitals[temp]'];
         if (req.body['vitals[spo2]'] !== undefined) finalVitals.spo2 = req.body['vitals[spo2]'];
 
-        // Option C: JSON stringified or raw nested Object
         if (req.body.vitals) {
             try {
                 const parsedVitals = typeof req.body.vitals === 'string' 
@@ -876,24 +884,18 @@ const completeWithPrescription = async (req, res) => {
                     if (parsedVitals.temp !== undefined) finalVitals.temp = parsedVitals.temp;
                     if (parsedVitals.spo2 !== undefined) finalVitals.spo2 = parsedVitals.spo2;
                 }
-            } catch (e) {
-                console.error("Error parsing vitals in completeWithPrescription:", e.message);
-            }
+            } catch (e) {}
         }
 
-        // 🚀 SYNC FIX: Check if a prescription already exists for this appointmentId to prevent double entries
         let prescription = await Prescription.findOne({ appointmentId: targetId });
 
         if (prescription) {
-            // Update existing prescription details instead of creating a new duplicate
             prescription.diagnosis = diagnosis || prescription.diagnosis || [];
             prescription.medicines = medicines || prescription.medicines || [];
             prescription.additionalNotes = additionalNotes || prescription.additionalNotes || "";
             prescription.vitals = finalVitals;
             await prescription.save();
-            console.log(`[Self-Healed Fallback] Duplicate prevented. Updated existing prescription ID: ${prescription._id}`);
         } else {
-            // Create only if it doesn't exist
             prescription = await Prescription.create({
                 appointmentId: targetId,
                 doctorId: req.user.id,
@@ -905,37 +907,144 @@ const completeWithPrescription = async (req, res) => {
             });
         }
 
+        // 🚨 Complete Appointment and mark payment paid
         appointment.status = 'Completed';
+        appointment.paymentStatus = 'Paid';
         await appointment.save();
-        res.status(201).json({ success: true, message: "Prescription added and completed", data: prescription });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        res.status(201).json({ success: true, message: "Prescription added and consultation completed", data: prescription });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
-// endpoint: GET /doctor/appointments/patient-history
+// --- COMPLETE WITH PRESCRIPTION (Direct API fallback) ---
+// const completeWithPrescription = async (req, res) => {
+//     try {
+//         const { appointmentId, diagnosis, medicines, additionalNotes } = req.body;
+//         const targetId = appointmentId || req.params.id;
+
+//         const appointment = await Appointment.findOne({ _id: targetId, bookingType: 'Appointment' });
+//         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+
+//         // SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
+//         if (appointment.consultationType === 'Video Consult') {
+//             if (appointment.tracking?.isOtpVerified !== true) {
+//                 return res.status(400).json({ 
+//                     success: false, 
+//                     message: "Prescription Blocked: Video consultation has not been verified via User OTP yet." 
+//                 });
+//             }
+//         }
+
+//         // Robust Vitals Parser
+//         let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
+
+//         // Option A: Direct Flat Keys
+//         if (req.body.bp !== undefined) finalVitals.bp = req.body.bp;
+//         if (req.body.pulse !== undefined) finalVitals.pulse = req.body.pulse;
+//         if (req.body.temp !== undefined) finalVitals.temp = req.body.temp;
+//         if (req.body.spo2 !== undefined) finalVitals.spo2 = req.body.spo2;
+
+//         // Option B: Flutter Multipart Nested Keys
+//         if (req.body['vitals[bp]'] !== undefined) finalVitals.bp = req.body['vitals[bp]'];
+//         if (req.body['vitals[pulse]'] !== undefined) finalVitals.pulse = req.body['vitals[pulse]'];
+//         if (req.body['vitals[temp]'] !== undefined) finalVitals.temp = req.body['vitals[temp]'];
+//         if (req.body['vitals[spo2]'] !== undefined) finalVitals.spo2 = req.body['vitals[spo2]'];
+
+//         // Option C: JSON stringified or raw nested Object
+//         if (req.body.vitals) {
+//             try {
+//                 const parsedVitals = typeof req.body.vitals === 'string' 
+//                     ? JSON.parse(req.body.vitals) 
+//                     : req.body.vitals;
+                
+//                 if (parsedVitals && typeof parsedVitals === 'object') {
+//                     if (parsedVitals.bp !== undefined) finalVitals.bp = parsedVitals.bp;
+//                     if (parsedVitals.pulse !== undefined) finalVitals.pulse = parsedVitals.pulse;
+//                     if (parsedVitals.temp !== undefined) finalVitals.temp = parsedVitals.temp;
+//                     if (parsedVitals.spo2 !== undefined) finalVitals.spo2 = parsedVitals.spo2;
+//                 }
+//             } catch (e) {
+//                 console.error("Error parsing vitals in completeWithPrescription:", e.message);
+//             }
+//         }
+
+//         // 🚀 SYNC FIX: Check if a prescription already exists for this appointmentId to prevent double entries
+//         let prescription = await Prescription.findOne({ appointmentId: targetId });
+
+//         if (prescription) {
+//             // Update existing prescription details instead of creating a new duplicate
+//             prescription.diagnosis = diagnosis || prescription.diagnosis || [];
+//             prescription.medicines = medicines || prescription.medicines || [];
+//             prescription.additionalNotes = additionalNotes || prescription.additionalNotes || "";
+//             prescription.vitals = finalVitals;
+//             await prescription.save();
+//             console.log(`[Self-Healed Fallback] Duplicate prevented. Updated existing prescription ID: ${prescription._id}`);
+//         } else {
+//             // Create only if it doesn't exist
+//             prescription = await Prescription.create({
+//                 appointmentId: targetId,
+//                 doctorId: req.user.id,
+//                 userId: appointment.userId,
+//                 diagnosis,
+//                 medicines,
+//                 additionalNotes,
+//                 vitals: finalVitals
+//             });
+//         }
+
+//         appointment.status = 'Completed';
+//         await appointment.save();
+//         res.status(201).json({ success: true, message: "Prescription added and completed", data: prescription });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
+
+// endpoint: GET /doctor/appointments/patient-history?page=1&limit=10
 const getPatientHistory = async (req, res) => {
     try {
         const doctorId = req.user.id;
- 
-        // Fetch completed appointments for this doctor
-        const history = await Appointment.find({
+        const { page = 1, limit = 10 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
+
+        const query = {
             doctorId,
             bookingType: 'Appointment',
-            status: 'Completed' // History usually implies finished visits
-        })
-        .populate('userId', 'profileImage') // To get patient profile picture
-        .sort({ appointmentDate: -1 });
+            status: 'Completed'
+        };
+
+        const total = await Appointment.countDocuments(query);
+ 
+        // Fetch completed appointments for this doctor
+        const history = await Appointment.find(query)
+            .populate('userId', 'name phone profileImage')
+            .sort({ appointmentDate: -1 })
+            .skip(skip)
+            .limit(limitNum);
  
         // Formatting data for the Figma List UI
         const formattedHistory = history.map(app => ({
             appointmentId: app._id,
-            patientName: app.patients[0]?.patientName || "Unknown",
-            // Merging address fields for the subtitle in Figma
-            location: `${app.address.houseNo}, ${app.address.sector} ${app.address.city}`,
+            bookingId: app.bookingId,
+            patientName: app.patients[0]?.patientName || app.userId?.name || "Unknown",
+            location: app.address ? `${app.address.houseNo || ''}, ${app.address.sector || ''} ${app.address.city || ''}`.trim() : "Clinic Consultation",
             profileImage: app.userId?.profileImage || null,
+            consultationType: app.consultationType,
+            appointmentDate: app.appointmentDate,
+            appointmentTime: app.appointmentTime,
+            paymentMethod: app.paymentMethod,
+            paymentStatus: app.paymentStatus,
+            totalAmount: app.totalAmount
         }));
  
         res.json({
             success: true,
+            total,
+            currentPage: pageNum,
+            totalPages: Math.ceil(total / limitNum),
             count: formattedHistory.length,
             data: formattedHistory
         });
@@ -1003,25 +1112,34 @@ const getPatientHistoryDetails = async (req, res) => {
 };
 
 
-// GET: Fetch appointments eligible for Video Consultation
-// endpoint: GET /doctor/appointments/video-consults
+// GET: Fetch appointments eligible for Video Consultation (with Pagination)
+// endpoint: GET /doctor/appointments/video-consults?page=1&limit=10
 const getDoctorVideoConsults = async (req, res) => {
     try {
-        const doctorId = req.user.id; // Decoded from protect('doctor') middleware
+        const doctorId = req.user.id;
+        const { page = 1, limit = 10 } = req.query;
 
-        // Mongoose query with strict validation rules
-        const appointments = await Appointment.find({
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
+
+        const query = {
             doctorId,
-            bookingType: 'Appointment',            // Only normal appointment bookings
-            consultationType: 'Video Consult',      // Only Video consultations
-            status: { $in: ['Confirmed', 'In-Progress'] } // Active states only
-        })
-        .populate('userId', 'name phone profilePic fcmToken') // Fetch patient's basic profile & token
-        .sort({ appointmentDate: 1, appointmentTime: 1 });   // Upcoming appointments first
+            bookingType: 'Appointment',
+            consultationType: 'Video Consult',
+            status: { $in: ['Confirmed', 'In-Progress'] }
+        };
 
-        // Formatting data for Flutter/Next.js UI presentation
+        const total = await Appointment.countDocuments(query);
+
+        const appointments = await Appointment.find(query)
+            .populate('userId', 'name phone profilePic fcmToken')
+            .sort({ appointmentDate: 1, appointmentTime: 1 })
+            .skip(skip)
+            .limit(limitNum);
+
         const formattedData = appointments.map(app => {
-            const mainPatient = app.patients[0]; // Actual patient being treated
+            const mainPatient = app.patients[0];
             
             return {
                 appointmentId: app._id,
@@ -1034,21 +1152,25 @@ const getDoctorVideoConsults = async (req, res) => {
                 appointmentTime: app.appointmentTime,
                 status: app.status,
                 totalAmount: app.totalAmount,
+                paymentMethod: app.paymentMethod,
+                paymentStatus: app.paymentStatus,
+                subscriptionDetails: app.subscriptionDetails,
                 
-                // Account holder details
                 userAccount: {
                     phone: app.userId?.phone,
                     profilePic: app.userId?.profilePic || null,
                     hasFcmToken: !!app.userId?.fcmToken
                 },
 
-                // UI Helper: Frontend can directly use this boolean to enable/disable the "Start Video Call" button
                 isCallActionEnabled: true 
             };
         });
 
         res.json({
             success: true,
+            total,
+            currentPage: pageNum,
+            totalPages: Math.ceil(total / limitNum),
             count: formattedData.length,
             data: formattedData
         });

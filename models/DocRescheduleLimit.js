@@ -9,7 +9,7 @@ const docRescheduleLimitSchema = new mongoose.Schema({
     },
     updatedBy: { 
         type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Admin' // Super Admin ID जिसने limit set kari hai
+        ref: 'Admin' // Super Admin ID will be stored here
     }
 }, { timestamps: true });
 

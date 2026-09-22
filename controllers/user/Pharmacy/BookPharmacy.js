@@ -608,14 +608,25 @@ const getMedicineCategoryDetails = async (req, res) => {
         const limit = 20;
         const skip = (parseInt(page) - 1) * limit;
 
-        let breadcrumbRegex = subCategory
-            ? new RegExp(`^${category}\\s*>\\s*${subCategory}`, 'i')
-            : new RegExp(`^${category}\\s*>`, 'i');
+        if (!category || category.trim() === "" || category === "undefined" || category === "null") {
+            return res.status(400).json({ success: false, message: "Category query parameter is required." });
+        }
+
+        // 🛡️ Safe Regex against special characters (e.g. "Baby & Mom", "Vitamins (A-Z)")
+        const safeCat = escapeRegex(category.trim());
+        let breadcrumbRegex;
+
+        if (subCategory && subCategory.trim() !== "" && subCategory !== "undefined" && subCategory !== "null") {
+            const safeSub = escapeRegex(subCategory.trim());
+            breadcrumbRegex = new RegExp(`^${safeCat}\\s*>\\s*${safeSub}`, 'i');
+        } else {
+            breadcrumbRegex = new RegExp(`^${safeCat}\\s*>`, 'i');
+        }
 
         const pipeline = [
             { $match: { bread_crumb: breadcrumbRegex } },
             {
-                // 1. Inventory check (Lowest Vendor Price) [cite: 1.1.2]
+                // 1. Inventory check (Lowest Vendor Price)
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -629,11 +640,40 @@ const getMedicineCategoryDetails = async (req, res) => {
                 }
             },
             {
+                // 🛡️ BUG 8 FIX: Safe numeric conversion preventing String-to-Double cast crashes
                 $addFields: {
-                    numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
-                    numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
-                    numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
-                    numInventoryMRP: { $toDouble: { $arrayElemAt: ["$inventory.mrp", 0] } }, // 👈 Added: Fetch batch MRP [cite: 1.1.2]
+                    numMRP: {
+                        $convert: {
+                            input: "$mrp",
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
+                        }
+                    },
+                    numDocBestPrice: {
+                        $convert: {
+                            input: "$best_price",
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
+                        }
+                    },
+                    numInventoryPrice: {
+                        $convert: {
+                            input: { $arrayElemAt: ["$inventory.vendor_price", 0] },
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
+                        }
+                    },
+                    numInventoryMRP: {
+                        $convert: {
+                            input: { $arrayElemAt: ["$inventory.mrp", 0] },
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
+                        }
+                    },
                     isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
                 }
             },
@@ -646,7 +686,7 @@ const getMedicineCategoryDetails = async (req, res) => {
                             "$numDocBestPrice"
                         ]
                     },
-                    minimumMRP: { // 👈 Added: Dynamic MRP based on batch [cite: 1.1.2]
+                    minimumMRP: {
                         $cond: [
                             "$isInventoryAvailable",
                             "$numInventoryMRP",
@@ -660,7 +700,12 @@ const getMedicineCategoryDetails = async (req, res) => {
                 $addFields: {
                     discountPercentage: {
                         $cond: {
-                            if: { $gt: ["$minimumMRP", 0] },
+                            if: {
+                                $and: [
+                                    { $gt: ["$minimumMRP", 0] },
+                                    { $gt: ["$minimumMRP", "$minimumPrice"] }
+                                ]
+                            },
                             then: {
                                 $round: [
                                     {
@@ -678,9 +723,9 @@ const getMedicineCategoryDetails = async (req, res) => {
                 }
             },
             {
-                // 🚨 OVERWRITE best_price, mrp, and discont_percent to remove static master data leaks [cite: 1.1.2]
+                // Overwrite fields for consistent client payload
                 $addFields: {
-                    mrp: { $toString: "$minimumMRP" }, // Overwrite MRP with batch MRP! [cite: 1.1.2]
+                    mrp: { $toString: "$minimumMRP" },
                     best_price: {
                         $cond: {
                             if: "$isInventoryAvailable",
@@ -726,9 +771,10 @@ const getMedicineCategoryDetails = async (req, res) => {
             total,
             currentPage: parseInt(page),
             totalPages: Math.ceil(total / limit),
-            data: result[0].data
+            data: result[0].data || []
         });
     } catch (error) {
+        console.error("getMedicineCategoryDetails Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2684,18 +2730,18 @@ const getNonPrescriptionMedicines = async (req, res) => {
 const getHighestDiscountMedicines = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limitVal = parseInt(req.query.limit) || 20; // 👈 Dynamic limit from Flutter query params [1]
+        const limitVal = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limitVal;
 
         const pipeline = [
             {
-                // Match only those medicines that have valid MRP values
+                // Match medicines having MRP defined
                 $match: {
                     mrp: { $exists: true, $ne: null, $ne: "" }
                 }
             },
             {
-                // Fetch dynamic lowest vendor price from inventory [cite: 1.1.2]
+                // Fetch dynamic lowest vendor price from inventory
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -2709,16 +2755,37 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             {
+                // 🛡️ BUG 8 FIX: Safe numeric conversion preventing String-to-Double cast crashes on dirty data
                 $addFields: {
-                    numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
-                    numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
-                    numInventoryMRP: { $toDouble: { $arrayElemAt: ["$inventory.mrp", 0] } }, // 👈 Dynamic batch MRP extracted [cite: 1.1.2]
+                    numMRP: {
+                        $convert: {
+                            input: "$mrp",
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
+                        }
+                    },
+                    numInventoryPrice: {
+                        $convert: {
+                            input: { $arrayElemAt: ["$inventory.vendor_price", 0] },
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
+                        }
+                    },
+                    numInventoryMRP: {
+                        $convert: {
+                            input: { $arrayElemAt: ["$inventory.mrp", 0] },
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
+                        }
+                    },
                     isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
                 }
             },
             {
                 $addFields: {
-                    // Mapped helper: 1 if vendor has priced stock, 0 if not listed [cite: 1.1.2]
                     hasVendorPrice: {
                         $cond: ["$isInventoryAvailable", 1, 0]
                     },
@@ -2733,7 +2800,7 @@ const getHighestDiscountMedicines = async (req, res) => {
                         $cond: [
                             "$isInventoryAvailable",
                             "$numInventoryMRP",
-                            null // 👈 Strictly hides master MRP if unstocked by vendors [cite: 1.1.2]
+                            null
                         ]
                     },
                     isAvailable: "$isInventoryAvailable"
@@ -2741,13 +2808,14 @@ const getHighestDiscountMedicines = async (req, res) => {
             },
             {
                 $addFields: {
-                    // Dynamic discount percentage based strictly on live batch MRP and vendor price [cite: 1.1.2]
+                    // Dynamic discount percentage based strictly on live batch MRP and vendor price
                     discountPercentage: {
                         $cond: {
                             if: {
                                 $and: [
                                     "$isInventoryAvailable",
-                                    { $gt: ["$minimumMRP", 0] }
+                                    { $gt: ["$minimumMRP", 0] },
+                                    { $gt: ["$minimumMRP", "$minimumPrice"] }
                                 ]
                             },
                             then: {
@@ -2767,7 +2835,7 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             {
-                // 🚨 OVERWRITE best_price, mrp, and discont_percent with live values [cite: 1.1.2]
+                // Overwrite best_price, mrp, and discont_percent with live batch values
                 $addFields: {
                     best_price: {
                         $cond: {
@@ -2798,8 +2866,7 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             {
-                // 🚨 SORT LOGIC: Deploys hasVendorPrice DESC, then discountPercentage DESC, then alphabetical [cite: 1.1.2]
-                // This forces unstocked items (no vendor price) to the very bottom of the page [cite: 1.1.2]
+                // Sort in-stock items with highest discount first, followed by alphabetical
                 $sort: {
                     hasVendorPrice: -1,
                     discountPercentage: -1,
@@ -2807,7 +2874,6 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             {
-                // Keep clean project payload returning all original keys
                 $project: {
                     inventory: 0,
                     numMRP: 0,
@@ -2818,7 +2884,6 @@ const getHighestDiscountMedicines = async (req, res) => {
                 }
             },
             {
-                // Dynamic Facet stage: Calculates total count & paginated records in parallel
                 $facet: {
                     metadata: [{ $count: "total" }],
                     data: [{ $skip: skip }, { $limit: limitVal }]

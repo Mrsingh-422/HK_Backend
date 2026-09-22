@@ -16,7 +16,7 @@ const calculateVendorBalances = async (vendorId) => {
     const completedAppointments = await Appointment.find({
         doctorId: doctorObjId,
         status: 'Completed'
-    }).select('totalAmount updatedAt').lean();
+    }).select('totalAmount pricingBreakdown paymentMethod paymentStatus subscriptionDetails updatedAt').lean();
 
     let grossEarnings = 0;
     let totalEarnings = 0;
@@ -24,21 +24,37 @@ const calculateVendorBalances = async (vendorId) => {
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 2. Deduct Admin Commission for each completed appointment
+    // 2. Process each completed appointment
     for (let appt of completedAppointments) {
-        const grossAmount = Number(appt.totalAmount || 0);
+        // Agar Subscription se Free booking thi toh originalBaseFee par doctor ko compensate karein
+        const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
+        const grossAmount = isSub 
+            ? Number(appt.pricingBreakdown?.originalBaseFee || 0) 
+            : Number(appt.totalAmount || 0);
+
         grossEarnings += grossAmount;
 
         const { netVendorAmount, adminCutoff } = await calculateAdminCommission('Doctor', grossAmount);
-
         adminCommissionDeducted += adminCutoff;
-        totalEarnings += netVendorAmount;
+
+        let effectiveVendorCredit = 0;
+
+        // 🚨 COD vs ONLINE WALLET LOGIC:
+        if (appt.paymentMethod === 'COD') {
+            // Patient ne poora cash doctor ko de diya hai, toh wallet se sirf Admin Commission deduct hoga
+            effectiveVendorCredit = -adminCutoff;
+        } else {
+            // Online / Subscription booking me Admin doctor ko (Gross - Commission) pay karega
+            effectiveVendorCredit = netVendorAmount;
+        }
+
+        totalEarnings += effectiveVendorCredit;
 
         // 7-Day Rolling Cleared vs Locked Calculation
         if (new Date(appt.updatedAt) <= sevenDaysAgo) {
-            clearedEarnings += netVendorAmount;
+            clearedEarnings += effectiveVendorCredit;
         } else {
-            pendingEarnings += netVendorAmount;
+            pendingEarnings += effectiveVendorCredit;
         }
     }
 
@@ -107,9 +123,9 @@ const getDoctorWalletStats = async (req, res) => {
 
         res.json({ 
             success: true, 
-            grossEarnings: balances.grossEarnings,                     // 👈 Total consultation revenue before commission
-            adminCommissionDeducted: balances.adminCommissionDeducted, // 👈 Admin platform fee deducted
-            commissionPolicy: balances.commissionConfig,               // 👈 Active commission rate
+            grossEarnings: balances.grossEarnings,                     // Total consultation revenue before commission
+            adminCommissionDeducted: balances.adminCommissionDeducted, // Admin platform fee deducted
+            commissionPolicy: balances.commissionConfig,               // Active commission rate
             totalBalance: balances.walletBalance,
             withdrawableBalance: balances.withdrawableBalance,
             pendingBalance: balances.pendingEarnings,
@@ -122,7 +138,6 @@ const getDoctorWalletStats = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-3
 
 // 2. DOCTOR WITHDRAWAL REQUEST (With lazy-initialization fix)
 const requestDoctorWithdrawal = async (req, res) => {
