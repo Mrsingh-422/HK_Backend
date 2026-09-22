@@ -98,7 +98,6 @@ const getDoctorDetails = async (req, res) => {
             .populate('hospitalId', 'name address city')
             .select('-password -token');
 
-        // 🚨 CRITICAL CHECK: Block access if doctor is not found or is marked inactive by Admin
         if (!doctorDoc || doctorDoc.isActive === false) {
             return res.status(404).json({ success: false, message: "Doctor profile is inactive or not found." });
         }
@@ -126,14 +125,22 @@ const getDoctorDetails = async (req, res) => {
         const allDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
         if (availability) {
-            const workDays = allDays.filter(day => !availability.offDays.includes(day));
-            const closedDays = availability.offDays;
+            const offDaysList = availability.offDays || [];
+            const workDays = allDays.filter(day => !offDaysList.includes(day));
+            const closedDays = offDaysList;
+
+            let workDaysLabel = "Not Available";
+            if (workDays.length === 1) {
+                workDaysLabel = workDays[0].slice(0, 3);
+            } else if (workDays.length > 1) {
+                workDaysLabel = `${workDays[0].slice(0, 3)} - ${workDays[workDays.length - 1].slice(0, 3)}`;
+            }
 
             workingHoursDisplay = [
                 {
-                    days: workDays.length > 0 ? `${workDays[0].slice(0,3)} - ${workDays[workDays.length-1].slice(0,3)}` : "Not Available",
-                    time: `${availability.startTime} - ${availability.endTime}`,
-                    isClosed: false
+                    days: workDaysLabel,
+                    time: `${availability.startTime || '09:00'} - ${availability.endTime || '18:00'}`,
+                    isClosed: workDays.length === 0
                 }
             ];
 
@@ -157,21 +164,23 @@ const getDoctorDetails = async (req, res) => {
                     ...doctor,
                     averageRating: averageRating,   
                     totalReviews: reviews.length,  
-                    experience: `${doctor.experienceYears}+ years`,
+                    experience: `${doctor.experienceYears || 0}+ years`,
                     workingHours: workingHoursDisplay,
-                    helpWith: doctor.treatedConditions || ["Fever", "Cough", "Headache"],
-                    competencies: doctor.competencies || ["MD Degree", "Emergency Care"],
-                    isOnline: doctor.isOnline ?? true // Sends online status to UI
+                    helpWith: (doctor.treatedConditions && doctor.treatedConditions.length > 0) ? doctor.treatedConditions : ["Fever", "Cough", "Headache"],
+                    competencies: (doctor.competencies && doctor.competencies.length > 0) ? doctor.competencies : ["MD Degree", "Emergency Care"],
+                    isOnline: doctor.isOnline ?? true
                 },
                 activeServices: [
-                    { type: 'Clinic Visit', fee: doctor.fees.clinic, active: doctor.consultationStatus.clinic },
-                    { type: 'Video Consult', fee: doctor.fees.online, active: doctor.consultationStatus.online },
-                    { type: 'Home Visit', fee: doctor.fees.home, active: doctor.consultationStatus.home }
+                    { type: 'Clinic Visit', fee: doctor.fees?.clinic || 0, active: doctor.consultationStatus?.clinic ?? true },
+                    { type: 'Video Consult', fee: doctor.fees?.online || 0, active: doctor.consultationStatus?.online ?? true },
+                    { type: 'Home Visit', fee: doctor.fees?.home || 0, active: doctor.consultationStatus?.home ?? true }
                 ],
                 recentReviews 
             } 
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // GET VISIT CONFIG
@@ -429,11 +438,8 @@ const getCheckoutSummary = async (req, res) => {
 // 2. BOOK APPOINTMENT (Corrected with req.user.id)
 const bookAppointment = async (req, res) => {
     try {
-        console.log("Incoming Appointment Booking Request:", req.body);
-
         let body = { ...req.body };
 
-        // 🚨 1. Safe Multipart / Stringified JSON Parsers
         if (typeof body.patients === 'string') {
             try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
         }
@@ -456,11 +462,9 @@ const bookAppointment = async (req, res) => {
             totalAmount        
         } = body;
 
-        // 🚨 2. Safe TimeSlot Resolver (Supports both 'timeSlot' and 'appointmentTime')
         const appointmentTime = timeSlot || incomingApptTime; 
         const pricingData = pricingBreakdown; 
 
-        // 1. Basic Validations
         if (!doctorId || !appointmentDate || !appointmentTime) {
             return res.status(400).json({ 
                 success: false, 
@@ -468,7 +472,6 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 🚨 3. Updated Payment Methods (Includes 'Online')
         const allowedPaymentMethods = ['Online', 'UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
         const activePaymentMethod = body.paymentMethod || "Online";
         
@@ -479,7 +482,6 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 🚀 SMART COD VALIDATION: Passes req.user.id (Subscribers get VIP bypass)
         if (activePaymentMethod === 'COD') {
             const isCodAllowed = await isCodEnabled('Doctor', req.user.id);
             if (!isCodAllowed) {
@@ -490,7 +492,6 @@ const bookAppointment = async (req, res) => {
             }
         }
 
-        // 2. Doctor Existence & Online Check
         const doctor = await Doctor.findById(doctorId);
         if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor not found." });
@@ -509,8 +510,8 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 3. Duplicate Slot Check
-        const queryDate = moment(appointmentDate).startOf('day').toDate();
+        // 🛡️ ZOMBIE SLOT GUARD: Check if slot is booked by a confirmed appointment OR a fresh (<15m) pending session
+        const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
         const isBooked = await Appointment.findOne({ 
             doctorId, 
             appointmentDate: { 
@@ -518,7 +519,11 @@ const bookAppointment = async (req, res) => {
                 $lte: moment(appointmentDate).endOf('day').toDate()
             }, 
             appointmentTime, 
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] } 
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] },
+            $or: [
+                { status: { $ne: 'Pending' } },
+                { status: 'Pending', createdAt: { $gte: fifteenMinutesAgo } } // Only active pending orders block slot
+            ]
         });
 
         if (isBooked) {
@@ -528,16 +533,14 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // Subscription variables
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
-        const rawDoctorFee = doctor.fees[typeMap[consultationType]] || 0;
+        const rawDoctorFee = doctor.fees?.[typeMap[consultationType]] || 0;
 
         let originalBaseFee = rawDoctorFee;
         let isSubscriptionApplied = false;
         let planName = "";
         let userSubscriptionId = null;
 
-        // 🚀 Check Subscription Benefit
         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', rawDoctorFee);
         
         if (docBenefit.isApplied) {
@@ -563,9 +566,7 @@ const bookAppointment = async (req, res) => {
         const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         const finalPayable = Number(totalAmount !== undefined ? totalAmount : (pricingData.subtotal || 0));
 
-        // =========================================================================
         // CASE A: FREE BOOKING VIA SUBSCRIPTION / COD
-        // =========================================================================
         if (finalPayable === 0 || activePaymentMethod === 'COD') {
             const appointment = await Appointment.create({
                 userId: req.user.id,
@@ -621,14 +622,11 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // =========================================================================
-        // CASE B: PAID ONLINE APPOINTMENT (RAZORPAY ORDER)
-        // =========================================================================
+        // CASE B: PAID ONLINE APPOINTMENT (RAZORPAY)
         let rzpOrder;
         try {
             rzpOrder = await createRazorpayOrder(finalPayable, `receipt_${tempBookingId}`);
         } catch (rzpErr) {
-            console.error("Razorpay Order Error:", rzpErr.message);
             return res.status(400).json({
                 success: false,
                 message: `Payment Gateway Error: ${rzpErr.message || "Failed to initialize Razorpay order."}`

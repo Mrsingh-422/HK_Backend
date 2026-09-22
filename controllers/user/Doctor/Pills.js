@@ -195,11 +195,22 @@ const recordPillAction = async (req, res) => {
         const { time, action } = req.body; 
         const todayStr = moment().format('YYYY-MM-DD');
 
-        const pill = await PillReminder.findOne({ _id: pillId, userId: req.user.id });
-        if (!pill) return res.status(404).json({ message: "Pill not found" });
+        if (!time || !action) {
+            return res.status(400).json({ success: false, message: "Both 'time' and 'action' are required." });
+        }
 
-        const timeIndex = pill.times.findIndex(t => t.time === time);
-        if (timeIndex === -1) return res.status(400).json({ message: "Time slot not found" });
+        const pill = await PillReminder.findOne({ _id: pillId, userId: req.user.id });
+        if (!pill) return res.status(404).json({ success: false, message: "Pill reminder not found." });
+
+        // 🛡️ Case-insensitive & Whitespace-trimmed Matching
+        const cleanIncomingTime = String(time).trim().toLowerCase();
+        const timeIndex = pill.times.findIndex(t => 
+            t.time && String(t.time).trim().toLowerCase() === cleanIncomingTime
+        );
+
+        if (timeIndex === -1) {
+            return res.status(400).json({ success: false, message: `Time slot '${time}' not found for this medication.` });
+        }
 
         if (action === 'Taken') {
             pill.times[timeIndex].isTakenToday = true;
@@ -208,7 +219,7 @@ const recordPillAction = async (req, res) => {
             pill.times[timeIndex].snoozeUntil = moment().add(10, 'minutes').toDate();
         }
 
-        pill.history.push({ date: todayStr, time: time, action: action });
+        pill.history.push({ date: todayStr, time: pill.times[timeIndex].time, action: action });
         await pill.save();
 
         res.json({ success: true, message: `Medication marked as ${action}`, data: enrichPillWithProgress(pill) });

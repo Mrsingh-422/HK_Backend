@@ -109,9 +109,22 @@ const logNewPeriodDate = async (req, res) => {
 const getPeriodInsights = async (req, res) => {
     try {
         const tracker = await MenstrualTracker.findOne({ userId: req.user.id });
-        if (!tracker) return res.json({ success: true, data: null });
+        
+        // 🛡️ If no tracker or no periods logged, return clean null state instead of NaN
+        if (!tracker || !tracker.periods || tracker.periods.length === 0 || !tracker.lastPeriodDate) {
+            return res.json({ 
+                success: true, 
+                data: {
+                    cycleLength: tracker?.cycleLength || 28,
+                    periodDuration: tracker?.periodDuration || 5,
+                    lastPeriodDate: null,
+                    nextPeriodDate: null,
+                    daysUntilNext: 0,
+                    regularity: "No cycle logged yet"
+                } 
+            });
+        }
 
-        // Next Period Date = Last Logged Date + Cycle Length
         const nextPeriod = moment(tracker.lastPeriodDate).add(tracker.cycleLength, 'days').startOf('day');
         const today = moment().startOf('day');
         const daysUntilNext = nextPeriod.diff(today, 'days');
@@ -124,7 +137,7 @@ const getPeriodInsights = async (req, res) => {
                 lastPeriodDate: moment(tracker.lastPeriodDate).format('YYYY-MM-DD'),
                 nextPeriodDate: nextPeriod.format('YYYY-MM-DD'),
                 daysUntilNext: daysUntilNext >= 0 ? daysUntilNext : 0,
-                regularity: tracker.regularity // "Regular cycle"
+                regularity: tracker.regularity || "Regular cycle"
             }
         });
     } catch (error) {
