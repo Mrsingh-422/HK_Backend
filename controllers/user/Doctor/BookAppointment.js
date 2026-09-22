@@ -274,6 +274,12 @@ const validateCoupon = async (req, res) => {
 // for condtional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
 const getCheckoutSummary = async (req, res) => {
     try {
+        // 🖨️ YEH LOG FRONTEND KA POORA DATA TERMINAL ME PRINT KAREGA:
+        console.log("\n📦 ================= INCOMING FRONTEND CHECKOUT DATA =================");
+        console.log("👤 Logged In User ID :", req.user?.id || req.user?._id);
+        console.log("📩 Raw Request Body  :", JSON.stringify(req.body, null, 2));
+        console.log("=======================================================================\n");
+
         let body = { ...req.body };
 
         // 🚨 SAFE MULTIPART PARSER
@@ -294,12 +300,14 @@ const getCheckoutSummary = async (req, res) => {
         } = body;
 
         const doctor = await Doctor.findById(doctorId);
-        if (!doctor) return res.status(404).json({ message: "Doctor not found" });
+        if (!doctor) {
+            console.log("❌ REJECTED: Doctor ID not found in database ->", doctorId);
+            return res.status(404).json({ message: "Doctor not found" });
+        }
 
-        // 🚀 FIX: req.user.id pass kiya (Subscribed User ke liye COD hamesha TRUE aayega!)
         const isCodAllowed = await isCodEnabled('Doctor', req.user ? req.user.id : null);
 
-        // FAMILY MEMBERS VERIFICATION LOGIC
+        // FAMILY MEMBERS CHECK
         const user = await User.findById(req.user.id).select('familyMember');
         if (!user) return res.status(404).json({ message: "User account not found" });
 
@@ -314,6 +322,9 @@ const getCheckoutSummary = async (req, res) => {
                     );
 
                     if (!isRegisteredMember) {
+                        // 🖨️ Yahan print hoga ki kyu reject hua:
+                        console.log(`❌ 400 REJECTED: Patient '${pName}' is NOT in familyMember array of user '${req.user.name || req.user.id}'`);
+                        
                         return res.status(400).json({
                             success: false,
                             message: `Access Blocked: Patient '${pName}' is not registered under your family profile.`
@@ -331,7 +342,6 @@ const getCheckoutSummary = async (req, res) => {
         let planName = "";
         let userSubscriptionId = null;
 
-        // SUBSCRIPTION CHECK
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
         
@@ -386,6 +396,8 @@ const getCheckoutSummary = async (req, res) => {
             }
         }
 
+        console.log("✅ CHECKOUT SUMMARY CALCULATED SUCCESSFULLY for User:", req.user.id);
+
         res.json({
             success: true,
             data: {
@@ -399,7 +411,7 @@ const getCheckoutSummary = async (req, res) => {
                 totalPayable: Math.max(0, subtotal - discount),
                 patients,
                 address: consultationType === 'Home Visit' ? address : null,
-                isCodAvailable: isCodAllowed, // 👈 Subscribed user ke liye HAMESHA TRUE
+                isCodAvailable: isCodAllowed,
                 subscriptionDetails: {
                     isSubscriptionApplied, 
                     userSubscriptionId,
@@ -408,6 +420,7 @@ const getCheckoutSummary = async (req, res) => {
             }
         });
     } catch (error) { 
+        console.error("Checkout Summary Error:", error);
         res.status(500).json({ message: error.message }); 
     }
 };
@@ -887,57 +900,99 @@ const userCancelAppointment = async (req, res) => {
 // RESCHEDULE
 const rescheduleAppointment = async (req, res) => {
     try {
-        const { appointmentId, newDate, newTimeSlot } = req.body;
+        console.log("\n🔄 [INCOMING RESCHEDULE REQUEST]:", JSON.stringify(req.body, null, 2));
+
+        // 🚨 1. Flexible Key Mapping (Frontend kisi bhi key name se data bheje, match ho jayega)
+        const appointmentId = req.body.appointmentId || req.body.id || req.body.bookingId;
+        const newDate = req.body.newDate || req.body.appointmentDate || req.body.date;
+        const newTimeSlot = req.body.newTimeSlot || req.body.timeSlot || req.body.appointmentTime;
 
         if (!appointmentId || !newDate || !newTimeSlot) {
-            return res.status(400).json({ success: false, message: "Appointment, Date, and TimeSlot are mandatory." });
+            console.log("❌ 400 REJECTED: Missing required fields ->", { appointmentId, newDate, newTimeSlot });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Appointment ID, New Date, and New TimeSlot are mandatory." 
+            });
         }
 
-        const appt = await Appointment.findOne({ _id: appointmentId, userId: req.user.id });
-        if (!appt) return res.status(404).json({ success: false, message: "Appointment record not found." });
+        // 2. Fetch User Appointment
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(appointmentId) : new mongoose.Types.ObjectId() },
+                { bookingId: String(appointmentId).trim() }
+            ],
+            userId: req.user.id
+        };
 
-        // 🚀 SYNC FIX: Block rescheduling if the consultation is already finalized, in-progress, or marked as No-Show
+        const appt = await Appointment.findOne(query);
+        if (!appt) {
+            console.log("❌ 404 REJECTED: Appointment not found for user:", req.user.id);
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
+        }
+
+        // 3. Blocked Status Check
         const blockedStates = ['Completed', 'In-Progress', 'No-Show'];
         if (blockedStates.includes(appt.status)) {
+            console.log(`❌ 400 REJECTED: Appointment is already in '${appt.status}' state.`);
             return res.status(400).json({ 
                 success: false, 
                 message: `Reschedule Blocked: Consultation is already in '${appt.status}' state.` 
             });
         }
 
+        // 4. Global Limit Check (Max 2 Reschedules)
         const globalConfig = await DocRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
-
         const currentRescheduleCount = appt.rescheduleCount || 0;
 
         if (currentRescheduleCount >= maxLimit) {
+            console.log(`❌ 400 REJECTED: Max limit reached (${currentRescheduleCount}/${maxLimit})`);
             return res.status(400).json({
                 success: false,
-                message: `Reschedule failed: Aapki maximum reschedule limit (${maxLimit} times) poori ho chuki hai.`
+                message: `Reschedule failed: Maximum reschedule limit (${maxLimit} times) reached for this appointment.`
             });
         }
 
+        // 5. Check if New Slot is Already Booked (Safe Date Range Boundary)
+        const queryStart = moment(newDate).startOf('day').toDate();
+        const queryEnd = moment(newDate).endOf('day').toDate();
+
         const isBooked = await Appointment.findOne({
-            _id: { $ne: appointmentId },
+            _id: { $ne: appt._id },
             doctorId: appt.doctorId,
-            appointmentDate: new Date(newDate),
+            appointmentDate: { $gte: queryStart, $lte: queryEnd },
             appointmentTime: newTimeSlot,
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] }
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] }
         });
 
         if (isBooked) {
-            return res.status(400).json({ success: false, message: "Naya selected slot pehle se hi kisi aur patient ke liye booked hai." });
+            console.log(`❌ 400 REJECTED: Slot '${newTimeSlot}' on '${newDate}' is already booked.`);
+            return res.status(400).json({ 
+                success: false, 
+                message: `The selected time slot (${newTimeSlot}) is already booked. Please select another slot.` 
+            });
         }
 
+        // 6. Update Appointment
         appt.appointmentDate = new Date(newDate);
         appt.appointmentTime = newTimeSlot;
         appt.rescheduleCount = currentRescheduleCount + 1;
         appt.status = 'Confirmed'; 
 
         await appt.save();
-        res.json({ success: true, message: "Appointment rescheduled successfully", data: appt });
+
+        console.log(`✅ APPOINTMENT RESCHEDULED SUCCESSFULLY (Count: ${appt.rescheduleCount}/${maxLimit})`);
+
+        res.json({ 
+            success: true, 
+            message: "Appointment rescheduled successfully", 
+            remainingReschedules: Math.max(0, maxLimit - appt.rescheduleCount),
+            data: appt 
+        });
 
     } catch (error) {
+        console.error("Reschedule Appointment Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -981,7 +1036,7 @@ const getMyPrescriptions = async (req, res) => {
 const getAvailableSlots = async (req, res) => {
     try {
         const { doctorId } = req.params;
-        const { date } = req.query; 
+        const { date } = req.query; // Date in 'YYYY-MM-DD' format
 
         if (!date) {
             return res.status(400).json({ success: false, message: "Date query parameter is required." });

@@ -35,6 +35,7 @@ const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require
 const { processCancellationRefund, creditVendorCompensation } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
 const PharmacyReturnConfig = require('../../../models/PharmacyReturnConfig');
+const Driver = require('../../../models/Driver');
 
 
 
@@ -575,13 +576,16 @@ const getMedicineCategories = async (req, res) => {
 const getPharmacySubCategories = async (req, res) => {
     try {
         const { category } = req.query;
+        if (!category || category.trim() === "" || category === "undefined") {
+            return res.json({ success: true, data: [] });
+        }
 
-        // Aggregation logic taaki laakho records mein se unique sub-cats jaldi nikle
+        const safeCategory = escapeRegex(category.trim());
+
         const subCats = await Medicine.aggregate([
-            { $match: { bread_crumb: new RegExp(`^${category}\\s*>`, 'i') } },
+            { $match: { bread_crumb: new RegExp(`^${safeCategory}\\s*>`, 'i') } },
             {
                 $project: {
-                    // Split "Cardiac Care > Blood Pressure" and take index 1
                     sub: { $trim: { input: { $arrayElemAt: [{ $split: ["$bread_crumb", ">"] }, 1] } } }
                 }
             },
@@ -594,7 +598,9 @@ const getPharmacySubCategories = async (req, res) => {
             success: true,
             data: subCats.map(s => s._id)
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 const getMedicineCategoryDetails = async (req, res) => {
     try {
@@ -1158,7 +1164,6 @@ const getStandardMedicineCatalog = async (req, res) => {
     }
 };
 
-
 // 2. GET medicine with all VENDORS FOR A SPECIFIC MEDICINE
 // endpoint: GET /user/pharmacy/medicine-details/:medicineId?lat=28.6&lng=77.2
 const getMedicineVendors = async (req, res) => {
@@ -1423,15 +1428,13 @@ const searchAlternateBrand = async (req, res) => {
     }
 };
 
-
-
 // --- NEW: GET PHARMACY SLOTS (Mirroring Lab) ---
 const getPharmacySlots = async (req, res) => {
     try {
         const { pharmacyId, date } = req.query; // date format: YYYY-MM-DD
 
-        if (!pharmacyId || !date) {
-            return res.status(400).json({ success: false, message: "Pharmacy ID and Date are required" });
+        if (!pharmacyId || !date || date === 'undefined' || date === 'null') {
+            return res.status(400).json({ success: false, message: "Pharmacy ID and a valid Date are required" });
         }
 
         // 1. Fetch Availability Configuration
@@ -1442,7 +1445,7 @@ const getPharmacySlots = async (req, res) => {
 
         // 2. Check for Weekly Off-days (e.g., Sunday)
         const dayName = moment(date).format('dddd');
-        if (config.offDays.includes(dayName)) {
+        if (config.offDays && config.offDays.includes(dayName)) {
             return res.json({
                 success: true,
                 isClosed: true,
@@ -1464,13 +1467,16 @@ const getPharmacySlots = async (req, res) => {
         // 4. Generate base slots using helper
         const allGeneratedSlots = generateTimeSlots(config);
 
-        // 5. Occupancy/Capacity Logic: Calculate existing bookings for this pharmacy on this date
-        // PharmacyBooking (MedicineOrder) model ka use karke booked slots nikalna
+        // 🛡️ BUG 5 FIX: BSON Date Range calculation for MongoDB Aggregation Pipeline
+        const startOfDay = moment(date).startOf('day').toDate();
+        const endOfDay = moment(date).endOf('day').toDate();
+
+        // 5. Occupancy/Capacity Logic: Calculate existing bookings for this pharmacy on this date range
         const bookedCounts = await PharmacyBooking.aggregate([
             {
                 $match: {
                     pharmacyId: new mongoose.Types.ObjectId(pharmacyId),
-                    appointmentDate: date, // Agar DB mein string format hai toh direct match, warna format adjust karein
+                    appointmentDate: { $gte: startOfDay, $lte: endOfDay }, // 👈 Fixed: Matches exact date boundaries correctly
                     status: { $ne: 'Cancelled' }
                 }
             },
@@ -1937,7 +1943,7 @@ const placeOrder = async (req, res) => {
                 ? (isPrescriptionOrder ? 'Under Review' : 'Placed')
                 : 'Pending',
             paymentStatus: 'Pending',
-            deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString()
+            deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString(),
         });
 
         // 8. COD Immediate Success Return
@@ -1976,7 +1982,6 @@ const placeOrder = async (req, res) => {
     }
 };
 
-
 // ==========================================
 // 2. VERIFY PHARMACY PAYMENT & REDUCE STOCK
 // ==========================================
@@ -1996,6 +2001,20 @@ const verifyPharmacyPayment = async (req, res) => {
 
         const order = await PharmacyBooking.findById(appointmentId);
         if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+
+        // 🛡️ BUG 4 FIX: IDEMPOTENCY GUARD (Double payment verification / Network retry se stock do bar deduct hone se bachata hai)
+        if (order.paymentStatus === 'Paid') {
+            const sanitizedPaidOrder = order.toObject();
+            if (sanitizedPaidOrder.paymentDetails) {
+                delete sanitizedPaidOrder.paymentDetails.razorpaySignature;
+                delete sanitizedPaidOrder.paymentDetails.razorpayOrderId;
+            }
+            return res.json({
+                success: true,
+                message: "Pharmacy payment already verified & order confirmed.",
+                data: sanitizedPaidOrder
+            });
+        }
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
@@ -2064,35 +2083,79 @@ const verifyPharmacyPayment = async (req, res) => {
     }
 };
 
-
 const uploadPrescription = async (req, res) => {
     try {
-        const { address, pharmacyId } = req.body;
-        if (!req.files || req.files.length === 0) return res.status(400).json({ message: "Upload prescription" });
+        const { address, pharmacyId, collectionType } = req.body;
+        
+        let images = [];
+        if (req.files) {
+            if (Array.isArray(req.files)) {
+                images = req.files.map(f => f.path.replace(/\\/g, "/"));
+            } else if (req.files['prescriptionImages']) {
+                images = req.files['prescriptionImages'].map(f => f.path.replace(/\\/g, "/"));
+            }
+        } else if (req.file) {
+            images = [req.file.path.replace(/\\/g, "/")];
+        }
 
-        const images = req.files.map(f => f.path);
+        if (images.length === 0) {
+            return res.status(400).json({ success: false, message: "Please upload at least one prescription image." });
+        }
+
+        if (!pharmacyId) {
+            return res.status(400).json({ success: false, message: "Pharmacy ID is required." });
+        }
+
+        let parsedAddress = {};
+        if (typeof address === 'string' && address !== 'undefined') {
+            try { parsedAddress = JSON.parse(address); } catch (e) { parsedAddress = { addressLine: address }; }
+        } else if (typeof address === 'object' && address !== null) {
+            parsedAddress = address;
+        }
+
+        const tempOrderId = `MED-RX-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
         const order = await PharmacyBooking.create({
-            orderId: `MED-RX-${crypto.randomInt(1000, 9999)}`,
+            orderId: tempOrderId,
             userId: req.user.id,
             pharmacyId,
-            address,
+            collectionType: collectionType || 'Home Delivery',
+            address: parsedAddress,
+            appointmentDate: new Date(),
+            appointmentTime: 'Immediate',
             prescriptionImages: images,
-            orderType: 'Prescription-Based',
-            status: 'Under Review'
+            orderType: 'Prescription',
+            status: 'Under Review',
+            paymentStatus: 'Pending',
+            deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString(),
+            billSummary: {
+                itemTotal: 0,
+                originalItemTotal: 0,
+                comboSavings: 0,
+                deliveryCharge: 0,
+                totalAmount: 0
+            }
         });
 
-        // 🚨 Trigger Notification for Pharmacy Prescription inquiries
+        // Notify Pharmacist
         await notifyAdminsAndVendor(
             pharmacyId,
             'pharmacy',
-            "New Prescription Inquiry Placed!",
-            `Prescription inquiry #${order.orderId} is pending manual review.`,
+            "New Prescription Upload Received!",
+            `Prescription inquiry #${order.orderId} has been placed for manual review.`,
             { bookingId: order._id.toString(), type: 'pharmacy_prescription_review' }
         );
 
-        res.json({ success: true, message: "Pharmacist will verify your prescription", orderId: order.orderId });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({
+            success: true,
+            message: "Prescription uploaded successfully. Pharmacist is reviewing your order.",
+            orderId: order.orderId,
+            data: order
+        });
+    } catch (error) {
+        console.error("uploadPrescription Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 const cancelMedicineOrder = async (req, res) => {
@@ -2173,7 +2236,6 @@ const cancelMedicineOrder = async (req, res) => {
     }
 };
 
-
 const getOrderHistory = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -2207,7 +2269,6 @@ const getOrderHistory = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-
 
 const trackOrder = async (req, res) => {
     try {
@@ -2381,7 +2442,6 @@ const trackOrder = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 const getLatestAddedMedicines = async (req, res) => {
     try {
@@ -2847,54 +2907,66 @@ const estimateRxPrices = async (req, res) => {
     try {
         const { pharmacyId, medicines } = req.body;
 
-        if (!pharmacyId || !medicines || !medicines.length) {
-            return res.status(400).json({ success: false, message: "Pharmacy ID and medicines list are required" });
+        if (!pharmacyId) {
+            return res.status(400).json({ success: false, message: "Pharmacy ID is required" });
+        }
+
+        // Safe parser for medicines array
+        let parsedMeds = [];
+        if (typeof medicines === 'string') {
+            try { parsedMeds = JSON.parse(medicines); } catch (e) { parsedMeds = []; }
+        } else if (Array.isArray(medicines)) {
+            parsedMeds = medicines;
+        }
+
+        if (!parsedMeds || parsedMeds.length === 0) {
+            return res.status(400).json({ success: false, message: "Medicines list is required" });
         }
 
         let estimatedTotal = 0;
         const pricedMedicines = [];
 
-        for (const med of medicines) {
+        for (const med of parsedMeds) {
+            if (!med || !med.name) continue;
+
             let pricePerUnit = 0;
             let mrp = 0;
             let matchedInInventory = false;
 
-            // Search in inventory
             const inventory = await MedicineInventory.findOne({
                 pharmacyId,
                 $or: [
                     { medicineId: mongoose.isValidObjectId(med.medicineId) ? med.medicineId : new mongoose.Types.ObjectId() },
-                    { name: new RegExp(`^${med.name}$`, 'i') }
+                    { name: new RegExp(`^${escapeRegex(med.name)}$`, 'i') }
                 ],
                 is_available: true
             }).populate('medicineId');
 
             if (inventory) {
-                pricePerUnit = inventory.vendor_price;
-                mrp = inventory.medicineId ? Number(inventory.medicineId.mrp || 0) : 0;
+                pricePerUnit = Number(inventory.vendor_price || 0);
+                mrp = inventory.medicineId ? Number(inventory.medicineId.mrp || 0) : Number(inventory.mrp || 0);
                 matchedInInventory = true;
             } else {
-                // Safe DB Fallback
-                const masterMed = await Medicine.findOne({ name: new RegExp(`^${med.name}$`, 'i') });
+                const masterMed = await Medicine.findOne({ name: new RegExp(`^${escapeRegex(med.name)}$`, 'i') });
                 if (masterMed) {
                     mrp = Number(masterMed.mrp || 0);
                     pricePerUnit = Number(masterMed.best_price || masterMed.mrp || 0);
                 } else {
-                    mrp = Number(med.mrp || 0); // User/AI parsed fallback
-                    pricePerUnit = mrp > 0 ? mrp * 0.9 : 15; // default fallback 10% discount estimation
+                    mrp = Number(med.mrp || 0);
+                    pricePerUnit = mrp > 0 ? mrp * 0.9 : 15;
                 }
             }
 
-            const calculatedQty = Math.max(1, (med.durationDays || 15));
+            const calculatedQty = Math.max(1, Number(med.durationDays || 15));
             const subtotal = pricePerUnit * calculatedQty;
             estimatedTotal += subtotal;
 
             pricedMedicines.push({
                 name: med.name,
-                durationDays: med.durationDays,
+                durationDays: calculatedQty,
                 mrp,
                 pricePerUnit,
-                totalPrice: subtotal,
+                totalPrice: Math.round(subtotal),
                 available: matchedInInventory
             });
         }
@@ -2905,6 +2977,7 @@ const estimateRxPrices = async (req, res) => {
             medicines: pricedMedicines
         });
     } catch (error) {
+        console.error("estimateRxPrices Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2952,11 +3025,25 @@ const createPrescriptionRequest = async (req, res) => {
             return res.status(400).json({ success: false, message: "Please upload prescription image file" });
         }
 
-        const parsedMedicines = typeof requestedMedicines === 'string' ? JSON.parse(requestedMedicines) : requestedMedicines;
+        // 🛡️ BUG 6 FIX: Crash-proof parser for requestedMedicines (Handles empty, undefined string, or raw JSON)
+        let parsedMedicines = [];
+        if (requestedMedicines && requestedMedicines !== 'undefined' && requestedMedicines !== 'null') {
+            if (typeof requestedMedicines === 'string') {
+                try {
+                    parsedMedicines = JSON.parse(requestedMedicines);
+                } catch (e) {
+                    parsedMedicines = [];
+                }
+            } else if (Array.isArray(requestedMedicines)) {
+                parsedMedicines = requestedMedicines;
+            }
+        }
+        if (!Array.isArray(parsedMedicines)) parsedMedicines = [];
 
         // Populate baseline MRPs inside user request data safely
         const verifiedRequestedMeds = [];
         for (const med of parsedMedicines) {
+            if (!med || !med.name) continue;
             const dbMed = await Medicine.findOne({ name: new RegExp(`^${med.name}$`, 'i') }).select('mrp').lean();
             verifiedRequestedMeds.push({
                 name: med.name,
@@ -2967,16 +3054,39 @@ const createPrescriptionRequest = async (req, res) => {
             });
         }
 
+        // 🛡️ Crash-proof Address Parsing
+        let finalAddress = {};
+        if (address && address !== 'undefined' && address !== 'null') {
+            if (typeof address === 'string') {
+                try {
+                    finalAddress = JSON.parse(address);
+                } catch (e) {
+                    finalAddress = { addressLine: address };
+                }
+            } else if (typeof address === 'object') {
+                finalAddress = address;
+            }
+        }
+
+        // 🛡️ Safe Date Parsing
+        let finalPrescriptionDate = new Date();
+        if (prescriptionDate && prescriptionDate !== 'undefined' && prescriptionDate !== 'null' && String(prescriptionDate).trim() !== '') {
+            const parsed = new Date(prescriptionDate);
+            if (!isNaN(parsed.getTime())) {
+                finalPrescriptionDate = parsed;
+            }
+        }
+
         const newRequest = await PharmacyPrescriptionRequest.create({
             requestId: `REQ-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             userId,
             pharmacyId,
-            doctorName: doctorName || 'Prescription Request',
-            prescriptionDate: prescriptionDate ? new Date(prescriptionDate) : new Date(),
-            prescriptionImage: req.file.path,
-            durationType,
+            doctorName: (doctorName && doctorName !== 'undefined' && doctorName !== 'null') ? doctorName : 'Prescription Request',
+            prescriptionDate: finalPrescriptionDate,
+            prescriptionImage: req.file.path.replace(/\\/g, "/"),
+            durationType: durationType || 'Full Course',
             requestedMedicines: verifiedRequestedMeds,
-            address: typeof address === 'string' ? JSON.parse(address) : address,
+            address: finalAddress,
             status: 'Pending Review'
         });
 

@@ -264,9 +264,8 @@ const getMyNonPrescriptionInventory = async (req, res) => {
 
 const deleteInventoryItem = async (req, res) => {
     try {
-        const pharmacyId = req.user.id; // Logged-in pharmacy id
+        const pharmacyId = req.user.id;
         
-        // Taaki pharmacy sirf apne hi inventory item ko delete kar sake
         const deleted = await MedicineInventory.findOneAndDelete({
             _id: req.params.id,
             pharmacyId
@@ -276,7 +275,17 @@ const deleteInventoryItem = async (req, res) => {
             return res.status(404).json({ success: false, message: "Medicine not found in your inventory or unauthorized" });
         }
 
-        res.status(200).json({ success: true, message: "Medicine removed from your inventory successfully!" });
+        // 🚨 CLEANUP: Also remove or deactivate active combo offers for this medicine
+        const PharmacyComboOffer = require('../../../models/PharmacyComboOffer');
+        await PharmacyComboOffer.deleteMany({
+            pharmacyId,
+            medicineId: deleted.medicineId
+        });
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Medicine and associated promo campaigns removed successfully!" 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
