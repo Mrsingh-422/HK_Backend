@@ -2587,20 +2587,21 @@ const getTrackCasesList = async (req, res) => {
 const getTrackCaseSuperDetails = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { id } = req.params; // Appointment ID
+        const { id } = req.params; // Appointment / Admission ID
+        const { sortOrder = 'asc', order } = req.query; // 👈 Dynamic Sort Query: 'desc' (Newest First) | 'asc' (Oldest First)
 
-        // Deep populate patient bio, active bed position, main doctor, co-doctors, timeline history, and clinical checkups
+        // Deep populate patient bio, active bed position, doctors, history, and active medications
         const appointment = await Appointment.findOne({ _id: id, hospitalId })
             .populate('userId', 'name phone email profilePic age gender bloodGroup')
             .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay',
+                select: 'bedNumber pricePerDay status',
                 populate: { path: 'wardId', select: 'name type' }
             })
             .populate('treatmentHistory.fromDoctorId', 'name speciality qualification profileImage')
             .populate('treatmentHistory.toDoctorId', 'name speciality qualification profileImage')
-            .populate('bedsideCareTeam.doctorId', 'name speciality qualification profileImage')
+            .populate('bedsideCareTeam.doctorId', 'name speciality qualification profileImage dutyStatus')
             .populate('clinicalLogs.doctorId', 'name speciality qualification profileImage')
             .populate('activeMedications.addedBy', 'name speciality qualification profileImage');
 
@@ -2608,112 +2609,165 @@ const getTrackCaseSuperDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
         }
 
-        // Fetch final Prescription details (medicines, vitals, PDF Url)
-        const Prescription = require('../../models/Prescription'); // Safe local load
+        // Fetch final Prescription details
+        const Prescription = require('../../models/Prescription');
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
-        // 🚀 A. Compile: Collaborative Treatment Team Timeline
+        // =========================================================================
+        // 🏥 1. ACCURATE PATIENT PROFILE (Patient Name instead of User Account Name)
+        // =========================================================================
+        const primaryPatient = appointment.patients?.[0] || {};
+        const patientProfile = {
+            patientName: primaryPatient.patientName || appointment.userId?.name || "Admitted Patient",
+            age: primaryPatient.patientAge || appointment.userId?.age || "N/A",
+            gender: primaryPatient.gender || appointment.userId?.gender || "N/A",
+            relation: primaryPatient.relation || "Self",
+            reasonForVisit: primaryPatient.reasonForVisit || appointment.bookingReason || "General Admission",
+            bloodGroup: appointment.clinicalSummary?.bloodGroup || appointment.userId?.bloodGroup || "N/A",
+            phone: appointment.address?.phone || appointment.userId?.phone || "N/A",
+            email: appointment.userId?.email || "N/A",
+            profilePic: appointment.userId?.profilePic || null,
+            address: appointment.address || null,
+            accountHolderName: appointment.userId?.name || "N/A"
+        };
+
+        // =========================================================================
+        // ⏱️ 2. CONSOLIDATED UNIFIED MEDICAL TIMELINE (Everything from All Doctors)
+        // =========================================================================
         const treatmentTimeline = [];
 
-        // Current active primary doctor shift
-        if (appointment.doctorId) {
-            const primaryShift = appointment.treatmentHistory?.find(h => 
-                h.toDoctorId && h.toDoctorId._id?.toString() === appointment.doctorId._id?.toString() && h.startTime
-            );
-
-            treatmentTimeline.push({
-                doctorId: appointment.doctorId._id,
-                name: appointment.doctorId.name,
-                speciality: appointment.doctorId.speciality,
-                qualification: appointment.doctorId.qualification || "MBBS",
-                profileImage: appointment.doctorId.profileImage,
-                role: "Current Primary Physician",
-                joinedAt: primaryShift ? primaryShift.startTime : appointment.startDate,
-                dischargedAt: primaryShift?.endTime || appointment.endDate || null,
-                duration: primaryShift?.durationDisplay || ""
-            });
-        }
-
-        // Previous transferred doctors' shift history
-        if (appointment.treatmentHistory && appointment.treatmentHistory.length > 0) {
-            appointment.treatmentHistory.forEach(historyLog => {
-                if (historyLog.toDoctorId && historyLog.endTime) {
-                    const isCurrentActiveDoc = appointment.doctorId && 
-                                               appointment.doctorId._id?.toString() === historyLog.toDoctorId._id?.toString() && 
-                                               !historyLog.endTime;
-                    
-                    if (!isCurrentActiveDoc) {
-                        const alreadyPushed = treatmentTimeline.some(t => 
-                            t.doctorId?.toString() === historyLog.toDoctorId._id?.toString() && 
-                            String(t.joinedAt) === String(historyLog.startTime)
-                        );
-
-                        if (!alreadyPushed) {
-                            treatmentTimeline.push({
-                                doctorId: historyLog.toDoctorId._id,
-                                name: historyLog.toDoctorId.name,
-                                speciality: historyLog.toDoctorId.speciality,
-                                qualification: historyLog.toDoctorId.qualification || "MBBS",
-                                profileImage: historyLog.toDoctorId.profileImage,
-                                role: "Previous Primary Physician (Discharged)",
-                                joinedAt: historyLog.startTime,
-                                dischargedAt: historyLog.endTime,
-                                duration: historyLog.durationDisplay || ""
-                            });
-                        }
-                    }
-                }
-            });
-        }
-
-        // 🚀 B. Compile: Bedside Specialists logs and dynamic medications recommendations (Stay & Home)
-        const bedsideCareLogs = appointment.bedsideCareTeam.map(member => {
-            const meds = member.recommendedMedicines || [];
-            return {
-                specialist: {
-                    doctorId: member.doctorId?._id,
-                    name: member.doctorId?.name,
-                    speciality: member.doctorId?.speciality,
-                    profileImage: member.doctorId?.profileImage,
-                    status: member.status
-                },
-                requestedAt: member.requestedAt,
-                respondedAt: member.respondedAt,
-                rejectionReason: member.rejectionReason,
-                
-                // 🚀 SYNC FIX: Map bedside observations with logged checkup vitals!
-                clinicalObservations: member.specialistFeedback.map(obs => ({
-                    observation: obs.observation,
-                    patientCondition: obs.patientCondition,
-                    priorityRating: obs.priorityRating,
-                    submittedAt: obs.submittedAt,
-                    vitals: obs.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
-                })),
-                
-                activeStayRecommendations: meds.filter(m => m.type === 'Active-Stay'),
-                dischargeHomeRecommendations: meds.filter(m => m.type === 'Discharge-Home')
-            };
+        // Helper to format doctor metadata safely
+        const formatDoc = (doc, defaultRole = "Physician") => ({
+            doctorId: doc?._id || null,
+            name: doc?.name || "Doctor",
+            speciality: doc?.speciality || "General Medicine",
+            qualification: doc?.qualification || "MBBS",
+            profileImage: doc?.profileImage || null,
+            role: defaultRole
         });
 
-        // 🚀 C. Compile: Primary Doctor Round checkup logs (Attending progress rounds)
-        const primaryDoctorRoundLogs = appointment.clinicalLogs.map(log => ({
-            doctor: {
-                doctorId: log.doctorId?._id,
-                name: log.doctorId?.name,
-                speciality: log.doctorId?.speciality,
-                profileImage: log.doctorId?.profileImage
-            },
-            observation: log.observation,
-            patientCondition: log.patientCondition,
-            priorityRating: log.priorityRating,
-            loggedAt: log.loggedAt,
-            
-            // 🚀 SYNC FIX: Map primary round logs with recorded vitals!
-            vitals: log.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
-        }));
+        // A. Doctor Shifts & Handover Transitions
+        if (appointment.treatmentHistory && appointment.treatmentHistory.length > 0) {
+            appointment.treatmentHistory.forEach(h => {
+                treatmentTimeline.push({
+                    eventType: "SHIFT_ACTION",
+                    category: "Doctor Assignment / Transfer",
+                    timestamp: h.startTime || h.timestamp || appointment.createdAt,
+                    doctor: formatDoc(h.toDoctorId || appointment.doctorId, "Primary Physician"),
+                    action: h.action || "Duty Shift",
+                    notes: h.notes || "Shift assigned / transferred",
+                    duration: h.durationDisplay || null
+                });
+            });
+        }
 
+        // B. Primary Doctor Clinical Rounds & Progress Observations
+        if (appointment.clinicalLogs && appointment.clinicalLogs.length > 0) {
+            appointment.clinicalLogs.forEach(log => {
+                treatmentTimeline.push({
+                    eventType: "CLINICAL_ROUND",
+                    category: "Attending Physician Round",
+                    timestamp: log.loggedAt || new Date(),
+                    doctor: formatDoc(log.doctorId, "Attending Physician"),
+                    observation: log.observation,
+                    patientCondition: log.patientCondition || "Stable",
+                    priorityRating: log.priorityRating || "Routine",
+                    vitals: log.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+                });
+            });
+        }
+
+        // C. Bedside Specialists Feedbacks & Consultations
+        if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
+            appointment.bedsideCareTeam.forEach(member => {
+                const docMeta = formatDoc(member.doctorId, "Bedside Specialist");
+                
+                // Feedback logs by this specialist
+                (member.specialistFeedback || []).forEach(obs => {
+                    treatmentTimeline.push({
+                        eventType: "BEDSIDE_FEEDBACK",
+                        category: "Specialist Observation",
+                        timestamp: obs.submittedAt || member.requestedAt,
+                        doctor: docMeta,
+                        observation: obs.observation,
+                        patientCondition: obs.patientCondition || "Stable",
+                        priorityRating: obs.priorityRating || "Routine",
+                        vitals: obs.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+                    });
+                });
+
+                // Medications recommended by this specialist
+                (member.recommendedMedicines || []).forEach(med => {
+                    treatmentTimeline.push({
+                        eventType: "SPECIALIST_RECOMMENDATION",
+                        category: "Specialist Medication Advice",
+                        timestamp: med.addedAt || member.requestedAt,
+                        doctor: docMeta,
+                        medication: {
+                            name: med.name,
+                            dosage: med.dosage || "",
+                            frequency: med.frequency || "",
+                            duration: med.duration || "",
+                            instructions: med.instructions || "",
+                            target: med.type === 'Active-Stay' ? "In-Hospital Stay" : "Post-Discharge Home"
+                        }
+                    });
+                });
+            });
+        }
+
+        // D. In-Patient Active Medication Orders (Nurse/Stay Administration)
+        if (appointment.activeMedications && appointment.activeMedications.length > 0) {
+            appointment.activeMedications.forEach(med => {
+                treatmentTimeline.push({
+                    eventType: med.status === 'Active' ? "MEDICATION_ORDERED" : "MEDICATION_STOPPED",
+                    category: "In-Patient Drug Order",
+                    timestamp: med.startDate || new Date(),
+                    doctor: formatDoc(med.addedBy, "Ordering Doctor"),
+                    medication: {
+                        name: med.medicineName,
+                        dosage: med.dosage || "",
+                        frequency: med.frequency || "",
+                        instructions: med.instructions || "",
+                        status: med.status
+                    }
+                });
+            });
+        }
+
+        // E. Prescription Generation Event
+        if (prescription) {
+            treatmentTimeline.push({
+                eventType: "PRESCRIPTION_ISSUED",
+                category: "Final Prescription Compiled",
+                timestamp: prescription.createdAt,
+                doctor: formatDoc(appointment.doctorId, "Prescribing Doctor"),
+                pdfUrl: prescription.pdfUrl || null,
+                diagnosis: prescription.diagnosis || [],
+                totalMedicines: prescription.medicines?.length || 0,
+                vitals: prescription.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+            });
+        }
+
+        // =========================================================================
+        // 🚀 3. DYNAMIC TIMELINE SORTING (ASC vs DESC)
+        // =========================================================================
+        const effectiveOrder = (sortOrder || order || 'desc').toLowerCase();
+        const isAscending = effectiveOrder === 'asc';
+
+        treatmentTimeline.sort((a, b) => {
+            const timeA = new Date(a.timestamp || 0).getTime();
+            const timeB = new Date(b.timestamp || 0).getTime();
+            return isAscending ? timeA - timeB : timeB - timeA;
+        });
+
+        // =========================================================================
+        // 📊 4. FINAL CONSOLIDATED RESPONSE
+        // =========================================================================
         res.json({
             success: true,
+            timelineSortApplied: isAscending ? 'asc' : 'desc',
+            totalTimelineEvents: treatmentTimeline.length,
             data: {
                 caseDetails: {
                     appointmentId: appointment._id,
@@ -2726,15 +2780,21 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     totalAmount: appointment.totalAmount,
                     paymentStatus: appointment.paymentStatus,
                     paymentMethod: appointment.paymentMethod,
-                    patientProfile: appointment.userId,
-                    bedDetails: appointment.bedId,
                     
-                    // 🚀 SYNC FIX: Maps final discharge vitals here!
+                    // 👈 Accurate Patient Information
+                    patientProfile, 
+                    bedDetails: appointment.bedId,
                     dischargeVitals: appointment.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
                 },
+
+                // 🌟 Single Unified Master Timeline (Sorted dynamically)
+                treatmentTimeline, 
+
+                // Raw Prescription snapshot
                 prescriptionDetails: prescription ? {
                     prescriptionId: prescription._id,
                     pdfUrl: prescription.pdfUrl,
+                    dietPlanPdf: prescription.dietPlanPdf || null,
                     medicines: prescription.medicines || [],
                     vitals: prescription.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
                     diagnosis: prescription.diagnosis || [],
@@ -2742,10 +2802,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     advisedInvestigations: prescription.advisedInvestigations || "None",
                     adviceGiven: prescription.adviceGiven || "",
                     specialInstructions: prescription.specialInstructions || ""
-                } : null,
-                treatmentTimeline,         // Previous transfers, shift timings, doctors
-                bedsideCareLogs,           // Specialists, bedside observations, recommended meds (Stay & Home)
-                primaryDoctorRoundLogs     // Active physician rounds observations with Vitals
+                } : null
             }
         });
 
@@ -2754,6 +2811,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 
