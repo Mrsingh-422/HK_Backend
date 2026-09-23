@@ -11,11 +11,10 @@ const calculateHospitalBalances = async (hospitalId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const hospitalObjId = new mongoose.Types.ObjectId(hospitalId);
 
-    // 1. Fetch all completed admissions & appointments
     const completedAppointments = await Appointment.find({
         hospitalId: hospitalObjId,
         status: 'Completed'
-    }).select('totalAmount updatedAt').lean();
+    }).select('totalAmount pricingBreakdown paymentMethod paymentStatus subscriptionDetails updatedAt').lean();
 
     let grossEarnings = 0;
     let totalEarnings = 0;
@@ -23,24 +22,37 @@ const calculateHospitalBalances = async (hospitalId) => {
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 2. Deduct Admin Commission for each completed hospital admission
     for (let appt of completedAppointments) {
-        const grossAmount = Number(appt.totalAmount || 0);
+        const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
+        const grossAmount = isSub 
+            ? Number(appt.pricingBreakdown?.originalBaseFee || 0) 
+            : Number(appt.totalAmount || 0);
+
         grossEarnings += grossAmount;
 
         const { netVendorAmount, adminCutoff } = await calculateAdminCommission('Hospital', grossAmount);
-
         adminCommissionDeducted += adminCutoff;
-        totalEarnings += netVendorAmount;
+
+        let effectiveVendorCredit = 0;
+
+        // 🚨 COD vs ONLINE WALLET LOGIC:
+        if (appt.paymentMethod === 'COD') {
+            // Patient paid 100% cash at hospital counter; wallet only deducts Admin Commission
+            effectiveVendorCredit = -adminCutoff;
+        } else {
+            // Online / Subscription stay: Platform reimburses (Gross - Admin Commission)
+            effectiveVendorCredit = netVendorAmount;
+        }
+
+        totalEarnings += effectiveVendorCredit;
 
         if (new Date(appt.updatedAt) <= sevenDaysAgo) {
-            clearedEarnings += netVendorAmount;
+            clearedEarnings += effectiveVendorCredit;
         } else {
-            pendingEarnings += netVendorAmount;
+            pendingEarnings += effectiveVendorCredit;
         }
     }
 
-    // 3. Total Payouts Requested till date
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
@@ -53,7 +65,6 @@ const calculateHospitalBalances = async (hospitalId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    // 4. Fetch Active Commission Policy details
     const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Hospital', isActive: true }).lean();
 

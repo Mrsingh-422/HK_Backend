@@ -704,16 +704,18 @@ const submitDischargeSummary = async (req, res) => {
             return res.status(404).json({ success: false, message: "Patient Admission Record Not Found." });
         }
 
-        // Close Active Doctor's shift
-        const activeShift = appointmentObj.treatmentHistory.find(h => 
-            h.toDoctorId && h.toDoctorId.toString() === req.user.id.toString() && !h.endTime
-        );
-        if (activeShift) {
-            activeShift.endTime = now;
-            activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
+        // 🚨 BUG FIX: Close Active Doctor's shift directly on Mongoose Document
+        if (appointmentObj.treatmentHistory && appointmentObj.treatmentHistory.length > 0) {
+            const activeShift = appointmentObj.treatmentHistory.find(h => 
+                h.toDoctorId && h.toDoctorId.toString() === req.user.id.toString() && !h.endTime
+            );
+            if (activeShift) {
+                activeShift.endTime = now;
+                activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
+            }
         }
 
-        // Auto-close any active or accepted bedside specialist consults
+        // Auto-close bedside specialist consults
         if (appointmentObj.bedsideCareTeam && appointmentObj.bedsideCareTeam.length > 0) {
             appointmentObj.bedsideCareTeam.forEach(member => {
                 if (['Pending', 'Accepted', 'In-Progress'].includes(member.status)) {
@@ -727,21 +729,15 @@ const submitDischargeSummary = async (req, res) => {
             });
         }
 
-        // Extract uploaded additional reports from multer files
-        let updatedReports = (appointmentObj.clinicalSummary && appointmentObj.clinicalSummary.uploadedReports) 
-            ? appointmentObj.clinicalSummary.uploadedReports 
-            : [];
-            
+        // Extract uploaded additional reports
+        let updatedReports = appointmentObj.clinicalSummary?.uploadedReports || [];
         if (req.files && req.files.clinicalReports) {
             const reportPaths = req.files.clinicalReports.map(f => `/uploads/doctor_reports/${f.filename}`);
             updatedReports = [...updatedReports, ...reportPaths];
         }
 
         // Extract final generated Discharge PDF path
-        let dischargePdfPath = (appointmentObj.clinicalSummary && appointmentObj.clinicalSummary.dischargeSummaryPdf)
-            ? appointmentObj.clinicalSummary.dischargeSummaryPdf
-            : null;
-
+        let dischargePdfPath = appointmentObj.clinicalSummary?.dischargeSummaryPdf || null;
         if (req.files && req.files.dischargePdf && req.files.dischargePdf[0]) {
             dischargePdfPath = `/uploads/hospital_discharges/${req.files.dischargePdf[0].filename}`;
         }
@@ -759,28 +755,19 @@ const submitDischargeSummary = async (req, res) => {
             };
         }
 
-        // --- DYNAMIC DATA MAPPING ---
-        const updateData = {
-            status: 'Discharge-Pending', 
-            bedsideCareTeam: appointmentObj.bedsideCareTeam, 
-            clinicalSummary: {
-                diagnosis: body.diagnosis || (appointmentObj.clinicalSummary?.diagnosis) || "",
-                investigation: body.investigation || (appointmentObj.clinicalSummary?.investigation) || "",
-                treatmentResult: body.treatmentResult || (appointmentObj.clinicalSummary?.treatmentResult) || "",
-                dischargeNote: body.dischargeNote || (appointmentObj.clinicalSummary?.dischargeNote) || "",
-                dischargedAt: now,
-                uploadedReports: updatedReports,
-
-                // Save dynamic preparation keys
-                dateOfSurgery: body.dateOfSurgery ? new Date(body.dateOfSurgery) : (appointmentObj.clinicalSummary?.dateOfSurgery || null),
-                conditionDuringAdmission: body.conditionDuringAdmission || (appointmentObj.clinicalSummary?.conditionDuringAdmission) || "",
-                conditionDuringDischarge: body.conditionDuringDischarge || (appointmentObj.clinicalSummary?.conditionDuringDischarge) || "",
-
-                dischargeSummaryPdf: dischargePdfPath,
-                
-                // 🚀 Injects Final Discharge Vitals
-                vitals: parsedVitals
-            }
+        appointmentObj.status = 'Discharge-Pending';
+        appointmentObj.clinicalSummary = {
+            diagnosis: body.diagnosis || appointmentObj.clinicalSummary?.diagnosis || "",
+            investigation: body.investigation || appointmentObj.clinicalSummary?.investigation || "",
+            treatmentResult: body.treatmentResult || appointmentObj.clinicalSummary?.treatmentResult || "",
+            dischargeNote: body.dischargeNote || appointmentObj.clinicalSummary?.dischargeNote || "",
+            dischargedAt: now,
+            uploadedReports: updatedReports,
+            dateOfSurgery: body.dateOfSurgery ? new Date(body.dateOfSurgery) : appointmentObj.clinicalSummary?.dateOfSurgery || null,
+            conditionDuringAdmission: body.conditionDuringAdmission || appointmentObj.clinicalSummary?.conditionDuringAdmission || "",
+            conditionDuringDischarge: body.conditionDuringDischarge || appointmentObj.clinicalSummary?.conditionDuringDischarge || "",
+            dischargeSummaryPdf: dischargePdfPath,
+            vitals: parsedVitals
         };
 
         appointmentObj.treatmentHistory.push({
@@ -790,19 +777,15 @@ const submitDischargeSummary = async (req, res) => {
             timestamp: now
         });
 
-        const updatedAppt = await Appointment.findByIdAndUpdate(
-            appointmentId,
-            { 
-                $set: updateData,
-                $push: { treatmentHistory: appointmentObj.treatmentHistory[appointmentObj.treatmentHistory.length - 1] } 
-            },
-            { new: true, runValidators: true }
-        );
+        // 🚨 Atomic save persists modified shifts + pushed timeline entries simultaneously
+        appointmentObj.markModified('treatmentHistory');
+        appointmentObj.markModified('bedsideCareTeam');
+        await appointmentObj.save();
 
         res.json({ 
             success: true, 
             message: "Discharge summary, clinical files, and final PDF summary recorded successfully.", 
-            data: updatedAppt 
+            data: appointmentObj 
         });
 
     } catch (error) { 

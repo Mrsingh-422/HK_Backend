@@ -1134,7 +1134,7 @@ const getDoctorVideoConsults = async (req, res) => {
 
         const appointments = await Appointment.find(query)
             .populate('userId', 'name phone profilePic fcmToken')
-            .sort({ appointmentDate: 1, appointmentTime: 1 })
+            .sort({ appointmentDate: -1, appointmentTime: 1 })
             .skip(skip)
             .limit(limitNum);
 

@@ -8,13 +8,13 @@ const generateToken = (id, role) => {
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
-// --- 1. ADD AMBULANCE (By Hospital Admin with Full Documents) ---
+// --- ADD AMBULANCE (Hospital Admin Fleet/Ambulance Registration) ---
 // Endpoint: POST /api/hospital/ambulance/add
-// --- 1. ADD AMBULANCE (Figma Aligned) ---
 const addHospitalAmbulance = async (req, res) => {
     try {
         const { 
-            name, email, phone, password, address, ambulanceNumber, vehicleType,
+            name, email, phone, password, address, 
+            ambulanceNumber, vehicleNumber, vehicleType,
             fixedPrice, distance, perKMPrice, 
             accidentalService, emergencyService, referralService, 
             defaultService, optionalService,
@@ -29,8 +29,9 @@ const addHospitalAmbulance = async (req, res) => {
         const files = req.files || {};
         const getPath = (key) => (files[key] ? `/uploads/ambulances/${files[key][0].filename}` : null);
 
-        // 🚀 SYNC FIX: Fallback to handle both 'fullName' and 'name' keys
         const ambulanceName = fullName || name || "Hospital Ambulance";
+        // 🚨 BUG FIX: Map ambulanceNumber to schema key vehicleNumber
+        const finalVehicleNumber = vehicleNumber || ambulanceNumber || "N/A";
 
         const newAmbulance = await Ambulance.create({
             hospitalId: req.user.id,
@@ -39,8 +40,8 @@ const addHospitalAmbulance = async (req, res) => {
             phone: phone,
             password: hashedPassword,
             address: address,
-            ambulanceNumber: ambulanceNumber,
-            vehicleType: vehicleType,
+            vehicleNumber: finalVehicleNumber,
+            vehicleType: vehicleType || 'Van',
             role: 'hospital-ambulance',
             profileStatus: 'Approved',
             
