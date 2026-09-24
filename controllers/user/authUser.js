@@ -407,10 +407,10 @@ const updateUserProfile = async (req, res) => {
             user.profilePic = `/uploads/users/${req.file.filename}`;
         }
 
-        // Destructure all fields from Figma Image
+        // Destructure all fields including bloodGroup
         const { 
             name, fatherName, phone, countryCode, email, 
-            weight, gender, dob, height,
+            weight, gender, dob, height, bloodGroup,
             country, state, city, 
             insuranceId 
         } = req.body;
@@ -418,17 +418,18 @@ const updateUserProfile = async (req, res) => {
         // Basic Info
         if (name) user.name = name;
         if (fatherName) user.fatherName = fatherName;
-        if (email) user.email = email;
+        if (email) user.email = email.toLowerCase().trim();
         
-        // Stats & Gender
+        // Stats & Medical Info
         if (weight) user.weight = weight;
         if (gender) user.gender = gender;
         if (dob) user.dob = dob;
         if (height) user.height = height;
+        if (bloodGroup !== undefined) user.bloodGroup = bloodGroup; // 👈 Blood Group Saved
 
         // Phone Update
         if (phone && countryCode) {
-            user.phone = phone;
+            user.phone = phone.trim().replace(/\D/g, "").slice(-10);
             user.countryCode = countryCode;
         }
 
@@ -474,7 +475,7 @@ const addUserFamilyMember = async (req, res) => {
         const userId = req.user.id;
         const { 
             memberName, relation, dob, phone, gender, 
-            height, weight, insuranceNo, insuranceId, hasInsurance 
+            height, weight, bloodGroup, insuranceNo, insuranceId, hasInsurance 
         } = req.body;
 
         const user = await User.findById(userId);
@@ -488,8 +489,9 @@ const addUserFamilyMember = async (req, res) => {
             gender,
             height,
             weight,
+            bloodGroup: bloodGroup || null, // 👈 Saved in Family Array
             insuranceNo,
-            insuranceId: insuranceId || null, // Dropdown se aayi ID
+            insuranceId: insuranceId || null,
             hasInsurance: hasInsurance === 'true' || hasInsurance === true,
             profilePic: req.file ? `/uploads/users/${req.file.filename}` : null
         };
@@ -548,19 +550,19 @@ const editFamilyMember = async (req, res) => {
     try {
         const { itemId } = req.params;
         const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
         const member = user.familyMember.id(itemId);
+        if (!member) return res.status(404).json({ success: false, message: "Family member not found" });
 
-        if (!member) return res.status(404).json({ message: "Not found" });
-
-        const { insuranceId, hasInsurance, ...rest } = req.body;
+        const { insuranceId, hasInsurance, bloodGroup, ...rest } = req.body;
 
         // Update Text Fields
         Object.assign(member, rest);
 
-        // Update ID from Dropdown
+        if (bloodGroup !== undefined) member.bloodGroup = bloodGroup; // 👈 Updated
         if (insuranceId) member.insuranceId = insuranceId;
 
-        // Update Boolean
         if (hasInsurance !== undefined) {
             member.hasInsurance = hasInsurance === 'true' || hasInsurance === true;
         }
@@ -568,9 +570,9 @@ const editFamilyMember = async (req, res) => {
         if (req.file) member.profilePic = `/uploads/users/${req.file.filename}`;
 
         await user.save();
-        res.json({ success: true, data: member });
+        res.json({ success: true, message: "Family member updated successfully", data: member });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

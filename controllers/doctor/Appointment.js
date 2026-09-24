@@ -631,28 +631,30 @@ const getAppointmentClinicalDetails = async (req, res) => {
     try {
         const appointmentId = req.params.id;
 
-        // Query the appointment and populate patient base user account and prescribing doctor profile
         const appointment = await Appointment.findOne({
             _id: appointmentId,
             doctorId: req.user.id
         })
-        .populate('userId', 'name phone email profilePic')
+        .populate('userId', 'name phone email profilePic bloodGroup')
         .populate('doctorId', 'name qualification speciality councilNumber councilName licensingAuthority');
 
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Appointment record not found." });
         }
 
-        // Identify the target patient from the patients array (typically the first index)
         const primaryPatient = appointment.patients?.[0] || {};
 
-        // Format user's clinical address dynamically
         const addr = appointment.address;
         const formattedAddress = addr
             ? `${addr.houseNo ? addr.houseNo + ', ' : ''}${addr.sector ? addr.sector + ', ' : ''}${addr.landmark ? addr.landmark + ', ' : ''}${addr.city || ''}, ${addr.state || ''} - ${addr.pincode || ''}`
             : "Address Not Specified";
 
-        // Map data strictly to match the headers shown on your prescription screenshot
+        // 🚨 Dynamic Blood Group Resolution
+        const resolvedBloodGroup = primaryPatient.bloodGroup || 
+                                  appointment.clinicalSummary?.bloodGroup || 
+                                  appointment.userId?.bloodGroup || 
+                                  "N/A";
+
         const responseData = {
             appointmentHeader: {
                 appointmentId: appointment.bookingId || appointment._id,
@@ -665,17 +667,18 @@ const getAppointmentClinicalDetails = async (req, res) => {
                 name: primaryPatient.patientName || appointment.userId?.name || "N/A",
                 age: primaryPatient.patientAge || "N/A",
                 gender: primaryPatient.gender || "N/A",
+                bloodGroup: resolvedBloodGroup, // 👈 Dynamically populated
                 address: formattedAddress,
                 phone: appointment.userId?.phone || "N/A",
                 reasonForVisit: primaryPatient.reasonForVisit || ""
             },
             doctorCredentials: {
                 name: appointment.doctorId?.name,
-                qualifications: appointment.doctorId?.qualification || "MBBS, MD", // Matches "MBBS, MD" from image
+                qualifications: appointment.doctorId?.qualification || "MBBS, MD",
                 speciality: appointment.doctorId?.speciality || "General Physician",
                 councilDetails: appointment.doctorId?.councilNumber 
                     ? `${appointment.doctorId.councilName || 'Medical Council'} No. : ${appointment.doctorId.councilNumber}`
-                    : "Not Registered" // Matches "Punjab Medical Council No. : 162542"
+                    : "Not Registered"
             }
         };
 
@@ -1061,12 +1064,18 @@ const getPatientHistoryDetails = async (req, res) => {
  
         // 1. Get Appointment Data
         const appointment = await Appointment.findById(appointmentId)
-            .populate('userId', 'phone profileImage');
+            .populate('userId', 'phone profileImage bloodGroup');
  
         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
  
         // 2. Get Prescription Data associated with this appointment
         const prescription = await Prescription.findOne({ appointmentId });
+
+        // 🚨 STATIC "O+" REMOVED -> Fully Dynamic Blood Group Resolution
+        const dynamicBloodGroup = appointment.clinicalSummary?.bloodGroup || 
+                                 appointment.patients?.[0]?.bloodGroup || 
+                                 appointment.userId?.bloodGroup || 
+                                 "N/A";
  
         // Formatting data to match Figma Detail UI sections
         const responseData = {
@@ -1074,10 +1083,12 @@ const getPatientHistoryDetails = async (req, res) => {
                 name: appointment.patients[0]?.patientName,
                 age: appointment.patients[0]?.patientAge,
                 gender: appointment.patients[0]?.gender,
-                bloodGroup: "O+", // Placeholder
+                bloodGroup: dynamicBloodGroup, // 👈 Dynamic Resolved
                 phone: appointment.userId?.phone,
                 profileImage: appointment.userId?.profileImage,
-                address: `${appointment.address.houseNo}, ${appointment.address.landmark}, ${appointment.address.city}, ${appointment.address.pincode}`
+                address: appointment.address 
+                    ? `${appointment.address.houseNo || ''}, ${appointment.address.landmark || ''}, ${appointment.address.city || ''}, ${appointment.address.pincode || ''}`.replace(/^, |, $/g, '')
+                    : "Address Not Specified"
             },
             consultationSummary: {
                 diagnosis: prescription?.diagnosis || [],
@@ -1094,13 +1105,12 @@ const getPatientHistoryDetails = async (req, res) => {
                 duration: m.duration
             })) || [],
             paymentDetails: {
-                consultationFee: appointment.pricingBreakdown.baseFee,
-                platformFee: appointment.pricingBreakdown.extraCharges || 50,
+                consultationFee: appointment.pricingBreakdown?.baseFee || 0,
+                platformFee: appointment.pricingBreakdown?.extraCharges || 0,
                 totalPaid: appointment.totalAmount,
-                paymentMode: "UPI" 
+                paymentMode: appointment.paymentMethod || "Online"
             },
             
-            // 🚀 SYNC FIX: Injects prescription unique mongo ID and the compiled PDF link!
             prescriptionId: prescription?._id || null,
             pdfUrl: prescription?.pdfUrl || null
         };

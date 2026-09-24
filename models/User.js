@@ -16,6 +16,11 @@ const userSchema = new mongoose.Schema({
     gender: { type: String, enum: ['Male', 'Female', 'Other'] },
     dob: { type: Date },      // Date of Birth
     height: { type: String }, // e.g., "5'9"
+    bloodGroup: {
+        type: String,
+        enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', null],
+        default: null
+    },
 
     country: { type: String }, // ID or Name store kar sakte hain
     state: { type: String },
@@ -104,6 +109,7 @@ const userSchema = new mongoose.Schema({
         gender: { type: String },
         height: { type: String },
         weight: { type: String },
+        bloodGroup: { type: String, default: null },
         insuranceNo: { type: String },
         insuranceId: {
             type: mongoose.Schema.Types.ObjectId,
@@ -148,7 +154,7 @@ const userSchema = new mongoose.Schema({
         default: null
     },
     fcmToken: { type: String, default: null },
-    
+
     isShortRegistered: { type: Boolean, default: false }, // True agar bina OTP short register hua hai
     accidentalBookingCount: { type: Number, default: 0 }, // Unverified number se kitni accidental bookings hui
     isActive: { type: Boolean, default: true },

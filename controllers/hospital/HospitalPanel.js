@@ -36,6 +36,53 @@ const generateCaseRef = (type) => {
     return `HK-${new Date().getFullYear()}-${prefix}-${timeSlice}${randomHex}`;
 };
 
+// 🛡️ REUSABLE DTO HELPER: Resolves accurate single patient profile & bloodGroup without data leaks
+const resolvePatientDTO = (appt) => {
+    const user = appt.userId;
+    const primaryPatient = appt.patients?.[0] || {};
+    const isSelf = !primaryPatient.relation || 
+                   primaryPatient.relation.toLowerCase() === 'self' || 
+                   (user?.name && primaryPatient.patientName && primaryPatient.patientName.trim().toLowerCase() === user.name.trim().toLowerCase());
+
+    let matchedFamilyMember = null;
+    if (!isSelf && user?.familyMember && Array.isArray(user.familyMember)) {
+        matchedFamilyMember = user.familyMember.find(fm => 
+            (fm.memberName && primaryPatient.patientName && fm.memberName.trim().toLowerCase() === primaryPatient.patientName.trim().toLowerCase()) ||
+            (fm.relation && primaryPatient.relation && fm.relation.trim().toLowerCase() === primaryPatient.relation.trim().toLowerCase())
+        );
+    }
+
+    let resolvedBloodGroup = "N/A";
+    if (appt.clinicalSummary?.bloodGroup && appt.clinicalSummary.bloodGroup.trim() !== "") {
+        resolvedBloodGroup = appt.clinicalSummary.bloodGroup;
+    } else if (primaryPatient.bloodGroup && primaryPatient.bloodGroup.trim() !== "") {
+        resolvedBloodGroup = primaryPatient.bloodGroup;
+    } else if (!isSelf && matchedFamilyMember?.bloodGroup) {
+        resolvedBloodGroup = matchedFamilyMember.bloodGroup;
+    } else if (isSelf && user?.bloodGroup) {
+        resolvedBloodGroup = user.bloodGroup;
+    }
+
+    const resolvedProfilePic = (!isSelf && matchedFamilyMember?.profilePic) 
+        ? matchedFamilyMember.profilePic 
+        : (user?.profilePic || null);
+
+    const resolvedAge = primaryPatient.patientAge || 
+        (matchedFamilyMember?.dob ? moment().diff(moment(matchedFamilyMember.dob), 'years') : (user?.age || "N/A"));
+
+    return {
+        patientName: primaryPatient.patientName || (isSelf ? user?.name : "Admitted Patient"),
+        age: resolvedAge,
+        gender: primaryPatient.gender || matchedFamilyMember?.gender || (isSelf ? user?.gender : "N/A"),
+        relation: matchedFamilyMember?.relation || primaryPatient.relation || (isSelf ? "Self" : "Family Member"),
+        bloodGroup: resolvedBloodGroup, // 👈 Single, clean, accurate Blood Group!
+        reasonForVisit: primaryPatient.reasonForVisit || appt.bookingReason || "Hospital Admission",
+        profilePic: resolvedProfilePic
+    };
+};
+
+
+
 // --- MASTER DATA/Enums FOR HOSPITAL PANEL (Screenshot 6) ---
 const getHospitalMasterData = async (req, res) => {
     try {
@@ -938,10 +985,10 @@ const deleteWard = async (req, res) => {
 const getAllHospitalAdmissions = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { status, bedBookingType, page = 1, limit = 20 } = req.query;
+        const { status, bedBookingType, page = 1, limit = 10 } = req.query;
 
-        const pageNum = parseInt(page) || 1;
-        const limitNum = parseInt(limit) || 20;
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
         let query = { 
@@ -956,37 +1003,146 @@ const getAllHospitalAdmissions = async (req, res) => {
         if (status) query.status = status;
         if (bedBookingType) query.bedBookingType = bedBookingType; 
 
-        // Count total matching records for pagination meta
         const totalRecords = await Appointment.countDocuments(query);
 
+        // Fetch records with required populate
         const admissions = await Appointment.find(query)
-            .populate('userId', 'name phone email profilePic age gender')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
             .populate('pendingDoctorId', 'name speciality') 
-            // 🚀 Populating bedId and its ward details so bedNumber/ward details are completely available
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay',
+                select: 'bedNumber pricePerDay status',
                 populate: { path: 'wardId', select: 'name type' }
             })
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum);
 
+        // =========================================================================
+        // 🧹 DTO TRANSFORMATION: Clean, Professional & Clutter-Free Patient Cards
+        // =========================================================================
+        const cleanedAdmissions = admissions.map(appt => {
+            const user = appt.userId;
+            const primaryPatient = appt.patients?.[0] || {};
+
+            // Determine if patient is the account holder or family member
+            const isSelf = !primaryPatient.relation || 
+                           primaryPatient.relation.toLowerCase() === 'self' || 
+                           (user?.name && primaryPatient.patientName && primaryPatient.patientName.trim().toLowerCase() === user.name.trim().toLowerCase());
+
+            let matchedFamilyMember = null;
+            if (!isSelf && user?.familyMember && Array.isArray(user.familyMember)) {
+                matchedFamilyMember = user.familyMember.find(fm => 
+                    (fm.memberName && primaryPatient.patientName && fm.memberName.trim().toLowerCase() === primaryPatient.patientName.trim().toLowerCase()) ||
+                    (fm.relation && primaryPatient.relation && fm.relation.trim().toLowerCase() === primaryPatient.relation.trim().toLowerCase())
+                );
+            }
+
+            // 🎯 Accurate Blood Group for the specific admitted patient
+            let resolvedBloodGroup = "N/A";
+            if (appt.clinicalSummary?.bloodGroup && appt.clinicalSummary.bloodGroup.trim() !== "") {
+                resolvedBloodGroup = appt.clinicalSummary.bloodGroup;
+            } else if (primaryPatient.bloodGroup && primaryPatient.bloodGroup.trim() !== "") {
+                resolvedBloodGroup = primaryPatient.bloodGroup;
+            } else if (!isSelf && matchedFamilyMember?.bloodGroup) {
+                resolvedBloodGroup = matchedFamilyMember.bloodGroup;
+            } else if (isSelf && user?.bloodGroup) {
+                resolvedBloodGroup = user.bloodGroup;
+            }
+
+            const resolvedProfilePic = (!isSelf && matchedFamilyMember?.profilePic) 
+                ? matchedFamilyMember.profilePic 
+                : (user?.profilePic || null);
+
+            const resolvedAge = primaryPatient.patientAge || 
+                (matchedFamilyMember?.dob ? moment().diff(moment(matchedFamilyMember.dob), 'years') : (user?.age || "N/A"));
+
+            // Returning strictly necessary, well-structured fields
+            return {
+                _id: appt._id,
+                bookingId: appt.bookingId,
+                bookingType: appt.bookingType || 'Admission',
+                bedBookingType: appt.bedBookingType || 'General-Bed',
+                status: appt.status,
+                startDate: appt.startDate,
+                endDate: appt.endDate,
+                stayDuration: appt.stayDuration || 1,
+
+                // 🏥 Admitted Patient Info (Only the person who is admitted!)
+                patientDetails: {
+                    patientName: primaryPatient.patientName || (isSelf ? user?.name : "Admitted Patient"),
+                    age: resolvedAge,
+                    gender: primaryPatient.gender || matchedFamilyMember?.gender || (isSelf ? user?.gender : "N/A"),
+                    relation: matchedFamilyMember?.relation || primaryPatient.relation || (isSelf ? "Self" : "Family Member"),
+                    bloodGroup: resolvedBloodGroup, // 👈 Single, accurate Blood Group!
+                    reasonForVisit: primaryPatient.reasonForVisit || appt.bookingReason || "Hospital Admission",
+                    profilePic: resolvedProfilePic
+                },
+
+                // 🛏️ Assigned Bed Details
+                bedDetails: appt.bedId ? {
+                    _id: appt.bedId._id,
+                    bedNumber: appt.bedId.bedNumber || appt.bedNumber || "N/A",
+                    pricePerDay: appt.bedId.pricePerDay || 0,
+                    status: appt.bedId.status,
+                    wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
+                    wardType: appt.bedId.wardId?.type || "Ward"
+                } : null,
+
+                // 👨‍⚕️ Assigned Doctor (if any)
+                assignedDoctor: appt.doctorId ? {
+                    _id: appt.doctorId._id,
+                    name: appt.doctorId.name,
+                    speciality: appt.doctorId.speciality,
+                    qualification: appt.doctorId.qualification || "MBBS",
+                    profileImage: appt.doctorId.profileImage || null
+                } : null,
+
+                // 💳 Billing & Payment Summary
+                billing: {
+                    totalAmount: appt.totalAmount || 0,
+                    paymentMethod: appt.paymentMethod || 'Online',
+                    paymentStatus: appt.paymentStatus || 'Pending',
+                    baseFee: appt.pricingBreakdown?.baseFee || 0,
+                    transactionId: appt.transactionId || null
+                },
+
+                // 🛡️ Cashless Insurance Status
+                insurance: {
+                    hasInsurance: Boolean(appt.insuranceDetails?.hasInsurance),
+                    companyName: appt.insuranceDetails?.companyName || "",
+                    approvalStatus: appt.insuranceDetails?.approvalStatus || "Pending"
+                },
+
+                // 👤 Account Holder (Who booked the admission)
+                bookedBy: user ? {
+                    userId: user._id,
+                    name: user.name,
+                    phone: user.phone,
+                    email: user.email
+                } : null,
+
+                createdAt: appt.createdAt,
+                updatedAt: appt.updatedAt
+            };
+        });
+
         res.json({ 
             success: true, 
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
-            count: admissions.length,
-            data: admissions 
+            count: cleanedAdmissions.length,
+            data: cleanedAdmissions 
         });
+
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("getAllHospitalAdmissions Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// --- EMERGENCY CASES ---
 // --- EMERGENCY CASES (Ambulance + Walk-in Emergency Triage) ---
 const getEmergencyCases = async (req, res) => {
     try {
@@ -1058,7 +1214,6 @@ const getEmergencyCases = async (req, res) => {
 };
 
 // --- TRACK AMBULANCES (Hospital Admin Fleet Map) ---
-// Path: controllers/hospital/HospitalPanel.js
 // Updated: Calculates live distance between hospital base and ambulance coordinates instead of static "2.3 km"
 const trackAllAmbulances = async (req, res) => {
     try {
@@ -1336,8 +1491,6 @@ const getHospitalReferralBookings = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-
-
 
 // --- API 1: UPDATE BED PRICE (Supports both single bed update and bulk ward update) ---
 const updateBedPrice = async (req, res) => {
@@ -1798,8 +1951,6 @@ const getHospitalCaseDetails = async (req, res) => {
     }
 };
 
-// Helper function to enrich appointment with clinical details, prescriptions, and treatment team timeline
-// Added dynamic Pre-Billing and Overstay bed surcharge calculation mechanics
 // Helper function to enrich appointment with clinical details, prescriptions, and treatment team timeline
 // Fixed: Computes dynamic pricing metrics and heals zero-value database pricing breakdowns on-the-fly
 const enrichAppointmentClinicalDetails = async (appt) => {
@@ -2402,7 +2553,6 @@ const reportHospitalNoShow = async (req, res) => {
 
 // --- API: TRANSFER PATIENT BED (With Automatic Split Stay Billing Engine) ---
 // Endpoint: POST /hospital/panel/admissions/transfer-bed
-// Path: controllers/hospital/HospitalPanel.js
 const transferPatientBed = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -2520,7 +2670,6 @@ const transferPatientBed = async (req, res) => {
 
 // --- API 1: GET HOSPITAL ALL CASES FOR TRACKING (With 20-Record Pagination) ---
 // Endpoint: GET /hospital/panel/cases/track-list
-// Path: controllers/hospital/HospitalPanel.js
 const getTrackCasesList = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -2583,16 +2732,15 @@ const getTrackCasesList = async (req, res) => {
 
 // --- API 2: UNIFIED "SUPER DETAILS" ADMISSION FILE (NEW CONSOLIDATED API) ---
 // Endpoint: GET /hospital/panel/cases/track-details/:id
-// Path: controllers/hospital/HospitalPanel.js
 const getTrackCaseSuperDetails = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const { id } = req.params; // Appointment / Admission ID
-        const { sortOrder = 'asc', order } = req.query; // 👈 Dynamic Sort Query: 'desc' (Newest First) | 'asc' (Oldest First)
+        const { sortOrder = 'desc', order } = req.query; // 'desc' (Newest First) | 'asc' (Oldest First)
 
-        // Deep populate patient bio, active bed position, doctors, history, and active medications
+        // 🚨 Populating familyMember array along with userId details
         const appointment = await Appointment.findOne({ _id: id, hospitalId })
-            .populate('userId', 'name phone email profilePic age gender bloodGroup')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
                 path: 'bedId',
@@ -2609,34 +2757,65 @@ const getTrackCaseSuperDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
         }
 
-        // Fetch final Prescription details
         const Prescription = require('../../models/Prescription');
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
         // =========================================================================
-        // 🏥 1. ACCURATE PATIENT PROFILE (Patient Name instead of User Account Name)
+        // 🏥 1. FAMILY MEMBER VS SELF DYNAMIC RESOLUTION (Blood Group, Age, Photo)
         // =========================================================================
+        const user = appointment.userId;
         const primaryPatient = appointment.patients?.[0] || {};
+        
+        // Check if the admitted patient is the main user or a family member
+        const isSelf = !primaryPatient.relation || 
+                       primaryPatient.relation.toLowerCase() === 'self' || 
+                       (user?.name && primaryPatient.patientName && primaryPatient.patientName.trim().toLowerCase() === user.name.trim().toLowerCase());
+
+        // Match the specific family member from User's familyMember array if not Self
+        let matchedFamilyMember = null;
+        if (!isSelf && user?.familyMember && Array.isArray(user.familyMember)) {
+            matchedFamilyMember = user.familyMember.find(fm => 
+                (fm.memberName && primaryPatient.patientName && fm.memberName.trim().toLowerCase() === primaryPatient.patientName.trim().toLowerCase()) ||
+                (fm.relation && primaryPatient.relation && fm.relation.trim().toLowerCase() === primaryPatient.relation.trim().toLowerCase())
+            );
+        }
+
+        // 🚨 DYNAMIC BLOOD GROUP RESOLUTION (Family Member First, Main User only if Self)
+        let resolvedBloodGroup = "N/A";
+        if (appointment.clinicalSummary?.bloodGroup && appointment.clinicalSummary.bloodGroup.trim() !== "") {
+            resolvedBloodGroup = appointment.clinicalSummary.bloodGroup;
+        } else if (primaryPatient.bloodGroup && primaryPatient.bloodGroup.trim() !== "") {
+            resolvedBloodGroup = primaryPatient.bloodGroup;
+        } else if (!isSelf && matchedFamilyMember?.bloodGroup) {
+            resolvedBloodGroup = matchedFamilyMember.bloodGroup; // 👈 Picked Selected Family Member's Blood Group
+        } else if (isSelf && user?.bloodGroup) {
+            resolvedBloodGroup = user.bloodGroup; // 👈 Main Account Holder's Blood Group
+        }
+
+        // Resolve Profile Photo (Family member photo if available, otherwise account photo)
+        const resolvedProfilePic = (!isSelf && matchedFamilyMember?.profilePic) 
+            ? matchedFamilyMember.profilePic 
+            : (user?.profilePic || null);
+
         const patientProfile = {
-            patientName: primaryPatient.patientName || appointment.userId?.name || "Admitted Patient",
-            age: primaryPatient.patientAge || appointment.userId?.age || "N/A",
-            gender: primaryPatient.gender || appointment.userId?.gender || "N/A",
-            relation: primaryPatient.relation || "Self",
+            patientName: primaryPatient.patientName || (isSelf ? user?.name : "Admitted Patient"),
+            age: primaryPatient.patientAge || (matchedFamilyMember?.dob ? moment().diff(moment(matchedFamilyMember.dob), 'years') : (user?.age || "N/A")),
+            gender: primaryPatient.gender || matchedFamilyMember?.gender || (isSelf ? user?.gender : "N/A"),
+            relation: primaryPatient.relation || (isSelf ? "Self" : "Family Member"),
             reasonForVisit: primaryPatient.reasonForVisit || appointment.bookingReason || "General Admission",
-            bloodGroup: appointment.clinicalSummary?.bloodGroup || appointment.userId?.bloodGroup || "N/A",
-            phone: appointment.address?.phone || appointment.userId?.phone || "N/A",
-            email: appointment.userId?.email || "N/A",
-            profilePic: appointment.userId?.profilePic || null,
+            bloodGroup: resolvedBloodGroup, // 👈 100% Accurate per Selected Family Member
+            phone: primaryPatient.phone || matchedFamilyMember?.phone || appointment.address?.phone || user?.phone || "N/A",
+            email: user?.email || "N/A",
+            profilePic: resolvedProfilePic,
             address: appointment.address || null,
-            accountHolderName: appointment.userId?.name || "N/A"
+            accountHolderName: user?.name || "N/A"
         };
 
         // =========================================================================
-        // ⏱️ 2. CONSOLIDATED UNIFIED MEDICAL TIMELINE (Everything from All Doctors)
+        // ⏱️ 2. CONSOLIDATED UNIFIED MEDICAL TIMELINE
         // =========================================================================
         const treatmentTimeline = [];
 
-        // Helper to format doctor metadata safely
         const formatDoc = (doc, defaultRole = "Physician") => ({
             doctorId: doc?._id || null,
             name: doc?.name || "Doctor",
@@ -2682,7 +2861,6 @@ const getTrackCaseSuperDetails = async (req, res) => {
             appointment.bedsideCareTeam.forEach(member => {
                 const docMeta = formatDoc(member.doctorId, "Bedside Specialist");
                 
-                // Feedback logs by this specialist
                 (member.specialistFeedback || []).forEach(obs => {
                     treatmentTimeline.push({
                         eventType: "BEDSIDE_FEEDBACK",
@@ -2696,7 +2874,6 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     });
                 });
 
-                // Medications recommended by this specialist
                 (member.recommendedMedicines || []).forEach(med => {
                     treatmentTimeline.push({
                         eventType: "SPECIALIST_RECOMMENDATION",
@@ -2716,7 +2893,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
             });
         }
 
-        // D. In-Patient Active Medication Orders (Nurse/Stay Administration)
+        // D. In-Patient Active Medication Orders
         if (appointment.activeMedications && appointment.activeMedications.length > 0) {
             appointment.activeMedications.forEach(med => {
                 treatmentTimeline.push({
@@ -2750,7 +2927,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
         }
 
         // =========================================================================
-        // 🚀 3. DYNAMIC TIMELINE SORTING (ASC vs DESC)
+        // 🚀 3. TIMELINE SORTING
         // =========================================================================
         const effectiveOrder = (sortOrder || order || 'desc').toLowerCase();
         const isAscending = effectiveOrder === 'asc';
@@ -2762,7 +2939,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
         });
 
         // =========================================================================
-        // 📊 4. FINAL CONSOLIDATED RESPONSE
+        // 📊 4. FINAL RESPONSE
         // =========================================================================
         res.json({
             success: true,
@@ -2781,16 +2958,14 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     paymentStatus: appointment.paymentStatus,
                     paymentMethod: appointment.paymentMethod,
                     
-                    // 👈 Accurate Patient Information
+                    // 👈 Accurate Selected Family Member Profile with Blood Group
                     patientProfile, 
                     bedDetails: appointment.bedId,
                     dischargeVitals: appointment.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
                 },
 
-                // 🌟 Single Unified Master Timeline (Sorted dynamically)
                 treatmentTimeline, 
 
-                // Raw Prescription snapshot
                 prescriptionDetails: prescription ? {
                     prescriptionId: prescription._id,
                     pdfUrl: prescription.pdfUrl,
@@ -2814,13 +2989,11 @@ const getTrackCaseSuperDetails = async (req, res) => {
 
 
 
-
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////// DISCHARGE ambulance DROP-OFF APIs  ////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 // --- API 1: GET AVAILABLE FLEET FOR DISCHARGE DROP-OFF (Figma Screen 3 Aligned) ---
 // Endpoint: GET /hospital/panel/discharge/available-ambulances
-// Path: controllers/hospital/HospitalPanel.js
 const getAvailableDischargeAmbulances = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -2845,7 +3018,6 @@ const getAvailableDischargeAmbulances = async (req, res) => {
 
 // --- API 2: CALCULATE DISCHARGE DROP-OFF FARE (Figma Screen 2/4 Pricing Engine) ---
 // Endpoint: POST /hospital/panel/discharge/calculate-fare
-// Path: controllers/hospital/HospitalPanel.js
 const calculateDischargeAmbulanceFare = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -2900,7 +3072,6 @@ const calculateDischargeAmbulanceFare = async (req, res) => {
 
 // --- API 3: DISPATCH DISCHARGE AMBULANCE & MERGE FARE WITH HOSPITAL BILL (Figma Action Sync) ---
 // Endpoint: POST /hospital/panel/discharge/dispatch-ambulance
-// Path: controllers/hospital/HospitalPanel.js
 const dispatchDischargeAmbulance = async (req, res) => {
     let ambulanceToRollback = null;
 
@@ -3032,10 +3203,8 @@ const dispatchDischargeAmbulance = async (req, res) => {
     }
 };
 
-
 // --- API 4: CANCEL DISCHARGE AMBULANCE ADD-ON & REVERT LEDGER CHARGES (NEW API) ---
 // Endpoint: POST /hospital/panel/discharge/cancel-ambulance
-// Path: controllers/hospital/HospitalPanel.js
 const cancelDischargeAmbulance = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -3106,7 +3275,6 @@ const cancelDischargeAmbulance = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 
 
@@ -3504,7 +3672,6 @@ const uploadInsuranceApprovalLetter = async (req, res) => {
 
 // --- API 2: GET MASTER DROPDOWNS DATA FOR ADDING INSURANCE (Figma Screen 3 Selector) ---
 // Endpoint: GET /hospital/panel/insurance/master-data
-// Path: controllers/hospital/HospitalPanel.js
 const getInsuranceMasterDropdowns = async (req, res) => {
     try {
         const InsuranceType = require('../../models/InsuranceType'); // Safe path load
@@ -3530,7 +3697,6 @@ const getInsuranceMasterDropdowns = async (req, res) => {
 
 // --- API 3: SAVE/UPDATE PATIENT INSURANCE DETAILS WITH DUAL SIDE UPLOADS (Figma Save Button) ---
 // Endpoint: PUT /hospital/panel/insurance/save/:patientUserId
-// Path: controllers/hospital/HospitalPanel.js
 const savePatientInsuranceDetails = async (req, res) => {
     try {
         const hospitalId = req.user.id;

@@ -22,6 +22,7 @@ const appointmentSchema = new mongoose.Schema({
         gender: { type: String, enum: ['Male', 'Female', 'Other'] },
         relation: { type: String, default: 'Self' },
         reasonForVisit: { type: String },
+        bloodGroup: { type: String, default: null },
         isMainUser: { type: Boolean, default: false }
     }],
     address: {

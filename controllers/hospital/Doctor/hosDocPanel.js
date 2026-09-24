@@ -1579,14 +1579,13 @@ const getPrintableDischargeSummary = async (req, res) => {
         const { id } = req.params;
 
         const appt = await Appointment.findById(id)
-            .populate('userId', 'name phone email profilePic age gender country state city address')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup country state city address')
             .populate('hospitalId', 'name address city state zipCode hospitalImage')
             .populate('doctorId', 'name speciality qualification')
             .populate({
                 path: 'bedsideCareTeam.doctorId',
                 select: 'name speciality qualification'
             })
-            // Populate the history to extract transferred doctors' profiles
             .populate({
                 path: 'treatmentHistory.toDoctorId',
                 select: 'name speciality qualification'
@@ -1598,7 +1597,6 @@ const getPrintableDischargeSummary = async (req, res) => {
 
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
-        // 1. Compile Bedside Specialist Care team co-doctors
         const dynamicHandoffDoctors = appt.bedsideCareTeam
             .filter(member => ['Completed', 'Accepted', 'In-Progress'].includes(member.status))
             .map(member => ({
@@ -1606,7 +1604,6 @@ const getPrintableDischargeSummary = async (req, res) => {
                 department: `Department of ${member.doctorId?.speciality || 'Medicine'}`
             }));
 
-        // 🚀 2. DYNAMIC SYNC: Add Previous Primary Physicians who treated and transferred care
         if (appt.treatmentHistory && appt.treatmentHistory.length > 0) {
             appt.treatmentHistory.forEach(historyLog => {
                 if (historyLog.toDoctorId && historyLog.endTime) {
@@ -1614,8 +1611,6 @@ const getPrintableDischargeSummary = async (req, res) => {
                     if (!isCurrent) {
                         const name = historyLog.toDoctorId.name;
                         const dept = `Department of ${historyLog.toDoctorId.speciality || 'Medicine'}`;
-                        
-                        // Prevent duplicate display
                         const exists = dynamicHandoffDoctors.some(d => d.name === name);
                         if (!exists && name) {
                             dynamicHandoffDoctors.push({ name, department: dept });
@@ -1625,7 +1620,6 @@ const getPrintableDischargeSummary = async (req, res) => {
             });
         }
 
-        // Helper to format payment method
         const formatPaymentMethod = (method) => {
             if (!method) return "Pending";
             if (method.toUpperCase() === 'ONLINE' || method.toUpperCase() === 'UPI') return "UPI (Google Pay)";
@@ -1633,56 +1627,48 @@ const getPrintableDischargeSummary = async (req, res) => {
             return method;
         };
 
+        // 🚨 DYNAMIC BLOOD GROUP RESOLUTION FOR DISCHARGE PRINT
+        const patientBloodGroup = appt.clinicalSummary?.bloodGroup || 
+                                  appt.patients?.[0]?.bloodGroup || 
+                                  appt.userId?.bloodGroup || 
+                                  "N/A";
+
         const figmaDataSheet = {
             header: {
                 hospitalName: appt.hospitalId?.name || "RADIUS HOSPITAL",
                 hospitalAddress: appt.hospitalId?.address || "Mohali, Punjab",
                 hospitalLogo: appt.hospitalId?.hospitalImage?.[0] || null,
                 leadDoctor: {
-                    name: appt.doctorId?.name || "Dr. Deepak Joshi",
-                    title: `Professor & Head: Department of ${appt.doctorId?.speciality || 'Medicine'}`,
+                    name: appt.doctorId?.name || "Attending Physician",
+                    title: `Department of ${appt.doctorId?.speciality || 'Medicine'}`,
                     qualification: appt.doctorId?.qualification || "MD"
                 },
-                collaborativeDoctors: dynamicHandoffDoctors // 👈 Includes specialists and previous primary doctors
+                collaborativeDoctors: dynamicHandoffDoctors
             },
 
-            // --- ALL 9 KEYS MAPPED TO DYNAMIC DATABASE PROPERTIES ---
             patientDetails: {
                 appointmentId: appt.bookingId,
-                name: appt.userId?.name || "N/A",
-                address: appt.userId?.address || "N/A",
-                gender: appt.userId?.gender || "Male",
-                age: appt.userId?.age || 30,
+                name: appt.patients?.[0]?.patientName || appt.userId?.name || "N/A",
+                address: appt.address?.city ? `${appt.address.houseNo || ''} ${appt.address.city}` : (appt.userId?.address || "N/A"),
+                gender: appt.patients?.[0]?.gender || appt.userId?.gender || "Male",
+                age: appt.patients?.[0]?.patientAge || appt.userId?.age || 30,
+                bloodGroup: patientBloodGroup, // 👈 Injected Dynamic Blood Group
                 
-                // 1. Date of Admission (startDate)
                 dateOfAdmission: appt.startDate ? moment(appt.startDate).format("YYYY-MM-DD") : "N/A",
-                
-                // 2. Department (Dynamic Doctor Specialization)
                 department: appt.doctorId?.speciality 
                     ? `Department of ${appt.doctorId.speciality}, Unit - 1` 
                     : "Department of Medicine, Unit - 1",
                 
-                // 3. Date of Discharge (endDate)
                 dateOfDischarge: appt.endDate ? moment(appt.endDate).format("YYYY-MM-DD") : "N/A",
-                
-                // 4. Date of Surgery (dynamic check)
                 dateOfSurgery: appt.clinicalSummary?.dateOfSurgery 
                     ? moment(appt.clinicalSummary.dateOfSurgery).format("YYYY-MM-DD") 
                     : "N/A",
                 
-                // 5. Insurance Status
-                insuranceStatus: appt.hasInsurance ? "Verified (Cashless)" : "N/A",
-                
-                // 6. Payment Status
+                insuranceStatus: appt.insuranceDetails?.hasInsurance || appt.hasInsurance ? "Verified (Cashless)" : "N/A",
                 paymentStatus: appt.paymentStatus || "Pending",
-                
-                // 7. Payment Type
                 paymentType: formatPaymentMethod(appt.paymentMethod),
                 
-                // 8. Condition during Admission
                 conditionDuringAdmission: appt.clinicalSummary?.conditionDuringAdmission || "Stable",
-                
-                // 9. Condition during Discharge
                 conditionDuringDischarge: appt.clinicalSummary?.conditionDuringDischarge || "Recovered & Stable",
 
                 chiefComplaints: appt.clinicalSummary?.chiefComplaint || appt.patients?.[0]?.reasonForVisit || "N/A",

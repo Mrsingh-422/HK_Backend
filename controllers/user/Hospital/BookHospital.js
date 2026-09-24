@@ -1121,14 +1121,31 @@ const getMyHospitalBookings = async (req, res) => {
 // GET FAMILY MEMBERS FOR BUBBLES (Screenshot 24)
 const getBookingProfiles = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('name profilePic familyMember');
-        // Main User + Family members ka array merge karke bhejein
+        const user = await User.findById(req.user.id).select('name profilePic familyMember bloodGroup');
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        // Main User + Family members array merged with Blood Group
         const profiles = [
-            { id: user._id, name: "My Self", profilePic: user.profilePic, relation: 'Self' },
-            ...user.familyMember.map(fm => ({ id: fm._id, name: fm.memberName, profilePic: fm.profilePic, relation: fm.relation }))
+            { 
+                id: user._id, 
+                name: "My Self", 
+                profilePic: user.profilePic, 
+                relation: 'Self',
+                bloodGroup: user.bloodGroup || null 
+            },
+            ...user.familyMember.map(fm => ({ 
+                id: fm._id, 
+                name: fm.memberName, 
+                profilePic: fm.profilePic, 
+                relation: fm.relation,
+                bloodGroup: fm.bloodGroup || null 
+            }))
         ];
+
         res.json({ success: true, data: profiles });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 
