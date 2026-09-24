@@ -421,21 +421,36 @@ const getWardStatus = async (req, res) => {
 
 // --- 2. UPDATE INDIVIDUAL BED STATUS (Figma Screenshot 27/28) ---
 // Used when Admin manually marks a bed for Maintenance or releases it
+// Endpoint: PATCH /hospital/panel/bed/status
 const updateBedStatus = async (req, res) => {
     try {
         const { bedId, status } = req.body;
+
+        if (!bedId || !status) {
+            return res.status(400).json({ success: false, message: "bedId and status are required." });
+        }
+
         const bed = await Bed.findById(bedId);
+        if (!bed) {
+            return res.status(404).json({ success: false, message: "Bed not found in the system." });
+        }
+
         const oldStatus = bed.status;
         bed.status = status;
         await bed.save();
 
-        if(oldStatus !== 'Available' && status === 'Available') {
+        // Sync Ward Available Count
+        if (oldStatus !== 'Available' && status === 'Available') {
             await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
-        } else if(oldStatus === 'Available' && status !== 'Available') {
+        } else if (oldStatus === 'Available' && status !== 'Available') {
             await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
         }
-        res.json({ success: true, data: bed });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        res.json({ success: true, message: `Bed status updated to ${status}`, data: bed });
+    } catch (error) { 
+        console.error("Update Bed Status Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // POST /hospital/panel/admissions/assign-doctor
@@ -883,10 +898,10 @@ const assignDriverToCase = async (req, res) => {
 const getIncomingReferrals = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { page = 1, limit = 20 } = req.query;
+        const { page = 1, limit = 10 } = req.query;
 
-        const pageNum = parseInt(page) || 1;
-        const limitNum = parseInt(limit) || 20;
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
         const query = { 
@@ -898,30 +913,69 @@ const getIncomingReferrals = async (req, res) => {
         const totalRecords = await Appointment.countDocuments(query);
 
         const referrals = await Appointment.find(query)
-            .populate('userId', 'name phone profilePic')
-            .populate('ambulanceId', 'name vehicleNumber')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
+            .populate('ambulanceId', 'name vehicleNumber vehicleType')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay',
+                select: 'bedNumber pricePerDay status',
                 populate: { path: 'wardId', select: 'name type' }
             })
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum);
 
+        const cleanedReferrals = referrals.map(appt => ({
+            _id: appt._id,
+            bookingId: appt.bookingId,
+            status: appt.status,
+            startDate: appt.startDate,
+            endDate: appt.endDate,
+            stayDuration: appt.stayDuration || 1,
+
+            patientDetails: resolvePatientDTO(appt),
+
+            bedDetails: appt.bedId ? {
+                _id: appt.bedId._id,
+                bedNumber: appt.bedId.bedNumber,
+                pricePerDay: appt.bedId.pricePerDay,
+                wardName: appt.bedId.wardId?.name || appt.wardName || "N/A"
+            } : null,
+
+            ambulanceDetails: appt.ambulanceId ? {
+                _id: appt.ambulanceId._id,
+                name: appt.ambulanceId.name,
+                vehicleNumber: appt.ambulanceId.vehicleNumber || "N/A"
+            } : null,
+
+            billing: {
+                totalAmount: appt.totalAmount || 0,
+                paymentMethod: appt.paymentMethod || 'Online',
+                paymentStatus: appt.paymentStatus || 'Pending'
+            },
+
+            bookedBy: appt.userId ? {
+                userId: appt.userId._id,
+                name: appt.userId.name,
+                phone: appt.userId.phone,
+                email: appt.userId.email
+            } : null,
+
+            createdAt: appt.createdAt
+        }));
+
         res.json({ 
             success: true, 
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
-            count: referrals.length,
-            data: referrals 
+            count: cleanedReferrals.length,
+            data: cleanedReferrals 
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("getIncomingReferrals Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
 
 
 const getHospitalWards = async (req, res) => {
@@ -1005,7 +1059,6 @@ const getAllHospitalAdmissions = async (req, res) => {
 
         const totalRecords = await Appointment.countDocuments(query);
 
-        // Fetch records with required populate
         const admissions = await Appointment.find(query)
             .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
@@ -1019,114 +1072,59 @@ const getAllHospitalAdmissions = async (req, res) => {
             .skip(skip)
             .limit(limitNum);
 
-        // =========================================================================
-        // 🧹 DTO TRANSFORMATION: Clean, Professional & Clutter-Free Patient Cards
-        // =========================================================================
-        const cleanedAdmissions = admissions.map(appt => {
-            const user = appt.userId;
-            const primaryPatient = appt.patients?.[0] || {};
+        const cleanedAdmissions = admissions.map(appt => ({
+            _id: appt._id,
+            bookingId: appt.bookingId,
+            bookingType: appt.bookingType || 'Admission',
+            bedBookingType: appt.bedBookingType || 'General-Bed',
+            status: appt.status,
+            startDate: appt.startDate,
+            endDate: appt.endDate,
+            stayDuration: appt.stayDuration || 1,
 
-            // Determine if patient is the account holder or family member
-            const isSelf = !primaryPatient.relation || 
-                           primaryPatient.relation.toLowerCase() === 'self' || 
-                           (user?.name && primaryPatient.patientName && primaryPatient.patientName.trim().toLowerCase() === user.name.trim().toLowerCase());
+            patientDetails: resolvePatientDTO(appt),
 
-            let matchedFamilyMember = null;
-            if (!isSelf && user?.familyMember && Array.isArray(user.familyMember)) {
-                matchedFamilyMember = user.familyMember.find(fm => 
-                    (fm.memberName && primaryPatient.patientName && fm.memberName.trim().toLowerCase() === primaryPatient.patientName.trim().toLowerCase()) ||
-                    (fm.relation && primaryPatient.relation && fm.relation.trim().toLowerCase() === primaryPatient.relation.trim().toLowerCase())
-                );
-            }
+            bedDetails: appt.bedId ? {
+                _id: appt.bedId._id,
+                bedNumber: appt.bedId.bedNumber || appt.bedNumber || "N/A",
+                pricePerDay: appt.bedId.pricePerDay || 0,
+                status: appt.bedId.status,
+                wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
+                wardType: appt.bedId.wardId?.type || "Ward"
+            } : null,
 
-            // 🎯 Accurate Blood Group for the specific admitted patient
-            let resolvedBloodGroup = "N/A";
-            if (appt.clinicalSummary?.bloodGroup && appt.clinicalSummary.bloodGroup.trim() !== "") {
-                resolvedBloodGroup = appt.clinicalSummary.bloodGroup;
-            } else if (primaryPatient.bloodGroup && primaryPatient.bloodGroup.trim() !== "") {
-                resolvedBloodGroup = primaryPatient.bloodGroup;
-            } else if (!isSelf && matchedFamilyMember?.bloodGroup) {
-                resolvedBloodGroup = matchedFamilyMember.bloodGroup;
-            } else if (isSelf && user?.bloodGroup) {
-                resolvedBloodGroup = user.bloodGroup;
-            }
+            assignedDoctor: appt.doctorId ? {
+                _id: appt.doctorId._id,
+                name: appt.doctorId.name,
+                speciality: appt.doctorId.speciality,
+                qualification: appt.doctorId.qualification || "MBBS",
+                profileImage: appt.doctorId.profileImage || null
+            } : null,
 
-            const resolvedProfilePic = (!isSelf && matchedFamilyMember?.profilePic) 
-                ? matchedFamilyMember.profilePic 
-                : (user?.profilePic || null);
+            billing: {
+                totalAmount: appt.totalAmount || 0,
+                paymentMethod: appt.paymentMethod || 'Online',
+                paymentStatus: appt.paymentStatus || 'Pending',
+                baseFee: appt.pricingBreakdown?.baseFee || 0,
+                transactionId: appt.transactionId || null
+            },
 
-            const resolvedAge = primaryPatient.patientAge || 
-                (matchedFamilyMember?.dob ? moment().diff(moment(matchedFamilyMember.dob), 'years') : (user?.age || "N/A"));
+            insurance: {
+                hasInsurance: Boolean(appt.insuranceDetails?.hasInsurance),
+                companyName: appt.insuranceDetails?.companyName || "",
+                approvalStatus: appt.insuranceDetails?.approvalStatus || "Pending"
+            },
 
-            // Returning strictly necessary, well-structured fields
-            return {
-                _id: appt._id,
-                bookingId: appt.bookingId,
-                bookingType: appt.bookingType || 'Admission',
-                bedBookingType: appt.bedBookingType || 'General-Bed',
-                status: appt.status,
-                startDate: appt.startDate,
-                endDate: appt.endDate,
-                stayDuration: appt.stayDuration || 1,
+            bookedBy: appt.userId ? {
+                userId: appt.userId._id,
+                name: appt.userId.name,
+                phone: appt.userId.phone,
+                email: appt.userId.email
+            } : null,
 
-                // 🏥 Admitted Patient Info (Only the person who is admitted!)
-                patientDetails: {
-                    patientName: primaryPatient.patientName || (isSelf ? user?.name : "Admitted Patient"),
-                    age: resolvedAge,
-                    gender: primaryPatient.gender || matchedFamilyMember?.gender || (isSelf ? user?.gender : "N/A"),
-                    relation: matchedFamilyMember?.relation || primaryPatient.relation || (isSelf ? "Self" : "Family Member"),
-                    bloodGroup: resolvedBloodGroup, // 👈 Single, accurate Blood Group!
-                    reasonForVisit: primaryPatient.reasonForVisit || appt.bookingReason || "Hospital Admission",
-                    profilePic: resolvedProfilePic
-                },
-
-                // 🛏️ Assigned Bed Details
-                bedDetails: appt.bedId ? {
-                    _id: appt.bedId._id,
-                    bedNumber: appt.bedId.bedNumber || appt.bedNumber || "N/A",
-                    pricePerDay: appt.bedId.pricePerDay || 0,
-                    status: appt.bedId.status,
-                    wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
-                    wardType: appt.bedId.wardId?.type || "Ward"
-                } : null,
-
-                // 👨‍⚕️ Assigned Doctor (if any)
-                assignedDoctor: appt.doctorId ? {
-                    _id: appt.doctorId._id,
-                    name: appt.doctorId.name,
-                    speciality: appt.doctorId.speciality,
-                    qualification: appt.doctorId.qualification || "MBBS",
-                    profileImage: appt.doctorId.profileImage || null
-                } : null,
-
-                // 💳 Billing & Payment Summary
-                billing: {
-                    totalAmount: appt.totalAmount || 0,
-                    paymentMethod: appt.paymentMethod || 'Online',
-                    paymentStatus: appt.paymentStatus || 'Pending',
-                    baseFee: appt.pricingBreakdown?.baseFee || 0,
-                    transactionId: appt.transactionId || null
-                },
-
-                // 🛡️ Cashless Insurance Status
-                insurance: {
-                    hasInsurance: Boolean(appt.insuranceDetails?.hasInsurance),
-                    companyName: appt.insuranceDetails?.companyName || "",
-                    approvalStatus: appt.insuranceDetails?.approvalStatus || "Pending"
-                },
-
-                // 👤 Account Holder (Who booked the admission)
-                bookedBy: user ? {
-                    userId: user._id,
-                    name: user.name,
-                    phone: user.phone,
-                    email: user.email
-                } : null,
-
-                createdAt: appt.createdAt,
-                updatedAt: appt.updatedAt
-            };
-        });
+            createdAt: appt.createdAt,
+            updatedAt: appt.updatedAt
+        }));
 
         res.json({ 
             success: true, 
@@ -1136,24 +1134,24 @@ const getAllHospitalAdmissions = async (req, res) => {
             count: cleanedAdmissions.length,
             data: cleanedAdmissions 
         });
-
     } catch (error) { 
         console.error("getAllHospitalAdmissions Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// --- EMERGENCY CASES (Ambulance + Walk-in Emergency Triage) ---
+
+// --- EMERGENCY CASES (Clean DTO with Walk-in & Ambulance arrivals) ---
+// Endpoint: GET /hospital/panel/emergency-cases?page=1&limit=10
 const getEmergencyCases = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { page = 1, limit = 20 } = req.query;
+        const { page = 1, limit = 10 } = req.query;
 
-        const pageNum = parseInt(page) || 1;
-        const limitNum = parseInt(limit) || 20;
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
-        // 🚨 BUG FIX: Include both Ambulance arrivals AND Direct Emergency Admissions
         const query = { 
             hospitalId: hospitalId, 
             $or: [
@@ -1167,19 +1165,19 @@ const getEmergencyCases = async (req, res) => {
         const totalRecords = await Appointment.countDocuments(query);
 
         const appointments = await Appointment.find(query)
-            .populate('userId', 'name profilePic phone age gender')
+            .populate('userId', 'name profilePic phone age gender email bloodGroup familyMember')
             .populate('ambulanceId', 'name vehicleNumber vehicleType')
+            .populate('doctorId', 'name speciality profileImage')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay',
-                populate: { path: 'wardId', select: 'name' }
+                populate: { path: 'wardId', select: 'name type' }
             })
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limitNum)
-            .lean(); 
+            .limit(limitNum);
 
-        const enrichedData = await Promise.all(appointments.map(async (appt) => {
+        const cleanedEmergency = await Promise.all(appointments.map(async (appt) => {
             const booking = await AmbulanceBooking.findOne({
                 $or: [
                     { bookingId: appt.bookingId },
@@ -1188,15 +1186,45 @@ const getEmergencyCases = async (req, res) => {
             }).select('patientDetails caseReference serviceType triageLevel').lean();
 
             return {
-                ...appt,
+                _id: appt._id,
+                bookingId: appt.bookingId,
                 caseReference: booking ? booking.caseReference : null,
                 serviceType: booking ? booking.serviceType : "Walk-in Emergency",
-                emergencyPhotos: booking ? {
-                    userIncidentPhoto: booking.patientDetails?.incidentPhoto || null,
-                    driverOnSpotPhoto: booking.patientDetails?.driverOnSpotPhoto || null,
-                    referralCard: booking.patientDetails?.referralCard || null,
-                    emergencyDescription: booking.patientDetails?.emergencyDescription || ""
-                } : null
+                triageLevel: appt.triageLevel || "Emergency",
+                status: appt.status,
+                startDate: appt.startDate,
+
+                patientDetails: resolvePatientDTO(appt),
+
+                bedDetails: appt.bedId ? {
+                    _id: appt.bedId._id,
+                    bedNumber: appt.bedId.bedNumber || appt.bedNumber || "N/A",
+                    status: appt.bedId.status,
+                    wardName: appt.bedId.wardId?.name || appt.wardName || "Emergency Ward"
+                } : null,
+
+                ambulanceDetails: appt.ambulanceId ? {
+                    _id: appt.ambulanceId._id,
+                    name: appt.ambulanceId.name,
+                    vehicleNumber: appt.ambulanceId.vehicleNumber || "N/A",
+                    vehicleType: appt.ambulanceId.vehicleType || "ALS"
+                } : null,
+
+                assignedDoctor: appt.doctorId ? {
+                    _id: appt.doctorId._id,
+                    name: appt.doctorId.name,
+                    speciality: appt.doctorId.speciality,
+                    profileImage: appt.doctorId.profileImage || null
+                } : null,
+
+                emergencyPhotos: booking?.patientDetails ? {
+                    userIncidentPhoto: booking.patientDetails.incidentPhoto || null,
+                    driverOnSpotPhoto: booking.patientDetails.driverOnSpotPhoto || null,
+                    referralCard: booking.patientDetails.referralCard || null,
+                    emergencyDescription: booking.patientDetails.emergencyDescription || ""
+                } : null,
+
+                createdAt: appt.createdAt
             };
         }));
 
@@ -1205,10 +1233,11 @@ const getEmergencyCases = async (req, res) => {
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
-            count: enrichedData.length, 
-            data: enrichedData 
+            count: cleanedEmergency.length, 
+            data: cleanedEmergency 
         });
     } catch (error) { 
+        console.error("getEmergencyCases Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -1594,7 +1623,10 @@ const getHospitalHistory = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const { page = 1, limit = 10, search, caseType } = req.query; 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
 
         let query = { 
             hospitalId: hospitalId, 
@@ -1612,7 +1644,6 @@ const getHospitalHistory = async (req, res) => {
 
         if (search) {
             const isBookingId = search.toUpperCase().startsWith('HKH-') || search.toUpperCase().startsWith('HK-');
-            
             if (isBookingId) {
                 query.bookingId = { $regex: search, $options: 'i' };
             } else {
@@ -1628,41 +1659,63 @@ const getHospitalHistory = async (req, res) => {
         const totalRecords = await Appointment.countDocuments(query);
 
         const history = await Appointment.find(query)
-            .populate('userId', 'name phone email profilePic age gender')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber pricePerDay',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .populate({
-                path: 'bedsideCareTeam.doctorId',
-                select: 'name speciality qualification profileImage'
-            })
-            .populate({
-                path: 'treatmentHistory.fromDoctorId',
-                select: 'name speciality qualification profileImage'
-            })
-            .populate({
-                path: 'treatmentHistory.toDoctorId',
-                select: 'name speciality qualification profileImage'
-            })
             .sort({ updatedAt: -1 }) 
             .skip(skip)
-            .limit(parseInt(limit));
+            .limit(limitNum);
 
-        // Asynchronously process files and timeline details for each history record
-        const enrichedHistory = await Promise.all(history.map(async (appt) => {
-            return await enrichAppointmentClinicalDetails(appt);
+        const cleanedHistory = await Promise.all(history.map(async (appt) => {
+            const enriched = await enrichAppointmentClinicalDetails(appt);
+            
+            return {
+                _id: appt._id,
+                bookingId: appt.bookingId,
+                status: appt.status,
+                startDate: appt.startDate,
+                endDate: appt.endDate,
+                stayDuration: appt.stayDuration || 1,
+
+                patientDetails: resolvePatientDTO(appt),
+
+                bedDetails: appt.bedId ? {
+                    _id: appt.bedId._id,
+                    bedNumber: appt.bedId.bedNumber,
+                    wardName: appt.bedId.wardId?.name || appt.wardName || "N/A"
+                } : null,
+
+                assignedDoctor: appt.doctorId ? {
+                    _id: appt.doctorId._id,
+                    name: appt.doctorId.name,
+                    speciality: appt.doctorId.speciality,
+                    qualification: appt.doctorId.qualification || "MBBS"
+                } : null,
+
+                billing: {
+                    totalAmount: appt.totalAmount || 0,
+                    paymentMethod: appt.paymentMethod || 'Online',
+                    paymentStatus: appt.paymentStatus || 'Paid',
+                    transactionId: appt.transactionId || null
+                },
+
+                clinicalFiles: enriched.clinicalFiles,
+
+                updatedAt: appt.updatedAt
+            };
         }));
 
         res.json({
             success: true,
             totalRecords,
-            totalPages: Math.ceil(totalRecords / parseInt(limit)),
-            currentPage: parseInt(page),
-            count: enrichedHistory.length,
-            data: enrichedHistory 
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
+            count: cleanedHistory.length,
+            data: cleanedHistory 
         });
 
     } catch (error) {
@@ -1871,48 +1924,30 @@ const getHospitalCaseDetails = async (req, res) => {
         const hospitalId = req.user.id;
         const { id } = req.params; // Appointment ID
 
-        // Deep populate patient bio, active bed position, main doctor, co-doctors, timeline history, and clinical checkups
         const patient = await Appointment.findOne({ _id: id, hospitalId })
-            .populate('userId', 'name phone email profilePic age gender bloodGroup')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay',
+                select: 'bedNumber pricePerDay status',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .populate({
-                path: 'treatmentHistory.fromDoctorId',
-                select: 'name speciality profileImage'
-            })
-            .populate({
-                path: 'treatmentHistory.toDoctorId',
-                select: 'name speciality profileImage'
-            })
-            .populate({
-                path: 'bedsideCareTeam.doctorId',
-                select: 'name speciality profileImage dutyStatus'
-            })
-            .populate({
-                path: 'clinicalLogs.doctorId',
-                select: 'name speciality qualification profileImage'
-            })
-            .populate({
-                path: 'activeMedications.addedBy',
-                select: 'name speciality qualification profileImage'
-            });
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage')
+            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage dutyStatus')
+            .populate('clinicalLogs.doctorId', 'name speciality qualification profileImage')
+            .populate('activeMedications.addedBy', 'name speciality qualification profileImage');
 
         if (!patient) {
             return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
         }
 
-        // 1. Process files and compile billing breakdown details
         const enrichedPatient = await enrichAppointmentClinicalDetails(patient);
+        const resolvedPatient = resolvePatientDTO(patient);
 
-        // 2. Fetch latest prescription dynamically
         const Prescription = require('../../models/Prescription'); 
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
-        // 3. Sync dynamic ambulance telemetry
         let ambulanceBooking = null;
         if (patient.ambulanceId) {
             const AmbulanceBooking = require('../../models/AmbulanceBooking');
@@ -1924,7 +1959,6 @@ const getHospitalCaseDetails = async (req, res) => {
             }).lean();
         }
 
-        // 🚀 4. COLLABORATIVE SYNC: Map and flatten all bedside specialists recommended medicines for ward desk view
         const bedsideMedications = patient.bedsideCareTeam
             .filter(member => ['Completed', 'In-Progress', 'Accepted'].includes(member.status))
             .map(member => ({
@@ -1937,16 +1971,38 @@ const getHospitalCaseDetails = async (req, res) => {
                 recommendations: member.recommendedMedicines || []
             }));
 
+        // Dynamic Clinical Summary
+        const dynamicClinicalSummary = {
+            reasonForVisit: patient.patients?.[0]?.reasonForVisit || patient.bookingReason || "Hospital Admission",
+            admissionNote: patient.clinicalSummary?.admissionNote || patient.clinicalSummary?.chiefComplaint || patient.bookingReason || "Admitted for inpatient care.",
+            triagePriority: patient.clinicalSummary?.triagePriority || patient.triageLevel || "Routine",
+            clinicalDiagnosis: patient.clinicalSummary?.diagnosis || "Diagnosis pending clinical validation.",
+            investigationNotes: patient.clinicalSummary?.investigation || "Pending investigations",
+            outcomeResult: patient.clinicalSummary?.treatmentResult || (patient.status === 'Completed' ? "Discharged" : "Under Active Treatment"),
+            conditionDuringAdmission: patient.clinicalSummary?.conditionDuringAdmission || "Stable",
+            conditionDuringDischarge: patient.clinicalSummary?.conditionDuringDischarge || (patient.status === 'Discharge-Pending' ? "Recovered & Stable" : "N/A"),
+            bloodGroup: resolvedPatient.bloodGroup,
+            dateOfSurgery: patient.clinicalSummary?.dateOfSurgery || null,
+            vitals: patient.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
+            uploadedReports: patient.clinicalSummary?.uploadedReports || [],
+            dischargeSummaryPdf: patient.clinicalSummary?.dischargeSummaryPdf || null
+        };
+
         res.json({ 
             success: true, 
             data: {
-                patient: enrichedPatient,
+                patient: {
+                    ...enrichedPatient,
+                    patientDetails: resolvedPatient,
+                    clinicalSummary: dynamicClinicalSummary
+                },
                 prescription: prescription || null,
                 ambulanceTelemetry: ambulanceBooking,
-                bedsideMedications // 👈 Recieved identical collaborative medications pool directly in desk response!
+                bedsideMedications
             }
         });
     } catch (error) {
+        console.error("getHospitalCaseDetails Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2130,7 +2186,10 @@ const getHospitalPendingDischarges = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const { page = 1, limit = 10, caseType } = req.query; 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
 
         const query = {
             hospitalId,
@@ -2138,7 +2197,6 @@ const getHospitalPendingDischarges = async (req, res) => {
             "bedsideCareTeam.status": { $nin: ['Pending', 'In-Progress'] } 
         };
 
-        // Case type filters
         if (caseType === 'emergency') {
             query.ambulanceId = { $ne: null, $exists: true };
         } else if (caseType === 'admission') {
@@ -2150,43 +2208,110 @@ const getHospitalPendingDischarges = async (req, res) => {
 
         const totalRecords = await Appointment.countDocuments(query);
 
-        // Fetch pending discharges with populated care team details
         const list = await Appointment.find(query)
-            .populate('userId', 'name phone email profilePic age gender')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay',
+                select: 'bedNumber pricePerDay status',
                 populate: { path: 'wardId', select: 'name type' }
-            })
-            .populate({
-                path: 'bedsideCareTeam.doctorId',
-                select: 'name speciality qualification profileImage'
-            })
-            .populate({
-                path: 'treatmentHistory.fromDoctorId',
-                select: 'name speciality qualification profileImage'
-            })
-            .populate({
-                path: 'treatmentHistory.toDoctorId',
-                select: 'name speciality qualification profileImage'
             })
             .sort({ updatedAt: -1 }) 
             .skip(skip)
-            .limit(parseInt(limit));
+            .limit(limitNum);
 
-        // Asynchronously process files, timeline details and PRE-BILLING surcharges for each pending record
-        const enrichedList = await Promise.all(list.map(async (appt) => {
-            return await enrichAppointmentClinicalDetails(appt);
+        const cleanedPendingDischarges = await Promise.all(list.map(async (appt) => {
+            const enriched = await enrichAppointmentClinicalDetails(appt);
+            const resolvedPatient = resolvePatientDTO(appt);
+
+            // 🎯 Dynamic Field Resolvers with Smart Fallbacks
+            const resolvedTriage = appt.clinicalSummary?.triagePriority || 
+                                   appt.triageLevel || 
+                                   "Routine";
+
+            const resolvedAdmissionNote = appt.clinicalSummary?.admissionNote || 
+                                         appt.clinicalSummary?.chiefComplaint || 
+                                         appt.bookingReason || 
+                                         "Admitted for clinical inpatient care.";
+
+            const resolvedDiagnosis = appt.clinicalSummary?.diagnosis || 
+                                     "Diagnosis pending final clinical validation.";
+
+            const resolvedInvestigation = appt.clinicalSummary?.investigation || 
+                                         "Routine baseline investigations completed.";
+
+            const resolvedOutcomeResult = appt.clinicalSummary?.treatmentResult || 
+                                         (appt.status === 'Discharge-Pending' ? "Discharged (Pending Clearance)" : "Under Treatment");
+
+            const resolvedConditionAdmission = appt.clinicalSummary?.conditionDuringAdmission || 
+                                               (appt.triageLevel === 'Emergency' ? "Critical" : "Stable");
+
+            const resolvedConditionDischarge = appt.clinicalSummary?.conditionDuringDischarge || 
+                                               "Recovered & Clinically Stable";
+
+            return {
+                _id: appt._id,
+                bookingId: appt.bookingId,
+                status: appt.status,
+                triageLevel: resolvedTriage,
+                startDate: appt.startDate,
+                endDate: appt.endDate,
+                dischargedAt: appt.clinicalSummary?.dischargedAt || appt.updatedAt,
+
+                // 👤 Patient Details
+                patientDetails: resolvedPatient,
+
+                // 🛏️ Bed & Ward Details
+                bedDetails: appt.bedId ? {
+                    _id: appt.bedId._id,
+                    bedNumber: appt.bedId.bedNumber,
+                    wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
+                    wardType: appt.bedId.wardId?.type || "ICU",
+                    pricePerDay: appt.bedId.pricePerDay || 0
+                } : null,
+
+                // 👨‍⚕️ Assigned Doctor
+                assignedDoctor: appt.doctorId ? {
+                    _id: appt.doctorId._id,
+                    name: appt.doctorId.name,
+                    speciality: appt.doctorId.speciality,
+                    qualification: appt.doctorId.qualification || "MBBS, MD"
+                } : null,
+
+                // 📋 Complete Case & Diagnostics Summary (Mapped to Screenshot)
+                clinicalSummary: {
+                    reasonForVisit: primaryPatientReason(appt),
+                    admissionNote: resolvedAdmissionNote,
+                    triagePriority: resolvedTriage,
+                    clinicalDiagnosis: resolvedDiagnosis,
+                    investigationNotes: resolvedInvestigation,
+                    outcomeResult: resolvedOutcomeResult,
+                    conditionDuringAdmission: resolvedConditionAdmission,
+                    conditionDuringDischarge: resolvedConditionDischarge,
+                    bloodGroup: resolvedPatient.bloodGroup,
+                    dateOfSurgery: appt.clinicalSummary?.dateOfSurgery || null,
+                    vitals: appt.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
+                    uploadedReports: appt.clinicalSummary?.uploadedReports || [],
+                    dischargeSummaryPdf: appt.clinicalSummary?.dischargeSummaryPdf || null
+                },
+
+                // 💳 Financial Ledger Breakdown
+                billingBreakdown: enriched.billingBreakdown,
+
+                // 📑 Clinical Files & PDFs
+                clinicalFiles: enriched.clinicalFiles,
+
+                updatedAt: appt.updatedAt
+            };
         }));
 
         res.json({
             success: true,
             totalRecords,
-            totalPages: Math.ceil(totalRecords / parseInt(limit)),
-            currentPage: parseInt(page),
-            count: enrichedList.length,
-            data: enrichedList
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
+            count: cleanedPendingDischarges.length,
+            data: cleanedPendingDischarges
         });
 
     } catch (error) {
@@ -2194,6 +2319,12 @@ const getHospitalPendingDischarges = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// Helper for visit reason
+const primaryPatientReason = (appt) => {
+    return appt.patients?.[0]?.reasonForVisit || appt.bookingReason || "Hospital Admission";
+};
+
 // --- API: DISPATCH HOSPITAL AMBULANCE FOR ADMISSION PATIENT (Figma Flow Sync) ---
 // Endpoint: POST /hospital/panel/admissions/dispatch-ambulance
 // Logic: Generates AmbulanceBooking, locks driver availability, and appends transit charges to patient's bill
@@ -2673,16 +2804,15 @@ const transferPatientBed = async (req, res) => {
 const getTrackCasesList = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { page = 1, search, status } = req.query;
+        const { page = 1, limit = 10, search, status } = req.query;
 
-        // Strictly paginated with 10 records per page as requested
-        const pageNum = parseInt(page) || 1;
-        const limitNum = 10; 
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
         let query = { 
             hospitalId,
-            bookingType: 'Admission' // Only track bed admission cases
+            bookingType: 'Admission'
         };
 
         if (status) query.status = status;
@@ -2692,7 +2822,7 @@ const getTrackCasesList = async (req, res) => {
             if (isBookingId) {
                 query.bookingId = { $regex: search, $options: 'i' };
             } else {
-                const User = require('../../models/User'); // Safe path load
+                const User = require('../../models/User');
                 const matchedUsers = await User.find({
                     name: { $regex: search, $options: 'i' }
                 }).select('_id');
@@ -2704,24 +2834,57 @@ const getTrackCasesList = async (req, res) => {
         const totalRecords = await Appointment.countDocuments(query);
 
         const list = await Appointment.find(query)
-            .populate('userId', 'name phone email profilePic age gender')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality profileImage')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay',
+                select: 'bedNumber pricePerDay status',
                 populate: { path: 'wardId', select: 'name type' }
             })
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum);
 
+        const cleanedTrackList = list.map(appt => ({
+            _id: appt._id,
+            bookingId: appt.bookingId,
+            status: appt.status,
+            triageLevel: appt.triageLevel || "Routine",
+            startDate: appt.startDate,
+            endDate: appt.endDate,
+            stayDuration: appt.stayDuration || 1,
+
+            patientDetails: resolvePatientDTO(appt),
+
+            bedDetails: appt.bedId ? {
+                _id: appt.bedId._id,
+                bedNumber: appt.bedId.bedNumber,
+                wardName: appt.bedId.wardId?.name || appt.wardName || "N/A"
+            } : null,
+
+            assignedDoctor: appt.doctorId ? {
+                _id: appt.doctorId._id,
+                name: appt.doctorId.name,
+                speciality: appt.doctorId.speciality,
+                profileImage: appt.doctorId.profileImage || null
+            } : null,
+
+            billing: {
+                totalAmount: appt.totalAmount || 0,
+                paymentStatus: appt.paymentStatus || 'Pending',
+                paymentMethod: appt.paymentMethod || 'Online'
+            },
+
+            createdAt: appt.createdAt
+        }));
+
         res.json({
             success: true,
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
-            count: list.length,
-            data: list
+            count: cleanedTrackList.length,
+            data: cleanedTrackList
         });
 
     } catch (error) {

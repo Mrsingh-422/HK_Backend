@@ -41,25 +41,56 @@ const getHospitalAllBookings = async (req, res) => {
 };
 
 // 2. APPROVE & ASSIGN (Fixed: Bed status marked as 'Reserved' instead of premature 'Occupied')
+// Endpoint: PATCH /hospital/doctor/appointments/approve/:id
 const approveHospitalBooking = async (req, res) => {
     try {
         const { doctorId } = req.body; 
         const hospitalId = req.user.id;
 
         const appointment = await Appointment.findOne({ _id: req.params.id, hospitalId });
-        if (!appointment) return res.status(404).json({ message: "Booking not found" });
+        if (!appointment) return res.status(404).json({ success: false, message: "Booking not found" });
 
-        appointment.status = 'Confirmed'; // Awaiting physical arrival/admission
-        if (doctorId) appointment.doctorId = doctorId;
+        appointment.status = 'Confirmed';
+        const now = new Date();
+
+        // 🛡️ SYNC FIX: If doctor is assigned during approval, start their treatment shift
+        if (doctorId) {
+            appointment.doctorId = doctorId;
+            appointment.treatmentHistory.push({
+                toDoctorId: doctorId,
+                action: 'Initial-Assignment',
+                notes: "Assigned on hospital admission approval.",
+                timestamp: now,
+                startTime: now
+            });
+        }
         
-        // FIX: Bed is reserved during approval, not occupied yet (Occupied will trigger at physical admission)
+        // Reserve Bed if admission booking
         if (appointment.bookingType === 'Admission' && appointment.bedId) {
-             await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Reserved' } });
+            await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Reserved' } });
         }
 
         await appointment.save();
-        res.json({ success: true, message: "Admission Confirmed & Bed Reserved", data: appointment });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        // 🛡️ NOTIFICATION FIX: Alert Patient regarding confirmation
+        const { sendPushNotification } = require('../../../utils/notification');
+        await sendPushNotification(
+            appointment.userId,
+            'user',
+            "🏥 Admission Confirmed!",
+            `Your hospital admission booking #${appointment.bookingId} has been confirmed. Bed is reserved for your arrival.`,
+            { appointmentId: appointment._id.toString(), type: 'admission_confirmed' }
+        );
+
+        res.json({ 
+            success: true, 
+            message: "Admission Confirmed, Bed Reserved, and Patient Notified.", 
+            data: appointment 
+        });
+    } catch (error) { 
+        console.error("Approve Booking Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 3. REJECT & RELEASE (Updated with automatic dispatched ambulance release)

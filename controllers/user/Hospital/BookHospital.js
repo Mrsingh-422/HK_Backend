@@ -905,6 +905,7 @@ const cancelBedBooking = async (req, res) => {
 };
 
 // --- 2. RESCHEDULE BED BOOKING (Strict Global Limits Integration - No Conflicts) ---
+// Endpoint: POST /user/hospital/reschedule
 const rescheduleBedBooking = async (req, res) => {
     try {
         const { appointmentId, newStartDate, newEndDate, newBedId } = req.body;
@@ -920,7 +921,7 @@ const rescheduleBedBooking = async (req, res) => {
         if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({ 
                 success: false, 
-                message: `Reschedule failed: Aapki maximum reschedule limit (${maxLimit} times) poori ho chuki hai.` 
+                message: `Reschedule failed: Maximum reschedule limit (${maxLimit} times) reached.` 
             });
         }
 
@@ -932,19 +933,19 @@ const rescheduleBedBooking = async (req, res) => {
         const end = moment(newEndDate).endOf('day').toDate();
 
         const newStartMoment = moment(newStartDate).startOf('day');
-        const newEndMoment = moment(newEndDate).startOf('day');
+        const newEndMoment = moment(newEndDate).endOf('day');
         const newDuration = newEndMoment.diff(newStartMoment, 'days');
 
         if (originalDuration !== newDuration) {
             return res.status(400).json({
                 success: false,
-                message: `Reschedule failed: Aapki original booking ${originalDuration} din ki thi. Naye schedule me bhi strictly ${originalDuration} din select karein.`
+                message: `Reschedule failed: Original stay was ${originalDuration} days. Please select exactly ${originalDuration} days.`
             });
         }
 
         const targetBedId = newBedId || appt.bedId;
 
-        // 🚀 SYNC FIX: Included 'Discharge-Pending' in active overlap checking query
+        // Check if target bed is occupied on new dates
         const isOccupied = await Appointment.findOne({
             _id: { $ne: appointmentId },
             bedId: targetBedId,
@@ -958,18 +959,37 @@ const rescheduleBedBooking = async (req, res) => {
         if (isOccupied) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Selected bed naye target dates ke liye pehle se hi occupied hai. Kripya naya date range ya bed choose karein." 
+                message: "Selected bed is already booked for these dates. Please choose another bed or dates." 
             });
+        }
+
+        // 🛡️ BED REALLOCATION FIX: If bed is switched, release old bed and reserve new bed
+        if (newBedId && String(newBedId) !== String(appt.bedId)) {
+            // 1. Release Old Bed
+            if (appt.bedId) {
+                const oldBed = await Bed.findByIdAndUpdate(appt.bedId, { status: 'Available' });
+                if (oldBed && oldBed.wardId) {
+                    await Ward.findByIdAndUpdate(oldBed.wardId, { $inc: { availableBeds: 1 } });
+                }
+            }
+
+            // 2. Reserve New Bed
+            const newBed = await Bed.findById(newBedId);
+            if (newBed) {
+                newBed.status = 'Reserved';
+                await newBed.save();
+                if (newBed.wardId) {
+                    await Ward.findByIdAndUpdate(newBed.wardId, { $inc: { availableBeds: -1 } });
+                    const ward = await Ward.findById(newBed.wardId);
+                    appt.wardName = ward ? ward.name : appt.wardName;
+                }
+                appt.bedNumber = newBed.bedNumber;
+            }
+            appt.bedId = newBedId;
         }
 
         appt.startDate = start;
         appt.endDate = end;
-        if (newBedId) {
-            appt.bedId = newBedId;
-            const bed = await Bed.findById(newBedId);
-            appt.bedNumber = bed ? bed.bedNumber : appt.bedNumber;
-        }
-        
         appt.rescheduleCount = currentRescheduleCount + 1;
         appt.status = 'Hospital-Pending'; 
 
@@ -977,7 +997,8 @@ const rescheduleBedBooking = async (req, res) => {
         res.json({ success: true, message: "Admission rescheduled successfully", data: appt });
 
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Reschedule Bed Booking Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
