@@ -574,7 +574,7 @@ const calcDuration = (start, end) => {
     return hours > 0 ? `${hours} hr ${minutes} mins` : `${minutes} mins`;
 };
 // --- 3. FINAL DISCHARGE & DYNAMIC BILLING (Full Code - Auto-closes open specialist care shifts on checkout) ---
-// Updated: Added Active Transit Guard to prevent premature fleet release when patient is being driven home
+// Endpoint: POST /hospital/panel/discharge/finalize
 const generateFinalBillAndDischarge = async (req, res) => {
     try {
         const { appointmentId, billingItems } = req.body; 
@@ -583,82 +583,70 @@ const generateFinalBillAndDischarge = async (req, res) => {
         const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
         if (!appointment) return res.status(404).json({ success: false, message: "Admission Record Not Found" });
 
-        const previousTotalAmount = appointment.totalAmount || 0;
-        let actualEndDate = new Date();
-        let bedPricePerDay = 500;
+        const actualEndDate = new Date();
 
-        if (appointment.bedId) {
-            const bed = await Bed.findById(appointment.bedId);
-            if (bed) {
-                bedPricePerDay = bed.pricePerDay || 500;
-            }
-        }
+        // 🚀 1. Run 24-Hour Stay & Financial Ledger Calculations
+        const ledger = calcStayAndLedger(appointment, actualEndDate, billingItems);
 
-        // 🚨 BUG FIX: Standardize inclusive base stay calculation matching booking formula
-        let baseStayDays = 1;
-        let baseStayCharge = 0;
-        if (appointment.startDate && appointment.endDate) {
-            const start = moment(appointment.startDate).startOf('day');
-            const scheduledEnd = moment(appointment.endDate).startOf('day');
-            baseStayDays = Math.max(1, scheduledEnd.diff(start, 'days') + 1);
-            baseStayCharge = baseStayDays * bedPricePerDay;
-        }
-
-        // Calculate Overstay Days & Surcharge
-        let overstayDays = 0;
-        let overstayCharge = 0;
-        if (appointment.startDate && appointment.endDate) {
-            const scheduledEnd = moment(appointment.endDate).startOf('day');
-            const actualEnd = moment(actualEndDate).startOf('day');
-            
-            overstayDays = actualEnd.diff(scheduledEnd, 'days');
-            if (overstayDays > 0) {
-                overstayCharge = overstayDays * bedPricePerDay;
-            } else {
-                overstayDays = 0;
-            }
-        }
-
+        // 2. Add extra billing items to specialServices schema
         const items = Array.isArray(billingItems) ? billingItems : [];
-        const extraBillingTotal = items.reduce((sum, item) => sum + Number(item.price), 0);
+        items.forEach(itm => {
+            appointment.specialServices.push({
+                serviceName: itm.serviceName,
+                price: Number(itm.price)
+            });
+        });
 
-        if (!appointment.pricingBreakdown) {
-            appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
-        }
-
-        if (!appointment.pricingBreakdown.baseFee || appointment.pricingBreakdown.baseFee === 0) {
-            appointment.pricingBreakdown.baseFee = baseStayCharge;
-        }
-
-        const combinedExtraCharges = overstayCharge + extraBillingTotal;
-        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + combinedExtraCharges;
-
-        appointment.pricingBreakdown.subtotal = 
-            (appointment.pricingBreakdown.baseFee || 0) + 
-            (appointment.pricingBreakdown.visitCharges || 0) + 
-            (appointment.pricingBreakdown.extraCharges || 0);
-
-        const discount = appointment.pricingBreakdown.discountAmount || 0;
-        const finalCalculatedTotal = Math.max(0, appointment.pricingBreakdown.subtotal - discount);
-        
-        appointment.specialServices = items.map(itm => ({
-            serviceName: itm.serviceName,
-            price: Number(itm.price)
-        }));
-
-        if (overstayCharge > 0) {
+        if (ledger.overstayCharge > 0) {
             appointment.specialServices.push({ 
-                serviceName: `Overstay Bed Surcharge (${overstayDays} days)`, 
-                price: overstayCharge 
+                serviceName: `Overstay Bed Surcharge (${ledger.overstayDays} days)`, 
+                price: ledger.overstayCharge 
             });
         }
 
-        appointment.status = 'Completed';
-        appointment.paymentStatus = 'Paid'; 
-        appointment.endDate = actualEndDate;
-        appointment.totalAmount = finalCalculatedTotal;
+        // 3. Update Pricing Breakdown & Ledger Snapshots
+        if (!appointment.pricingBreakdown) {
+            appointment.pricingBreakdown = {};
+        }
 
-        // Auto-close open primary doctor's active shift
+        appointment.pricingBreakdown.baseFee = ledger.accumulatedBaseFee;
+        appointment.pricingBreakdown.extraCharges = ledger.extraServicesTotal;
+        appointment.pricingBreakdown.discountAmount = ledger.discountAmount;
+        appointment.pricingBreakdown.subtotal = ledger.accumulatedBaseFee + ledger.extraServicesTotal;
+        appointment.pricingBreakdown.actualStayHours = ledger.exactStayHours;
+        appointment.pricingBreakdown.actualStayDays = ledger.actualStayDays;
+        appointment.pricingBreakdown.bookedDurationDays = ledger.bookedDays;
+        appointment.pricingBreakdown.depositPaidOnBooking = ledger.depositPaidOnBooking;
+        appointment.pricingBreakdown.unusedDaysRefund = ledger.unusedDaysRefund;
+        appointment.pricingBreakdown.refundDueToUser = ledger.refundDueToUser;
+        appointment.pricingBreakdown.pendingDepartureBalance = ledger.pendingDepartureBalance;
+        appointment.pricingBreakdown.settlementStatus = ledger.settlementStatus;
+
+        appointment.status = 'Completed';
+        appointment.endDate = actualEndDate;
+        appointment.totalAmount = ledger.totalActualBill; // Saved Final Actual Bill
+
+        // 🚀 4. PAYMENT & REFUND RESOLUTION
+        if (ledger.refundDueToUser > 0 && appointment.paymentMethod === 'Online' && appointment.paymentDetails?.razorpayPaymentId) {
+            try {
+                const { refundRazorpayPayment } = require('../../utils/razorpay');
+                await refundRazorpayPayment(
+                    appointment.paymentDetails.razorpayPaymentId,
+                    ledger.refundDueToUser,
+                    appointment.bookingId
+                );
+                appointment.paymentStatus = 'Refund-Initiated';
+            } catch (refundErr) {
+                console.error("Gateway Refund Exception:", refundErr.message);
+                appointment.paymentStatus = 'Refund-Initiated';
+            }
+        } else if (ledger.pendingDepartureBalance > 0) {
+            appointment.paymentStatus = 'Paid'; // Marked Paid after counter collection
+        } else {
+            appointment.paymentStatus = 'Paid';
+        }
+
+        // 5. Auto-close open primary doctor's active shift
         if (appointment.doctorId) {
             const activePrimaryShift = appointment.treatmentHistory.find(h => 
                 h.toDoctorId && 
@@ -671,7 +659,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
             }
         }
 
-        // Auto-close any active bedside specialist care shifts
+        // 6. Auto-close bedside specialist care shifts
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(careMember => {
                 if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
@@ -684,7 +672,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
 
         await appointment.save();
 
-        // Release Bed & Update Ward capacity
+        // 7. Release Bed & Update Ward capacity
         if (appointment.bedId) {
             const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             if (bed && bed.wardId) {
@@ -692,7 +680,7 @@ const generateFinalBillAndDischarge = async (req, res) => {
             }
         }
 
-        // Release Ambulance if not currently in transit
+        // 8. Release Ambulance if not currently in transit
         if (appointment.ambulanceId) {
             const AmbulanceBooking = require('../../models/AmbulanceBooking');
             const activeDischargeTrip = await AmbulanceBooking.findOne({
@@ -709,8 +697,24 @@ const generateFinalBillAndDischarge = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Patient Discharged Successfully with synchronized stay charges.", 
-            billAmount: appointment.totalAmount 
+            message: ledger.refundDueToUser > 0
+                ? `Patient Discharged. Stay of ${ledger.durationDisplay} settled. Excess advance of ₹${ledger.refundDueToUser} refunded to user.`
+                : (ledger.pendingDepartureBalance > 0
+                    ? `Patient Discharged. Stay of ${ledger.durationDisplay} settled. Pending balance of ₹${ledger.pendingDepartureBalance} cleared.`
+                    : `Patient Discharged successfully. Full stay of ${ledger.durationDisplay} settled.`),
+            data: {
+                bookingId: appointment.bookingId,
+                stayDuration: ledger.durationDisplay,
+                actualStayDays: ledger.actualStayDays,
+                exactStayHours: ledger.exactStayHours,
+                accumulatedBaseFee: ledger.accumulatedBaseFee,
+                depositPaidOnBooking: ledger.depositPaidOnBooking,
+                extraServicesFee: ledger.extraServicesTotal,
+                totalInvoiceValue: ledger.totalActualBill,
+                refundDueToUser: ledger.refundDueToUser,
+                pendingDepartureBalance: ledger.pendingDepartureBalance,
+                settlementStatus: ledger.settlementStatus
+            }
         });
 
     } catch (error) { 
@@ -1725,12 +1729,12 @@ const getHospitalHistory = async (req, res) => {
 };
 
 // --- API: EMERGENCY PATIENT DISCHARGE & RESOURCE RELEASE (Full Code - Auto-closes open specialist care shifts on discharge) ---
+// Endpoint: POST /hospital/panel/discharge/emergency
 const emergencyDischarge = async (req, res) => {
     try {
         const { appointmentId, billingItems } = req.body; 
         const hospitalId = req.user.id; 
 
-        // Find the target appointment and verify it belongs to this hospital and is an emergency case
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
             hospitalId,
@@ -1752,90 +1756,65 @@ const emergencyDischarge = async (req, res) => {
             return res.status(400).json({ success: false, message: "Patient is already discharged." });
         }
 
-        const previousTotalAmount = appointment.totalAmount || 0;
-        let actualEndDate = new Date();
-        let bedPricePerDay = 500; // default fallback
+        const actualEndDate = new Date();
 
-        // Fetch Bed details for dynamic pricing
-        if (appointment.bedId) {
-            const bed = await Bed.findById(appointment.bedId);
-            if (bed) {
-                bedPricePerDay = bed.pricePerDay || 500;
-            }
-        }
+        // 🚀 1. Run 24-Hour Stay & Financial Ledger Calculations
+        const ledger = calcStayAndLedger(appointment, actualEndDate, billingItems);
 
-        // Calculate Scheduled Base Stay Days & Charge
-        let baseStayDays = 1;
-        let baseStayCharge = 0;
-        if (appointment.startDate && appointment.endDate) {
-            const start = moment(appointment.startDate).startOf('day');
-            const scheduledEnd = moment(appointment.endDate).startOf('day');
-            baseStayDays = Math.max(1, scheduledEnd.diff(start, 'days'));
-            baseStayCharge = baseStayDays * bedPricePerDay;
-        }
-
-        // Calculate dynamic overstay bed charges
-        let overstayDays = 0;
-        let overstayCharge = 0;
-        if (appointment.startDate && appointment.endDate) {
-            const scheduledEnd = moment(appointment.endDate).startOf('day');
-            const actualEnd = moment(actualEndDate).startOf('day');
-            
-            overstayDays = actualEnd.diff(scheduledEnd, 'days');
-            if (overstayDays > 0) {
-                overstayCharge = overstayDays * bedPricePerDay;
-            } else {
-                overstayDays = 0;
-            }
-        }
-
-        // Calculate manual dynamic billing items
         const items = Array.isArray(billingItems) ? billingItems : [];
-        const extraBillingTotal = items.reduce((sum, item) => sum + Number(item.price), 0);
+        items.forEach(itm => {
+            appointment.specialServices.push({
+                serviceName: itm.serviceName,
+                price: Number(itm.price)
+            });
+        });
 
-        // Structure & Heal Pricing Breakdown object
-        if (!appointment.pricingBreakdown) {
-            appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
-        }
-
-        // Heal baseFee if originally zero
-        if (!appointment.pricingBreakdown.baseFee || appointment.pricingBreakdown.baseFee === 0) {
-            appointment.pricingBreakdown.baseFee = baseStayCharge;
-        }
-
-        // Update extra charges
-        const combinedExtraCharges = overstayCharge + extraBillingTotal;
-        appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + combinedExtraCharges;
-
-        // Recompute dynamic values
-        appointment.pricingBreakdown.subtotal = 
-            (appointment.pricingBreakdown.baseFee || 0) + 
-            (appointment.pricingBreakdown.visitCharges || 0) + 
-            (appointment.pricingBreakdown.extraCharges || 0);
-
-        const discount = appointment.pricingBreakdown.discountAmount || 0;
-        const finalCalculatedTotal = Math.max(0, appointment.pricingBreakdown.subtotal - discount);
-
-        // Mapping billing items dynamically into specialServices array schema
-        appointment.specialServices = items.map(itm => ({
-            serviceName: itm.serviceName,
-            price: Number(itm.price)
-        }));
-
-        if (overstayCharge > 0) {
+        if (ledger.overstayCharge > 0) {
             appointment.specialServices.push({ 
-                serviceName: `Overstay Bed Surcharge (${overstayDays} days)`, 
-                price: overstayCharge 
+                serviceName: `Overstay Bed Surcharge (${ledger.overstayDays} days)`, 
+                price: ledger.overstayCharge 
             });
         }
 
-        // 🚀 SYNC FIX: Transition status to Completed and paymentStatus to Paid upon dynamic settle
-        appointment.status = 'Completed';
-        appointment.paymentStatus = 'Paid'; 
-        appointment.endDate = actualEndDate;
-        appointment.totalAmount = finalCalculatedTotal; // Corrected dynamic total sum
+        if (!appointment.pricingBreakdown) {
+            appointment.pricingBreakdown = {};
+        }
 
-        // Auto-close the Primary Doctor's open active shift
+        appointment.pricingBreakdown.baseFee = ledger.accumulatedBaseFee;
+        appointment.pricingBreakdown.extraCharges = ledger.extraServicesTotal;
+        appointment.pricingBreakdown.discountAmount = ledger.discountAmount;
+        appointment.pricingBreakdown.subtotal = ledger.accumulatedBaseFee + ledger.extraServicesTotal;
+        appointment.pricingBreakdown.actualStayHours = ledger.exactStayHours;
+        appointment.pricingBreakdown.actualStayDays = ledger.actualStayDays;
+        appointment.pricingBreakdown.bookedDurationDays = ledger.bookedDays;
+        appointment.pricingBreakdown.depositPaidOnBooking = ledger.depositPaidOnBooking;
+        appointment.pricingBreakdown.unusedDaysRefund = ledger.unusedDaysRefund;
+        appointment.pricingBreakdown.refundDueToUser = ledger.refundDueToUser;
+        appointment.pricingBreakdown.pendingDepartureBalance = ledger.pendingDepartureBalance;
+        appointment.pricingBreakdown.settlementStatus = ledger.settlementStatus;
+
+        appointment.status = 'Completed';
+        appointment.endDate = actualEndDate;
+        appointment.totalAmount = ledger.totalActualBill;
+
+        // Payment & Refund Action
+        if (ledger.refundDueToUser > 0 && appointment.paymentMethod === 'Online' && appointment.paymentDetails?.razorpayPaymentId) {
+            try {
+                const { refundRazorpayPayment } = require('../../utils/razorpay');
+                await refundRazorpayPayment(
+                    appointment.paymentDetails.razorpayPaymentId,
+                    ledger.refundDueToUser,
+                    appointment.bookingId
+                );
+                appointment.paymentStatus = 'Refund-Initiated';
+            } catch (e) {
+                appointment.paymentStatus = 'Refund-Initiated';
+            }
+        } else {
+            appointment.paymentStatus = 'Paid';
+        }
+
+        // Auto-close doctor shift
         if (appointment.doctorId) {
             const activePrimaryShift = appointment.treatmentHistory.find(h => 
                 h.toDoctorId && 
@@ -1848,7 +1827,7 @@ const emergencyDischarge = async (req, res) => {
             }
         }
 
-        // Auto-close any active bedside specialist care shifts
+        // Auto-close bedside team
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(careMember => {
                 if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
@@ -1861,45 +1840,15 @@ const emergencyDischarge = async (req, res) => {
 
         await appointment.save();
 
-        // Financial Wallet Sync
-        const walletDeltaCredit = Math.max(0, finalCalculatedTotal - previousTotalAmount);
-
-        if (walletDeltaCredit > 0) {
-            const walletTransaction = {
-                type: 'Credit',
-                amount: walletDeltaCredit,
-                remark: `Emergency Discharge Bill Finalized - ${appointment.bookingId}`,
-                orderId: appointment.bookingId
-            };
-
-            const walletSchemaPath = Wallet.schema.path('vendorModel');
-            const allowedEnums = walletSchemaPath ? walletSchemaPath.enumValues : [];
-            let matchedModel = 'Hospital';
-            if (allowedEnums.length > 0) {
-                const match = allowedEnums.find(val => val.toLowerCase() === 'hospital');
-                if (match) matchedModel = match;
-            }
-
-            await Wallet.findOneAndUpdate(
-                { vendorId: hospitalId },
-                { 
-                    $setOnInsert: { vendorModel: matchedModel }, 
-                    $inc: { balance: walletDeltaCredit },
-                    $push: { transactions: walletTransaction }
-                },
-                { upsert: true, new: true, runValidators: false }
-            );
-        }
-
-        // Release Bed & Update Ward capacity
+        // Release Bed
         if (appointment.bedId) {
             const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
-            if (bed) {
+            if (bed && bed.wardId) {
                 await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
             }
         }
 
-        // Automatic ambulance release
+        // Release Ambulance
         if (appointment.ambulanceId) {
             await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
                 $set: { availableForEmergency: true } 
@@ -1908,8 +1857,20 @@ const emergencyDischarge = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Emergency Patient Discharged. Bed & Ambulance released successfully with staying charges.", 
-            billAmount: appointment.totalAmount 
+            message: `Emergency Patient Discharged. Total stay: ${ledger.durationDisplay}. Bill settled successfully.`, 
+            data: {
+                bookingId: appointment.bookingId,
+                stayDuration: ledger.durationDisplay,
+                actualStayDays: ledger.actualStayDays,
+                exactStayHours: ledger.exactStayHours,
+                accumulatedBaseFee: ledger.accumulatedBaseFee,
+                depositPaidOnBooking: ledger.depositPaidOnBooking,
+                extraServicesFee: ledger.extraServicesTotal,
+                totalInvoiceValue: ledger.totalActualBill,
+                refundDueToUser: ledger.refundDueToUser,
+                pendingDepartureBalance: ledger.pendingDepartureBalance,
+                settlementStatus: ledger.settlementStatus
+            }
         });
 
     } catch (error) { 
@@ -1924,92 +1885,377 @@ const getHospitalCaseDetails = async (req, res) => {
         const hospitalId = req.user.id;
         const { id } = req.params; // Appointment ID
 
-        const patient = await Appointment.findOne({ _id: id, hospitalId })
-            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
+        // 1. Deep Populate all relational models
+        const appointment = await Appointment.findOne({ _id: id, hospitalId })
+            .populate('hospitalId', 'name address city state country zipCode phone email hospitalImage type')
+            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember address')
             .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay status',
-                populate: { path: 'wardId', select: 'name type' }
+                select: 'bedNumber pricePerDay status isVentilatorAvailable',
+                populate: { path: 'wardId', select: 'name type totalBeds availableBeds' }
             })
-            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage')
-            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage')
-            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage dutyStatus')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality qualification profileImage')
+            .populate('treatmentHistory.toDoctorId', 'name speciality qualification profileImage')
+            .populate('bedsideCareTeam.doctorId', 'name speciality qualification profileImage dutyStatus')
             .populate('clinicalLogs.doctorId', 'name speciality qualification profileImage')
             .populate('activeMedications.addedBy', 'name speciality qualification profileImage');
 
-        if (!patient) {
+        if (!appointment) {
             return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
         }
 
-        const enrichedPatient = await enrichAppointmentClinicalDetails(patient);
-        const resolvedPatient = resolvePatientDTO(patient);
-
+        // 2. Fetch latest Prescription
         const Prescription = require('../../models/Prescription'); 
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
-        let ambulanceBooking = null;
-        if (patient.ambulanceId) {
-            const AmbulanceBooking = require('../../models/AmbulanceBooking');
-            ambulanceBooking = await AmbulanceBooking.findOne({
-                $or: [
-                    { bookingId: patient.bookingId },
-                    { bookingId: patient.transactionId } 
-                ]
-            }).lean();
+        // 3. Resolve Patient DTO
+        const resolvedPatient = resolvePatientDTO(appointment);
+
+        // 4. Calculate 24-Hour Stay & Financial Ledger
+        const targetDischargeTime = appointment.clinicalSummary?.dischargedAt || appointment.endDate || new Date();
+        const ledger = calcStayAndLedger(appointment, targetDischargeTime);
+
+        // 5. Build Bedside Care Team with Real Observations (No Fake Vitals)
+        const bedsideCareTeam = (appointment.bedsideCareTeam || []).map(member => ({
+            doctor: {
+                id: member.doctorId?._id || member.doctorId,
+                name: member.doctorId?.name || "Specialist",
+                speciality: member.doctorId?.speciality || "Specialist",
+                qualification: member.doctorId?.qualification || "MBBS, MD",
+                profileImage: member.doctorId?.profileImage || null
+            },
+            status: member.status,
+            requestReason: member.requestReason || "",
+            observations: (member.specialistFeedback || []).map(obs => ({
+                vitals: {
+                    bp: obs.vitals?.bp || "",
+                    pulse: obs.vitals?.pulse || "",
+                    temp: obs.vitals?.temp || "",
+                    spo2: obs.vitals?.spo2 || ""
+                },
+                observation: obs.observation || "",
+                patientCondition: obs.patientCondition || "",
+                priorityRating: obs.priorityRating || "",
+                submittedAt: obs.submittedAt,
+                _id: obs._id
+            })),
+            recommendedMedicines: (member.recommendedMedicines || []).map(med => ({
+                name: med.name,
+                dosage: med.dosage || "",
+                frequency: med.frequency || "",
+                duration: med.duration || "",
+                instructions: med.instructions || "",
+                type: med.type || "Active-Stay",
+                addedAt: med.addedAt,
+                _id: med._id
+            }))
+        }));
+
+        // 6. Build Treatment Team Timeline
+        const treatmentTeamTimeline = [];
+        if (appointment.doctorId) {
+            const primaryShift = appointment.treatmentHistory?.find(h => 
+                h.toDoctorId && h.toDoctorId._id?.toString() === appointment.doctorId._id?.toString() && h.startTime
+            );
+
+            treatmentTeamTimeline.push({
+                doctorId: appointment.doctorId._id,
+                name: appointment.doctorId.name,
+                speciality: appointment.doctorId.speciality,
+                qualification: appointment.doctorId.qualification || "MBBS, MD",
+                profileImage: appointment.doctorId.profileImage,
+                role: "Primary Physician",
+                joinedAt: primaryShift ? primaryShift.startTime : appointment.startDate,
+                dischargedAt: primaryShift?.endTime || appointment.clinicalSummary?.dischargedAt || appointment.endDate || null,
+                duration: primaryShift?.durationDisplay || ""
+            });
         }
 
-        const bedsideMedications = patient.bedsideCareTeam
-            .filter(member => ['Completed', 'In-Progress', 'Accepted'].includes(member.status))
-            .map(member => ({
-                doctor: {
-                    id: member.doctorId?._id,
-                    name: member.doctorId?.name,
-                    speciality: member.doctorId?.speciality,
-                    profileImage: member.doctorId?.profileImage
-                },
-                recommendations: member.recommendedMedicines || []
-            }));
-
-        // Dynamic Clinical Summary
-        const dynamicClinicalSummary = {
-            reasonForVisit: patient.patients?.[0]?.reasonForVisit || patient.bookingReason || "Hospital Admission",
-            admissionNote: patient.clinicalSummary?.admissionNote || patient.clinicalSummary?.chiefComplaint || patient.bookingReason || "Admitted for inpatient care.",
-            triagePriority: patient.clinicalSummary?.triagePriority || patient.triageLevel || "Routine",
-            clinicalDiagnosis: patient.clinicalSummary?.diagnosis || "Diagnosis pending clinical validation.",
-            investigationNotes: patient.clinicalSummary?.investigation || "Pending investigations",
-            outcomeResult: patient.clinicalSummary?.treatmentResult || (patient.status === 'Completed' ? "Discharged" : "Under Active Treatment"),
-            conditionDuringAdmission: patient.clinicalSummary?.conditionDuringAdmission || "Stable",
-            conditionDuringDischarge: patient.clinicalSummary?.conditionDuringDischarge || (patient.status === 'Discharge-Pending' ? "Recovered & Stable" : "N/A"),
-            bloodGroup: resolvedPatient.bloodGroup,
-            dateOfSurgery: patient.clinicalSummary?.dateOfSurgery || null,
-            vitals: patient.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
-            uploadedReports: patient.clinicalSummary?.uploadedReports || [],
-            dischargeSummaryPdf: patient.clinicalSummary?.dischargeSummaryPdf || null
-        };
-
-        res.json({ 
-            success: true, 
-            data: {
-                patient: {
-                    ...enrichedPatient,
-                    patientDetails: resolvedPatient,
-                    clinicalSummary: dynamicClinicalSummary
-                },
-                prescription: prescription || null,
-                ambulanceTelemetry: ambulanceBooking,
-                bedsideMedications
+        (appointment.bedsideCareTeam || []).forEach(member => {
+            if (member.doctorId) {
+                treatmentTeamTimeline.push({
+                    doctorId: member.doctorId._id || member.doctorId,
+                    name: member.doctorId.name || "Specialist",
+                    speciality: member.doctorId.speciality || "Specialist",
+                    qualification: member.doctorId.qualification || "MD",
+                    profileImage: member.doctorId.profileImage || null,
+                    role: "Bedside Specialist",
+                    joinedAt: member.startTime || member.requestedAt,
+                    dischargedAt: member.endTime || member.respondedAt || appointment.clinicalSummary?.dischargedAt || null,
+                    duration: member.durationDisplay || ""
+                });
             }
         });
+
+        // 7. Clinical Files
+        const clinicalFiles = {
+            dietPlanPdf: prescription?.dietPlanPdf || null,
+            dischargeSummaryPdf: appointment.clinicalSummary?.dischargeSummaryPdf || null,
+            clinicalReports: appointment.clinicalSummary?.uploadedReports || [],
+            dischargeCardUrl: prescription?.pdfUrl || null
+        };
+
+        // 8. Hospital Header Info
+        const hospitalDetails = appointment.hospitalId ? {
+            _id: appointment.hospitalId._id,
+            name: appointment.hospitalId.name,
+            address: appointment.hospitalId.address || "",
+            city: appointment.hospitalId.city || "",
+            state: appointment.hospitalId.state || "",
+            country: appointment.hospitalId.country || "India",
+            zipCode: appointment.hospitalId.zipCode || "",
+            fullAddress: `${appointment.hospitalId.address ? appointment.hospitalId.address + ', ' : ''}${appointment.hospitalId.city || ''}, ${appointment.hospitalId.state || ''} - ${appointment.hospitalId.zipCode || ''}`.replace(/^, |, $/g, ''),
+            phone: appointment.hospitalId.phone || "",
+            email: appointment.hospitalId.email || "",
+            logo: appointment.hospitalId.hospitalImage?.[0] || null,
+            hospitalType: appointment.hospitalId.type || "Private"
+        } : null;
+
+        // 🚨 CLEAN DYNAMIC VITALS (Purely actual DB values, zero static strings)
+        const actualVitals = {
+            bp: appointment.clinicalSummary?.vitals?.bp || "",
+            pulse: appointment.clinicalSummary?.vitals?.pulse || "",
+            temp: appointment.clinicalSummary?.vitals?.temp || "",
+            spo2: appointment.clinicalSummary?.vitals?.spo2 || ""
+        };
+
+        // =========================================================================
+        // 📊 COMPLETE CONSOLIDATED CASE DOSSIER RESPONSE (ZERO STATIC DATA)
+        // =========================================================================
+        res.json({
+            success: true,
+            data: {
+                _id: appointment._id,
+                bookingId: appointment.bookingId,
+                status: appointment.status,
+                bookingType: appointment.bookingType || 'Admission',
+                bedBookingType: appointment.bedBookingType || 'General-Bed',
+                triageLevel: appointment.clinicalSummary?.triagePriority || appointment.triageLevel || "Routine",
+                startDate: appointment.startDate,
+                endDate: appointment.endDate,
+                dischargedAt: appointment.clinicalSummary?.dischargedAt || appointment.updatedAt,
+                stayDuration: appointment.stayDuration || 1,
+
+                // 👤 Accurate Patient Details
+                patientDetails: resolvedPatient,
+
+                // 🛏️ Assigned Bed Details
+                bedDetails: appointment.bedId ? {
+                    _id: appointment.bedId._id,
+                    bedNumber: appointment.bedId.bedNumber || appointment.bedNumber || "",
+                    wardName: appointment.bedId.wardId?.name || appointment.wardName || "",
+                    wardType: appointment.bedId.wardId?.type || "ICU",
+                    pricePerDay: Number(appointment.bedId.pricePerDay || 0)
+                } : null,
+
+                // 👨‍⚕️ Assigned Primary Doctor
+                assignedDoctor: appointment.doctorId ? {
+                    _id: appointment.doctorId._id,
+                    name: appointment.doctorId.name,
+                    speciality: appointment.doctorId.speciality,
+                    qualification: appointment.doctorId.qualification || "MBBS, MD",
+                    profileImage: appointment.doctorId.profileImage || null
+                } : null,
+
+                // 👥 Bedside Care Team
+                bedsideCareTeam,
+
+                // 📋 Dynamic Case & Diagnostics Summary (100% Real DB Data)
+                clinicalSummary: {
+                    reasonForVisit: appointment.patients?.[0]?.reasonForVisit || appointment.bookingReason || "",
+                    admissionNote: appointment.clinicalSummary?.admissionNote || appointment.clinicalSummary?.chiefComplaint || appointment.bookingReason || "",
+                    triagePriority: appointment.clinicalSummary?.triagePriority || appointment.triageLevel || "",
+                    clinicalDiagnosis: appointment.clinicalSummary?.diagnosis || "",
+                    investigationNotes: appointment.clinicalSummary?.investigation || "",
+                    outcomeResult: appointment.clinicalSummary?.treatmentResult || (appointment.status === 'Completed' ? "Discharged" : ""),
+                    conditionDuringAdmission: appointment.clinicalSummary?.conditionDuringAdmission || "",
+                    conditionDuringDischarge: appointment.clinicalSummary?.conditionDuringDischarge || "",
+                    bloodGroup: resolvedPatient.bloodGroup,
+                    dateOfSurgery: appointment.clinicalSummary?.dateOfSurgery || null,
+                    vitals: actualVitals, // 👈 Pure DB Vitals (Empty if not set)
+                    uploadedReports: appointment.clinicalSummary?.uploadedReports || [],
+                    dischargeSummaryPdf: appointment.clinicalSummary?.dischargeSummaryPdf || null
+                },
+
+                // 💳 24-Hour Financial Ledger
+                billingBreakdown: {
+                    stayUnitCharge: ledger.stayUnitCharge,
+                    baseStayDuration: ledger.durationDisplay,
+                    baseStayDays: ledger.actualStayDays,
+                    actualStayDays: ledger.actualStayDays,
+                    exactStayHours: ledger.exactStayHours,
+                    bookedDays: ledger.bookedDays,
+                    accumulatedBaseFee: ledger.accumulatedBaseFee,
+                    baseBedAllocationCharge: ledger.accumulatedBaseFee,
+                    baseStayCharge: ledger.accumulatedBaseFee,
+                    paidOnBooking: ledger.paidOnBooking,
+                    depositPaidOnBooking: ledger.depositPaidOnBooking,
+                    unusedDays: ledger.unusedDays,
+                    unusedDaysRefund: ledger.unusedDaysRefund,
+                    overstayDays: ledger.overstayDays,
+                    overstayCharge: ledger.overstayCharge,
+                    extraFacilitiesFee: ledger.extraServicesTotal,
+                    doctorVisitFee: 0,
+                    discountDeductions: ledger.discountAmount,
+                    totalInvoiceValue: ledger.totalActualBill,
+                    estimatedTotal: ledger.totalActualBill,
+                    currentBillTotal: ledger.totalActualBill,
+                    refundDueToUser: ledger.refundDueToUser,
+                    pendingDepartureBalance: ledger.pendingDepartureBalance,
+                    remainingBalance: ledger.remainingBalance,
+                    settlementStatus: ledger.settlementStatus
+                },
+
+                // 📑 Clinical Documents & PDFs
+                clinicalFiles,
+
+                // ⏱️ Treatment Shifts Timeline
+                treatmentTeamTimeline,
+
+                // 🏥 Hospital Header Details
+                hospitalDetails,
+
+                // 🛡️ Insurance Details
+                insurance: {
+                    hasInsurance: Boolean(appointment.insuranceDetails?.hasInsurance || appointment.hasInsurance),
+                    companyName: appointment.insuranceDetails?.companyName || "",
+                    insuranceNumber: appointment.insuranceDetails?.insuranceNumber || "",
+                    insuranceType: appointment.insuranceDetails?.insuranceType || "Cashless",
+                    approvalStatus: appointment.insuranceDetails?.approvalStatus || "Pending",
+                    approvalLetterPdf: appointment.insuranceDetails?.approvalLetterPdf || null
+                },
+
+                // 👤 Booking Account Holder Info
+                bookedBy: appointment.userId ? {
+                    userId: appointment.userId._id,
+                    name: appointment.userId.name,
+                    phone: appointment.userId.phone,
+                    email: appointment.userId.email
+                } : null,
+
+                updatedAt: appointment.updatedAt
+            }
+        });
+
     } catch (error) {
         console.error("getHospitalCaseDetails Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message }); 
     }
+};
+
+// 🧮 MASTER 24-HOUR DYNAMIC STAY & FINANCIAL LEDGER ENGINE
+const calcStayAndLedger = (appt, actualEndDate = new Date(), billingItems = []) => {
+    const apptObj = appt.toObject ? appt.toObject() : { ...appt };
+    
+    const bedPricePerDay = Number(apptObj.bedId?.pricePerDay || 500);
+    
+    // Check-In & Checkout Timestamps
+    const checkIn = moment(apptObj.startDate || apptObj.createdAt);
+    const checkOut = moment(actualEndDate);
+    
+    // Exact Stay Hours
+    const diffMs = Math.max(0, checkOut.diff(checkIn));
+    const exactHours = Number((diffMs / (1000 * 60 * 60)).toFixed(1));
+    
+    // 24-Hour Block Calculation (<= 24h = 1 day, 24.1h-48h = 2 days, etc.)
+    const actualStayDays = Math.max(1, Math.ceil(exactHours / 24));
+    
+    // Booked Duration Days
+    let bookedDays = apptObj.stayDuration || 1;
+    if (apptObj.startDate && apptObj.endDate) {
+        const startDay = moment(apptObj.startDate).startOf('day');
+        const endDay = moment(apptObj.endDate).startOf('day');
+        bookedDays = Math.max(1, endDay.diff(startDay, 'days') + 1);
+    }
+    
+    // 1. Consumed Base Stay Bed Charge
+    const actualStayBedCharge = actualStayDays * bedPricePerDay;
+    
+    // 2. Advance Deposit Paid on Booking (Robust Fallbacks for UI Sync)
+    let depositPaidOnBooking = 0;
+    if (apptObj.paymentStatus === 'Paid' || apptObj.paymentDetails?.status === 'captured') {
+        depositPaidOnBooking = Number(apptObj.paymentDetails?.amount || apptObj.totalAmount || (bookedDays * bedPricePerDay));
+    } else if (apptObj.totalAmount && apptObj.totalAmount > 0) {
+        depositPaidOnBooking = Number(apptObj.totalAmount);
+    }
+    
+    // 3. Early Checkout vs Overstay Calculations
+    let unusedDays = 0;
+    let unusedDaysRefund = 0;
+    let overstayDays = 0;
+    let overstayCharge = 0;
+    
+    if (actualStayDays < bookedDays) {
+        unusedDays = bookedDays - actualStayDays;
+        unusedDaysRefund = unusedDays * bedPricePerDay;
+    } else if (actualStayDays > bookedDays) {
+        overstayDays = actualStayDays - bookedDays;
+        overstayCharge = overstayDays * bedPricePerDay;
+    }
+    
+    // 4. Extra Services / Consumables
+    const existingExtra = (apptObj.specialServices || [])
+        .filter(s => !s.serviceName?.startsWith("Overstay Bed Surcharge"))
+        .reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+        
+    const incomingExtra = (Array.isArray(billingItems) ? billingItems : [])
+        .reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+        
+    const extraServicesTotal = existingExtra + incomingExtra;
+    
+    // 5. Discount
+    const discount = Number(apptObj.pricingBreakdown?.discountAmount || apptObj.couponDetails?.discountValue || 0);
+    
+    // 6. Total Actual Bill
+    const totalActualBill = Math.max(0, actualStayBedCharge + extraServicesTotal - discount);
+    
+    // 7. Net Financial Settlement
+    const netBalance = totalActualBill - depositPaidOnBooking;
+    
+    let refundDueToUser = 0;
+    let pendingDepartureBalance = 0;
+    let settlementStatus = "Settled";
+    
+    if (netBalance < 0) {
+        refundDueToUser = Math.abs(netBalance);
+        pendingDepartureBalance = 0;
+        settlementStatus = "Refund-Initiated";
+    } else if (netBalance > 0) {
+        pendingDepartureBalance = netBalance;
+        refundDueToUser = 0;
+        settlementStatus = "Pending-Collection";
+    }
+    
+    return {
+        stayUnitCharge: bedPricePerDay,
+        exactStayHours: exactHours,
+        actualStayDays: actualStayDays,
+        bookedDays: bookedDays,
+        durationDisplay: `${actualStayDays} Day${actualStayDays > 1 ? 's' : ''}`,
+        accumulatedBaseFee: actualStayBedCharge,
+        baseStayCharge: actualStayBedCharge,       // 👈 Aliased for Frontend UI
+        depositPaidOnBooking: depositPaidOnBooking,
+        paidOnBooking: depositPaidOnBooking,        // 👈 Aliased for Frontend UI
+        unusedDays: unusedDays,
+        unusedDaysRefund: unusedDaysRefund,
+        overstayDays: overstayDays,
+        overstayCharge: overstayCharge,
+        extraServicesTotal: extraServicesTotal,
+        discountAmount: discount,
+        totalActualBill: totalActualBill,
+        estimatedTotal: totalActualBill,           // 👈 Aliased for Frontend UI
+        currentBillTotal: totalActualBill,         // 👈 Aliased for Frontend UI
+        refundDueToUser: refundDueToUser,
+        pendingDepartureBalance: pendingDepartureBalance,
+        remainingBalance: pendingDepartureBalance,  // 👈 Aliased for Frontend UI
+        settlementStatus: settlementStatus
+    };
 };
 
 // Helper function to enrich appointment with clinical details, prescriptions, and treatment team timeline
 // Fixed: Computes dynamic pricing metrics and heals zero-value database pricing breakdowns on-the-fly
-const enrichAppointmentClinicalDetails = async (appt) => {
+const enrichAppointmentClinicalDetails = async (appt, targetDischargeDate = new Date()) => {
     const apptObj = appt.toObject ? appt.toObject() : { ...appt };
 
     const prescriptionObj = await Prescription.findOne({ appointmentId: apptObj._id })
@@ -2061,115 +2307,36 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         });
     }
 
-    if (apptObj.treatmentHistory && apptObj.treatmentHistory.length > 0) {
-        apptObj.treatmentHistory.forEach(historyLog => {
-            if (historyLog.toDoctorId && historyLog.endTime) {
-                const isCurrentActiveDoc = apptObj.doctorId && 
-                                           apptObj.doctorId._id?.toString() === historyLog.toDoctorId._id?.toString() && 
-                                           !historyLog.endTime;
-                
-                if (!isCurrentActiveDoc) {
-                    const alreadyPushed = treatmentTeamTimeline.some(t => 
-                        t.doctorId?.toString() === historyLog.toDoctorId._id?.toString() && 
-                        String(t.joinedAt) === String(historyLog.startTime)
-                    );
+    // 🚀 Execute 24-Hour Stay & Ledger Calculations
+    const ledger = calcStayAndLedger(apptObj, targetDischargeDate);
 
-                    if (!alreadyPushed) {
-                        treatmentTeamTimeline.push({
-                            doctorId: historyLog.toDoctorId._id,
-                            name: historyLog.toDoctorId.name,
-                            speciality: historyLog.toDoctorId.speciality,
-                            qualification: historyLog.toDoctorId.qualification || "MD",
-                            profileImage: historyLog.toDoctorId.profileImage,
-                            role: "Previous Physician (Discharged)",
-                            joinedAt: historyLog.startTime,
-                            dischargedAt: historyLog.endTime,
-                            duration: historyLog.durationDisplay || ""
-                        });
-                    }
-                }
-            }
-        });
-    }
-
-    let overstayDays = 0;
-    let overstayCharge = 0;
-    let bedPricePerDay = 0;
-    let baseStayDays = 0;
-    let baseStayCharge = 0;
-
-    if (apptObj.bedId) {
-        bedPricePerDay = apptObj.bedId.pricePerDay || 0;
-    }
-
-    if (apptObj.startDate && apptObj.endDate) {
-        const start = moment(apptObj.startDate);
-        const scheduledEnd = moment(apptObj.endDate);
-        
-        if (start.isValid() && scheduledEnd.isValid()) {
-            baseStayDays = Math.max(1, scheduledEnd.startOf('day').diff(start.startOf('day'), 'days'));
-            baseStayCharge = baseStayDays * bedPricePerDay;
-
-            const checkoutTime = apptObj.status === 'Completed' ? moment(apptObj.endDate) : moment();
-            const actualEnd = checkoutTime.startOf('day');
-            
-            overstayDays = actualEnd.diff(scheduledEnd.startOf('day'), 'days');
-            if (overstayDays > 0) {
-                overstayCharge = overstayDays * bedPricePerDay;
-            } else {
-                overstayDays = 0;
-            }
-        }
-    }
-
-    const dynamicPricingBreakdown = apptObj.pricingBreakdown ? { ...apptObj.pricingBreakdown } : {
-        baseFee: 0, subtotal: 0, originalBaseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, cancellationFeeApplied: 0, noShowFeeApplied: 0
-    };
-
-    if (!dynamicPricingBreakdown.baseFee || dynamicPricingBreakdown.baseFee === 0) {
-        dynamicPricingBreakdown.baseFee = baseStayCharge;
-    }
-
-    if (overstayCharge > 0) {
-        dynamicPricingBreakdown.extraCharges = (dynamicPricingBreakdown.extraCharges || 0) + overstayCharge;
-    }
-
-    const dynamicSubtotal = (dynamicPricingBreakdown.baseFee || 0) + (dynamicPricingBreakdown.visitCharges || 0) + (dynamicPricingBreakdown.extraCharges || 0);
-    dynamicPricingBreakdown.subtotal = dynamicSubtotal;
-
-    const discount = dynamicPricingBreakdown.discountAmount || 0;
-    const dynamicTotalAmount = Math.max(0, dynamicSubtotal - discount);
-
-    apptObj.pricingBreakdown = dynamicPricingBreakdown;
-
-    if (!apptObj.totalAmount || apptObj.totalAmount === 0) {
-        apptObj.totalAmount = dynamicTotalAmount;
-    }
-
-    // 🚀 LEDGER ACCUMULATOR: Calculate dynamic advance prepaid amount
-    let paidOnBooking = 0;
-    if (apptObj.paymentStatus === 'Paid') {
-        paidOnBooking = apptObj.paymentDetails?.amount || 0;
-        
-        // Fallback: If amount key is unpopulated but paymentStatus is Paid, use baseFee minus discount
-        if (paidOnBooking === 0) {
-            paidOnBooking = Math.max(0, (dynamicPricingBreakdown.baseFee || 0) - discount);
-        }
-    }
-
-    // Remaining Balance = Total Accumulated Cost - Paid on Booking
-    const remainingBalance = Math.max(0, dynamicTotalAmount - paidOnBooking);
-
+    // Full dual-key billingBreakdown matching UI Boxes
     const billingBreakdown = {
-        baseStayDays,
-        baseStayCharge,
-        overstayDays,
-        overstayCharge,
-        bedPricePerDay,
-        estimatedTotal: dynamicTotalAmount, // 👈 Total Accumulated Cost
-        paidOnBooking,                       // 🚀 NEW: Paid on Booking
-        remainingBalance,                    // 🚀 NEW: Remaining Balance
-        currentBillAmount: apptObj.totalAmount
+        stayUnitCharge: ledger.stayUnitCharge,
+        baseStayDuration: ledger.durationDisplay,
+        baseStayDays: ledger.actualStayDays,
+        actualStayDays: ledger.actualStayDays,
+        exactStayHours: ledger.exactStayHours,
+        bookedDays: ledger.bookedDays,
+        accumulatedBaseFee: ledger.accumulatedBaseFee,
+        baseBedAllocationCharge: ledger.accumulatedBaseFee,
+        baseStayCharge: ledger.accumulatedBaseFee,
+        paidOnBooking: ledger.paidOnBooking,
+        depositPaidOnBooking: ledger.depositPaidOnBooking,
+        unusedDays: ledger.unusedDays,
+        unusedDaysRefund: ledger.unusedDaysRefund,
+        overstayDays: ledger.overstayDays,
+        overstayCharge: ledger.overstayCharge,
+        extraFacilitiesFee: ledger.extraServicesTotal,
+        doctorVisitFee: 0,
+        discountDeductions: ledger.discountAmount,
+        totalInvoiceValue: ledger.totalActualBill,
+        estimatedTotal: ledger.totalActualBill,
+        currentBillTotal: ledger.totalActualBill,
+        refundDueToUser: ledger.refundDueToUser,
+        pendingDepartureBalance: ledger.pendingDepartureBalance,
+        remainingBalance: ledger.remainingBalance,
+        settlementStatus: ledger.settlementStatus
     };
 
     return {
@@ -2179,6 +2346,8 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         billingBreakdown
     };
 };
+
+
 
 // --- API: GET ALL CLINICALLY COMPLETED CASES AWAITING BILLING (Updated) ---
 // Endpoint: GET /hospital/panel/discharges/pending
@@ -2220,105 +2389,66 @@ const getHospitalPendingDischarges = async (req, res) => {
             .skip(skip)
             .limit(limitNum);
 
-        const cleanedPendingDischarges = await Promise.all(list.map(async (appt) => {
-            const enriched = await enrichAppointmentClinicalDetails(appt);
+        const lightweightList = list.map(appt => {
             const resolvedPatient = resolvePatientDTO(appt);
-
-            // 🎯 Dynamic Field Resolvers with Smart Fallbacks
-            const resolvedTriage = appt.clinicalSummary?.triagePriority || 
-                                   appt.triageLevel || 
-                                   "Routine";
-
-            const resolvedAdmissionNote = appt.clinicalSummary?.admissionNote || 
-                                         appt.clinicalSummary?.chiefComplaint || 
-                                         appt.bookingReason || 
-                                         "Admitted for clinical inpatient care.";
-
-            const resolvedDiagnosis = appt.clinicalSummary?.diagnosis || 
-                                     "Diagnosis pending final clinical validation.";
-
-            const resolvedInvestigation = appt.clinicalSummary?.investigation || 
-                                         "Routine baseline investigations completed.";
-
-            const resolvedOutcomeResult = appt.clinicalSummary?.treatmentResult || 
-                                         (appt.status === 'Discharge-Pending' ? "Discharged (Pending Clearance)" : "Under Treatment");
-
-            const resolvedConditionAdmission = appt.clinicalSummary?.conditionDuringAdmission || 
-                                               (appt.triageLevel === 'Emergency' ? "Critical" : "Stable");
-
-            const resolvedConditionDischarge = appt.clinicalSummary?.conditionDuringDischarge || 
-                                               "Recovered & Clinically Stable";
-
+            const bedRate = Number(appt.bedId?.pricePerDay || 0);
+            
             return {
                 _id: appt._id,
                 bookingId: appt.bookingId,
                 status: appt.status,
-                triageLevel: resolvedTriage,
+                triageLevel: appt.clinicalSummary?.triagePriority || appt.triageLevel || "",
                 startDate: appt.startDate,
                 endDate: appt.endDate,
                 dischargedAt: appt.clinicalSummary?.dischargedAt || appt.updatedAt,
+                stayDuration: appt.stayDuration || 1,
 
-                // 👤 Patient Details
+                // Patient Info Card
                 patientDetails: resolvedPatient,
 
-                // 🛏️ Bed & Ward Details
+                // Bed Snapshot
                 bedDetails: appt.bedId ? {
                     _id: appt.bedId._id,
-                    bedNumber: appt.bedId.bedNumber,
-                    wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
+                    bedNumber: appt.bedId.bedNumber || appt.bedNumber || "",
+                    wardName: appt.bedId.wardId?.name || appt.wardName || "",
                     wardType: appt.bedId.wardId?.type || "ICU",
-                    pricePerDay: appt.bedId.pricePerDay || 0
+                    pricePerDay: bedRate
                 } : null,
 
-                // 👨‍⚕️ Assigned Doctor
+                // Primary Doctor
                 assignedDoctor: appt.doctorId ? {
                     _id: appt.doctorId._id,
                     name: appt.doctorId.name,
                     speciality: appt.doctorId.speciality,
-                    qualification: appt.doctorId.qualification || "MBBS, MD"
+                    profileImage: appt.doctorId.profileImage || null
                 } : null,
 
-                // 📋 Complete Case & Diagnostics Summary (Mapped to Screenshot)
-                clinicalSummary: {
-                    reasonForVisit: primaryPatientReason(appt),
-                    admissionNote: resolvedAdmissionNote,
-                    triagePriority: resolvedTriage,
-                    clinicalDiagnosis: resolvedDiagnosis,
-                    investigationNotes: resolvedInvestigation,
-                    outcomeResult: resolvedOutcomeResult,
-                    conditionDuringAdmission: resolvedConditionAdmission,
-                    conditionDuringDischarge: resolvedConditionDischarge,
-                    bloodGroup: resolvedPatient.bloodGroup,
-                    dateOfSurgery: appt.clinicalSummary?.dateOfSurgery || null,
-                    vitals: appt.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
-                    uploadedReports: appt.clinicalSummary?.uploadedReports || [],
-                    dischargeSummaryPdf: appt.clinicalSummary?.dischargeSummaryPdf || null
+                // Billing Snapshot
+                billing: {
+                    totalAmount: appt.totalAmount || 0,
+                    paymentMethod: appt.paymentMethod || 'Online',
+                    paymentStatus: appt.paymentStatus || 'Pending'
                 },
-
-                // 💳 Financial Ledger Breakdown
-                billingBreakdown: enriched.billingBreakdown,
-
-                // 📑 Clinical Files & PDFs
-                clinicalFiles: enriched.clinicalFiles,
 
                 updatedAt: appt.updatedAt
             };
-        }));
+        });
 
         res.json({
             success: true,
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
-            count: cleanedPendingDischarges.length,
-            data: cleanedPendingDischarges
+            count: lightweightList.length,
+            data: lightweightList
         });
 
     } catch (error) {
-        console.error("Fetch pending discharges error:", error);
+        console.error("Fetch pending discharges list error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // Helper for visit reason
 const primaryPatientReason = (appt) => {
@@ -2898,10 +3028,9 @@ const getTrackCasesList = async (req, res) => {
 const getTrackCaseSuperDetails = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { id } = req.params; // Appointment / Admission ID
-        const { sortOrder = 'desc', order } = req.query; // 'desc' (Newest First) | 'asc' (Oldest First)
+        const { id } = req.params;
+        const { sortOrder = 'desc', order } = req.query;
 
-        // 🚨 Populating familyMember array along with userId details
         const appointment = await Appointment.findOne({ _id: id, hospitalId })
             .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
@@ -2923,72 +3052,20 @@ const getTrackCaseSuperDetails = async (req, res) => {
         const Prescription = require('../../models/Prescription');
         const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
 
-        // =========================================================================
-        // 🏥 1. FAMILY MEMBER VS SELF DYNAMIC RESOLUTION (Blood Group, Age, Photo)
-        // =========================================================================
-        const user = appointment.userId;
-        const primaryPatient = appointment.patients?.[0] || {};
-        
-        // Check if the admitted patient is the main user or a family member
-        const isSelf = !primaryPatient.relation || 
-                       primaryPatient.relation.toLowerCase() === 'self' || 
-                       (user?.name && primaryPatient.patientName && primaryPatient.patientName.trim().toLowerCase() === user.name.trim().toLowerCase());
+        const resolvedPatient = resolvePatientDTO(appointment);
 
-        // Match the specific family member from User's familyMember array if not Self
-        let matchedFamilyMember = null;
-        if (!isSelf && user?.familyMember && Array.isArray(user.familyMember)) {
-            matchedFamilyMember = user.familyMember.find(fm => 
-                (fm.memberName && primaryPatient.patientName && fm.memberName.trim().toLowerCase() === primaryPatient.patientName.trim().toLowerCase()) ||
-                (fm.relation && primaryPatient.relation && fm.relation.trim().toLowerCase() === primaryPatient.relation.trim().toLowerCase())
-            );
-        }
-
-        // 🚨 DYNAMIC BLOOD GROUP RESOLUTION (Family Member First, Main User only if Self)
-        let resolvedBloodGroup = "N/A";
-        if (appointment.clinicalSummary?.bloodGroup && appointment.clinicalSummary.bloodGroup.trim() !== "") {
-            resolvedBloodGroup = appointment.clinicalSummary.bloodGroup;
-        } else if (primaryPatient.bloodGroup && primaryPatient.bloodGroup.trim() !== "") {
-            resolvedBloodGroup = primaryPatient.bloodGroup;
-        } else if (!isSelf && matchedFamilyMember?.bloodGroup) {
-            resolvedBloodGroup = matchedFamilyMember.bloodGroup; // 👈 Picked Selected Family Member's Blood Group
-        } else if (isSelf && user?.bloodGroup) {
-            resolvedBloodGroup = user.bloodGroup; // 👈 Main Account Holder's Blood Group
-        }
-
-        // Resolve Profile Photo (Family member photo if available, otherwise account photo)
-        const resolvedProfilePic = (!isSelf && matchedFamilyMember?.profilePic) 
-            ? matchedFamilyMember.profilePic 
-            : (user?.profilePic || null);
-
-        const patientProfile = {
-            patientName: primaryPatient.patientName || (isSelf ? user?.name : "Admitted Patient"),
-            age: primaryPatient.patientAge || (matchedFamilyMember?.dob ? moment().diff(moment(matchedFamilyMember.dob), 'years') : (user?.age || "N/A")),
-            gender: primaryPatient.gender || matchedFamilyMember?.gender || (isSelf ? user?.gender : "N/A"),
-            relation: primaryPatient.relation || (isSelf ? "Self" : "Family Member"),
-            reasonForVisit: primaryPatient.reasonForVisit || appointment.bookingReason || "General Admission",
-            bloodGroup: resolvedBloodGroup, // 👈 100% Accurate per Selected Family Member
-            phone: primaryPatient.phone || matchedFamilyMember?.phone || appointment.address?.phone || user?.phone || "N/A",
-            email: user?.email || "N/A",
-            profilePic: resolvedProfilePic,
-            address: appointment.address || null,
-            accountHolderName: user?.name || "N/A"
-        };
-
-        // =========================================================================
-        // ⏱️ 2. CONSOLIDATED UNIFIED MEDICAL TIMELINE
-        // =========================================================================
         const treatmentTimeline = [];
 
         const formatDoc = (doc, defaultRole = "Physician") => ({
             doctorId: doc?._id || null,
-            name: doc?.name || "Doctor",
-            speciality: doc?.speciality || "General Medicine",
-            qualification: doc?.qualification || "MBBS",
+            name: doc?.name || "",
+            speciality: doc?.speciality || "",
+            qualification: doc?.qualification || "",
             profileImage: doc?.profileImage || null,
             role: defaultRole
         });
 
-        // A. Doctor Shifts & Handover Transitions
+        // A. Doctor Shifts
         if (appointment.treatmentHistory && appointment.treatmentHistory.length > 0) {
             appointment.treatmentHistory.forEach(h => {
                 treatmentTimeline.push({
@@ -2996,14 +3073,14 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     category: "Doctor Assignment / Transfer",
                     timestamp: h.startTime || h.timestamp || appointment.createdAt,
                     doctor: formatDoc(h.toDoctorId || appointment.doctorId, "Primary Physician"),
-                    action: h.action || "Duty Shift",
-                    notes: h.notes || "Shift assigned / transferred",
-                    duration: h.durationDisplay || null
+                    action: h.action || "",
+                    notes: h.notes || "",
+                    duration: h.durationDisplay || ""
                 });
             });
         }
 
-        // B. Primary Doctor Clinical Rounds & Progress Observations
+        // B. Primary Doctor Rounds (Actual Vitals)
         if (appointment.clinicalLogs && appointment.clinicalLogs.length > 0) {
             appointment.clinicalLogs.forEach(log => {
                 treatmentTimeline.push({
@@ -3011,15 +3088,20 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     category: "Attending Physician Round",
                     timestamp: log.loggedAt || new Date(),
                     doctor: formatDoc(log.doctorId, "Attending Physician"),
-                    observation: log.observation,
-                    patientCondition: log.patientCondition || "Stable",
-                    priorityRating: log.priorityRating || "Routine",
-                    vitals: log.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+                    observation: log.observation || "",
+                    patientCondition: log.patientCondition || "",
+                    priorityRating: log.priorityRating || "",
+                    vitals: {
+                        bp: log.vitals?.bp || "",
+                        pulse: log.vitals?.pulse || "",
+                        temp: log.vitals?.temp || "",
+                        spo2: log.vitals?.spo2 || ""
+                    }
                 });
             });
         }
 
-        // C. Bedside Specialists Feedbacks & Consultations
+        // C. Bedside Specialists Feedbacks & Meds
         if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
             appointment.bedsideCareTeam.forEach(member => {
                 const docMeta = formatDoc(member.doctorId, "Bedside Specialist");
@@ -3030,10 +3112,15 @@ const getTrackCaseSuperDetails = async (req, res) => {
                         category: "Specialist Observation",
                         timestamp: obs.submittedAt || member.requestedAt,
                         doctor: docMeta,
-                        observation: obs.observation,
-                        patientCondition: obs.patientCondition || "Stable",
-                        priorityRating: obs.priorityRating || "Routine",
-                        vitals: obs.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+                        observation: obs.observation || "",
+                        patientCondition: obs.patientCondition || "",
+                        priorityRating: obs.priorityRating || "",
+                        vitals: {
+                            bp: obs.vitals?.bp || "",
+                            pulse: obs.vitals?.pulse || "",
+                            temp: obs.vitals?.temp || "",
+                            spo2: obs.vitals?.spo2 || ""
+                        }
                     });
                 });
 
@@ -3044,7 +3131,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
                         timestamp: med.addedAt || member.requestedAt,
                         doctor: docMeta,
                         medication: {
-                            name: med.name,
+                            name: med.name || "",
                             dosage: med.dosage || "",
                             frequency: med.frequency || "",
                             duration: med.duration || "",
@@ -3065,11 +3152,11 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     timestamp: med.startDate || new Date(),
                     doctor: formatDoc(med.addedBy, "Ordering Doctor"),
                     medication: {
-                        name: med.medicineName,
+                        name: med.medicineName || "",
                         dosage: med.dosage || "",
                         frequency: med.frequency || "",
                         instructions: med.instructions || "",
-                        status: med.status
+                        status: med.status || ""
                     }
                 });
             });
@@ -3085,13 +3172,15 @@ const getTrackCaseSuperDetails = async (req, res) => {
                 pdfUrl: prescription.pdfUrl || null,
                 diagnosis: prescription.diagnosis || [],
                 totalMedicines: prescription.medicines?.length || 0,
-                vitals: prescription.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+                vitals: {
+                    bp: prescription.vitals?.bp || "",
+                    pulse: prescription.vitals?.pulse || "",
+                    temp: prescription.vitals?.temp || "",
+                    spo2: prescription.vitals?.spo2 || ""
+                }
             });
         }
 
-        // =========================================================================
-        // 🚀 3. TIMELINE SORTING
-        // =========================================================================
         const effectiveOrder = (sortOrder || order || 'desc').toLowerCase();
         const isAscending = effectiveOrder === 'asc';
 
@@ -3101,9 +3190,13 @@ const getTrackCaseSuperDetails = async (req, res) => {
             return isAscending ? timeA - timeB : timeB - timeA;
         });
 
-        // =========================================================================
-        // 📊 4. FINAL RESPONSE
-        // =========================================================================
+        const actualVitals = {
+            bp: appointment.clinicalSummary?.vitals?.bp || "",
+            pulse: appointment.clinicalSummary?.vitals?.pulse || "",
+            temp: appointment.clinicalSummary?.vitals?.temp || "",
+            spo2: appointment.clinicalSummary?.vitals?.spo2 || ""
+        };
+
         res.json({
             success: true,
             timelineSortApplied: isAscending ? 'asc' : 'desc',
@@ -3113,31 +3206,32 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     appointmentId: appointment._id,
                     bookingId: appointment.bookingId,
                     status: appointment.status,
-                    triageLevel: appointment.triageLevel,
+                    triageLevel: appointment.clinicalSummary?.triagePriority || appointment.triageLevel || "",
                     startDate: appointment.startDate,
                     endDate: appointment.endDate,
-                    stayDuration: appointment.stayDuration,
-                    totalAmount: appointment.totalAmount,
-                    paymentStatus: appointment.paymentStatus,
-                    paymentMethod: appointment.paymentMethod,
-                    
-                    // 👈 Accurate Selected Family Member Profile with Blood Group
-                    patientProfile, 
+                    stayDuration: appointment.stayDuration || 1,
+                    totalAmount: appointment.totalAmount || 0,
+                    paymentStatus: appointment.paymentStatus || "",
+                    paymentMethod: appointment.paymentMethod || "",
+                    patientProfile: resolvedPatient, 
                     bedDetails: appointment.bedId,
-                    dischargeVitals: appointment.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" }
+                    dischargeVitals: actualVitals
                 },
-
                 treatmentTimeline, 
-
                 prescriptionDetails: prescription ? {
                     prescriptionId: prescription._id,
-                    pdfUrl: prescription.pdfUrl,
+                    pdfUrl: prescription.pdfUrl || null,
                     dietPlanPdf: prescription.dietPlanPdf || null,
                     medicines: prescription.medicines || [],
-                    vitals: prescription.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
+                    vitals: {
+                        bp: prescription.vitals?.bp || "",
+                        pulse: prescription.vitals?.pulse || "",
+                        temp: prescription.vitals?.temp || "",
+                        spo2: prescription.vitals?.spo2 || ""
+                    },
                     diagnosis: prescription.diagnosis || [],
                     chiefComplaints: prescription.chiefComplaints || "",
-                    advisedInvestigations: prescription.advisedInvestigations || "None",
+                    advisedInvestigations: prescription.advisedInvestigations || "",
                     adviceGiven: prescription.adviceGiven || "",
                     specialInstructions: prescription.specialInstructions || ""
                 } : null
@@ -3149,6 +3243,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 

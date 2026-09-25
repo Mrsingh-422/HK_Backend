@@ -17,9 +17,11 @@ const { sendPushNotification } = require('../../../utils/notification');
 const { deleteFile } = require('../../../utils/fileHandler'); // Import the deleteFile utility
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
 const bcrypt = require('bcryptjs');
+const mongoose = require('mongoose');
 
 
-const enrichAppointmentClinicalDetails = async (appt) => {
+// --- ENRICH APPOINTMENT WITH DYNAMIC 24-HOUR LEDGER SNAPSHOT (For Doctor Panel) ---
+const enrichAppointmentClinicalDetails = async (appt, targetDischargeDate = new Date()) => {
     const apptObj = appt.toObject ? appt.toObject() : { ...appt };
 
     const prescriptionObj = await Prescription.findOne({ appointmentId: apptObj._id })
@@ -35,7 +37,6 @@ const enrichAppointmentClinicalDetails = async (appt) => {
 
     const treatmentTeamTimeline = [];
 
-    // A. Fetch Current Active Primary Doctor details & active Shift timings
     if (apptObj.doctorId) {
         const primaryShift = apptObj.treatmentHistory?.find(h => 
             h.toDoctorId && h.toDoctorId._id?.toString() === apptObj.doctorId._id?.toString() && h.startTime
@@ -54,7 +55,6 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         });
     }
 
-    // B. Fetch Bedside Care Team (Co-Doctors) details & active shift timings
     if (apptObj.bedsideCareTeam && apptObj.bedsideCareTeam.length > 0) {
         apptObj.bedsideCareTeam.forEach(member => {
             if (member.doctorId) {
@@ -73,102 +73,82 @@ const enrichAppointmentClinicalDetails = async (appt) => {
         });
     }
 
-    // C. Fetch Completed / Transferred previous primary shifts from treatmentHistory
-    if (apptObj.treatmentHistory && apptObj.treatmentHistory.length > 0) {
-        apptObj.treatmentHistory.forEach(historyLog => {
-            // Find closed doctor shifts (excluding the current active doctor's unended shift)
-            if (historyLog.toDoctorId && historyLog.endTime) {
-                const isCurrentActiveDoc = apptObj.doctorId && 
-                                           apptObj.doctorId._id?.toString() === historyLog.toDoctorId._id?.toString() && 
-                                           !historyLog.endTime;
-                
-                if (!isCurrentActiveDoc) {
-                    // Check if we already pushed this doctor with this shift to avoid duplicates in timeline
-                    const alreadyPushed = treatmentTeamTimeline.some(t => 
-                        t.doctorId?.toString() === historyLog.toDoctorId._id?.toString() && 
-                        String(t.joinedAt) === String(historyLog.startTime)
-                    );
-
-                    if (!alreadyPushed) {
-                        treatmentTeamTimeline.push({
-                            doctorId: historyLog.toDoctorId._id,
-                            name: historyLog.toDoctorId.name,
-                            speciality: historyLog.toDoctorId.speciality,
-                            qualification: historyLog.toDoctorId.qualification || "MD",
-                            profileImage: historyLog.toDoctorId.profileImage,
-                            role: "Previous Physician (Discharged)",
-                            joinedAt: historyLog.startTime,
-                            dischargedAt: historyLog.endTime,
-                            duration: historyLog.durationDisplay || ""
-                        });
-                    }
-                }
-            }
-        });
+    // 🚀 24-Hour Stay Calculations
+    const bedPricePerDay = apptObj.bedId?.pricePerDay || 500;
+    const checkIn = moment(apptObj.startDate || apptObj.createdAt);
+    const checkOut = moment(targetDischargeDate);
+    const diffMs = Math.max(0, checkOut.diff(checkIn));
+    const exactHours = Number((diffMs / (1000 * 60 * 60)).toFixed(1));
+    const actualStayDays = Math.max(1, Math.ceil(exactHours / 24));
+    
+    let bookedDays = apptObj.stayDuration || 1;
+    if (apptObj.startDate && apptObj.endDate) {
+        const startDay = moment(apptObj.startDate).startOf('day');
+        const endDay = moment(apptObj.endDate).startOf('day');
+        bookedDays = Math.max(1, endDay.diff(startDay, 'days') + 1);
     }
-
+    
+    const actualStayBedCharge = actualStayDays * bedPricePerDay;
+    
+    let depositPaidOnBooking = 0;
+    if (apptObj.paymentStatus === 'Paid' || apptObj.paymentDetails?.status === 'captured') {
+        depositPaidOnBooking = Number(apptObj.paymentDetails?.amount || apptObj.totalAmount || (bookedDays * bedPricePerDay));
+    }
+    
+    let unusedDays = 0;
+    let unusedDaysRefund = 0;
     let overstayDays = 0;
     let overstayCharge = 0;
-    let bedPricePerDay = 0;
-    let baseStayDays = 0;
-    let baseStayCharge = 0;
-
-    if (apptObj.bedId) {
-        bedPricePerDay = apptObj.bedId.pricePerDay || 0;
+    
+    if (actualStayDays < bookedDays) {
+        unusedDays = bookedDays - actualStayDays;
+        unusedDaysRefund = unusedDays * bedPricePerDay;
+    } else if (actualStayDays > bookedDays) {
+        overstayDays = actualStayDays - bookedDays;
+        overstayCharge = overstayDays * bedPricePerDay;
     }
-
-    if (apptObj.startDate && apptObj.endDate) {
-        const start = moment(apptObj.startDate);
-        const scheduledEnd = moment(apptObj.endDate);
+    
+    const extraServicesTotal = (apptObj.specialServices || [])
+        .filter(s => !s.serviceName?.startsWith("Overstay Bed Surcharge"))
+        .reduce((sum, item) => sum + (Number(item.price) || 0), 0);
         
-        if (start.isValid() && scheduledEnd.isValid()) {
-            baseStayDays = Math.max(1, scheduledEnd.startOf('day').diff(start.startOf('day'), 'days'));
-            baseStayCharge = baseStayDays * bedPricePerDay;
-
-            const checkoutTime = apptObj.status === 'Completed' ? moment(apptObj.endDate) : moment();
-            const actualEnd = checkoutTime.startOf('day');
-            
-            overstayDays = actualEnd.diff(scheduledEnd.startOf('day'), 'days');
-            if (overstayDays > 0) {
-                overstayCharge = overstayDays * bedPricePerDay;
-            } else {
-                overstayDays = 0;
-            }
-        }
-    }
-
-    const dynamicPricingBreakdown = apptObj.pricingBreakdown ? { ...apptObj.pricingBreakdown } : {
-        baseFee: 0, subtotal: 0, originalBaseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, cancellationFeeApplied: 0, noShowFeeApplied: 0
-    };
-
-    if (!dynamicPricingBreakdown.baseFee || dynamicPricingBreakdown.baseFee === 0) {
-        dynamicPricingBreakdown.baseFee = baseStayCharge;
-    }
-
-    if (overstayCharge > 0) {
-        dynamicPricingBreakdown.extraCharges = (dynamicPricingBreakdown.extraCharges || 0) + overstayCharge;
-    }
-
-    const dynamicSubtotal = (dynamicPricingBreakdown.baseFee || 0) + (dynamicPricingBreakdown.visitCharges || 0) + (dynamicPricingBreakdown.extraCharges || 0);
-    dynamicPricingBreakdown.subtotal = dynamicSubtotal;
-
-    const discount = dynamicPricingBreakdown.discountAmount || 0;
-    const dynamicTotalAmount = Math.max(0, dynamicSubtotal - discount);
-
-    apptObj.pricingBreakdown = dynamicPricingBreakdown;
-
-    if (!apptObj.totalAmount || apptObj.totalAmount === 0) {
-        apptObj.totalAmount = dynamicTotalAmount;
+    const discount = Number(apptObj.pricingBreakdown?.discountAmount || apptObj.couponDetails?.discountValue || 0);
+    const totalActualBill = Math.max(0, actualStayBedCharge + extraServicesTotal - discount);
+    const netBalance = totalActualBill - depositPaidOnBooking;
+    
+    let refundDueToUser = 0;
+    let pendingDepartureBalance = 0;
+    let settlementStatus = "Settled";
+    
+    if (netBalance < 0) {
+        refundDueToUser = Math.abs(netBalance);
+        pendingDepartureBalance = 0;
+        settlementStatus = "Refund-Initiated";
+    } else if (netBalance > 0) {
+        pendingDepartureBalance = netBalance;
+        refundDueToUser = 0;
+        settlementStatus = "Pending-Collection";
     }
 
     const billingBreakdown = {
-        baseStayDays,
-        baseStayCharge,
+        stayUnitCharge: bedPricePerDay,
+        baseStayDuration: `${actualStayDays} Day${actualStayDays > 1 ? 's' : ''} (${exactHours} Hours)`,
+        actualStayDays,
+        exactStayHours: exactHours,
+        bookedDays,
+        accumulatedBaseFee: actualStayBedCharge,
+        depositPaidOnBooking,
+        unusedDays,
+        unusedDaysRefund,
         overstayDays,
         overstayCharge,
-        bedPricePerDay,
-        estimatedTotal: dynamicTotalAmount,
-        currentBillAmount: apptObj.totalAmount
+        extraFacilitiesFee: extraServicesTotal,
+        discountDeductions: discount,
+        totalInvoiceValue: totalActualBill,
+        currentBillTotal: totalActualBill,
+        refundDueToUser,
+        pendingDepartureBalance,
+        settlementStatus
     };
 
     return {
@@ -427,36 +407,60 @@ const getSpecializations = async (req, res) => {
 const getDocDashboard = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        
-        // 🚀 SYNCHRONIZED: Pending transfer requests headed to me
+        const doctorObjId = new mongoose.Types.ObjectId(doctorId);
+
+        // 1. Pending Handover Transfers
         const transferCount = await Appointment.countDocuments({ 
-            pendingDoctorId: doctorId 
+            pendingDoctorId: doctorObjId 
         });
 
-        // 🚀 SYNCHRONIZED: Total active patients currently assigned to me (excluding in-transit)
-        const activeCount = await Appointment.countDocuments({ 
-            doctorId, 
+        // 🚀 2. Pending Bedside Specialist Help Requests
+        const pendingBedsideCount = await Appointment.countDocuments({
+            "bedsideCareTeam": {
+                $elemMatch: {
+                    doctorId: doctorObjId,
+                    status: "Pending"
+                }
+            }
+        });
+
+        // 🚀 3. Active Bedside Workload (Accepted / In-Progress)
+        const activeBedsideCount = await Appointment.countDocuments({
+            "bedsideCareTeam": {
+                $elemMatch: {
+                    doctorId: doctorObjId,
+                    status: { $in: ["Accepted", "In-Progress"] }
+                }
+            }
+        });
+
+        // 4. Primary Active Patients
+        const primaryActiveCount = await Appointment.countDocuments({ 
+            doctorId: doctorObjId, 
             pendingDoctorId: null,
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
         });
 
+        // Total Combined Active Workload
+        const totalActiveWorkload = primaryActiveCount + activeBedsideCount;
+
         const stats = {
-            totalCases: await Appointment.countDocuments({ doctorId }),
-            requests: transferCount, // Align requests directly to incoming transfers
-            active: activeCount
+            totalCases: await Appointment.countDocuments({ doctorId: doctorObjId }),
+            requests: transferCount + pendingBedsideCount, // Total actionable requests (Handovers + Bedside)
+            pendingBedsideRequests: pendingBedsideCount,
+            pendingHandovers: transferCount,
+            active: totalActiveWorkload
         };
 
-        // 🚀 SYNCHRONIZED: Emergency workload currently assigned to me
         const emergencyCount = await Appointment.countDocuments({ 
-            doctorId, 
+            doctorId: doctorObjId, 
             pendingDoctorId: null,
-            ambulanceId: { $ne: null, $exists: true }, // Brought strictly by Ambulance
+            ambulanceId: { $ne: null, $exists: true },
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
         });
 
-        // 🚀 SYNCHRONIZED: Direct admissions workload currently assigned to me
         const admissionCount = await Appointment.countDocuments({ 
-            doctorId, 
+            doctorId: doctorObjId, 
             pendingDoctorId: null,
             bookingType: 'Admission', 
             $or: [
@@ -471,13 +475,19 @@ const getDocDashboard = async (req, res) => {
             welcomeName: req.user.name,
             dutyStatus: req.user.dutyStatus, 
             stats,
-            grid: { emergencyCount, admissionCount, transferCount }
+            grid: { 
+                emergencyCount, 
+                admissionCount, 
+                transferCount,
+                pendingBedsideCount,
+                activeBedsideCount 
+            }
         });
     } catch (error) { 
+        console.error("Doctor Dashboard Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
 
 
 
@@ -1081,9 +1091,12 @@ const requestBedsideSpecialist = async (req, res) => {
         const { appointmentId, specialistDoctorId, reason, patientCondition, priority } = req.body;
         const mainDoctorId = req.user.id;
 
-        const appointment = await Appointment.findOne({ _id: appointmentId, doctorId: mainDoctorId });
+        const appointment = await Appointment.findOne({ _id: appointmentId, doctorId: mainDoctorId })
+            .populate('bedId', 'bedNumber')
+            .populate('userId', 'name');
+
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Unauthorized: Aap is patient ke main doctor nahi hain." });
+            return res.status(404).json({ success: false, message: "Unauthorized: You are not the primary treating physician for this patient." });
         }
 
         // Check if specialist already requested
@@ -1092,33 +1105,65 @@ const requestBedsideSpecialist = async (req, res) => {
             return res.status(400).json({ success: false, message: "This specialist is already requested or active on the care team." });
         }
 
+        const now = new Date();
+
         // Push new bedside request
         appointment.bedsideCareTeam.push({
             doctorId: specialistDoctorId,
             status: 'Pending',
-            requestReason: reason,
-            patientConditionAtRequest: patientCondition,
-            priority: priority || 'Routine'
+            requestReason: reason || "Specialist consultation requested.",
+            patientConditionAtRequest: patientCondition || "Stable",
+            priority: priority || 'Routine',
+            requestedAt: now
         });
 
+        appointment.markModified('bedsideCareTeam');
         await appointment.save();
-        res.status(201).json({ success: true, message: "Bedside help request sent to specialist successfully!" });
+
+        // 🚀 REAL-TIME ALERT: Push Notification sent to the requested Specialist Doctor
+        const { sendPushNotification } = require('../../../utils/notification');
+        const primaryPatient = appointment.patients?.[0]?.patientName || appointment.userId?.name || "Patient";
+        const bedLabel = appointment.bedId?.bedNumber || appointment.bedNumber || "Ward Bed";
+
+        await sendPushNotification(
+            specialistDoctorId,
+            'doctor',
+            "🚨 Urgent Bedside Specialist Request!",
+            `Dr. ${req.user.name} has requested your bedside consultation for patient ${primaryPatient} at Bed ${bedLabel}. Priority: ${priority || 'Routine'}.`,
+            { appointmentId: appointment._id.toString(), type: 'bedside_specialist_request' }
+        );
+
+        res.status(201).json({ 
+            success: true, 
+            message: "Bedside help request sent to specialist and mobile notification dispatched successfully!" 
+        });
 
     } catch (error) {
+        console.error("Request Bedside Specialist Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
+
 // 2. RESPOND TO BEDSIDE REQUEST (Specialist Doctor Action: Accept or Reject with Reason)
 const respondToBedsideRequest = async (req, res) => {
     try {
-        const { appointmentId, action, rejectionReason } = req.body; // action: 'Accepted' ya 'Rejected'
+        const { appointmentId, action, rejectionReason } = req.body; // action: 'Accepted' | 'Rejected'
         const specialistId = req.user.id;
+        const specialistObjId = new mongoose.Types.ObjectId(specialistId);
+
+        if (!appointmentId || !action) {
+            return res.status(400).json({ success: false, message: "Appointment ID and Action ('Accepted'/'Rejected') are required." });
+        }
 
         const appointment = await Appointment.findOne({ 
             _id: appointmentId, 
-            "bedsideCareTeam.doctorId": specialistId,
-            "bedsideCareTeam.status": "Pending"
+            "bedsideCareTeam": {
+                $elemMatch: {
+                    doctorId: specialistObjId,
+                    status: "Pending"
+                }
+            }
         });
 
         if (!appointment) {
@@ -1126,18 +1171,33 @@ const respondToBedsideRequest = async (req, res) => {
         }
 
         // Find specialist object in array and update
-        const careTeamObj = appointment.bedsideCareTeam.find(d => d.doctorId.toString() === specialistId);
-        careTeamObj.status = action;
-        careTeamObj.respondedAt = new Date();
+        const careTeamObj = appointment.bedsideCareTeam.find(d => 
+            d.doctorId && (d.doctorId.toString() === specialistId.toString() || d.doctorId._id?.toString() === specialistId.toString())
+        );
 
-        if (action === 'Rejected') {
-            careTeamObj.rejectionReason = rejectionReason || "Busy on another case";
+        if (careTeamObj) {
+            careTeamObj.status = action;
+            careTeamObj.respondedAt = new Date();
+
+            if (action === 'Rejected') {
+                careTeamObj.rejectionReason = rejectionReason || "Doctor busy on another emergency case.";
+            } else if (action === 'Accepted') {
+                careTeamObj.startTime = new Date(); // Start treatment shift timing
+            }
         }
 
+        // 🚨 Mark modified so Mongoose saves changes inside the nested subdocument array
+        appointment.markModified('bedsideCareTeam');
         await appointment.save();
-        res.json({ success: true, message: `Bedside request successfully ${action}!`, data: appointment });
+
+        res.json({ 
+            success: true, 
+            message: `Bedside specialist request successfully ${action}!`, 
+            data: appointment 
+        });
 
     } catch (error) {
+        console.error("Respond Bedside Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -1399,12 +1459,16 @@ const getAssignedCases = async (req, res) => {
         const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
+        // 🛡️ CRITICAL FIX 1: Convert req.user.id to BSON ObjectId for nested array matching
+        const doctorObjId = new mongoose.Types.ObjectId(req.user.id);
+        const doctorIdStr = req.user.id.toString();
+
         let query = {};
 
         // Case A: Active patients assigned to this doctor
         if (tab === 'active') {
             query = { 
-                doctorId: req.user.id, 
+                doctorId: doctorObjId, 
                 pendingDoctorId: null,
                 status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
             };
@@ -1412,14 +1476,14 @@ const getAssignedCases = async (req, res) => {
         // Case B: Ready for Discharge patients
         else if (tab === 'discharge') {
             query = {
-                doctorId: req.user.id,
+                doctorId: doctorObjId,
                 pendingDoctorId: null,
                 status: 'Discharge-Pending' 
             };
         }
-        // Case C: Incoming pending handover requests
+        // Case C: Incoming pending handover transfers
         else if (tab === 'pending') {
-            query = { pendingDoctorId: req.user.id };
+            query = { pendingDoctorId: doctorObjId };
         } 
         // Case D: Comprehensive History Tray
         else if (tab === 'history') {
@@ -1429,14 +1493,14 @@ const getAssignedCases = async (req, res) => {
                         $and: [
                             { 
                                 $or: [
-                                    { "treatmentHistory.fromDoctorId": req.user.id },
-                                    { "treatmentHistory.toDoctorId": req.user.id }
+                                    { "treatmentHistory.fromDoctorId": doctorObjId },
+                                    { "treatmentHistory.toDoctorId": doctorObjId }
                                 ] 
                             },
                             {
                                 $or: [
-                                    { doctorId: { $ne: req.user.id } },
-                                    { status: 'Completed' }
+                                    { doctorId: { $ne: doctorObjId } }, 
+                                    { status: 'Completed' }          
                                 ]
                             }
                         ]
@@ -1444,7 +1508,7 @@ const getAssignedCases = async (req, res) => {
                     {
                         "bedsideCareTeam": {
                             $elemMatch: {
-                                doctorId: req.user.id,
+                                doctorId: doctorObjId,
                                 status: 'Completed'
                             }
                         }
@@ -1452,23 +1516,23 @@ const getAssignedCases = async (req, res) => {
                 ]
             };
         }
-        // Case E: Active Bedside Specialist Care
+        // 🚀 Case E: Active Bedside Specialist Care (Accepted / In-Progress)
         else if (tab === 'bedside') {
             query = {
                 "bedsideCareTeam": {
                     $elemMatch: {
-                        doctorId: req.user.id,
+                        doctorId: doctorObjId,
                         status: { $in: ['Accepted', 'In-Progress'] }
                     }
                 }
             };
         }
-        // Case F: Pending Bedside Specialists Requests
+        // 🚀 Case F: Pending Bedside Specialists Requests (Invites awaiting doctor response)
         else if (tab === 'pending-bedside') {
             query = {
                 "bedsideCareTeam": {
                     $elemMatch: {
-                        doctorId: req.user.id,
+                        doctorId: doctorObjId,
                         status: 'Pending'
                     }
                 }
@@ -1488,14 +1552,14 @@ const getAssignedCases = async (req, res) => {
             query = {
                 $or: [
                     { 
-                        doctorId: req.user.id, 
+                        doctorId: doctorObjId, 
                         pendingDoctorId: { $ne: null } 
                     },
                     {
-                        doctorId: { $ne: req.user.id },
+                        doctorId: { $ne: doctorObjId },
                         "treatmentHistory": {
                             $elemMatch: {
-                                fromDoctorId: req.user.id,
+                                fromDoctorId: doctorObjId,
                                 action: { $in: ['Transfer-Initiated', 'Discharged'] }
                             }
                         }
@@ -1519,8 +1583,10 @@ const getAssignedCases = async (req, res) => {
 
         const totalRecords = await Appointment.countDocuments(query);
 
+        // 🛡️ CRITICAL FIX 2: Populate primary doctor who created the bedside request
         const cases = await Appointment.find(query)
             .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
+            .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber pricePerDay status',
@@ -1530,30 +1596,59 @@ const getAssignedCases = async (req, res) => {
             .skip(skip)
             .limit(limitNum);
 
-        // 🎯 Clean DTO Mapping for Doctor Tray Cards
-        const cleanedCases = cases.map(appt => ({
-            _id: appt._id,
-            bookingId: appt.bookingId,
-            status: appt.status,
-            triageLevel: appt.triageLevel || "Routine",
-            startDate: appt.startDate,
-            endDate: appt.endDate,
-            stayDuration: appt.stayDuration || 1,
+        // 🎯 Clean DTO Mapping with Bedside Specialist Metadata
+        const cleanedCases = cases.map(appt => {
+            // Find logged-in doctor's specific bedside team entry
+            const myBedsideEntry = (appt.bedsideCareTeam || []).find(member => 
+                member.doctorId && (member.doctorId._id?.toString() === doctorIdStr || member.doctorId.toString() === doctorIdStr)
+            );
 
-            patientDetails: resolvePatientDTO(appt),
+            return {
+                _id: appt._id,
+                bookingId: appt.bookingId,
+                status: appt.status,
+                triageLevel: appt.triageLevel || "Routine",
+                startDate: appt.startDate,
+                endDate: appt.endDate,
+                stayDuration: appt.stayDuration || 1,
 
-            bedDetails: appt.bedId ? {
-                _id: appt.bedId._id,
-                bedNumber: appt.bedId.bedNumber || appt.bedNumber || "N/A",
-                wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
-                wardType: appt.bedId.wardId?.type || "Ward",
-                pricePerDay: appt.bedId.pricePerDay || 0
-            } : null,
+                // Admitted Patient Details
+                patientDetails: resolvePatientDTO(appt),
 
-            pendingDoctorId: appt.pendingDoctorId || null,
-            createdAt: appt.createdAt,
-            updatedAt: appt.updatedAt
-        }));
+                // Bed & Ward Details
+                bedDetails: appt.bedId ? {
+                    _id: appt.bedId._id,
+                    bedNumber: appt.bedId.bedNumber || appt.bedNumber || "N/A",
+                    wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
+                    wardType: appt.bedId.wardId?.type || "Ward",
+                    pricePerDay: appt.bedId.pricePerDay || 0
+                } : null,
+
+                // Primary Treating Doctor (Who requested bedside help)
+                primaryDoctor: appt.doctorId ? {
+                    _id: appt.doctorId._id,
+                    name: appt.doctorId.name,
+                    speciality: appt.doctorId.speciality,
+                    qualification: appt.doctorId.qualification || "MBBS, MD",
+                    profileImage: appt.doctorId.profileImage || null
+                } : null,
+
+                // 🚀 CRITICAL FIX 3: Injected Bedside Request Payload for Frontend Cards
+                bedsideRequest: myBedsideEntry ? {
+                    status: myBedsideEntry.status, // 'Pending', 'Accepted', 'In-Progress'
+                    requestReason: myBedsideEntry.requestReason || "Bedside specialist consultation requested.",
+                    patientConditionAtRequest: myBedsideEntry.patientConditionAtRequest || "Stable",
+                    priority: myBedsideEntry.priority || "Routine",
+                    requestedAt: myBedsideEntry.requestedAt || appt.createdAt,
+                    respondedAt: myBedsideEntry.respondedAt || null,
+                    rejectionReason: myBedsideEntry.rejectionReason || null
+                } : null,
+
+                pendingDoctorId: appt.pendingDoctorId || null,
+                createdAt: appt.createdAt,
+                updatedAt: appt.updatedAt
+            };
+        });
 
         res.json({ 
             success: true, 
@@ -1565,9 +1660,10 @@ const getAssignedCases = async (req, res) => {
         });
     } catch (error) { 
         console.error("getAssignedCases Error:", error);
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 // Fetch existing prescriptions for a patient/appointment
 const getPrescriptionsByAppointment = async (req, res) => {
@@ -1847,75 +1943,74 @@ const getPrintableDischargeSummary = async (req, res) => {
         }
 
         const formatPaymentMethod = (method) => {
-            if (!method) return "Pending";
-            if (method.toUpperCase() === 'ONLINE' || method.toUpperCase() === 'UPI') return "UPI (Google Pay)";
+            if (!method) return "";
+            if (method.toUpperCase() === 'ONLINE' || method.toUpperCase() === 'UPI') return "UPI / Online";
             if (method.toUpperCase() === 'CASH' || method.toUpperCase() === 'COD') return "Cash / Offline";
             return method;
         };
 
-        // 🚨 DYNAMIC BLOOD GROUP RESOLUTION FOR DISCHARGE PRINT
         const patientBloodGroup = appt.clinicalSummary?.bloodGroup || 
                                   appt.patients?.[0]?.bloodGroup || 
                                   appt.userId?.bloodGroup || 
-                                  "N/A";
+                                  "";
 
         const figmaDataSheet = {
             header: {
-                hospitalName: appt.hospitalId?.name || "RADIUS HOSPITAL",
-                hospitalAddress: appt.hospitalId?.address || "Mohali, Punjab",
+                hospitalName: appt.hospitalId?.name || "",
+                hospitalAddress: appt.hospitalId?.address || "",
                 hospitalLogo: appt.hospitalId?.hospitalImage?.[0] || null,
                 leadDoctor: {
-                    name: appt.doctorId?.name || "Attending Physician",
-                    title: `Department of ${appt.doctorId?.speciality || 'Medicine'}`,
-                    qualification: appt.doctorId?.qualification || "MD"
+                    name: appt.doctorId?.name || "",
+                    title: appt.doctorId?.speciality ? `Department of ${appt.doctorId.speciality}` : "",
+                    qualification: appt.doctorId?.qualification || ""
                 },
                 collaborativeDoctors: dynamicHandoffDoctors
             },
 
             patientDetails: {
                 appointmentId: appt.bookingId,
-                name: appt.patients?.[0]?.patientName || appt.userId?.name || "N/A",
-                address: appt.address?.city ? `${appt.address.houseNo || ''} ${appt.address.city}` : (appt.userId?.address || "N/A"),
-                gender: appt.patients?.[0]?.gender || appt.userId?.gender || "Male",
-                age: appt.patients?.[0]?.patientAge || appt.userId?.age || 30,
-                bloodGroup: patientBloodGroup, // 👈 Injected Dynamic Blood Group
+                name: appt.patients?.[0]?.patientName || appt.userId?.name || "",
+                address: appt.address?.city ? `${appt.address.houseNo || ''} ${appt.address.city}` : (appt.userId?.address || ""),
+                gender: appt.patients?.[0]?.gender || appt.userId?.gender || "",
+                age: appt.patients?.[0]?.patientAge || appt.userId?.age || "",
+                bloodGroup: patientBloodGroup,
                 
-                dateOfAdmission: appt.startDate ? moment(appt.startDate).format("YYYY-MM-DD") : "N/A",
+                dateOfAdmission: appt.startDate ? moment(appt.startDate).format("YYYY-MM-DD") : "",
                 department: appt.doctorId?.speciality 
-                    ? `Department of ${appt.doctorId.speciality}, Unit - 1` 
-                    : "Department of Medicine, Unit - 1",
+                    ? `Department of ${appt.doctorId.speciality}` 
+                    : "",
                 
-                dateOfDischarge: appt.endDate ? moment(appt.endDate).format("YYYY-MM-DD") : "N/A",
+                dateOfDischarge: appt.endDate ? moment(appt.endDate).format("YYYY-MM-DD") : "",
                 dateOfSurgery: appt.clinicalSummary?.dateOfSurgery 
                     ? moment(appt.clinicalSummary.dateOfSurgery).format("YYYY-MM-DD") 
-                    : "N/A",
+                    : "",
                 
-                insuranceStatus: appt.insuranceDetails?.hasInsurance || appt.hasInsurance ? "Verified (Cashless)" : "N/A",
-                paymentStatus: appt.paymentStatus || "Pending",
+                insuranceStatus: appt.insuranceDetails?.hasInsurance || appt.hasInsurance ? "Verified (Cashless)" : "Non-Insured",
+                paymentStatus: appt.paymentStatus || "",
                 paymentType: formatPaymentMethod(appt.paymentMethod),
                 
-                conditionDuringAdmission: appt.clinicalSummary?.conditionDuringAdmission || "Stable",
-                conditionDuringDischarge: appt.clinicalSummary?.conditionDuringDischarge || "Recovered & Stable",
+                conditionDuringAdmission: appt.clinicalSummary?.conditionDuringAdmission || "",
+                conditionDuringDischarge: appt.clinicalSummary?.conditionDuringDischarge || "",
 
-                chiefComplaints: appt.clinicalSummary?.chiefComplaint || appt.patients?.[0]?.reasonForVisit || "N/A",
-                diagnosis: appt.clinicalSummary?.diagnosis || "N/A"
+                chiefComplaints: appt.clinicalSummary?.chiefComplaint || appt.patients?.[0]?.reasonForVisit || "",
+                diagnosis: appt.clinicalSummary?.diagnosis || ""
             },
 
-            clinicalNotes: appt.clinicalSummary?.admissionNote || "N/A",
+            clinicalNotes: appt.clinicalSummary?.admissionNote || "",
 
             medications: prescription ? prescription.medicines.map((med, idx) => ({
                 sNo: String(idx + 1).padStart(2, '0'),
                 medicineName: med.name,
-                dose: med.dosage,
-                time: med.frequency,
-                duration: med.duration
+                dose: med.dosage || "",
+                time: med.frequency || "",
+                duration: med.duration || ""
             })) : [],
 
             followUp: {
-                adviseInvestigation: appt.clinicalSummary?.investigation || "ECG Normal, Blood counts stable",
-                adviceGiven: appt.clinicalSummary?.dischargeNote || "Avoid excess salt and drink warm water.",
-                anySpecialInstructionGiven: "This digital Discharge Document is not valid for Medico Legal purpose.",
-                nextAppointment: appt.endDate ? moment(appt.endDate).add(7, 'days').format("YYYY-MM-DD") : "N/A"
+                adviseInvestigation: appt.clinicalSummary?.investigation || "",
+                adviceGiven: appt.clinicalSummary?.dischargeNote || "",
+                anySpecialInstructionGiven: "This digital Discharge Document is generated via verified hospital clinical records.",
+                nextAppointment: appt.endDate ? moment(appt.endDate).add(7, 'days').format("YYYY-MM-DD") : ""
             }
         };
 
@@ -1929,6 +2024,7 @@ const getPrintableDischargeSummary = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // --- API: GET DOCTOR COMPLETED/TRANSFERRED CASES HISTORY (Paginated & Searchable) ---
 // Endpoint: GET /hospital-doctor/panel/cases/history-list?page=1&limit=10&search=HKH

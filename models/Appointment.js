@@ -56,8 +56,32 @@ const appointmentSchema = new mongoose.Schema({
         subtotal: { type: Number },
 
         cancellationFeeApplied: { type: Number, default: 0 },
-        noShowFeeApplied: { type: Number, default: 0 }
+        noShowFeeApplied: { type: Number, default: 0 },
+
+        // 🚀 NEW 24-HOUR DYNAMIC LEDGER KEYS:
+        bookedDurationDays: { type: Number, default: 1 },
+        actualStayHours: { type: Number, default: 0 },
+        actualStayDays: { type: Number, default: 1 },
+        depositPaidOnBooking: { type: Number, default: 0 },
+        unusedDaysRefund: { type: Number, default: 0 },
+        refundDueToUser: { type: Number, default: 0 },
+        pendingDepartureBalance: { type: Number, default: 0 },
+        settlementStatus: {
+            type: String,
+            enum: ['Settled', 'Refund-Initiated', 'Refunded', 'Pending-Collection'],
+            default: 'Settled'
+        }
     },
+
+    paymentMethod: {
+        type: String,
+        enum: ['Online', 'UPI', 'COD', 'Card', 'Netbanking', 'Wallet'],
+        default: 'Online'
+    },
+
+    totalAmount: { type: Number }, // Final Payable
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
+    transactionId: { type: String },
     couponDetails: {
         couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
         couponCode: { type: String },
@@ -79,15 +103,7 @@ const appointmentSchema = new mongoose.Schema({
         }
     },
 
-    paymentMethod: {
-        type: String,
-        enum: ['Online', 'UPI', 'COD', 'Card', 'Netbanking', 'Wallet'],
-        default: 'Online'
-    },
-
-    totalAmount: { type: Number }, // Final Payable
-    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
-    transactionId: { type: String },
+    
 
     // System Fields
     status: {

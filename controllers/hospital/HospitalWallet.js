@@ -6,7 +6,7 @@ const moment = require('moment');
 const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
-// Helper to calculate Hospital specific 7-day cleared and locked balances [1.2.2]
+// Helper to calculate Hospital balances based strictly on Actual Settled Bills
 const calculateHospitalBalances = async (hospitalId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const hospitalObjId = new mongoose.Types.ObjectId(hospitalId);
@@ -24,6 +24,8 @@ const calculateHospitalBalances = async (hospitalId) => {
 
     for (let appt of completedAppointments) {
         const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
+        
+        // 🚀 Gross is strictly the Actual Settled Bill (after early discharge adjustment)
         const grossAmount = isSub 
             ? Number(appt.pricingBreakdown?.originalBaseFee || 0) 
             : Number(appt.totalAmount || 0);
@@ -35,12 +37,11 @@ const calculateHospitalBalances = async (hospitalId) => {
 
         let effectiveVendorCredit = 0;
 
-        // 🚨 COD vs ONLINE WALLET LOGIC:
         if (appt.paymentMethod === 'COD') {
-            // Patient paid 100% cash at hospital counter; wallet only deducts Admin Commission
+            // Patient paid cash at counter; hospital owes adminCutoff
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online / Subscription stay: Platform reimburses (Gross - Admin Commission)
+            // Online booking; platform reimburses Net Amount
             effectiveVendorCredit = netVendorAmount;
         }
 
@@ -84,7 +85,6 @@ const calculateHospitalBalances = async (hospitalId) => {
         }
     };
 };
-
 // 1. GET HOSPITAL WALLET STATS
 const getHospitalWalletStats = async (req, res) => {
     try {
@@ -133,7 +133,6 @@ const getHospitalWalletStats = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-4
 
 // 2. REQUEST WITHDRAWAL (With 7-days dynamic locks)
 // Replacing requestHospitalWithdrawal inside controllers/hospital/HospitalWallet.js
