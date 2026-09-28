@@ -403,7 +403,8 @@ const getSpecializations = async (req, res) => {
     }
 };
 
-// --- 1. DASHBOARD CONTROLLER (Hospital Doctor Panel) ---
+// --- 1. DASHBOARD CONTROLLER (Synchronized Emergency & Admission Workload) ---
+// Endpoint: GET /hospital-doctor/panel/dashboard
 const getDocDashboard = async (req, res) => {
     try {
         const doctorId = req.user.id;
@@ -414,7 +415,7 @@ const getDocDashboard = async (req, res) => {
             pendingDoctorId: doctorObjId 
         });
 
-        // 🚀 2. Pending Bedside Specialist Help Requests
+        // 2. Pending Bedside Specialist Help Requests
         const pendingBedsideCount = await Appointment.countDocuments({
             "bedsideCareTeam": {
                 $elemMatch: {
@@ -424,7 +425,7 @@ const getDocDashboard = async (req, res) => {
             }
         });
 
-        // 🚀 3. Active Bedside Workload (Accepted / In-Progress)
+        // 3. Active Bedside Workload (Accepted / In-Progress)
         const activeBedsideCount = await Appointment.countDocuments({
             "bedsideCareTeam": {
                 $elemMatch: {
@@ -441,17 +442,17 @@ const getDocDashboard = async (req, res) => {
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
         });
 
-        // Total Combined Active Workload
         const totalActiveWorkload = primaryActiveCount + activeBedsideCount;
 
         const stats = {
             totalCases: await Appointment.countDocuments({ doctorId: doctorObjId }),
-            requests: transferCount + pendingBedsideCount, // Total actionable requests (Handovers + Bedside)
+            requests: transferCount + pendingBedsideCount,
             pendingBedsideRequests: pendingBedsideCount,
             pendingHandovers: transferCount,
             active: totalActiveWorkload
         };
 
+        // 🚨 STRICT EMERGENCY COUNT: Only cases brought by Ambulance
         const emergencyCount = await Appointment.countDocuments({ 
             doctorId: doctorObjId, 
             pendingDoctorId: null,
@@ -459,6 +460,7 @@ const getDocDashboard = async (req, res) => {
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
         });
 
+        // 🚨 STRICT ADMISSION COUNT: Direct admissions without ambulance
         const admissionCount = await Appointment.countDocuments({ 
             doctorId: doctorObjId, 
             pendingDoctorId: null,
@@ -488,6 +490,7 @@ const getDocDashboard = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 
@@ -1449,8 +1452,8 @@ const completeSpecialistCare = async (req, res) => {
     }
 };
 
-// --- UPDATE FOR getAssignedCases: Native support for Bedside and Pending-Admissions tabs ---
-// Endpoint: GET /hospital-doctor/panel/cases?tab=active&page=1&limit=10
+// --- GET DOCTOR'S ASSIGNED CASES (Strict Emergency vs Admission Query) ---
+// Endpoint: GET /hospital-doctor/panel/cases?type=Emergency&tab=active&page=1&limit=10
 const getAssignedCases = async (req, res) => {
     try {
         const { type, status, tab = 'active', page = 1, limit = 10 } = req.query; 
@@ -1459,7 +1462,6 @@ const getAssignedCases = async (req, res) => {
         const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
-        // 🛡️ CRITICAL FIX 1: Convert req.user.id to BSON ObjectId for nested array matching
         const doctorObjId = new mongoose.Types.ObjectId(req.user.id);
         const doctorIdStr = req.user.id.toString();
 
@@ -1516,7 +1518,7 @@ const getAssignedCases = async (req, res) => {
                 ]
             };
         }
-        // 🚀 Case E: Active Bedside Specialist Care (Accepted / In-Progress)
+        // Case E: Active Bedside Specialist Care
         else if (tab === 'bedside') {
             query = {
                 "bedsideCareTeam": {
@@ -1527,7 +1529,7 @@ const getAssignedCases = async (req, res) => {
                 }
             };
         }
-        // 🚀 Case F: Pending Bedside Specialists Requests (Invites awaiting doctor response)
+        // Case F: Pending Bedside Specialists Requests
         else if (tab === 'pending-bedside') {
             query = {
                 "bedsideCareTeam": {
@@ -1568,10 +1570,12 @@ const getAssignedCases = async (req, res) => {
             };
         }
 
+        // =========================================================================
+        // 🚨 STRICT FILTER: Ambulance = Emergency | Without Ambulance = Admission
+        // =========================================================================
         if (type === 'Emergency') {
             query.ambulanceId = { $ne: null, $exists: true };
-        }
-        if (type === 'Admission') {
+        } else if (type === 'Admission') {
             query.bookingType = 'Admission';
             query.$or = [
                 { ambulanceId: null },
@@ -1583,7 +1587,6 @@ const getAssignedCases = async (req, res) => {
 
         const totalRecords = await Appointment.countDocuments(query);
 
-        // 🛡️ CRITICAL FIX 2: Populate primary doctor who created the bedside request
         const cases = await Appointment.find(query)
             .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
@@ -1596,23 +1599,25 @@ const getAssignedCases = async (req, res) => {
             .skip(skip)
             .limit(limitNum);
 
-        // 🎯 Clean DTO Mapping with Bedside Specialist Metadata
         const cleanedCases = cases.map(appt => {
-            // Find logged-in doctor's specific bedside team entry
             const myBedsideEntry = (appt.bedsideCareTeam || []).find(member => 
                 member.doctorId && (member.doctorId._id?.toString() === doctorIdStr || member.doctorId.toString() === doctorIdStr)
             );
+
+            // 🎯 Pure Rule: Ambulance means Emergency, otherwise Admission
+            const isEmergencyCase = Boolean(appt.ambulanceId);
 
             return {
                 _id: appt._id,
                 bookingId: appt.bookingId,
                 status: appt.status,
-                triageLevel: appt.triageLevel || "Routine",
+                caseCategory: isEmergencyCase ? "Emergency" : "Admission",
+                triageLevel: appt.clinicalSummary?.triagePriority || appt.triageLevel || "Routine", // Visual Priority Badge
                 startDate: appt.startDate,
                 endDate: appt.endDate,
                 stayDuration: appt.stayDuration || 1,
 
-                // Admitted Patient Details
+                // Patient Profile Details
                 patientDetails: resolvePatientDTO(appt),
 
                 // Bed & Ward Details
@@ -1624,7 +1629,7 @@ const getAssignedCases = async (req, res) => {
                     pricePerDay: appt.bedId.pricePerDay || 0
                 } : null,
 
-                // Primary Treating Doctor (Who requested bedside help)
+                // Primary Doctor
                 primaryDoctor: appt.doctorId ? {
                     _id: appt.doctorId._id,
                     name: appt.doctorId.name,
@@ -1633,9 +1638,9 @@ const getAssignedCases = async (req, res) => {
                     profileImage: appt.doctorId.profileImage || null
                 } : null,
 
-                // 🚀 CRITICAL FIX 3: Injected Bedside Request Payload for Frontend Cards
+                // Bedside Request Payload
                 bedsideRequest: myBedsideEntry ? {
-                    status: myBedsideEntry.status, // 'Pending', 'Accepted', 'In-Progress'
+                    status: myBedsideEntry.status,
                     requestReason: myBedsideEntry.requestReason || "Bedside specialist consultation requested.",
                     patientConditionAtRequest: myBedsideEntry.patientConditionAtRequest || "Stable",
                     priority: myBedsideEntry.priority || "Routine",
@@ -1655,7 +1660,7 @@ const getAssignedCases = async (req, res) => {
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
-            count: cleanedCases.length,
+            count: cleanedCases.length, 
             data: cleanedCases 
         });
     } catch (error) { 

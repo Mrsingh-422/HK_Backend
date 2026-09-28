@@ -111,15 +111,12 @@ const getHospitalMasterData = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- GET HOSPITAL DASHBOARD STATS ---
+// --- GET HOSPITAL DASHBOARD STATS (Strict: Only Ambulance = Emergency) ---
 // Endpoint: GET /hospital/panel/dashboard-stats
 const getHospitalDashboardStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const todayStart = moment().startOf('day').toDate();
-        const todayEnd = moment().endOf('day').toDate();
 
-        // Safe Status arrays for dynamic real-time tracking
         const activeEmergencyStates = [
             'Confirmed', 
             'Arrived', 
@@ -129,24 +126,23 @@ const getHospitalDashboardStats = async (req, res) => {
             'Hospital-Pending'
         ];
 
-        // Parallel collection execution for ultra-fast API speed
         const [
             emergencyActive,       
             directAdmissions,      
-            emergencyDischarges,   // Tab 3: Emergency ready for discharge
-            hospitalDischarges,    // Tab 4: Direct ready for discharge
+            emergencyDischarges,   
+            hospitalDischarges,    
             referralAmbulances,    
             historyRecords         
         ] = await Promise.all([
             
-            // Tab 1: Emergency Case count (Includes active transit states so counts remain accurate during travel)
+            // Tab 1: Emergency Cases (Strictly Cases with Ambulance)
             Appointment.countDocuments({
                 hospitalId,
                 ambulanceId: { $ne: null, $exists: true },
-                status: { $in: activeEmergencyStates } // 🚀 FIXED
+                status: { $in: activeEmergencyStates }
             }),
 
-            // Tab 2: Hospital Admission count (direct and status pending)
+            // Tab 2: Regular Hospital Admissions (Direct Bed Bookings without Ambulance)
             Appointment.countDocuments({
                 hospitalId,
                 bookingType: 'Admission',
@@ -157,14 +153,14 @@ const getHospitalDashboardStats = async (req, res) => {
                 status: 'Hospital-Pending'
             }),
 
-            // Tab 3: Emergency Discharge (Brought by ambulance and clinically ready: Discharge-Pending)
+            // Tab 3: Emergency Discharges (Brought by Ambulance & Ready for Discharge)
             Appointment.countDocuments({
                 hospitalId,
                 ambulanceId: { $ne: null, $exists: true },
                 status: 'Discharge-Pending'
             }),
 
-            // Tab 4: Hospital Discharge (Direct admissions clinically ready: Discharge-Pending)
+            // Tab 4: Hospital Discharges (Direct Admissions Ready for Discharge)
             Appointment.countDocuments({
                 hospitalId,
                 bookingType: 'Admission',
@@ -175,30 +171,26 @@ const getHospitalDashboardStats = async (req, res) => {
                 status: 'Discharge-Pending'
             }),
 
-            // Tab 5: Referral Ambulance count
+            // Tab 5: Referral Ambulances
             AmbulanceBooking.countDocuments({
                 hospitalId,
                 serviceType: 'Referral Ambulance',
                 status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
             }),
 
-            // Tab 6: History Completed count
+            // Tab 6: History Completed Cases
             Appointment.countDocuments({
                 hospitalId,
                 status: 'Completed'
             })
         ]);
 
-        const topEmergency = emergencyActive; 
-        const topAdmission = directAdmissions;
-        const topDischarge = emergencyDischarges + hospitalDischarges; // Dynamic combined discharge pool
-
         res.json({
             success: true,
             data: {
-                emergency: topEmergency,
-                admission: topAdmission,
-                discharge: topDischarge,
+                emergency: emergencyActive,
+                admission: directAdmissions,
+                discharge: emergencyDischarges + hospitalDischarges,
 
                 servicesTabs: {
                     emergencyCase: emergencyActive,            
@@ -1038,8 +1030,8 @@ const deleteWard = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 4. GET ALL ADMISSIONS/PATIENTS (Figma: Patient List)
-// Updated: Added full bedId/ward populations and pagination controls
+// --- GET ALL ADMISSIONS/PATIENTS (Direct Hospital Admissions) ---
+// Endpoint: GET /hospital/panel/admissions/all?page=1&limit=10
 const getAllHospitalAdmissions = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -1049,6 +1041,7 @@ const getAllHospitalAdmissions = async (req, res) => {
         const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
+        // 🚨 Strict Filter: Direct Admissions without Ambulance
         let query = { 
             hospitalId, 
             bookingType: 'Admission',
@@ -1081,6 +1074,8 @@ const getAllHospitalAdmissions = async (req, res) => {
             bookingId: appt.bookingId,
             bookingType: appt.bookingType || 'Admission',
             bedBookingType: appt.bedBookingType || 'General-Bed',
+            caseCategory: "Admission",
+            triageLevel: appt.clinicalSummary?.triagePriority || appt.triageLevel || "Routine", // Visual priority badge
             status: appt.status,
             startDate: appt.startDate,
             endDate: appt.endDate,
@@ -1145,7 +1140,7 @@ const getAllHospitalAdmissions = async (req, res) => {
 };
 
 
-// --- EMERGENCY CASES (Clean DTO with Walk-in & Ambulance arrivals) ---
+// --- GET EMERGENCY CASES (Strictly Cases Brought by Ambulance) ---
 // Endpoint: GET /hospital/panel/emergency-cases?page=1&limit=10
 const getEmergencyCases = async (req, res) => {
     try {
@@ -1156,13 +1151,10 @@ const getEmergencyCases = async (req, res) => {
         const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
+        // 🚨 Strict Filter: ONLY Cases with an Ambulance
         const query = { 
             hospitalId: hospitalId, 
-            $or: [
-                { ambulanceId: { $ne: null, $exists: true } },
-                { bedBookingType: 'Emergency-Bed' },
-                { triageLevel: 'Emergency' }
-            ],
+            ambulanceId: { $ne: null, $exists: true },
             status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] }
         };
 
@@ -1193,7 +1185,8 @@ const getEmergencyCases = async (req, res) => {
                 _id: appt._id,
                 bookingId: appt.bookingId,
                 caseReference: booking ? booking.caseReference : null,
-                serviceType: booking ? booking.serviceType : "Walk-in Emergency",
+                serviceType: booking ? booking.serviceType : "Emergency Ambulance",
+                caseCategory: "Emergency",
                 triageLevel: appt.triageLevel || "Emergency",
                 status: appt.status,
                 startDate: appt.startDate,
