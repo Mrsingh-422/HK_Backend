@@ -86,29 +86,40 @@ const resolvePatientDTO = (appt) => {
 // --- MASTER DATA/Enums FOR HOSPITAL PANEL (Screenshot 6) ---
 const getHospitalMasterData = async (req, res) => {
     try {
-        // 1. Fetch Specializations from Database
-        const specialities = await Specialization.find({ isActive: true }).select('name');
+        const Insurance = require('../../models/Insurance'); // Safe dynamic load
+
+        // 1. Fetch Specializations and Master Insurance Plans in parallel
+        const [specialities, insurancePlans] = await Promise.all([
+            Specialization.find({ isActive: true }).select('name'),
+            Insurance.find({ isActive: true }).select('provider insuranceName type')
+        ]);
 
         // 2. Extract Enums dynamically from Mongoose Schemas
-        const hospitalTypes = Hospital.schema.path('type').enumValues;
-        const ambulanceTypes = Ambulance.schema.path('vehicleType').enumValues;
-        const wardTypes = Ward.schema.path('type').enumValues;
+        const hospitalTypes = Hospital.schema.path('type').enumValues || ['Govt', 'Private', 'Charity'];
+        const ambulanceTypes = Ambulance.schema.path('vehicleType').enumValues || ['Van', 'Mini Van', 'Advance Life Support', 'ICU Ambulance'];
+        const wardTypes = Ward.schema.path('type').enumValues || ['ICU', 'Ward'];
         
-        // Agar aapne triage facility model mein rkha hai toh wahan se, 
-        // warna agar Appointment model mein enum hai toh wahan se pick karein
-        // const triageOptions = Appointment.schema.path('triage').enumValues; 
+        // 3. Extract unique insurance provider brand names dynamically
+        const dbInsuranceCompanies = [...new Set(insurancePlans.map(p => p.provider).filter(Boolean))];
+        const finalInsuranceCompanies = dbInsuranceCompanies.length > 0 
+            ? dbInsuranceCompanies 
+            : ['HDFC ERGO', 'LIC Health', 'SBI General', 'Star Health', 'Care Health'];
 
         res.json({
             success: true,
             data: {
                 specialities,
-                hospitalTypes, // ['Govt', 'Private', 'Charity']
-                ambulanceTypes, // ['BLS', 'ALS', 'ICU Ambulance']
-                wardTypes,      // ['ICU', 'Ward']
-                insuranceCompanies: ['HDFC', 'LIC', 'SBI', 'AXIS', 'KOTAK'] // Ye alag model se bhi aa sakta hai
+                hospitalTypes,
+                ambulanceTypes,
+                wardTypes,
+                insuranceCompanies: finalInsuranceCompanies, // 👈 Dynamic from DB
+                insurancePlans // 👈 Full insurance catalog details
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("getHospitalMasterData Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // --- GET HOSPITAL DASHBOARD STATS (Strict: Only Ambulance = Emergency) ---
@@ -1337,48 +1348,62 @@ const getHospitalTerms = async (req, res) => {
 };
 
 // --- 2. GET HOSPITAL & AMBULANCE RATINGS (Screenshot 25, 26) ---
+// Endpoint: GET /hospital/panel/ratings?targetType=Hospital (or ?targetType=Ambulance or ?targetType=All)
 const getHospitalPanelRatings = async (req, res) => {
     try {
-        const { targetType } = req.query; // 'Hospital' or 'Ambulance'
+        const { targetType = 'Hospital' } = req.query; // 👈 Defaults cleanly to 'Hospital'
         const hospitalId = req.user.id;
 
         let query = {};
         if (targetType === 'Hospital') {
             query = { targetId: hospitalId, targetType: 'Hospital' };
-        } else {
-            // Is hospital se linked saari ambulances ke reviews
+        } else if (targetType === 'Ambulance') {
             const ambulances = await Ambulance.find({ hospitalId }).select('_id');
             const ambIds = ambulances.map(a => a._id);
             query = { targetId: { $in: ambIds }, targetType: 'Ambulance' };
+        } else {
+            // All reviews (Hospital + All Fleet Ambulances)
+            const ambulances = await Ambulance.find({ hospitalId }).select('_id');
+            const allTargetIds = [hospitalId, ...ambulances.map(a => a._id)];
+            query = { targetId: { $in: allTargetIds } };
         }
 
         const reviews = await Review.find(query)
             .populate('userId', 'name profilePic')
             .sort({ createdAt: -1 });
 
-        res.json({ success: true, data: reviews });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.json({ success: true, count: reviews.length, targetType, data: reviews });
+    } catch (error) { 
+        console.error("getHospitalPanelRatings Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-
+// --- GET DAILY WARD BED OCCUPANCY (Strict Day-Boundary Overlap Sync) ---
+// Endpoint: GET /hospital/panel/daily-occupancy?wardId=...&date=YYYY-MM-DD
 const getDailyOccupancy = async (req, res) => {
     try {
         const { wardId, date } = req.query;
 
-        // Default to today's date if not passed
-        const targetDate = date ? moment(date).startOf('day').toDate() : moment().startOf('day').toDate();
+        if (!wardId) {
+            return res.status(400).json({ success: false, message: "wardId is required." });
+        }
+
+        // 🛡️ CRITICAL FIX: Safe Day Range (Start of Day to End of Day) to prevent UTC Time Mismatches
+        const targetDayStart = date ? moment(date).startOf('day').toDate() : moment().startOf('day').toDate();
+        const targetDayEnd = date ? moment(date).endOf('day').toDate() : moment().endOf('day').toDate();
 
         // 1. Fetch all beds for this specific ward
         const allBeds = await Bed.find({ wardId }).lean();
         const bedIds = allBeds.map(b => b._id);
 
-        // 2. Find overlapping bookings STRICTLY for this specific target date
+        // 2. Find overlapping bookings strictly for any moment within target date
         const bookings = await Appointment.find({
             bedId: { $in: bedIds },
-            bookingType: 'Admission', // Strictly admission records only
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
-            startDate: { $lte: targetDate },
-            endDate: { $gte: targetDate }
+            bookingType: 'Admission',
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] },
+            startDate: { $lte: targetDayEnd },
+            endDate: { $gte: targetDayStart }
         }).populate('userId', 'name');
 
         // Create occupancy map
@@ -1394,29 +1419,29 @@ const getDailyOccupancy = async (req, res) => {
             }
         });
 
-        // 3. Map dynamic bed grid status day-by-day (FIXED: Overriding buggy static db status)
+        // 3. Map dynamic bed grid status day-by-day
         const grid = allBeds.map(bed => {
             const occupant = occupancyMap[bed._id.toString()];
-            
-            let finalStatus = 'Available'; // Default dynamic status is always Available
+            let finalStatus = 'Available';
 
             if (occupant) {
-                finalStatus = 'Occupied'; // Agar us specific day booking hai
+                finalStatus = 'Occupied';
             } else if (bed.status === 'Maintenance') {
-                finalStatus = 'Maintenance'; // Agar use strictly maintenance par dala gaya hai
+                finalStatus = 'Maintenance';
             }
 
             return {
                 ...bed,
                 currentOccupant: occupant ? occupant.patientName : null,
                 activeBookingId: occupant ? occupant.bookingId : null,
-                status: finalStatus // Overriding static status with computed finalStatus
+                status: finalStatus
             };
         });
 
-        res.json({ success: true, data: grid });
+        res.json({ success: true, date: moment(targetDayStart).format("YYYY-MM-DD"), data: grid });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("getDailyOccupancy Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

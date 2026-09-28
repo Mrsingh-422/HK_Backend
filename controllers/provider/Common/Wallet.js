@@ -35,24 +35,22 @@ const calculateProviderBalances = async (vendorId, role) => {
     else if (role === 'Nurse') {
         BookingModel = NurseBooking;
         matchQuery = { nurseId: vendorObjId };
-        completedStatuses = ['Completed']; // 🚀 FIXED: Only count earnings when service is officially Completed!
+        completedStatuses = ['Completed'];
     } else {
         throw new Error("Invalid Provider Role inside Wallet controller.");
     }
 
-    // 1. Fetch all completed bookings for this provider
     const completedOrders = await BookingModel.find({
         ...matchQuery,
         status: { $in: completedStatuses }
-    }).select('billSummary totalPrice priceBreakdown updatedAt').lean();
+    }).select('billSummary totalPrice priceBreakdown paymentMethod updatedAt').lean();
 
     let grossEarnings = 0;
-    let totalEarnings = 0; // Net earnings after commission
+    let totalEarnings = 0;
     let adminCommissionDeducted = 0;
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 2. Deduct Admin Commission based on specific provider role
     for (let order of completedOrders) {
         let grossAmount = 0;
         if (role === 'Lab' || role === 'Pharmacy') {
@@ -66,17 +64,27 @@ const calculateProviderBalances = async (vendorId, role) => {
         const { netVendorAmount, adminCutoff } = await calculateAdminCommission(role, grossAmount);
 
         adminCommissionDeducted += adminCutoff;
-        totalEarnings += netVendorAmount;
 
-        // 7-Day Rolling Cleared vs Locked calculation
-        if (new Date(order.updatedAt) <= sevenDaysAgo) {
-            clearedEarnings += netVendorAmount;
+        let effectiveVendorCredit = 0;
+
+        // 🚨 COD vs ONLINE LEDGER SYNC:
+        if (order.paymentMethod === 'COD') {
+            // Pharmacy/Driver collected 100% physical cash; only Admin Commission is debited
+            effectiveVendorCredit = -adminCutoff;
         } else {
-            pendingEarnings += netVendorAmount;
+            // Online order: Admin reimburses Net Vendor Amount
+            effectiveVendorCredit = netVendorAmount;
+        }
+
+        totalEarnings += effectiveVendorCredit;
+
+        if (new Date(order.updatedAt) <= sevenDaysAgo) {
+            clearedEarnings += effectiveVendorCredit;
+        } else {
+            pendingEarnings += effectiveVendorCredit;
         }
     }
 
-    // 3. Total requested withdrawals
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
@@ -89,7 +97,6 @@ const calculateProviderBalances = async (vendorId, role) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    // 4. Fetch Active Commission Policy details for vendor transparency
     const AdminCommissionConfig = require('../../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: role, isActive: true }).lean();
 

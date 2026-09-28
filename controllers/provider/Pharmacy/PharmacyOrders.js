@@ -779,37 +779,27 @@ const handleReturnRequestAction = async (req, res) => {
         }
 
         if (action === 'Approved') {
-            // 🚨 STOCK RESTORATION: Agar Return approve hua toh medicines stock me wapas jud jayengi
-            for (const item of order.items) {
-                if (!item.medicineId) continue;
-                let inventory = await MedicineInventory.findOne({ pharmacyId, medicineId: item.medicineId });
-                if (inventory) {
-                    inventory.stock_quantity += Number(item.quantity || 1);
-                    inventory.is_available = true;
-                    await inventory.save();
-                }
-            }
-
+            // 🛡️ DOUBLE RESTOCK FIX: Stock is NOT added here! It is only added when physical parcel is verified at store in 'confirmStoreReturnReceipt'
             order.returnDetails.status = 'Approved';
             order.returnDetails.resolvedAt = new Date();
-            order.status = order.returnDetails.requestType === 'Return' ? 'Cancelled' : 'Shipped'; // If replacement, new shipment triggers
+            order.status = order.returnDetails.requestType === 'Return' ? 'Cancelled' : 'Shipped';
             order.paymentStatus = order.returnDetails.requestType === 'Return' ? 'Refund-Initiated' : order.paymentStatus;
             await order.save();
 
             return res.json({
                 success: true,
-                message: `Return request approved successfully. Stock restored to your inventory.`,
+                message: `Return request approved. Assign a driver to pick up the package from customer.`,
                 data: order.returnDetails
             });
         } 
         
         if (action === 'Rejected') {
-            if (!rejectionReason) {
+            if (!rejectionReason || rejectionReason.trim() === "") {
                 return res.status(400).json({ success: false, message: "Rejection reason is required." });
             }
 
             order.returnDetails.status = 'Rejected';
-            order.returnDetails.rejectionReason = rejectionReason;
+            order.returnDetails.rejectionReason = rejectionReason.trim();
             order.returnDetails.resolvedAt = new Date();
             await order.save();
 
