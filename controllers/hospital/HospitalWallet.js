@@ -6,15 +6,26 @@ const moment = require('moment');
 const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
-// Helper to calculate Hospital balances based strictly on Actual Settled Bills
+// 3. CALCULATE HOSPITAL BALANCES (With COD & Compensations)
 const calculateHospitalBalances = async (hospitalId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const hospitalObjId = new mongoose.Types.ObjectId(hospitalId);
 
-    const completedAppointments = await Appointment.find({
-        hospitalId: hospitalObjId,
-        status: 'Completed'
-    }).select('totalAmount pricingBreakdown paymentMethod paymentStatus subscriptionDetails updatedAt').lean();
+    const [completedAppointments, compensatedAppointments] = await Promise.all([
+        Appointment.find({
+            hospitalId: hospitalObjId,
+            status: 'Completed'
+        }).select('totalAmount pricingBreakdown paymentMethod paymentStatus subscriptionDetails updatedAt').lean(),
+
+        Appointment.find({
+            hospitalId: hospitalObjId,
+            status: { $in: ['Cancelled-By-User', 'No-Show'] },
+            $or: [
+                { 'pricingBreakdown.cancellationFeeApplied': { $gt: 0 } },
+                { 'pricingBreakdown.noShowFeeApplied': { $gt: 0 } }
+            ]
+        }).select('pricingBreakdown updatedAt').lean()
+    ]);
 
     let grossEarnings = 0;
     let totalEarnings = 0;
@@ -24,8 +35,6 @@ const calculateHospitalBalances = async (hospitalId) => {
 
     for (let appt of completedAppointments) {
         const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
-        
-        // 🚀 Gross is strictly the Actual Settled Bill (after early discharge adjustment)
         const grossAmount = isSub 
             ? Number(appt.pricingBreakdown?.originalBaseFee || 0) 
             : Number(appt.totalAmount || 0);
@@ -38,10 +47,8 @@ const calculateHospitalBalances = async (hospitalId) => {
         let effectiveVendorCredit = 0;
 
         if (appt.paymentMethod === 'COD') {
-            // Patient paid cash at counter; hospital owes adminCutoff
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online booking; platform reimburses Net Amount
             effectiveVendorCredit = netVendorAmount;
         }
 
@@ -51,6 +58,18 @@ const calculateHospitalBalances = async (hospitalId) => {
             clearedEarnings += effectiveVendorCredit;
         } else {
             pendingEarnings += effectiveVendorCredit;
+        }
+    }
+
+    for (let compAppt of compensatedAppointments) {
+        const compFee = Number(compAppt.pricingBreakdown?.noShowFeeApplied || compAppt.pricingBreakdown?.cancellationFeeApplied || 0);
+        if (compFee > 0) {
+            totalEarnings += compFee;
+            if (new Date(compAppt.updatedAt) <= sevenDaysAgo) {
+                clearedEarnings += compFee;
+            } else {
+                pendingEarnings += compFee;
+            }
         }
     }
 
@@ -85,6 +104,7 @@ const calculateHospitalBalances = async (hospitalId) => {
         }
     };
 };
+
 // 1. GET HOSPITAL WALLET STATS
 const getHospitalWalletStats = async (req, res) => {
     try {

@@ -139,25 +139,42 @@ const getCareSubCategories = async (req, res) => {
     res.json({ success: true, data: subCategories });
 };
 
+// GET CARE DETAILS (With Paginated Master Consumables & Flexible Parsing)
+// Endpoint: GET /admin/nurse-csv/details?category=...&subCategory=...&page=1&limit=20&search=
 const getCareDetails = async (req, res) => {
     try {
-        const { category, subCategory } = req.query;
+        const { category, subCategory, search } = req.query;
         
-        // 1. Service Template fetch karein
-        const details = await CareService.findOne({ category, subCategory }).lean();
+        // 🚨 Pagination Query Parameters
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20; // Default 20 items per page
+        const skip = (page - 1) * limit;
+
+        if (!category || !subCategory) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Category and subCategory query parameters are required." 
+            });
+        }
         
-        if (!details) return res.status(404).json({ message: "Service not found" });
+        // 1. Fetch Service Template (Case-insensitive matching)
+        const details = await CareService.findOne({ 
+            category: { $regex: new RegExp("^" + category.trim() + "$", "i") },
+            subCategory: { $regex: new RegExp("^" + subCategory.trim() + "$", "i") }
+        }).lean();
+        
+        if (!details) {
+            return res.status(404).json({ success: false, message: "Care service template not found." });
+        }
 
         let resolvedConsumables = [];
 
-        // 2. String parsing logic
-        if (details.consumablesUsed && typeof details.consumablesUsed === 'string') {
-            // "Item [Size] || Item [Size]" ko alag karein
-            const itemStrings = details.consumablesUsed.split('||').map(s => s.trim());
+        // 2. Parse template-specific consumables from CSV string if present
+        if (details.consumablesUsed && typeof details.consumablesUsed === 'string' && details.consumablesUsed.trim() !== '') {
+            const delimiter = details.consumablesUsed.includes('||') ? '||' : ',';
+            const itemStrings = details.consumablesUsed.split(delimiter).map(s => s.trim()).filter(Boolean);
 
-            // Sabhi items ko Master list mein search karein (Parallel processing)
             resolvedConsumables = await Promise.all(itemStrings.map(async (str) => {
-                // Regex to extract: Group 1 = Name, Group 2 = Size
                 const regex = /(.+?)\s*\[(.+?)\]/; 
                 const match = str.match(regex);
 
@@ -165,31 +182,71 @@ const getCareDetails = async (req, res) => {
                     const itemName = match[1].trim();
                     const size = match[2].trim();
 
-                    // Master list mein search (Case-insensitive)
-                    return await MasterConsumable.findOne({
+                    let found = await MasterConsumable.findOne({
                         itemName: { $regex: new RegExp("^" + itemName + "$", "i") },
-                        size: { $regex: new RegExp("^" + size + "$", "i") }
-                    });
+                        size: { $regex: new RegExp("^" + size + "$", "i") },
+                        isActive: true
+                    }).lean();
+
+                    if (!found) {
+                        found = await MasterConsumable.findOne({
+                            itemName: { $regex: new RegExp("^" + itemName + "$", "i") },
+                            isActive: true
+                        }).lean();
+                    }
+                    return found;
+                } else {
+                    return await MasterConsumable.findOne({
+                        itemName: { $regex: new RegExp("^" + str + "$", "i") },
+                        isActive: true
+                    }).lean();
                 }
-                return null;
             }));
 
-            // Null values hatayein (agar koi item master list mein na mile)
-            resolvedConsumables = resolvedConsumables.filter(item => item !== null);
+            resolvedConsumables = resolvedConsumables.filter(Boolean);
         }
+
+        // 3. Dynamic Paginated Query for Master Consumables (with search support)
+        let masterQuery = { isActive: true };
+        if (search && search.trim() !== '') {
+            masterQuery.itemName = { $regex: search.trim(), $options: 'i' };
+        }
+
+        const [masterList, totalMasterItems] = await Promise.all([
+            MasterConsumable.find(masterQuery)
+                .sort({ itemName: 1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            MasterConsumable.countDocuments(masterQuery)
+        ]);
+
+        // Priority logic: If specific CSV items exist, use them; otherwise use paginated master list
+        const finalConsumables = resolvedConsumables.length > 0 ? resolvedConsumables : masterList;
 
         res.json({ 
             success: true, 
             data: { 
                 ...details, 
-                resolvedConsumables // Yeh list dropdown mein dikhegi
+                resolvedConsumables: finalConsumables,
+                allConsumables: masterList,
+                // 🚨 Detailed Pagination Metadata
+                consumablesPagination: {
+                    totalItems: totalMasterItems,
+                    totalPages: Math.ceil(totalMasterItems / limit),
+                    currentPage: page,
+                    limit: limit,
+                    hasNextPage: page < Math.ceil(totalMasterItems / limit),
+                    hasPrevPage: page > 1
+                }
             } 
         });
 
     } catch (error) { 
         console.error("Error fetching service details:", error);
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 module.exports = { uploadCareCSV, uploadMasterConsumables, getCareCategories, getCareSubCategories, getCareDetails };

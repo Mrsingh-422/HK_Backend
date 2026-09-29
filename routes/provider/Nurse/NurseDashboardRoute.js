@@ -7,7 +7,7 @@ const {
     getProviderDashboard, updateProviderProfile,changeNursePassword,getLatestNurseProfileRequest, manageNurseService,
     getMyServices, deleteService, getBookingRequests,
     handleBookingAction, getAvailableStaff, assignStaffToBooking, reassignStaffToBooking, getStaffByStatus,getStaffActiveJob, searchMasterConsumables,
-    getOrderHistory, trackNurse
+    getOrderHistory, trackNurse,getProviderCareServiceDetails
 } = require('../../../controllers/provider/Nurse/NurseDashboard');
 
 // base URL: /provider/nurse/dash
@@ -38,5 +38,7 @@ router.get('/consumables/search', protect('nurse'), searchMasterConsumables);
 // ORDER HISTORY & Tracking
 router.get('/orders/history', protect('nurse'), getOrderHistory);
 router.get('/track/:bookingId', protect('nurse'), trackNurse);
+
+router.get('/care-details', protect('nurse'), getProviderCareServiceDetails);
 
 module.exports = router;

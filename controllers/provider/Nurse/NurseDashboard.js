@@ -3,6 +3,7 @@ const NurseService = require('../../../models/NurseService');
 const NurseBooking = require('../../../models/NurseBooking');
 const MasterConsumable = require('../../../models/MasterConsumable');
 const Driver = require('../../../models/Driver');
+const CareService = require('../../../models/CareService');
 const { deleteFile } = require('../../../utils/fileHandler'); // 👈 Correct relative import
 const moment = require('moment');
 const mongoose = require('mongoose');
@@ -450,19 +451,29 @@ const getStaffActiveJob = async (req, res) => {
     }
 };
 
-// ==========================================
-// 4. CONSUMABLES (Master List Search)
-// ==========================================
-
+// SEARCH / LIST ALL MASTER CONSUMABLES (For Dropdowns & Add-ons)
+// Endpoint: GET /provider/nurse/dash/consumables/search
 const searchMasterConsumables = async (req, res) => {
     try {
         const { search } = req.query;
-        let query = {};
-        if (search) query.itemName = { $regex: search, $options: 'i' };
-        const items = await MasterConsumable.find(query);
-        res.json({ success: true, data: items });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        let query = { isActive: true };
+
+        if (search && search.trim() !== '') {
+            query.itemName = { $regex: search.trim(), $options: 'i' };
+        }
+
+        const items = await MasterConsumable.find(query).sort({ itemName: 1 }).lean();
+
+        res.json({ 
+            success: true, 
+            count: items.length, 
+            data: items 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 // ==========================================
 // 5. ORDER HISTORY (Figma: Completed/Cancelled Bookings)
@@ -597,9 +608,112 @@ const trackNurse = async (req, res) => {
     }
 };
 
+// =========================================================================
+// GET CARE TEMPLATE & PAGINATED CONSUMABLES FOR PROVIDER PANEL
+// Endpoint: GET /provider/nurse/dash/care-details?category=...&subCategory=...&page=1&limit=20&search=
+// =========================================================================
+const getProviderCareServiceDetails = async (req, res) => {
+    try {
+        const { category, subCategory, search } = req.query;
+        
+        // Pagination Query Parameters
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20; // Default 20 items per page
+        const skip = (page - 1) * limit;
+
+        let details = null;
+        let resolvedConsumables = [];
+
+        // 1. Fetch Care Service Template if category and subCategory are provided
+        if (category && subCategory) {
+            details = await CareService.findOne({ 
+                category: { $regex: new RegExp("^" + category.trim() + "$", "i") },
+                subCategory: { $regex: new RegExp("^" + subCategory.trim() + "$", "i") }
+            }).lean();
+
+            // 2. Parse template-specific consumables from CSV string if present
+            if (details && details.consumablesUsed && typeof details.consumablesUsed === 'string' && details.consumablesUsed.trim() !== '') {
+                const delimiter = details.consumablesUsed.includes('||') ? '||' : ',';
+                const itemStrings = details.consumablesUsed.split(delimiter).map(s => s.trim()).filter(Boolean);
+
+                resolvedConsumables = await Promise.all(itemStrings.map(async (str) => {
+                    const regex = /(.+?)\s*\[(.+?)\]/; 
+                    const match = str.match(regex);
+
+                    if (match) {
+                        const itemName = match[1].trim();
+                        const size = match[2].trim();
+
+                        let found = await MasterConsumable.findOne({
+                            itemName: { $regex: new RegExp("^" + itemName + "$", "i") },
+                            size: { $regex: new RegExp("^" + size + "$", "i") },
+                            isActive: true
+                        }).lean();
+
+                        if (!found) {
+                            found = await MasterConsumable.findOne({
+                                itemName: { $regex: new RegExp("^" + itemName + "$", "i") },
+                                isActive: true
+                            }).lean();
+                        }
+                        return found;
+                    } else {
+                        return await MasterConsumable.findOne({
+                            itemName: { $regex: new RegExp("^" + str + "$", "i") },
+                            isActive: true
+                        }).lean();
+                    }
+                }));
+
+                resolvedConsumables = resolvedConsumables.filter(Boolean);
+            }
+        }
+
+        // 3. Dynamic Paginated Query for Master Consumables (with search support)
+        let masterQuery = { isActive: true };
+        if (search && search.trim() !== '') {
+            masterQuery.itemName = { $regex: search.trim(), $options: 'i' };
+        }
+
+        const [masterList, totalMasterItems] = await Promise.all([
+            MasterConsumable.find(masterQuery)
+                .sort({ itemName: 1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            MasterConsumable.countDocuments(masterQuery)
+        ]);
+
+        // Priority logic: If specific template consumables exist use them, else use paginated master list
+        const finalConsumables = resolvedConsumables.length > 0 ? resolvedConsumables : masterList;
+
+        res.json({ 
+            success: true, 
+            data: { 
+                template: details || null,
+                resolvedConsumables: finalConsumables,
+                allConsumables: masterList,
+                // Pagination Metadata for Dropdown
+                consumablesPagination: {
+                    totalItems: totalMasterItems,
+                    totalPages: Math.ceil(totalMasterItems / limit),
+                    currentPage: page,
+                    limit: limit,
+                    hasNextPage: page < Math.ceil(totalMasterItems / limit),
+                    hasPrevPage: page > 1
+                }
+            } 
+        });
+
+    } catch (error) { 
+        console.error("Provider Care Details Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
 module.exports = { 
     getProviderDashboard, updateProviderProfile,changeNursePassword,getLatestNurseProfileRequest, manageNurseService, 
     getMyServices, deleteService, getBookingRequests, 
     handleBookingAction, getAvailableStaff, assignStaffToBooking,reassignStaffToBooking, searchMasterConsumables, getStaffByStatus,getStaffActiveJob,
-    getOrderHistory, trackNurse
+    getOrderHistory, trackNurse,getProviderCareServiceDetails
 };

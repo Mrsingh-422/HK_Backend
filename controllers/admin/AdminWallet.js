@@ -32,14 +32,14 @@ const getPendingWithdrawals = async (req, res) => {
     }
 };
 
-// 2. APPROVE WITHDRAWAL (Using manual payment UTR/Reference ID)
+// 4. APPROVE WITHDRAWAL (With Exact Transaction Match)
 const approveWithdrawal = async (req, res) => {
     try {
         const { requestId } = req.params;
         const { transactionReference } = req.body; 
 
-        if (!transactionReference) {
-            return res.status(400).json({ success: false, message: "Manual payout UTR reference code is mandatory." });
+        if (!transactionReference || String(transactionReference).trim() === "") {
+            return res.status(400).json({ success: false, message: "Manual payout UTR / Reference code is mandatory." });
         }
 
         const request = await WithdrawalRequest.findById(requestId);
@@ -48,16 +48,21 @@ const approveWithdrawal = async (req, res) => {
         }
 
         request.status = 'Approved';
-        request.transactionReference = transactionReference;
+        request.transactionReference = String(transactionReference).trim();
         request.approvedAt = new Date();
         await request.save();
 
-        // Finalize transaction details in the vendor's wallet
+        // 🚨 EXACT TRANSACTION LOOKUP FIX:
         const wallet = await Wallet.findOne({ vendorId: request.vendorId, vendorModel: request.vendorModel });
-        if (wallet) {
-            const lastTransaction = wallet.transactions[wallet.transactions.length - 1];
-            if (lastTransaction && lastTransaction.type === 'Debit') {
-                lastTransaction.remark = `Withdrawal Approved (UTR Ref: ${transactionReference})`;
+        if (wallet && wallet.transactions) {
+            const holdTx = wallet.transactions.slice().reverse().find(t => 
+                t.type === 'Debit' && 
+                t.amount === request.amount && 
+                t.remark.includes('Withdrawal Request (Hold)')
+            );
+            
+            if (holdTx) {
+                holdTx.remark = `Withdrawal Approved (UTR Ref: ${transactionReference})`;
             }
             await wallet.save();
         }
@@ -194,17 +199,17 @@ const getPendingBankVerifications = async (req, res) => {
     }
 };
 
-// 6. GET ADMIN GLOBAL WALLET DASHBOARD STATS (Centralized Financial Monitor) - [1.2.2]
-// GET: /api/admin/wallet/dashboard-stats
+// 5. GET ADMIN GLOBAL WALLET & COMMISSION STATS (Real Platform Revenue)
+// Endpoint: GET /api/admin/wallet/dashboard-stats
 const getAdminWalletDashboardStats = async (req, res) => {
     try {
-        // A. Calculate Total Platform Liability (Vendors ka total bacha hua wallet balance)
+        // A. Total Platform Liability (Vendors' unpaid digital balances)
         const totalLiabilityQuery = await Wallet.aggregate([
             { $group: { _id: null, total: { $sum: "$balance" } } }
         ]);
-        const platformTotalLiability = totalLiabilityQuery[0]?.total || 0;
+        const platformTotalLiability = Math.max(0, totalLiabilityQuery[0]?.total || 0);
 
-        // B. Calculate Payout Metrics (Pending, Approved, Rejected)
+        // B. Payout Metrics
         const payoutStats = await WithdrawalRequest.aggregate([
             {
                 $group: {
@@ -230,7 +235,7 @@ const getAdminWalletDashboardStats = async (req, res) => {
             }
         });
 
-        // C. Count Pending Bank Verifications
+        // C. Pending Bank Verification Count
         const queryFilter = {
             "bankDetails.accountNumber": { $exists: true, $ne: "" },
             $or: [
@@ -249,22 +254,24 @@ const getAdminWalletDashboardStats = async (req, res) => {
         ]);
         const totalPendingBanks = doctors + hospitals + labs + pharmacies + nurses + ambulances;
 
-        // 🚨 D. CALCULATE TOTAL PLATFORM COMMISSION EARNED (Admin Revenue across all 6 collections)
+        // D. Calculate Total Gross Order Volume & Real Admin Commission Revenue
         const [completedAppts, completedLabs, completedPharmas, completedNurses, completedAmbulances] = await Promise.all([
-            Appointment.find({ status: 'Completed' }).select('bookingType totalAmount').lean(),
+            Appointment.find({ status: 'Completed' }).select('bookingType totalAmount pricingBreakdown subscriptionDetails').lean(),
             LabBooking.find({ status: { $in: ['Report Uploaded', 'Completed'] } }).select('billSummary totalPrice').lean(),
             PharmacyBooking.find({ status: { $in: ['Delivered', 'Completed'] } }).select('billSummary').lean(),
             NurseBooking.find({ status: 'Completed' }).select('priceBreakdown totalPrice').lean(),
-            AmbulanceBooking.find({ status: 'Delivered' }).select('serviceType pricing').lean()
+            AmbulanceBooking.find({ status: 'Delivered' }).select('serviceType pricing isFreeCase').lean()
         ]);
 
         let totalAdminCommissionRevenue = 0;
         let totalGrossOrderVolume = 0;
 
-        // 1. Doctor & Hospital Appointments Commission
+        // 1. Doctor & Hospital Commission
         for (let appt of completedAppts) {
             const role = appt.bookingType === 'Admission' ? 'Hospital' : 'Doctor';
-            const gross = Number(appt.totalAmount || 0);
+            const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
+            const gross = isSub ? Number(appt.pricingBreakdown?.originalBaseFee || 0) : Number(appt.totalAmount || 0);
+            
             totalGrossOrderVolume += gross;
             const { adminCutoff } = await calculateAdminCommission(role, gross);
             totalAdminCommissionRevenue += adminCutoff;
@@ -294,24 +301,25 @@ const getAdminWalletDashboardStats = async (req, res) => {
             totalAdminCommissionRevenue += adminCutoff;
         }
 
-        // 5. Ambulance Commission
+        // 5. Ambulance Commission (Excludes Subsidized Free Accidental SOS)
         for (let amb of completedAmbulances) {
-            let subtype = 'Ambulance-Medical';
-            if (amb.serviceType === 'Accident emergency') subtype = 'Ambulance-Accident';
-            else if (amb.serviceType === 'Referral Ambulance') subtype = 'Ambulance-Referral';
-
+            const isAccident = (amb.serviceType === 'Accident emergency' || amb.isFreeCase);
             const gross = Number(amb.pricing?.total > 0 ? amb.pricing.total : (amb.pricing?.originalAmbulanceCharge || 2000));
             totalGrossOrderVolume += gross;
-            const { adminCutoff } = await calculateAdminCommission(subtype, gross);
-            totalAdminCommissionRevenue += adminCutoff;
+
+            if (!isAccident) {
+                const subtype = amb.serviceType === 'Referral Ambulance' ? 'Ambulance-Referral' : 'Ambulance-Medical';
+                const { adminCutoff } = await calculateAdminCommission(subtype, gross);
+                totalAdminCommissionRevenue += adminCutoff;
+            }
         }
 
         res.json({
             success: true,
             data: {
-                totalGrossOrderVolume,              // Platform par total kitne rupaye ke orders huye
-                totalAdminCommissionRevenue,        // 👈 Admin ka apna total kamaya gaya profit
-                platformTotalLiability,             // Vendors ko abhi kitna cash pay karna bacha hai
+                totalGrossOrderVolume,
+                totalAdminCommissionRevenue,
+                platformTotalLiability,
                 payoutStats: formattedPayouts,
                 pendingBankVerificationsCount: totalPendingBanks
             }
@@ -322,4 +330,5 @@ const getAdminWalletDashboardStats = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 module.exports = { getPendingWithdrawals, approveWithdrawal, rejectWithdrawal, verifyVendorBankDetails, getPendingBankVerifications, getAdminWalletDashboardStats }; 

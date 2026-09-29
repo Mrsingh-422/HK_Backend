@@ -102,28 +102,59 @@ const getAmbulanceMasterData = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 2. FIND NEARBY HOSPITALS (POST with Distance) ---
-// Figma Screen 42
+// 1. FIND NEARBY HOSPITALS (Crash-Proof Coordinates & Active Filter)
+// Endpoint: POST /user/ambulance/nearby-hospitals
 const getNearbyHospitals = async (req, res) => {
     try {
-        const { lat, lng } = req.body;
-        const hospitals = await Hospital.find({ profileStatus: 'Approved' })
-            .select('name address hospitalImage location');
+        const lat = req.body.lat || req.query.lat;
+        const lng = req.body.lng || req.query.lng;
+
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, message: "User coordinates (lat, lng) are required." });
+        }
+
+        // 🚨 CRITICAL FIX: Strictly active and approved hospitals only
+        const hospitals = await Hospital.find({ 
+            profileStatus: 'Approved',
+            isActive: true 
+        })
+        .select('name address hospitalImage location rating totalReviews type is24x7 phone')
+        .lean();
 
         const data = await Promise.all(hospitals.map(async (h) => {
-            const distance = await getDistance(lat, lng, h.location.lat, h.location.lng);
+            let distance = 0;
+            // 🚨 CRASH-PROOF FIX: Check if hospital has valid coordinates
+            if (h.location?.lat && h.location?.lng) {
+                distance = await getDistance(
+                    Number(lat), 
+                    Number(lng), 
+                    Number(h.location.lat), 
+                    Number(h.location.lng)
+                );
+            }
+
             return {
-                ...h._doc,
-                distance: `${distance} km`,
+                ...h,
+                distance: distance > 0 ? `${distance.toFixed(1)} km` : "Nearby",
                 rawDistance: distance,
-                tags: ['NABL Accredited', 'JCI Certified'], 
-                rating: 4.4
+                tags: h.type === 'Govt' ? ['Govt Hospital', 'Trauma Center'] : ['NABL Accredited', '24x7 Emergency'], 
+                rating: h.rating || 4.5,
+                totalReviews: h.totalReviews || 0
             };
         }));
 
+        // Sort nearest hospital first
         data.sort((a, b) => a.rawDistance - b.rawDistance);
-        res.json({ success: true, data });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        
+        res.json({ 
+            success: true, 
+            count: data.length,
+            data 
+        });
+    } catch (error) { 
+        console.error("Get Nearby Hospitals Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 
@@ -244,15 +275,18 @@ const getNearestAmbulances = async (req, res) => {
     }
 };
 
+// 2. GET AMBULANCE DETAILS (Security Sanitized: Password Excluded)
+// Endpoint: GET /user/ambulance/details/:id
 const getAmbulanceDetails = async (req, res) => {
     try {
         const { id } = req.params;
 
+        // 🚨 SECURITY FIX: Exclude password and tokens from payload
         const ambulance = await Ambulance.findById(id)
             .populate('hospitalId', 'name address city state hospitalImage location')
-            .select('+password');
+            .select('-password -token -resetPasswordOtp -resetPasswordExpires')
+            .lean();
 
-        // 🚨 CRITICAL CHECK: Block access if ambulance is inactive by Admin
         if (!ambulance || ambulance.isActive === false) {
             return res.status(404).json({ success: false, message: "Ambulance profile is inactive or not found." });
         }
@@ -285,10 +319,10 @@ const getAmbulanceDetails = async (req, res) => {
                 department: ambulance.driverInfo?.department,
                 rating: averageRating, 
                 totalReviews: reviews.length, 
-                tripsCount: reviews.length > 0 ? `${reviews.length * 3 + 120}+` : "1,240+" 
+                tripsCount: reviews.length > 0 ? `${reviews.length * 3 + 120}+` : "Verified Driver" 
             },
             vehicle: {
-                vehicleNumber: ambulance.vehicleNumber || "Not Assigned",
+                vehicleNumber: ambulance.vehicleNumber || "Verified Vehicle",
                 vehicleType: ambulance.vehicleType, 
                 serviceRadius: ambulance.serviceRadius,
                 isAvailable: ambulance.availableForEmergency,
@@ -297,17 +331,17 @@ const getAmbulanceDetails = async (req, res) => {
                     : ["Oxygen Support", "First Aid Kit", "Stretcher"]
             },
             pricing: {
-                basePrice: ambulance.pricing?.fixedPrice || 0,
-                baseDistance: ambulance.pricing?.baseDistance || 0,
-                extraKMPrice: ambulance.pricing?.pricePerKM || 0,
+                basePrice: ambulance.pricing?.fixedPrice || 2000,
+                baseDistance: ambulance.pricing?.baseDistance || 5,
+                extraKMPrice: ambulance.pricing?.pricePerKM || 20,
                 supportStaff: {
                     nurse: {
                         isAvailable: ambulance.supportStaff?.nurse?.available || false,
-                        fee: ambulance.supportStaff?.nurse?.price || 0
+                        fee: ambulance.supportStaff?.nurse?.price || 300
                     },
                     doctor: {
                         isAvailable: ambulance.supportStaff?.doctor?.available || false,
-                        fee: ambulance.supportStaff?.doctor?.price || 0
+                        fee: ambulance.supportStaff?.doctor?.price || 500
                     }
                 },
                 freeServices: {
@@ -329,7 +363,7 @@ const getAmbulanceDetails = async (req, res) => {
                 rcVerified: !!ambulance.documents?.rcFile,
                 insuranceValid: !!ambulance.documents?.insuranceFile
             },
-            isOnline: ambulance.isOnline ?? true, // Sends online status to UI
+            isOnline: ambulance.isOnline ?? true,
             recentReviews 
         };
 
@@ -338,9 +372,11 @@ const getAmbulanceDetails = async (req, res) => {
             data
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Get Ambulance Details Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 const getAmbulanceCoupons = async (req, res) => {
     try {
@@ -361,42 +397,80 @@ const getAmbulanceCoupons = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 2. VALIDATE COUPON (Checkout Logic) ---
+// 1. VALIDATE AMBULANCE COUPON (With Vendor Type & Ambulance ID Guard)
+// Endpoint: POST /user/ambulance/validate-coupon
 const validateAmbulanceCoupon = async (req, res) => {
     try {
-        const { couponCode, subtotal } = req.body;
+        const { couponCode, subtotal, ambulanceId } = req.body;
         const userId = req.user.id;
 
-        const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-
-        if (!coupon) return res.status(404).json({ success: false, message: "Invalid Coupon Code" });
-
-        // Production Checks
-        if (new Date() > coupon.expiryDate) return res.status(400).json({ message: "Coupon Expired" });
-        if (subtotal < coupon.minOrderAmount) return res.status(400).json({ message: `Min order should be ₹${coupon.minOrderAmount}` });
-
-        // Usage Check
-        const userUsage = coupon.usedBy.find(u => u.userId.toString() === userId.toString());
-        if (userUsage && userUsage.usageCount >= coupon.maxUsagePerUser) {
-            return res.status(400).json({ message: "You have exceeded the usage limit for this coupon" });
+        if (!couponCode) {
+            return res.status(400).json({ success: false, message: "Coupon code is required." });
         }
 
-        // Calculation
-        let discount = (subtotal * coupon.discountPercentage) / 100;
+        const cleanCode = String(couponCode).trim().toUpperCase();
+        const numSubtotal = Number(subtotal || 0);
+
+        // 🚨 CRITICAL FIX: Only fetch active coupons belonging to Ambulance or Global 'All'
+        const coupon = await Coupon.findOne({ 
+            couponName: cleanCode, 
+            isActive: true,
+            vendorType: { $in: ['Ambulance', 'All'] }
+        });
+
+        if (!coupon) {
+            return res.status(404).json({ success: false, message: "Invalid or inactive coupon code for ambulance services." });
+        }
+
+        // Check if coupon belongs to a specific different driver
+        if (coupon.vendorId && ambulanceId && coupon.vendorId.toString() !== ambulanceId.toString()) {
+            return res.status(400).json({ success: false, message: "This coupon is not valid for the selected ambulance driver." });
+        }
+
+        const today = new Date();
+        if (today > coupon.expiryDate) {
+            return res.status(400).json({ success: false, message: "This coupon has expired." });
+        }
+        if (today < coupon.startDate) {
+            return res.status(400).json({ success: false, message: "This coupon is not active yet." });
+        }
+
+        if (numSubtotal < coupon.minOrderAmount) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Minimum ride amount of ₹${coupon.minOrderAmount} required to apply this coupon.` 
+            });
+        }
+
+        // User usage limit verification
+        if (coupon.usedBy && Array.isArray(coupon.usedBy)) {
+            const userUsage = coupon.usedBy.find(u => u.userId && u.userId.toString() === userId.toString());
+            if (userUsage && userUsage.usageCount >= coupon.maxUsagePerUser) {
+                return res.status(400).json({ success: false, message: "You have already reached the maximum usage limit for this coupon." });
+            }
+        }
+
+        let discount = (numSubtotal * coupon.discountPercentage) / 100;
         if (discount > coupon.maxDiscount) discount = coupon.maxDiscount;
+        discount = Math.round(discount);
 
         res.json({ 
             success: true, 
+            message: "Coupon applied successfully!",
             data: {
                 couponId: coupon._id,
+                couponCode: coupon.couponName,
                 discountAmount: discount,
-                finalTotal: subtotal - discount
+                finalTotal: Math.max(0, numSubtotal - discount)
             } 
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("Validate Ambulance Coupon Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// --- PRIVATE HELPER: Shared Pricing Logic ---
+// 3. PRIVATE HELPER: SHARED FARE CALCULATION (With Fallback Price Per KM)
 const getFinalFare = async (params, userId) => {
     let { 
         ambulanceId, 
@@ -417,13 +491,14 @@ const getFinalFare = async (params, userId) => {
 
     let amb = null;
     if (ambulanceId && mongoose.isValidObjectId(ambulanceId)) {
-        amb = await Ambulance.findById(ambulanceId);
+        amb = await Ambulance.findById(ambulanceId).lean();
     }
 
-    // 1. Base Price & Per KM Rate from Ambulance Schema (with fallback)
+    // 1. Base Price & Dynamic Per KM Rate (With fallback rate for long distances)
     const baseAmbulanceFixedPrice = Number(amb?.pricing?.fixedPrice || 2000);
     const baseDistance = Number(amb?.pricing?.baseDistance || 5);
-    const pricePerKM = Number(amb?.pricing?.pricePerKM || 0);
+    // 🚨 FALLBACK FIX: If driver didn't configure pricePerKM, default to ₹20/km for long distances
+    const pricePerKM = Number(amb?.pricing?.pricePerKM && amb.pricing.pricePerKM > 0 ? amb.pricing.pricePerKM : 20);
 
     // 2. Safe Coordinates Extraction
     let pLat = pickupLat;
@@ -445,7 +520,7 @@ const getFinalFare = async (params, userId) => {
     let dLat = dropLat;
     let dLng = dropLng;
 
-    // For Referral: Origin Hospital Coordinates
+    // Origin Hospital Coordinates for Referral
     if ((!pLat || !pLng) && pickupHospitalId && mongoose.isValidObjectId(pickupHospitalId)) {
         try {
             const originHosp = await Hospital.findById(pickupHospitalId).select('location').lean();
@@ -456,7 +531,7 @@ const getFinalFare = async (params, userId) => {
         } catch (e) {}
     }
 
-    // For Destination Hospital Coordinates
+    // Destination Hospital Coordinates
     if ((!dLat || !dLng) && hospitalId && mongoose.isValidObjectId(hospitalId)) {
         try {
             const destHosp = await Hospital.findById(hospitalId).select('location').lean();
@@ -469,7 +544,7 @@ const getFinalFare = async (params, userId) => {
 
     // Calculate Distance Surge safely
     let dynamicDistanceSurge = 0;
-    if (pLat && pLng && dLat && dLng && pricePerKM > 0) {
+    if (pLat && pLng && dLat && dLng) {
         try {
             const totalDistance = await getDistance(Number(pLat), Number(pLng), Number(dLat), Number(dLng));
             const extraKM = totalDistance - baseDistance;
@@ -528,10 +603,10 @@ const getFinalFare = async (params, userId) => {
         staffList = staffList.map(s => String(s).trim());
 
         if (staffList.includes('Doctor')) {
-            supportingStaffCharge += Number(amb.supportStaff?.doctor?.price || 0);
+            supportingStaffCharge += Number(amb.supportStaff?.doctor?.price || 500);
         }
         if (staffList.includes('Nurse')) {
-            supportingStaffCharge += Number(amb.supportStaff?.nurse?.price || 0);
+            supportingStaffCharge += Number(amb.supportStaff?.nurse?.price || 300);
         }
     }
 
@@ -662,7 +737,7 @@ const getAmbulanceSlots = async (req, res) => {
 // Endpoint: POST /user/ambulance/confirm-booking
 const confirmAmbulanceBooking = async (req, res) => {
     try {
-        const { 
+        let { 
             ambulanceId, 
             serviceType, 
             triageLevel, 
@@ -681,6 +756,27 @@ const confirmAmbulanceBooking = async (req, res) => {
         } = req.body;
 
         const userId = req.user.id;
+        const Booking = require('../../../models/AmbulanceBooking');
+        const Ambulance = require('../../../models/Ambulance');
+        const Appointment = require('../../../models/Appointment');
+        const crypto = require('crypto');
+
+        // 🚨 MULTIPART STRINGIFIED JSON PARSING SAFETY
+        if (typeof patientDetails === 'string') {
+            try { patientDetails = JSON.parse(patientDetails); } catch (e) {}
+        }
+        if (typeof pickupLocation === 'string') {
+            try { pickupLocation = JSON.parse(pickupLocation); } catch (e) {}
+        }
+        if (typeof supportStaffSelected === 'string') {
+            try { supportStaffSelected = JSON.parse(supportStaffSelected); } catch (e) {}
+        }
+
+        const generateCaseRef = (type) => {
+            const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
+            const randomHex = crypto.randomBytes(2).toString('hex').toUpperCase();
+            return `HK-${new Date().getFullYear()}-${prefix}-${Date.now().toString().slice(-4)}${randomHex}`;
+        };
 
         // =========================================================================
         // CASE 1: ACCIDENTAL EMERGENCY (100% Free Instant Broadcast)
@@ -697,8 +793,8 @@ const confirmAmbulanceBooking = async (req, res) => {
                 hospitalId: hospitalId || null,
                 serviceType: 'Accident emergency',
                 triageLevel: 'Emergency',
-                pickupLocation,
-                patientDetails,
+                pickupLocation: pickupLocation || { address: "Spot", lat: 30.7046, lng: 76.7179 },
+                patientDetails: patientDetails || { name: "Accident Victim" },
                 additionalSupport: {
                     policeRequired: policeRequired === 'true' || policeRequired === true,
                     fireRequired: fireRequired === 'true' || fireRequired === true
@@ -707,7 +803,7 @@ const confirmAmbulanceBooking = async (req, res) => {
                     originalAmbulanceCharge: 2000,
                     subtotal: 2000,
                     discount: 0,
-                    total: 0 // 100% Free
+                    total: 0 // Free
                 },
                 isFreeCase: true,
                 paymentStatus: 'Paid',
@@ -823,9 +919,9 @@ const confirmAmbulanceBooking = async (req, res) => {
             pickupHospitalId: pickupHospitalId || null,
             serviceType: serviceType || 'Medical Ambulance',
             triageLevel: triageLevel || 'Routine',
-            pickupLocation,
+            pickupLocation: pickupLocation || {},
             patientDetails: {
-                ...patientDetails,
+                ...(patientDetails || {}),
                 referralCard: referralSlipUrl
             },
             supportStaffSelected: supportStaffSelected || { nurse: false, doctor: false },
@@ -1052,35 +1148,70 @@ const verifyAmbulancePayment = async (req, res) => {
 
 
 
-// --- 5. GET BOOKING DETAILS (Tracking Screen 37/38) ---
+// 3. GET BOOKING STATUS (Security Isolation: Owner Verified)
+// Endpoint: GET /user/ambulance/track/:id
 const getBookingStatus = async (req, res) => {
     try {
         const { id } = req.params;
+        const userId = req.user.id; // Logged-in patient user ID
+
         const isObjectId = mongoose.isValidObjectId(id);
-        const query = isObjectId ? { _id: id } : { bookingId: id };
+        const query = {
+            $and: [
+                {
+                    $or: [
+                        { _id: isObjectId ? new mongoose.Types.ObjectId(id) : new mongoose.Types.ObjectId() },
+                        { bookingId: String(id).trim() }
+                    ]
+                },
+                { userId: new mongoose.Types.ObjectId(userId) } // 🚨 SECURITY FIX: Prevents unauthorized patient data leakage
+            ]
+        };
 
         const booking = await Booking.findOne(query)
-            .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo profilePic')
+            .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo profilePic averageRating')
             .populate('hospitalId', 'name address location phone hospitalImage')
-            .populate('pickupHospitalId', 'name address location phone'); // 🚀 SYNC FIX: Populates Origin Hospital
+            .populate('pickupHospitalId', 'name address location phone hospitalImage')
+            .lean();
         
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
+        }
+
         res.json({ success: true, data: booking });
     } catch (error) { 
+        console.error("Get Booking Status Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
-// --- 1. GET USER NUMBERS (Figma Screen: Choose your number) ---
+// 2. GET USER NUMBERS (Sanitized & De-duplicated)
+// Endpoint: GET /user/ambulance/my-numbers
 const getUserNumbers = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('phone emergencyContact');
-        let numbers = [user.phone];
-        if (user.emergencyContact) {
-            user.emergencyContact.forEach(c => numbers.push(c.phone));
+        const user = await User.findById(req.user.id).select('phone emergencyContact').lean();
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found." });
         }
-        res.json({ success: true, numbers });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        let rawNumbers = [];
+        if (user.phone) rawNumbers.push(String(user.phone).trim());
+        
+        if (user.emergencyContact && Array.isArray(user.emergencyContact)) {
+            user.emergencyContact.forEach(c => {
+                if (c && c.phone) rawNumbers.push(String(c.phone).trim());
+            });
+        }
+
+        // 🚨 SANITIZE: Remove null/empty and eliminate duplicate phone numbers
+        const cleanNumbers = [...new Set(rawNumbers.filter(p => p && p.length >= 10))];
+
+        res.json({ 
+            success: true, 
+            numbers: cleanNumbers 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 
@@ -1115,23 +1246,24 @@ const uploadIncidentPhoto = async (req, res) => {
     }
 };
 
-// --- 4. GET LIVE TRACKING DATA (100% Real Dynamic Telemetry) ---
-// Updated: Removed hardcoded "5 mins", "4.8" rating, and "1,240 trips", replaced with live DB aggregations
+// 1. GET LIVE TRACKING DATA (Dynamic Target: Pickup Spot vs Hospital Destination)
+// Endpoint: GET /user/ambulance/live-track/:id
+// =========================================================================
 const getLiveTracking = async (req, res) => {
     try {
         const { id } = req.params;
         const isObjectId = mongoose.isValidObjectId(id);
-        const query = isObjectId ? { _id: id } : { bookingId: id };
+        const query = isObjectId ? { _id: id } : { bookingId: String(id).trim() };
 
         const booking = await Booking.findOne(query)
             .populate({
                 path: 'ambulanceId',
                 select: 'name phone vehicleNumber vehicleType location driverInfo profilePic averageRating totalReviews'
             })
-            .populate('hospitalId', 'name address location')
-            .populate('pickupHospitalId', 'name address location');
+            .populate('hospitalId', 'name address location phone hospitalImage')
+            .populate('pickupHospitalId', 'name address location phone');
 
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+        if (!booking) return res.status(404).json({ success: false, message: "Booking record not found." });
 
         const driver = booking.ambulanceId;
 
@@ -1144,16 +1276,32 @@ const getLiveTracking = async (req, res) => {
         }
 
         let dynamicEta = "Arriving";
-        if (driver?.location?.lat && booking.pickupLocation?.lat) {
+        let targetLat = null;
+        let targetLng = null;
+
+        // 🚨 CRITICAL FIX: Determine navigation destination based on ride lifecycle
+        if (booking.status === 'Picked-Up' || booking.status === 'En-Route') {
+            // Stage B: Patient onboarded ➔ Distance is to Destination Hospital
+            targetLat = booking.hospitalId?.location?.lat;
+            targetLng = booking.hospitalId?.location?.lng;
+        } else {
+            // Stage A: Driver going to pick up patient ➔ Distance is to Pickup Spot
+            targetLat = booking.pickupLocation?.lat;
+            targetLng = booking.pickupLocation?.lng;
+        }
+
+        if (driver?.location?.lat && targetLat) {
             const distance = await getDistance(
                 driver.location.lat,
                 driver.location.lng,
-                booking.pickupLocation.lat,
-                booking.pickupLocation.lng
+                targetLat,
+                targetLng
             );
 
             if (distance <= 0.3) {
-                dynamicEta = "Arrived on Spot";
+                dynamicEta = (booking.status === 'Picked-Up' || booking.status === 'En-Route') 
+                    ? "Arriving at Hospital Gate" 
+                    : "Arrived at Pickup Spot";
             } else {
                 const estimatedMinutes = Math.max(1, Math.round(distance * 3));
                 dynamicEta = `${estimatedMinutes} mins`;
@@ -1164,20 +1312,23 @@ const getLiveTracking = async (req, res) => {
             status: booking.status,
             otp: booking.otp,
             serviceType: booking.serviceType,
+            triageLevel: booking.triageLevel,
             eta: dynamicEta,
+            isNavigatingToHospital: (booking.status === 'Picked-Up' || booking.status === 'En-Route'),
             driver: {
                 name: driver?.driverInfo?.fullName || driver?.name || "Assigned Driver",
                 phone: driver?.phone || "N/A",
                 rating: driver?.averageRating || 5.0,
                 totalReviews: driver?.totalReviews || 0,
-                trips: realTripsCount > 0 ? `${realTripsCount} Trips` : "New Partner",
+                trips: realTripsCount > 0 ? `${realTripsCount} Trips` : "Verified Driver",
                 profilePic: driver?.profilePic || null
             },
             vehicle: {
                 plateNumber: driver?.vehicleNumber || "Verified Vehicle",
                 type: driver?.vehicleType || "Ambulance"
             },
-            location: driver?.location || { lat: 0, lng: 0 },
+            driverLocation: driver?.location || { lat: 0, lng: 0 },
+            pickupLocation: booking.pickupLocation,
             pickupHospital: booking.pickupHospitalId || null,
             destinationHospital: booking.hospitalId || null,
             timeline: booking.trackingTimeline || []
@@ -1185,6 +1336,7 @@ const getLiveTracking = async (req, res) => {
 
         res.json({ success: true, data: trackingData });
     } catch (error) { 
+        console.error("Live Tracking Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -1541,10 +1693,8 @@ const rateAmbulanceBooking = async (req, res) => {
 };
 
 
-// =========================================================================
-// 🚀 1. NEW: SHORT REGISTRATION & 1-CLICK ACCIDENTAL BOOKING (WITHOUT OTP)
+// 2. SHORT REGISTRATION & ACCIDENTAL SOS (With Multi-Driver Siren Broadcast)
 // Endpoint: POST /user/ambulance/accidental/short-book
-// =========================================================================
 const shortRegisterAndBookAccidental = async (req, res) => {
     try {
         const { 
@@ -1559,32 +1709,46 @@ const shortRegisterAndBookAccidental = async (req, res) => {
 
         const cleanPhone = String(phone).trim().replace(/\D/g, "").slice(-10);
         const fullPhone = countryCode ? `${countryCode}${cleanPhone}` : `+91${cleanPhone}`;
+        const pLat = Number(pickupLat || 30.7046);
+        const pLng = Number(pickupLng || 76.7179);
 
-        // 🚨 PRE-CHECK: Check if at least 1 driver is active, online & free
+        // 1. Check free online drivers within 15km
         const busyAmbs = await Booking.find({
             status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
         }).select('ambulanceId').lean();
         const busyIds = busyAmbs.filter(b => b.ambulanceId).map(b => b.ambulanceId.toString());
 
-        const freeDriversCount = await Ambulance.countDocuments({
+        const onlineDrivers = await Ambulance.find({
             _id: { $nin: busyIds },
             isActive: true,
             profileStatus: 'Approved',
             isOnline: true,
             availableForEmergency: true
-        });
+        }).lean();
 
-        // ❌ AGAR KOI DRIVER NAHI HAI: Direct reject with 108/112 (No dead user/booking created)
-        if (freeDriversCount === 0) {
+        // Distance filter (15km radius)
+        const nearbyDrivers = [];
+        for (let driver of onlineDrivers) {
+            if (driver.location?.lat && driver.location?.lng) {
+                const dist = await getDistance(pLat, pLng, driver.location.lat, driver.location.lng);
+                if (dist <= 15) {
+                    nearbyDrivers.push(driver);
+                }
+            }
+        }
+
+        // ❌ 0-Availability Helpline Fallback
+        if (nearbyDrivers.length === 0) {
             return res.status(200).json({
                 success: false,
                 isServiceAvailable: false,
                 canBook: false,
-                message: "Our ambulance fleet in your area is currently engaged in critical emergencies. Please dial Government 108 Ambulance or 112 Emergency immediately.",
+                message: "No partner ambulances are currently available within your radius. Please dial Government 108 or 112 emergency helpline immediately.",
                 emergencyHelplines: getEmergencyHelplinesData()
             });
         }
 
+        // 2. User resolution
         let user = await User.findOne({ phone: cleanPhone });
         let isNewUser = false;
 
@@ -1601,7 +1765,7 @@ const shortRegisterAndBookAccidental = async (req, res) => {
                 return res.status(403).json({
                     success: false,
                     requirePhoneVerification: true,
-                    message: "Free emergency booking limit reached for unverified number. Please verify your phone number via OTP."
+                    message: "Free emergency booking limit reached for unverified number. Please verify your phone via OTP."
                 });
             }
 
@@ -1634,8 +1798,8 @@ const shortRegisterAndBookAccidental = async (req, res) => {
             triageLevel: 'Emergency',
             pickupLocation: {
                 address: pickupAddress || "Accident Spot Location",
-                lat: Number(pickupLat || 30.7046),
-                lng: Number(pickupLng || 76.7179)
+                lat: pLat,
+                lng: pLng
             },
             patientDetails: {
                 name: name || "Accident Victim",
@@ -1662,16 +1826,30 @@ const shortRegisterAndBookAccidental = async (req, res) => {
             trackingTimeline: [{
                 status: 'Searching',
                 timestamp: new Date(),
-                note: `Accidental 1-Click SOS placed by ${user.name}. Searching nearest available drivers.`
+                note: `Accidental 1-Click SOS triggered. Broadcasted to ${nearbyDrivers.length} nearby ambulances.`
             }]
         });
 
+        // 🚨 BROADCAST LOUD SIREN PUSH NOTIFICATIONS TO ALL NEARBY DRIVERS
+        for (let driver of nearbyDrivers) {
+            try {
+                await sendPushNotification(
+                    driver._id,
+                    'ambulance',
+                    "🚨 URGENT ACCIDENTAL SOS NEAR YOU!",
+                    `New emergency pickup at ${pickupAddress || 'Accident Spot'}. Tap to claim immediately!`,
+                    { bookingId: booking._id.toString(), type: 'emergency_sos_broadcast' }
+                );
+            } catch (e) {}
+        }
+
+        // Notify Admin Control Desk
         try {
             await notifyAdminsAndVendor(
                 null,
                 'admin',
-                "🚨 CRITICAL: Accidental 1-Click SOS Dispatched!",
-                `Accident emergency reported at ${pickupAddress || 'Spot'}. Searching nearest ambulances.`,
+                "🚨 CRITICAL: Accidental SOS Dispatched!",
+                `Accident reported at ${pickupAddress || 'Spot'}. Alerted ${nearbyDrivers.length} nearby drivers.`,
                 { bookingId: booking._id.toString(), type: 'emergency_sos_broadcast' }
             );
         } catch (e) {}
@@ -1680,11 +1858,11 @@ const shortRegisterAndBookAccidental = async (req, res) => {
             success: true,
             isServiceAvailable: true,
             canBook: true,
-            message: "Accidental Ambulance Dispatched! Searching nearest ambulances.",
+            message: `Accidental SOS broadcasted to ${nearbyDrivers.length} nearby ambulances!`,
             token,
             isNewUser,
             bookingId: tempBookingId,
-            timeoutInSeconds: 60, // 👈 60-Second Timer
+            timeoutInSeconds: 60,
             booking
         });
 
@@ -1695,10 +1873,8 @@ const shortRegisterAndBookAccidental = async (req, res) => {
 };
 
 
-// =========================================================================
 // 🚀 1-MINUTE ACCIDENTAL SOS ESCALATION & GOVT HELPLINE FALLBACK
 // Endpoint: POST /user/ambulance/sos/escalate/:bookingId
-// =========================================================================
 const escalateAccidentalSos = async (req, res) => {
     try {
         const { bookingId } = req.params;

@@ -7,16 +7,27 @@ const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
 
-// Helper function to calculate all dynamic balances for a vendor
+// 2. CALCULATE DOCTOR BALANCES (With COD Commission & Compensations)
 const calculateVendorBalances = async (vendorId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const doctorObjId = new mongoose.Types.ObjectId(vendorId);
 
-    // 1. Fetch all completed appointments
-    const completedAppointments = await Appointment.find({
-        doctorId: doctorObjId,
-        status: 'Completed'
-    }).select('totalAmount pricingBreakdown paymentMethod paymentStatus subscriptionDetails updatedAt').lean();
+    // 1. Fetch Completed Appointments & Compensated Cancellations/No-Shows
+    const [completedAppointments, compensatedAppointments] = await Promise.all([
+        Appointment.find({
+            doctorId: doctorObjId,
+            status: 'Completed'
+        }).select('totalAmount pricingBreakdown paymentMethod paymentStatus subscriptionDetails updatedAt').lean(),
+
+        Appointment.find({
+            doctorId: doctorObjId,
+            status: { $in: ['Cancelled-By-User', 'No-Show'] },
+            $or: [
+                { 'pricingBreakdown.cancellationFeeApplied': { $gt: 0 } },
+                { 'pricingBreakdown.noShowFeeApplied': { $gt: 0 } }
+            ]
+        }).select('pricingBreakdown updatedAt').lean()
+    ]);
 
     let grossEarnings = 0;
     let totalEarnings = 0;
@@ -24,9 +35,8 @@ const calculateVendorBalances = async (vendorId) => {
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 2. Process each completed appointment
+    // 2. Process Completed Appointments
     for (let appt of completedAppointments) {
-        // Agar Subscription se Free booking thi toh originalBaseFee par doctor ko compensate karein
         const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
         const grossAmount = isSub 
             ? Number(appt.pricingBreakdown?.originalBaseFee || 0) 
@@ -39,18 +49,14 @@ const calculateVendorBalances = async (vendorId) => {
 
         let effectiveVendorCredit = 0;
 
-        // 🚨 COD vs ONLINE WALLET LOGIC:
         if (appt.paymentMethod === 'COD') {
-            // Patient ne poora cash doctor ko de diya hai, toh wallet se sirf Admin Commission deduct hoga
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online / Subscription booking me Admin doctor ko (Gross - Commission) pay karega
             effectiveVendorCredit = netVendorAmount;
         }
 
         totalEarnings += effectiveVendorCredit;
 
-        // 7-Day Rolling Cleared vs Locked Calculation
         if (new Date(appt.updatedAt) <= sevenDaysAgo) {
             clearedEarnings += effectiveVendorCredit;
         } else {
@@ -58,7 +64,20 @@ const calculateVendorBalances = async (vendorId) => {
         }
     }
 
-    // 3. Total Withdrawals requested till date
+    // 3. Process Compensations for No-Show / Late User Cancellation
+    for (let compAppt of compensatedAppointments) {
+        const compFee = Number(compAppt.pricingBreakdown?.noShowFeeApplied || compAppt.pricingBreakdown?.cancellationFeeApplied || 0);
+        if (compFee > 0) {
+            totalEarnings += compFee;
+            if (new Date(compAppt.updatedAt) <= sevenDaysAgo) {
+                clearedEarnings += compFee;
+            } else {
+                pendingEarnings += compFee;
+            }
+        }
+    }
+
+    // 4. Total Withdrawals Requested
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
@@ -71,7 +90,6 @@ const calculateVendorBalances = async (vendorId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    // 4. Fetch Active Commission Policy details
     const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Doctor', isActive: true }).lean();
 
@@ -91,7 +109,6 @@ const calculateVendorBalances = async (vendorId) => {
         }
     };
 };
-
 // 1. GET DOCTOR EARNING STATS
 const getDoctorWalletStats = async (req, res) => {
     try {

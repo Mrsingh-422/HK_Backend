@@ -13,14 +13,15 @@ const PharmacyBooking = require('../../../models/PharmacyBooking');
 const NurseBooking = require('../../../models/NurseBooking');
 const { calculateAdminCommission } = require('../../../utils/policyHelper');
 
-// Helper to dynamically resolve booking model and run aggregate calculations based on Provider Type
+// 1. CALCULATE PROVIDER BALANCES (With Strict COD vs Online & Compensations)
+// =========================================================================
 const calculateProviderBalances = async (vendorId, role) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const vendorObjId = new mongoose.Types.ObjectId(vendorId);
     
     let BookingModel;
     let matchQuery = {};
-    let completedStatuses = ['Completed'];
+    let completedStatuses = [];
 
     if (role === 'Lab') {
         BookingModel = LabBooking;
@@ -40,17 +41,32 @@ const calculateProviderBalances = async (vendorId, role) => {
         throw new Error("Invalid Provider Role inside Wallet controller.");
     }
 
-    const completedOrders = await BookingModel.find({
-        ...matchQuery,
-        status: { $in: completedStatuses }
-    }).select('billSummary totalPrice priceBreakdown paymentMethod updatedAt').lean();
+    // 1. Fetch Completed Orders & Compensated Cancellation/No-Show Orders
+    const [completedOrders, compensatedOrders] = await Promise.all([
+        BookingModel.find({
+            ...matchQuery,
+            status: { $in: completedStatuses }
+        }).select('billSummary totalPrice priceBreakdown paymentMethod paymentStatus updatedAt').lean(),
+
+        BookingModel.find({
+            ...matchQuery,
+            status: { $in: ['Cancelled', 'No-Show'] },
+            $or: [
+                { 'billSummary.cancellationFeeApplied': { $gt: 0 } },
+                { 'billSummary.noShowFeeApplied': { $gt: 0 } },
+                { 'priceBreakdown.cancellationFeeApplied': { $gt: 0 } },
+                { 'priceBreakdown.noShowFeeApplied': { $gt: 0 } }
+            ]
+        }).select('billSummary priceBreakdown paymentMethod updatedAt').lean()
+    ]);
 
     let grossEarnings = 0;
-    let totalEarnings = 0;
+    let totalEarnings = 0; // Net virtual balance
     let adminCommissionDeducted = 0;
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
+    // 2. Process Completed Orders (COD vs Online Split)
     for (let order of completedOrders) {
         let grossAmount = 0;
         if (role === 'Lab' || role === 'Pharmacy') {
@@ -62,22 +78,22 @@ const calculateProviderBalances = async (vendorId, role) => {
         grossEarnings += grossAmount;
 
         const { netVendorAmount, adminCutoff } = await calculateAdminCommission(role, grossAmount);
-
         adminCommissionDeducted += adminCutoff;
 
         let effectiveVendorCredit = 0;
 
-        // 🚨 COD vs ONLINE LEDGER SYNC:
+        // 🚨 MARKETPLACE ACCOUNTING LOGIC:
         if (order.paymentMethod === 'COD') {
-            // Pharmacy/Driver collected 100% physical cash; only Admin Commission is debited
+            // COD: Vendor already received 100% cash; deduct Admin Commission from wallet
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online order: Admin reimburses Net Vendor Amount
+            // Online: Platform received money; credit Net Amount to vendor wallet
             effectiveVendorCredit = netVendorAmount;
         }
 
         totalEarnings += effectiveVendorCredit;
 
+        // 7-Day Rolling Settlement Lock
         if (new Date(order.updatedAt) <= sevenDaysAgo) {
             clearedEarnings += effectiveVendorCredit;
         } else {
@@ -85,6 +101,26 @@ const calculateProviderBalances = async (vendorId, role) => {
         }
     }
 
+    // 3. Process Compensations (100% Vendor's earnings for customer fault)
+    for (let compOrder of compensatedOrders) {
+        let compFee = 0;
+        if (role === 'Lab' || role === 'Pharmacy') {
+            compFee = Number(compOrder.billSummary?.cancellationFeeApplied || compOrder.billSummary?.noShowFeeApplied || 0);
+        } else if (role === 'Nurse') {
+            compFee = Number(compOrder.priceBreakdown?.cancellationFeeApplied || compOrder.priceBreakdown?.noShowFeeApplied || 0);
+        }
+
+        if (compFee > 0) {
+            totalEarnings += compFee;
+            if (new Date(compOrder.updatedAt) <= sevenDaysAgo) {
+                clearedEarnings += compFee;
+            } else {
+                pendingEarnings += compFee;
+            }
+        }
+    }
+
+    // 4. Total Withdrawals Requested
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
@@ -97,6 +133,7 @@ const calculateProviderBalances = async (vendorId, role) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
+    // 5. Fetch Active Commission Policy Details
     const AdminCommissionConfig = require('../../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: role, isActive: true }).lean();
 
