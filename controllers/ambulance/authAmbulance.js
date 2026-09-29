@@ -1,8 +1,11 @@
+// controllers/ambulance/authAmbulance.js
 const Ambulance = require('../../models/Ambulance');
+const Availability = require('../../models/Availability');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest'); // For handling profile update requests
 const { deleteFile } = require('../../utils/fileHandler');
+const { sendEmailOTP } = require('../../utils/emailService');
 
 // Helper: Generate Token (Dev: 100 years, Prod: 30 days)
 const generateToken = (id, role) => {
@@ -134,7 +137,7 @@ const loginAmbulance = async (req, res) => {
     }
 };
 
-// --- 3. COMPLETE PROFILE & UPLOAD DOCS (Step 2, 3, 4) ---
+// --- 1. COMPLETE AMBULANCE PROFILE (Step 2 Onboarding with Safe JSON Parsers) ---
 // Endpoint: PUT /api/auth/ambulance/complete-profile
 const completeAmbulanceProfile = async (req, res) => {
     try {
@@ -142,7 +145,21 @@ const completeAmbulanceProfile = async (req, res) => {
         const updates = { ...req.body };
         const files = req.files || {};
 
-        // 🚀 SYNC FIX: Store clean, web-accessible URL paths instead of OS raw disk paths
+        // Safe JSON Parsing for form-data stringified fields
+        if (typeof updates.pricing === 'string') {
+            try { updates.pricing = JSON.parse(updates.pricing); } catch (e) {}
+        }
+        if (typeof updates.supportStaff === 'string') {
+            try { updates.supportStaff = JSON.parse(updates.supportStaff); } catch (e) {}
+        }
+        if (typeof updates.freeServices === 'string') {
+            try { updates.freeServices = JSON.parse(updates.freeServices); } catch (e) {}
+        }
+        if (typeof updates.optionalServices === 'string') {
+            try { updates.optionalServices = JSON.parse(updates.optionalServices); } catch (e) {}
+        }
+
+        // Map Clean Web-Accessible File Paths
         if (Object.keys(files).length > 0) {
             const documentPaths = {
                 drivingLicenseFile: files.drivingLicenseFile ? `/uploads/ambulances/${files.drivingLicenseFile[0].filename}` : null,
@@ -163,16 +180,20 @@ const completeAmbulanceProfile = async (req, res) => {
         const updatedAmb = await Ambulance.findByIdAndUpdate(
             ambId, 
             { $set: updates }, 
-            { new: true }
+            { new: true, runValidators: true }
         ).select('-password');
+
+        if (!updatedAmb) {
+            return res.status(404).json({ success: false, message: "Ambulance driver not found." });
+        }
 
         res.json({ 
             success: true, 
-            message: updates.profileStatus === 'Pending' ? 'Profile submitted for review' : 'Profile partially updated', 
+            message: updates.profileStatus === 'Pending' ? 'Profile submitted for Admin review.' : 'Profile partially updated.', 
             data: updatedAmb 
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -299,7 +320,8 @@ const resetPasswordTest = async (req, res) => {
     }
 };
 
-// --- 1. FORGOT PASSWORD (NEW: Send Recovery OTP) ---
+// 1. FORGOT PASSWORD (With Real Email Dispatch)
+// Endpoint: POST /api/auth/ambulance/forgot-password
 const forgotPasswordAmbulance = async (req, res) => {
     try {
         const { email } = req.body;
@@ -308,18 +330,21 @@ const forgotPasswordAmbulance = async (req, res) => {
         const driver = await Ambulance.findOne({ email: email.toLowerCase().trim() });
         if (!driver) return res.status(404).json({ success: false, message: "No driver registered with this email." });
 
-        // 🎲 6-Digit Recovery OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         
         driver.resetPasswordOtp = otp;
         driver.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 mins
         await driver.save();
 
-        console.log(`\n📧 [AMBULANCE RECOVERY OTP] Driver: ${driver.email} | OTP: ${otp}\n`);
+        // 🚨 SEND REAL EMAIL OTP VIA BREVO
+        const emailSent = await sendEmailOTP(driver.email, otp);
+        if (!emailSent && process.env.NODE_ENV === 'production') {
+            return res.status(500).json({ success: false, message: "Failed to send OTP email. Please try again." });
+        }
 
         res.json({ 
             success: true, 
-            message: "6-Digit Verification OTP sent to your registered email.",
+            message: "6-Digit Verification OTP sent to your registered email address.",
             debugOtp: process.env.NODE_ENV === 'production' ? undefined : otp 
         });
     } catch (error) { 
@@ -327,7 +352,9 @@ const forgotPasswordAmbulance = async (req, res) => {
     }
 };
 
-// --- 2. VERIFY RECOVERY OTP (NEW: Figma Screen OTP Verify Overlay) ---
+
+// 2. VERIFY RECOVERY OTP
+// Endpoint: POST /api/auth/ambulance/verify-recovery-otp
 const verifyRecoveryOtp = async (req, res) => {
     try {
         const { email, otp } = req.body;
@@ -339,13 +366,12 @@ const verifyRecoveryOtp = async (req, res) => {
         const savedOtp = String(driver.resetPasswordOtp || "").trim();
         const incomingOtp = String(otp).trim();
 
-        // Strict Check (Static 1111 bypass removed)
         if (!savedOtp || savedOtp !== incomingOtp) {
             return res.status(400).json({ success: false, message: "Invalid OTP code." });
         }
 
         if (Date.now() > driver.resetPasswordExpires) {
-            return res.status(400).json({ success: false, message: "Recovery OTP has expired. Please request a new OTP." });
+            return res.status(400).json({ success: false, message: "Recovery OTP has expired. Please request a new one." });
         }
 
         res.json({ success: true, message: "OTP Verified successfully. Please set a new password." });
@@ -354,33 +380,87 @@ const verifyRecoveryOtp = async (req, res) => {
     }
 };
 
-// --- 3. RESET PASSWORD (NEW: Update Password after OTP validation) ---
+// 3. RESET PASSWORD WITH OTP
+// Endpoint: PATCH /api/auth/ambulance/reset-password-otp
 const resetPasswordWithOtp = async (req, res) => {
     try {
-        const { email, newPassword } = req.body;
-        const driver = await Ambulance.findOne({ email: email.toLowerCase() });
+        const { email, newPassword, confirmPassword } = req.body;
+        
+        if (!newPassword || newPassword.length < 6) {
+            return res.status(400).json({ success: false, message: "Password must be at least 6 characters long." });
+        }
+        if (confirmPassword && newPassword !== confirmPassword) {
+            return res.status(400).json({ success: false, message: "Passwords do not match." });
+        }
+
+        const driver = await Ambulance.findOne({ email: email.toLowerCase().trim() });
         if (!driver) return res.status(404).json({ success: false, message: "Driver profile not found." });
 
-        // Hash and Update New Password
-        driver.password = await bcrypt.hash(newPassword, 10);
+        driver.password = await bcrypt.hash(String(newPassword), 10);
         driver.resetPasswordOtp = undefined;
         driver.resetPasswordExpires = undefined;
+        driver.token = null; // Invalidate sessions
         await driver.save();
 
-        res.json({ success: true, message: "Password updated successfully. Please login." });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+        res.json({ success: true, message: "Password updated successfully. Please login with new password." });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// --- 4. UPDATE DRIVER PROFILE (Figma "My Profile" Edit Screen) ---
+// --- 2. UPDATE DRIVER PROFILE (Full Multi-field Staging via ProfileUpdateRequest) ---
+// Endpoint: PATCH /api/auth/ambulance/profile/update
 const updateAmbulanceProfile = async (req, res) => {
     try {
         const driverId = req.user.id;
-        const { name, phone, email, address } = req.body;
+        const { 
+            name, phone, email, address, 
+            vehicleType, vehicleNumber, serviceRadius,
+            fixedPrice, baseDistance, pricePerKM,
+            bloodGroup, experienceYears
+        } = req.body;
 
-        // 🚨 SECURITY LOCKS
-        const updates = { name, phone, email: email?.toLowerCase(), address };
+        const currentDriver = await Ambulance.findById(driverId);
+        if (!currentDriver) {
+            return res.status(404).json({ success: false, message: "Driver not found." });
+        }
 
-        await ProfileUpdateRequest.findOneAndDelete({ vendorId: driverId, vendorModel: 'Ambulance', status: 'Pending' });
+        // Prepare staged updates dictionary
+        const updates = { 
+            name: name ? String(name).trim() : currentDriver.name,
+            phone: phone ? String(phone).trim() : currentDriver.phone,
+            email: email ? String(email).toLowerCase().trim() : currentDriver.email,
+            address: address ? String(address).trim() : currentDriver.address,
+            vehicleType: vehicleType || currentDriver.vehicleType,
+            vehicleNumber: vehicleNumber || currentDriver.vehicleNumber,
+            serviceRadius: serviceRadius || currentDriver.serviceRadius,
+            bloodGroup: bloodGroup || currentDriver.bloodGroup,
+            experienceYears: experienceYears || currentDriver.experienceYears,
+            pricing: {
+                fixedPrice: fixedPrice !== undefined ? Number(fixedPrice) : (currentDriver.pricing?.fixedPrice || 0),
+                baseDistance: baseDistance !== undefined ? Number(baseDistance) : (currentDriver.pricing?.baseDistance || 5),
+                pricePerKM: pricePerKM !== undefined ? Number(pricePerKM) : (currentDriver.pricing?.pricePerKM || 0)
+            }
+        };
+
+        // Handle profile photo upload if provided
+        if (req.files?.profilePic && req.files.profilePic[0]) {
+            updates.profilePic = `/uploads/ambulances/${req.files.profilePic[0].filename}`;
+        }
+
+        // Clean previous unapproved pending requests & uploaded temp files
+        const existingPending = await ProfileUpdateRequest.findOne({ 
+            vendorId: driverId, 
+            vendorModel: 'Ambulance', 
+            status: 'Pending' 
+        });
+
+        if (existingPending) {
+            if (updates.profilePic && existingPending.updatedFields?.profilePic) {
+                deleteFile(existingPending.updatedFields.profilePic);
+            }
+            await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
+        }
 
         const request = await ProfileUpdateRequest.create({
             vendorId: driverId,
@@ -391,10 +471,11 @@ const updateAmbulanceProfile = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            message: "Profile changes submitted to Admin for review. Updates will reflect upon approval.", 
             data: request 
         });
     } catch (error) { 
+        console.error("Update Ambulance Profile Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -440,6 +521,156 @@ const changeDriverPassword = async (req, res) => {
 };
 
 
+// 4. SET AMBULANCE AVAILABILITY & SHIFTS
+// Endpoint: POST /api/auth/ambulance/availability/set
+const setAmbulanceAvailability = async (req, res) => {
+    try {
+        const ambulanceId = req.user.id;
+        const { startTime, endTime, slotDuration, offDays, unavailableSlots } = req.body;
+
+        if (startTime && endTime && startTime >= endTime) {
+            return res.status(400).json({ success: false, message: "Shift start time must be before end time." });
+        }
+
+        const config = await Availability.findOneAndUpdate(
+            { vendorId: ambulanceId, vendorType: 'Ambulance' },
+            {
+                $set: {
+                    vendorId: ambulanceId,
+                    vendorType: 'Ambulance',
+                    startTime: startTime || "08:00",
+                    endTime: endTime || "20:00",
+                    slotDuration: Number(slotDuration) || 120, // 2-Hour buffer
+                    offDays: offDays || [],
+                    unavailableSlots: unavailableSlots || []
+                }
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({
+            success: true,
+            message: "Ambulance shift timings and slots updated successfully.",
+            data: config
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 5. GET DRIVER AVAILABILITY CONFIG
+// Endpoint: GET /api/auth/ambulance/availability/my-config
+const getMyAmbulanceAvailability = async (req, res) => {
+    try {
+        const ambulanceId = req.user.id;
+        let config = await Availability.findOne({ vendorId: ambulanceId, vendorType: 'Ambulance' });
+
+        if (!config) {
+            config = {
+                startTime: "00:00",
+                endTime: "23:59",
+                slotDuration: 120,
+                offDays: [],
+                unavailableSlots: []
+            };
+        }
+
+        res.json({
+            success: true,
+            data: config
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
-module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest, forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile,getLatestAmbulanceProfileRequest, changeDriverPassword };
+// =========================================================================
+// 1. AMBULANCE DRIVER PRE-CHECK (Duplicate & OTP Rate Limit Check)
+// Endpoint: POST /api/auth/ambulance/check-exists
+// =========================================================================
+const checkAmbulanceExists = async (req, res) => {
+    try {
+        const { phone, email } = req.body;
+
+        if (!phone && !email) {
+            return res.status(400).json({ success: false, message: "Phone number or Email is required." });
+        }
+
+        const cleanPhone = phone ? String(phone).trim().replace(/\D/g, "").slice(-10) : null;
+        const normalizedEmail = email ? email.toLowerCase().trim() : null;
+
+        const clientIp = req.headers['cf-connecting-ip'] || 
+                         req.headers['x-forwarded-for']?.split(',')[0].trim() || 
+                         req.socket.remoteAddress;
+
+        // 1. Check if Driver already exists in database
+        const query = [];
+        if (cleanPhone) query.push({ phone: cleanPhone });
+        if (normalizedEmail) query.push({ email: normalizedEmail });
+
+        const exists = await Ambulance.findOne({ $or: query });
+
+        if (exists) {
+            const isPhoneMatch = exists.phone === cleanPhone;
+            return res.status(200).json({ 
+                success: false, 
+                exists: true, 
+                message: isPhoneMatch 
+                    ? "This mobile number is already registered as an Ambulance Driver. Please Login." 
+                    : "This email address is already registered as an Ambulance Driver. Please Login."
+            });
+        }
+
+        // 2. Consume Registration-OTP limit
+        if (cleanPhone) {
+            const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
+            const limitCheck = await checkAndConsumeOtpLimit(cleanPhone, 'phone', 'Registration-OTP', clientIp);
+            if (!limitCheck.allowed) {
+                return res.status(limitCheck.statusCode).json({
+                    success: false,
+                    errorType: "OTP_LIMIT_EXCEEDED",
+                    message: limitCheck.message
+                });
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            exists: false, 
+            message: "Phone number and email are available for Ambulance registration." 
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// =========================================================================
+// 2. UPDATE DRIVER FCM PUSH TOKEN (For Live Emergency Sirens)
+// Endpoint: PATCH /api/auth/ambulance/fcm-token
+// =========================================================================
+const updateAmbulanceFcmToken = async (req, res) => {
+    try {
+        const { fcmToken } = req.body;
+        const ambulanceId = req.user.id;
+
+        if (!fcmToken) {
+            return res.status(400).json({ success: false, message: "fcmToken is required." });
+        }
+
+        await Ambulance.findByIdAndUpdate(ambulanceId, { 
+            $set: { fcmToken: String(fcmToken).trim() } 
+        });
+
+        res.json({ 
+            success: true, 
+            message: "Ambulance driver FCM token synchronized successfully." 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+module.exports = { registerAmbulance, loginAmbulance, completeAmbulanceProfile,toggleDriverAvailability,getMyAmbulanceProfile,resetPasswordTest, forgotPasswordAmbulance, verifyRecoveryOtp, resetPasswordWithOtp, updateAmbulanceProfile,getLatestAmbulanceProfileRequest, changeDriverPassword, setAmbulanceAvailability, getMyAmbulanceAvailability, checkAmbulanceExists, updateAmbulanceFcmToken };

@@ -47,5 +47,9 @@ router.patch('/notifications/mark-read', protect(['ambulance', 'hospital-ambulan
 // --- REPORT NO-SHOW (Screen 17) ---
 router.post('/orders/no-show', protect(['ambulance', 'hospital-ambulance']), controller.reportAmbulanceNoShow);
 
+// Single trip full audit detail
+router.get('/details/:id', protect(['ambulance', 'hospital-ambulance']), controller.getDriverBookingDetails);
+
+
 
 module.exports = router;

@@ -1970,6 +1970,9 @@ const placeOrder = async (req, res) => {
 
         const resolvedPatients = await mapPatients(userId, selectedPatientIds || ['Self']);
 
+        // 🛡️ FIX 1: Free orders (totalAmount === 0) are confirmed instantly
+        const isOrderConfirmedImmediately = activePaymentMethod === 'COD' || bill.totalAmount === 0;
+
         // 7. Create Order in Database
         const booking = await PharmacyBooking.create({
             orderId: tempOrderId,
@@ -1985,18 +1988,20 @@ const placeOrder = async (req, res) => {
             paymentMethod: activePaymentMethod,
             orderType: isPrescriptionOrder ? 'Prescription' : 'General',
             prescriptionImages: rxImages,
-            status: activePaymentMethod === 'COD'
+            status: isOrderConfirmedImmediately
                 ? (isPrescriptionOrder ? 'Under Review' : 'Placed')
                 : 'Pending',
-            paymentStatus: 'Pending',
+            paymentStatus: isOrderConfirmedImmediately
+                ? (bill.totalAmount === 0 ? 'Paid' : 'Pending')
+                : 'Pending',
             deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString()
         });
 
-        // 8. COD Immediate Success Return
-        if (activePaymentMethod === 'COD' || bill.totalAmount === 0) {
+        // 8. Immediate Confirmation Flow (COD or ₹0 Free Bill)
+        if (isOrderConfirmedImmediately) {
             await Cart.findOneAndUpdate({ userId }, { $set: { "pharmacyCart.items": [], "pharmacyCart.pharmacyId": null } });
 
-            // 🛡️ COUPON LOCK: Record user usage to prevent infinite reuse
+            // Record Coupon Usage
             if (bill.couponId) {
                 const existingUsage = await Coupon.findOne({ _id: bill.couponId, "usedBy.userId": userId });
                 if (existingUsage) {
@@ -2019,12 +2024,16 @@ const placeOrder = async (req, res) => {
             await notifyAdminsAndVendor(
                 pharmacyId,
                 'pharmacy',
-                "New Pharmacy Order Placed (COD)!",
-                `A COD medicine order #${tempOrderId} has been successfully placed.`,
+                bill.totalAmount === 0 ? "New Medicine Order Confirmed (Free)!" : "New Pharmacy Order Placed (COD)!",
+                `Medicine order #${tempOrderId} has been placed successfully.`,
                 { bookingId: booking._id.toString(), type: 'new_pharmacy_booking' }
             );
 
-            return res.status(201).json({ success: true, message: "Order placed successfully!", data: booking });
+            return res.status(201).json({ 
+                success: true, 
+                message: bill.totalAmount === 0 ? "Order placed successfully (100% Free Discount applied)!" : "Order placed successfully!", 
+                data: booking 
+            });
         }
 
         // 9. Razorpay Response for Online Payment
@@ -2236,40 +2245,57 @@ const uploadPrescription = async (req, res) => {
 
 const cancelMedicineOrder = async (req, res) => {
     try {
-        const { orderId, reason } = req.body;
+        const orderId = req.body.orderId || req.body.id || req.body.appointmentId;
+        const reason = req.body.reason || "Cancelled by User";
         const userId = req.user.id;
 
+        if (!orderId) {
+            return res.status(400).json({ success: false, message: "Order ID is required to cancel order." });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(orderId);
         const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(orderId) : new mongoose.Types.ObjectId() },
+                { orderId: String(orderId).trim() }
+            ],
             userId
         });
 
-        if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order record not found." });
+        }
 
         const terminalStates = ['OutForDelivery', 'ReachedLocation', 'Delivered', 'Cancelled', 'No-Show'];
         if (terminalStates.includes(order.status) || terminalStates.includes(order.deliveryStatus)) {
-            return res.status(400).json({ success: false, message: "Cannot cancel order once it is out for delivery or delivered." });
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot cancel order: Order is already in '${order.status}' status.` 
+            });
         }
 
+        // 1. Calculate dynamic cancellation policy & refund
         const policyResult = await processCancellationRefund(order, 'Pharmacy');
 
-        // 🛡️ BATCH-AWARE RESTORATION: Restore stock to the latest valid active batch
-        for (const item of order.items) {
-            if (!item.medicineId) continue;
-            let inventory = await MedicineInventory.findOne({
-                pharmacyId: order.pharmacyId,
-                medicineId: item.medicineId
-            }).sort({ expiry_date: -1 }); // Adds back to the freshest batch
+        // 2. Safe Stock Restoration (Restores to latest active batch)
+        if (order.items && Array.isArray(order.items)) {
+            for (const item of order.items) {
+                if (!item.medicineId) continue;
+                let inventory = await MedicineInventory.findOne({
+                    pharmacyId: order.pharmacyId,
+                    medicineId: item.medicineId
+                }).sort({ expiry_date: -1 });
 
-            if (inventory) {
-                inventory.stock_quantity += Number(item.quantity || 1);
-                inventory.is_available = true;
-                await inventory.save();
+                if (inventory) {
+                    inventory.stock_quantity += Number(item.quantity || 1);
+                    inventory.is_available = true;
+                    await inventory.save();
+                }
             }
         }
 
-        // Credit Vendor Compensation if penalty was applied
-        if (policyResult.cancellationFee > 0) {
+        // 3. Credit Vendor Compensation if penalty was applied
+        if (policyResult && policyResult.cancellationFee > 0) {
             await creditVendorCompensation(
                 order.pharmacyId,
                 'Pharmacy',
@@ -2279,41 +2305,59 @@ const cancelMedicineOrder = async (req, res) => {
             );
         }
 
-        // Revert Coupon Usage count on cancellation
+        // 4. Safe Reversion of Coupon Usage
         if (order.billSummary?.couponId) {
-            await Coupon.updateOne(
-                { _id: order.billSummary.couponId, "usedBy.userId": userId },
-                { $inc: { "usedBy.$.usageCount": -1 } }
-            );
+            const existingUsage = await Coupon.findOne({ 
+                _id: order.billSummary.couponId, 
+                "usedBy.userId": userId 
+            });
+            if (existingUsage) {
+                await Coupon.updateOne(
+                    { _id: order.billSummary.couponId, "usedBy.userId": userId },
+                    { $inc: { "usedBy.$.usageCount": -1 } }
+                );
+            }
         }
 
         order.status = 'Cancelled';
         order.deliveryStatus = 'CancelledByDriver';
-        order.cancelReason = reason || "Cancelled by User";
+        order.cancelReason = reason;
 
-        order.billSummary.cancellationFeeApplied = policyResult.cancellationFee;
-        order.paymentStatus = (order.paymentMethod === 'Online' && policyResult.refundAmount > 0)
-            ? 'Refund-Initiated'
-            : 'Refunded';
+        if (!order.billSummary) {
+            order.billSummary = {};
+        }
+        order.billSummary.cancellationFeeApplied = policyResult?.cancellationFee || 0;
+
+        // 5. Payment Status Resolution
+        if (order.paymentMethod === 'Online' && (policyResult?.refundAmount || 0) > 0) {
+            order.paymentStatus = 'Refund-Initiated';
+        } else if (order.paymentMethod === 'Online') {
+            order.paymentStatus = 'Refunded';
+        } else {
+            order.paymentStatus = 'Pending';
+        }
 
         await order.save();
 
+        // Release free subscription delivery count if applicable
         if (order.billSummary?.deliveryCharge === 0 && (order.collectionType === 'Home Delivery' || order.collectionType === 'Home Collection')) {
             await refundBenefitCount(order.userId, 'freePharmacyDeliveriesCount');
         }
 
         res.json({
             success: true,
-            message: policyResult.cancellationFee > 0
+            message: (policyResult?.cancellationFee || 0) > 0
                 ? `Order cancelled. A cancellation penalty of ₹${policyResult.cancellationFee} was applied. Refund of ₹${policyResult.refundAmount} has been initiated.`
                 : "Order cancelled successfully. Full refund initiated and stock restored.",
             data: {
-                cancellationFee: policyResult.cancellationFee,
-                refundAmount: policyResult.refundAmount,
+                cancellationFee: policyResult?.cancellationFee || 0,
+                refundAmount: policyResult?.refundAmount || 0,
                 order
             }
         });
+
     } catch (error) {
+        console.error("cancelMedicineOrder Error Details:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -3890,7 +3934,6 @@ const requestPharmacyOrderReturn = async (req, res) => {
             return res.status(400).json({ success: false, message: "Only delivered orders are eligible for return/replacement." });
         }
 
-        // 🚨 1. Check if vendor enabled return/replace on these items
         let eligibleSubtotal = 0;
         const eligibleItems = order.items.filter(item => {
             const isEligible = requestType === 'Return' ? item.isReturnAllowed : item.isReplacementAllowed;
@@ -3903,11 +3946,10 @@ const requestPharmacyOrderReturn = async (req, res) => {
         if (eligibleItems.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: `Store Policy Blocked: None of the items in this order are eligible for ${requestType.toLowerCase()}.`
+                message: `Store Policy Blocked: None of the items in this order are eligible for ${requestType ? requestType.toLowerCase() : 'return'}.`
             });
         }
 
-        // 2. Admin Policy Check
         let config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
         if (!config) config = { returnWindowDays: 3, isReturnEnabled: true, isReplacementEnabled: true };
 
@@ -3922,12 +3964,16 @@ const requestPharmacyOrderReturn = async (req, res) => {
         }
 
         if (order.returnDetails && order.returnDetails.status === 'Requested') {
-            return res.status(400).json({ success: false, message: "A return request is already pending." });
+            return res.status(400).json({ success: false, message: "A return request is already pending for this order." });
         }
 
         let uploadedProofs = [];
-        if (req.files && req.files.proofImages) {
-            uploadedProofs = req.files.proofImages.map(f => f.path.replace(/\\/g, "/"));
+        if (req.files) {
+            if (Array.isArray(req.files)) {
+                uploadedProofs = req.files.map(f => f.path.replace(/\\/g, "/"));
+            } else if (req.files.proofImages) {
+                uploadedProofs = req.files.proofImages.map(f => f.path.replace(/\\/g, "/"));
+            }
         }
 
         order.returnDetails = {
@@ -3943,16 +3989,27 @@ const requestPharmacyOrderReturn = async (req, res) => {
 
         await order.save();
 
+        // 🛡️ VENDOR NOTIFICATION: Alert Pharmacy Desk about new Return Request
+        await notifyAdminsAndVendor(
+            order.pharmacyId,
+            'pharmacy',
+            `🔄 New ${requestType || 'Return'} Request Received!`,
+            `Customer requested ${requestType || 'Return'} for Order #${order.orderId}. Reason: ${reason || 'Product issue'}.`,
+            { orderId: order._id.toString(), type: 'pharmacy_return_request' }
+        );
+
         res.json({
             success: true,
-            message: `${requestType} request submitted successfully under platform Terms & Conditions!`,
+            message: `${requestType || 'Return'} request submitted successfully! Pharmacist will review.`,
             data: order.returnDetails
         });
 
     } catch (error) {
+        console.error("requestPharmacyOrderReturn Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 // CANCEL RETURN REQUEST (By Patient before driver collection)
 // Endpoint: POST /user/pharmacy/orders/return-request/cancel/:orderId
 const cancelReturnRequestByCustomer = async (req, res) => {

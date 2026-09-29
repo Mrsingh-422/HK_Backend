@@ -446,15 +446,14 @@ const startPrescriptionReview = async (req, res) => {
 const submitPharmacistReview = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const pharmacyId = req.user.id; // Logged-in Pharmacy ID
+        const pharmacyId = req.user.id;
         const { items, deliveryCharge } = req.body; 
 
-        // 🚨 FIXED: Added pharmacyId check to prevent IDOR attacks
         const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
         if (!request) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Review request not found or you are not authorized to bill this prescription." 
+                message: "Review request not found or unauthorized to bill this prescription." 
             });
         }
 
@@ -465,13 +464,25 @@ const submitPharmacistReview = async (req, res) => {
             });
         }
 
+        // 🛡️ SAFE PARSER: Handle JSON string or raw Array
+        let parsedItems = [];
+        if (typeof items === 'string') {
+            try { parsedItems = JSON.parse(items); } catch(e) { parsedItems = []; }
+        } else if (Array.isArray(items)) {
+            parsedItems = items;
+        }
+
+        if (parsedItems.length === 0) {
+            return res.status(400).json({ success: false, message: "Please provide valid billed medicine items." });
+        }
+
         let itemTotal = 0;
         let taxableTotal = 0;
         let cgstTotal = 0;
         let sgstTotal = 0;
         const verifiedItems = [];
 
-        for (const item of items) {
+        for (const item of parsedItems) {
             const qty = Number(item.quantity || 1);
             const subtotal = Number(item.pricePerUnit || 0) * qty;
             itemTotal += subtotal;
@@ -491,13 +502,12 @@ const submitPharmacistReview = async (req, res) => {
                 }
             }
 
-            // Dynamic live HSN tax mapping
             let cgstPercent = 0;
             let sgstPercent = 0;
             if (verifiedHsn && verifiedHsn.trim() !== "" && verifiedHsn.toUpperCase() !== "N/A") {
                 const hsnConfig = await HsnMaster.findOne({ hsnCode: verifiedHsn.trim(), isActive: true });
                 if (hsnConfig) {
-                    const totalGst = hsnConfig.totalGstPercent;
+                    const totalGst = Number(hsnConfig.totalGstPercent || 0);
                     cgstPercent = totalGst / 2;
                     sgstPercent = totalGst / 2;
                 }
@@ -508,9 +518,9 @@ const submitPharmacistReview = async (req, res) => {
             const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
             const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
 
-            taxableTotal += itemTaxableAmount;
-            cgstTotal += itemCgstAmount;
-            sgstTotal += itemSgstAmount;
+            taxableTotal += isNaN(itemTaxableAmount) ? 0 : itemTaxableAmount;
+            cgstTotal += isNaN(itemCgstAmount) ? 0 : itemCgstAmount;
+            sgstTotal += isNaN(itemSgstAmount) ? 0 : itemSgstAmount;
 
             verifiedItems.push({
                 medicineId: mongoose.isValidObjectId(item.medicineId) ? item.medicineId : null,
@@ -519,13 +529,12 @@ const submitPharmacistReview = async (req, res) => {
                 pricePerUnit: Number(item.pricePerUnit || 0),
                 quantity: qty,
                 totalPrice: subtotal,
-                
                 hsn_number: verifiedHsn || "",
-                taxableAmount: Number(itemTaxableAmount.toFixed(2)),
+                taxableAmount: Number((itemTaxableAmount || 0).toFixed(2)),
                 cgstPercent,
                 sgstPercent,
-                cgstAmount: Number(itemCgstAmount.toFixed(2)),
-                sgstAmount: Number(itemSgstAmount.toFixed(2))
+                cgstAmount: Number((itemCgstAmount || 0).toFixed(2)),
+                sgstAmount: Number((itemSgstAmount || 0).toFixed(2))
             });
         }
 
@@ -534,14 +543,24 @@ const submitPharmacistReview = async (req, res) => {
         request.verifiedBill = {
             items: verifiedItems,
             itemTotal,
-            taxableTotal: Number(taxableTotal.toFixed(2)),
-            cgstTotal: Number(cgstTotal.toFixed(2)),       
-            sgstTotal: Number(sgstTotal.toFixed(2)),       
+            taxableTotal: Number((taxableTotal || 0).toFixed(2)),
+            cgstTotal: Number((cgstTotal || 0).toFixed(2)),       
+            sgstTotal: Number((sgstTotal || 0).toFixed(2)),       
             deliveryCharge: Number(deliveryCharge || 0),
             totalAmount: Math.round(totalAmount)
         };
         request.status = 'Bill Generated';
         await request.save();
+
+        // 🛡️ PATIENT ALERT: Push Notification sent to user to review and pay bill
+        const { sendPushNotification } = require('../../../utils/notification');
+        await sendPushNotification(
+            request.userId,
+            'user',
+            "🧾 Prescription Verified & Bill Ready!",
+            `Pharmacist has generated a bill of ₹${Math.round(totalAmount)} for your prescription #${request.requestId}. Tap to complete payment.`,
+            { requestId: request._id.toString(), type: 'prescription_bill_generated' }
+        );
 
         res.json({
             success: true,
@@ -549,9 +568,12 @@ const submitPharmacistReview = async (req, res) => {
             data: request
         });
     } catch (error) {
+        console.error("submitPharmacistReview Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// --- REJECT PRESCRIPTION REQUEST (With Patient Real-Time Alert) ---
+// Endpoint: POST /provider/pharmacy/orders/prescription-request/reject/:requestId
 const rejectPrescriptionRequest = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -563,7 +585,6 @@ const rejectPrescriptionRequest = async (req, res) => {
             return res.status(404).json({ success: false, message: "Prescription request not found or unauthorized." });
         }
 
-        // 🚨 FIXED: Prevent rejecting paid/in-process orders
         if (request.status === 'Paid') {
             return res.status(400).json({ 
                 success: false, 
@@ -575,6 +596,16 @@ const rejectPrescriptionRequest = async (req, res) => {
         request.rejectReason = reason || "Prescription verification failed or medicines out of stock.";
         await request.save();
 
+        // 🛡️ PATIENT ALERT: Notify user regarding prescription rejection
+        const { sendPushNotification } = require('../../../utils/notification');
+        await sendPushNotification(
+            request.userId,
+            'user',
+            "❌ Prescription Request Rejected",
+            `Your prescription request #${request.requestId} was rejected. Reason: ${request.rejectReason}`,
+            { requestId: request._id.toString(), type: 'prescription_rejected' }
+        );
+
         res.json({
             success: true,
             message: "Prescription request has been rejected successfully.",
@@ -582,6 +613,7 @@ const rejectPrescriptionRequest = async (req, res) => {
             data: request
         });
     } catch (error) {
+        console.error("rejectPrescriptionRequest Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

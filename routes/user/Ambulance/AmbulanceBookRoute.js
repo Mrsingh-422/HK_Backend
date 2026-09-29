@@ -4,6 +4,7 @@ const { ambulanceDocUploads } = require('../../../middleware/multer');
 const { 
     getAmbulanceMasterData, getNearbyHospitals, getNearestAmbulances,getAmbulanceDetails,
     getAmbulanceCoupons, validateAmbulanceCoupon, calculateAmbulanceFare, 
+    getAmbulanceSlots,
     confirmAmbulanceBooking,initiateAmbulancePaymentAfterAcceptance,
     verifyAmbulancePayment, getBookingStatus, 
     // addReview, updateReview,
@@ -37,6 +38,8 @@ router.post('/calculate-fare', protect('user'), calculateAmbulanceFare); // Comb
 // =============================================================================
 // NOTE: Yeh ek hi API Medical, Accidental aur Referral teeno flows handle karegi.
 // Referral Card upload ke liye 'referralCard' field use hogi.
+router.get('/slots/:ambulanceId', getAmbulanceSlots); // 👈 Date-wise slots query
+
 router.post('/confirm-booking', protect('user'), ambulanceDocUploads, confirmAmbulanceBooking);
 router.post('/initiate-payment/:bookingId', protect('user'), initiateAmbulancePaymentAfterAcceptance);
 router.post('/verify-payment', protect('user'), verifyAmbulancePayment); // Payment verification for all flows

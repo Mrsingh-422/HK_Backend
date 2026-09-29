@@ -125,7 +125,88 @@ const generateNurseSlots = (config, baseHourlyFinal) => {
 };
 
 
+/**
+ * Generates dynamic ambulance time slots with real-time booking collision checking
+ * @param {Object} availabilityConfig - Driver's Availability document
+ * @param {Array} bookedTrips - List of confirmed/ongoing bookings for that date
+ * @param {String} selectedDate - Date in 'YYYY-MM-DD' format
+ * @returns {Array} List of slots with category, status, and availability flag
+ */
+const generateAmbulanceSlots = (availabilityConfig, bookedTrips = [], selectedDate) => {
+    const startTime = availabilityConfig?.startTime || "00:00";
+    const endTime = availabilityConfig?.endTime || "23:59";
+    const slotDuration = availabilityConfig?.slotDuration || 120; // 120 minutes = 2 hours standard transit buffer
+    const unavailableSlots = availabilityConfig?.unavailableSlots || [];
+    const offDays = availabilityConfig?.offDays || [];
 
+    const dayName = moment(selectedDate).format('dddd');
+    if (offDays.includes(dayName)) {
+        return { isClosed: true, reason: `Ambulance is off on ${dayName}s.`, slots: [] };
+    }
 
+    const slots = [];
+    const [startHour, startMin] = startTime.split(':').map(Number);
+    const [endHour, endMin] = endTime.split(':').map(Number);
 
-module.exports = { generateTimeSlots, generateNurseSlots, isNurseAvailable };
+    const startTotalMinutes = startHour * 60 + startMin;
+    const endTotalMinutes = endHour * 60 + endMin;
+
+    const isToday = moment().format('YYYY-MM-DD') === selectedDate;
+    const currentMoment = moment();
+
+    for (let minutes = startTotalMinutes; minutes + slotDuration <= endTotalMinutes; minutes += slotDuration) {
+        const startH = Math.floor(minutes / 60);
+        const startM = minutes % 60;
+        const endMinutes = minutes + slotDuration;
+        const endH = Math.floor(endMinutes / 60);
+        const endM = endMinutes % 60;
+
+        const timeString24 = `${startH.toString().padStart(2, '0')}:${startM.toString().padStart(2, '0')}`;
+        const slotStartMoment = moment(`${selectedDate} ${timeString24}`, 'YYYY-MM-DD HH:mm');
+        const slotEndMoment = slotStartMoment.clone().add(slotDuration, 'minutes');
+
+        const displayTime = `${slotStartMoment.format('hh:mm A')} - ${slotEndMoment.format('hh:mm A')}`;
+
+        // 1. Categorization
+        let category = "Morning";
+        if (startH >= 12 && startH < 17) category = "Afternoon";
+        else if (startH >= 17 && startH <= 23) category = "Evening / Night";
+        else if (startH < 5) category = "Late Night";
+
+        // 2. Check if slot is already in the past for today
+        const isPast = isToday && slotStartMoment.isBefore(currentMoment);
+
+        // 3. Check if driver marked this slot unavailable
+        const isManuallyBlocked = unavailableSlots.includes(timeString24);
+
+        // 4. Check Collision against Confirmed / Ongoing Bookings
+        const hasBookingConflict = bookedTrips.some(trip => {
+            const tripStartTime = moment(trip.scheduledAt);
+            const tripEndTime = tripStartTime.clone().add(120, 'minutes'); // 2 hours trip buffer
+
+            // Overlap condition: (SlotStart < TripEnd) AND (SlotEnd > TripStart)
+            return slotStartMoment.isBefore(tripEndTime) && slotEndMoment.isAfter(tripStartTime);
+        });
+
+        const isAvailable = !isPast && !isManuallyBlocked && !hasBookingConflict;
+
+        let statusText = "Available";
+        if (isPast) statusText = "Past";
+        else if (isManuallyBlocked) statusText = "Unavailable";
+        else if (hasBookingConflict) statusText = "Booked";
+
+        slots.push({
+            slotTime: timeString24,
+            displayTime,
+            startTimeFormatted: slotStartMoment.format('hh:mm A'),
+            endTimeFormatted: slotEndMoment.format('hh:mm A'),
+            category,
+            isAvailable,
+            status: statusText
+        });
+    }
+
+    return { isClosed: false, slots };
+};
+
+module.exports = { generateTimeSlots, generateNurseSlots, isNurseAvailable,generateAmbulanceSlots };

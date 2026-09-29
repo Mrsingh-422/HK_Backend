@@ -92,7 +92,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
     paymentMethod: { type: String, enum: ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'COD' },
     paymentStatus: {
         type: String,
-        enum: ['Pending', 'Paid', 'Failed', 'Refunded'],
+        enum: ['Pending', 'Paid', 'Failed', 'Refunded','Refund-Initiated'],
         default: 'Pending'
     },
 
@@ -130,6 +130,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
     // Live trip tracking timestamps
     startedAt: { type: Date, default: null },
     arrivedAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
 
     paymentDetails: {
         razorpayPaymentId: { type: String, default: "" },

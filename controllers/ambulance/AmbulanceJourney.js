@@ -1,15 +1,20 @@
+const mongoose = require('mongoose');
 const Appointment = require('../../models/Appointment');
 const Booking = require('../../models/AmbulanceBooking');
 const Ambulance = require('../../models/Ambulance');
 
-// --- 1. START RIDE (Screenshot 37) ---
+// --- 1. START RIDE (Figma Screen 37) ---
 const startAmbulanceRide = async (req, res) => {
     try {
         const { bookingId } = req.body;
         const driverId = req.user.id;
         
+        if (!bookingId) {
+            return res.status(400).json({ success: false, message: "bookingId is required to start the ride." });
+        }
+
         const isObjectId = mongoose.isValidObjectId(bookingId);
-        const query = isObjectId ? { _id: bookingId } : { bookingId };
+        const query = isObjectId ? { _id: bookingId } : { bookingId: String(bookingId).trim() };
 
         const booking = await Booking.findOne(query);
         if (!booking) {
@@ -20,11 +25,13 @@ const startAmbulanceRide = async (req, res) => {
         booking.trackingTimeline.push({
             status: 'En-Route',
             timestamp: new Date(),
-            note: "Ambulance driver started the journey to hospital."
+            note: "Ambulance driver started the journey to destination hospital."
         });
         
-        // Driver busy
-        await Ambulance.findByIdAndUpdate(driverId, { $set: { availableForEmergency: false } });
+        // Lock driver busy state
+        await Ambulance.findByIdAndUpdate(driverId, { 
+            $set: { availableForEmergency: false, isOnline: true } 
+        });
         await booking.save();
 
         // Sync linked hospital appointment if exists
@@ -35,31 +42,60 @@ const startAmbulanceRide = async (req, res) => {
             );
         }
 
-        res.json({ success: true, message: "Ride started. Live patient and fleet tracking active.", data: booking });
+        res.json({ 
+            success: true, 
+            message: "Ride started. Live patient and fleet tracking active.", 
+            data: booking 
+        });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// --- 2. REACHED HOSPITAL (Screenshot 37) ---
+// --- 2. REACHED HOSPITAL (Handover Drop) ---
 const completeAmbulanceRide = async (req, res) => {
     try {
-        const { appointmentId } = req.body;
-        
-        const appointment = await Appointment.findById(appointmentId);
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Appointment/Trip record not found." });
+        const { appointmentId, bookingId } = req.body;
+        const driverId = req.user.id;
+
+        const targetId = appointmentId || bookingId;
+        if (!targetId) {
+            return res.status(400).json({ success: false, message: "appointmentId or bookingId is required." });
         }
 
-        if (!appointment.tracking) appointment.tracking = {};
-        appointment.tracking.status = 'Admitted/Dropped to Hospital';
-        appointment.tracking.rideEndTime = new Date();
-        
-        // Ambulance free ho gayi
-        await Ambulance.findByIdAndUpdate(req.user.id, { $set: { availableForEmergency: true } });
+        const isObjectId = mongoose.isValidObjectId(targetId);
+        const query = isObjectId ? { _id: targetId } : { bookingId: String(targetId).trim() };
 
-        await appointment.save();
-        res.json({ success: true, message: "Handover successful. Ambulance is now free.", data: appointment });
+        // 1. Sync Booking Model
+        const booking = await Booking.findOne(query);
+        if (booking) {
+            booking.status = 'Delivered';
+            if (booking.paymentMethod === 'COD') {
+                booking.paymentStatus = 'Paid';
+            }
+            await booking.save();
+        }
+
+        // 2. Sync Appointment Model
+        const apptQuery = isObjectId ? { _id: targetId } : { transactionId: String(targetId).trim() };
+        const appointment = await Appointment.findOne(apptQuery);
+        if (appointment) {
+            if (!appointment.tracking) appointment.tracking = {};
+            appointment.tracking.status = 'Admitted/Dropped to Hospital';
+            appointment.tracking.rideEndTime = new Date();
+            await appointment.save();
+        }
+
+        // Release Driver back to Available
+        await Ambulance.findByIdAndUpdate(driverId, { 
+            $set: { availableForEmergency: true, isOnline: true } 
+        });
+
+        res.json({ 
+            success: true, 
+            message: "Handover successful. Ambulance is now free and available for next trip.",
+            data: booking || appointment 
+        });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
@@ -76,14 +112,14 @@ const updateAmbulanceGPS = async (req, res) => {
         const { lat, lng, bookingId } = req.body;
         const driverId = req.user.id;
 
-        if (!lat || !lng) {
+        if (lat === undefined || lng === undefined) {
             return res.status(400).json({ success: false, message: "Latitude and Longitude are required." });
         }
 
         const numericLat = Number(lat);
         const numericLng = Number(lng);
 
-        // A. Update global position in Ambulance Model
+        // A. Update global position in Ambulance Fleet Model
         await Ambulance.findByIdAndUpdate(driverId, {
             $set: { location: { lat: numericLat, lng: numericLng } }
         });
@@ -91,7 +127,7 @@ const updateAmbulanceGPS = async (req, res) => {
         // B. Update trip-specific position in AmbulanceBooking
         if (bookingId) {
             const isObjectId = mongoose.isValidObjectId(bookingId);
-            const query = isObjectId ? { _id: bookingId } : { bookingId };
+            const query = isObjectId ? { _id: bookingId } : { bookingId: String(bookingId).trim() };
 
             await Booking.findOneAndUpdate(query, {
                 $set: {
@@ -100,7 +136,7 @@ const updateAmbulanceGPS = async (req, res) => {
                 }
             });
 
-            // Also update linked hospital admission if exists
+            // Also update linked hospital admission live coordinates
             await Appointment.findOneAndUpdate(
                 { transactionId: bookingId },
                 {
@@ -126,6 +162,10 @@ const updateJourneyStatus = async (req, res) => {
     try {
         const { appointmentId, journeyStatus, eta } = req.body;
 
+        if (!appointmentId || !journeyStatus) {
+            return res.status(400).json({ success: false, message: "appointmentId and journeyStatus are required." });
+        }
+
         const update = {
             'tracking.status': journeyStatus,
             'tracking.eta': eta || "10 mins"
@@ -137,7 +177,7 @@ const updateJourneyStatus = async (req, res) => {
 
         const appointment = await Appointment.findByIdAndUpdate(appointmentId, { $set: update }, { new: true });
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Appointment/Trip record not found." });
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
         }
 
         res.json({ success: true, message: `Timeline updated to: ${journeyStatus}`, data: appointment });
