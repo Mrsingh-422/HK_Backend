@@ -629,19 +629,35 @@ const getAboutContent = async (req, res) => {
     }
 };
 
+// REPORT NURSE NO-SHOW (With Bureau Wallet Compensation Credit)
+// Endpoint: POST /driver/nurse/orders/no-show
 const reportNurseNoShow = async (req, res) => {
     try {
         const { bookingId, comments } = req.body;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findOne({ _id: bookingId, assignedStaffId: staffId, status: 'Arrived' });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(bookingId) : new mongoose.Types.ObjectId() },
+                { bookingId: String(bookingId).trim() }
+            ],
+            assignedStaffId: new mongoose.Types.ObjectId(staffId),
+            status: 'Arrived'
+        };
+
+        const booking = await NurseBooking.findOne(query);
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking must be in 'Arrived' state to report No-Show." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Active booking in 'Arrived' state not found for this nurse staff." 
+            });
         }
 
-        const totalPaid = booking.priceBreakdown?.totalPrice || 0;
+        const totalPaid = Number(booking.priceBreakdown?.totalPrice || booking.totalPrice || 0);
         let noShowFee = 0;
 
+        // Fetch No-Show Policy for Nurse
         const config = await NoShowConfig.findOne({ vendorType: 'Nurse', isActive: true });
         if (config && config.chargeValue > 0) {
             noShowFee = config.chargeType === 'Percentage'
@@ -650,22 +666,49 @@ const reportNurseNoShow = async (req, res) => {
         }
 
         booking.status = 'No-Show';
+        if (!booking.priceBreakdown) booking.priceBreakdown = {};
         booking.priceBreakdown.noShowFeeApplied = noShowFee;
         booking.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
         booking.cancelReason = comments || "Nurse arrived on location but patient was unreachable.";
 
         await booking.save();
 
+        // 🚨 CRITICAL FIX: Credit 100% No-Show Compensation to Nurse Bureau Wallet
+        if (noShowFee > 0 && booking.nurseId) {
+            const { creditVendorCompensation } = require('../../../utils/policyHelper');
+            await creditVendorCompensation(
+                booking.nurseId, 
+                'Nurse', 
+                noShowFee, 
+                booking.bookingId || booking._id.toString(), 
+                'No-Show Fee'
+            );
+        }
+
         // Release nurse staff status back to available
-        await Driver.findByIdAndUpdate(staffId, { status: 'Available' });
+        await Driver.findByIdAndUpdate(staffId, { 
+            $set: { status: 'Available', isOnline: true } 
+        });
+
+        // Send alert to patient
+        try {
+            await sendPushNotification(
+                booking.userId,
+                'user',
+                "Home Visit No-Show Recorded",
+                `Nurse arrived at your address but could not reach you. No-Show fee of ₹${noShowFee} was applied.`,
+                { bookingId: booking._id.toString(), type: 'nurse_no_show' }
+            );
+        } catch (e) {}
 
         res.json({ 
             success: true, 
-            message: "Home Nursing No-Show logged successfully. Driver released and refund initiated.", 
+            message: `Home Nursing No-Show logged. ₹${noShowFee} compensation credited to Nurse Bureau wallet.`, 
             noShowFeeApplied: noShowFee,
-            data: booking
+            data: booking 
         });
     } catch (error) {
+        console.error("Report Nurse No-Show Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -31,77 +31,58 @@ const getIncomingPrescriptionRequests = async (req, res) => {
     }
 };
 
-// 2. SUBMIT PROPOSAL / GENERATE BILL
+// 3. SUBMIT PROPOSAL / GENERATE PRESCRIPTION BILL
+// Endpoint: POST /provider/nurse/prescription/respond
 const submitProposal = async (req, res) => {
     try {
-        const nurseId = req.user._id; // Using mongodb safe objectId key
-
-        // 🔍 Terminal log to inspect raw incoming request from Flutter/Frontend
-        console.log("=== [DEBUG] Incoming Submit Proposal Payload ===");
-        console.log("Body:", req.body);
-        console.log("User/Nurse ID:", nurseId);
-
+        const nurseId = req.user.id;
         let { requestId, servicesPricing, consumablesUsed, taxAmount } = req.body;
 
-        // 1. Safe parsing for stringified Arrays sent by some frontend networks
         if (typeof servicesPricing === 'string') {
-            try {
-                servicesPricing = JSON.parse(servicesPricing);
-            } catch (e) {
-                return res.status(400).json({ success: false, message: "Failed parsing servicesPricing string into JSON array." });
-            }
+            try { servicesPricing = JSON.parse(servicesPricing); } catch (e) {}
         }
-
         if (typeof consumablesUsed === 'string') {
-            try {
-                consumablesUsed = JSON.parse(consumablesUsed);
-            } catch (e) {
-                consumablesUsed = [];
-            }
+            try { consumablesUsed = JSON.parse(consumablesUsed); } catch (e) {}
         }
 
-        // 2. Precise Validation Checks with unique message tags
-        if (!requestId) {
-            return res.status(400).json({ success: false, message: "Validation Error: 'requestId' field is missing or empty." });
-        }
-        if (!servicesPricing || !Array.isArray(servicesPricing) || servicesPricing.length === 0) {
-            return res.status(400).json({ success: false, message: "Validation Error: 'servicesPricing' must be a valid non-empty array." });
+        if (!requestId || !servicesPricing || !Array.isArray(servicesPricing) || servicesPricing.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "requestId and a valid non-empty servicesPricing array are required." 
+            });
         }
 
         const request = await NursingPrescriptionRequest.findById(requestId);
         if (!request) {
-            return res.status(404).json({ success: false, message: "Database Lookup Error: No request found with the provided requestId." });
+            return res.status(404).json({ success: false, message: "Prescription request not found." });
         }
 
-        // 3. Expiration validation check
-        if (new Date() > request.expiresAt) {
-            request.status = 'Expired';
-            await request.save();
-            return res.status(400).json({ success: false, message: "Transaction Error: This prescription request has expired (6 hours passed)." });
+        if (request.status !== 'Broadcasted' || new Date() > request.expiresAt) {
+            return res.status(400).json({ success: false, message: "This prescription inquiry has expired or is no longer active." });
         }
 
-        // 4. Double submission validation check
         const alreadySubmitted = request.proposals.some(p => p.nurseId.toString() === nurseId.toString());
         if (alreadySubmitted) {
-            return res.status(400).json({ success: false, message: "Validation Error: You have already submitted a proposal for this prescription request." });
+            return res.status(400).json({ success: false, message: "You have already submitted a proposal for this request." });
         }
 
-        // Calculations
         const baseServicePrice = servicesPricing.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
         const consumableTotal = (consumablesUsed || []).reduce((sum, item) => sum + (Number(item.price) || 0), 0);
-        const tax = Number(taxAmount) || 0;
+        const tax = Number(taxAmount || 0);
         const totalPrice = baseServicePrice + consumableTotal + tax;
 
         const proposal = {
             nurseId,
             servicesPricing,
-            consumablesUsed,
+            consumablesUsed: consumablesUsed || [],
             priceBreakdown: {
                 baseServicePrice,
                 consumableTotal,
                 taxAmount: tax,
                 totalPrice
-            }
+            },
+            status: 'Pending',
+            submittedAt: new Date()
         };
 
         request.proposals.push(proposal);
@@ -113,14 +94,15 @@ const submitProposal = async (req, res) => {
 
         await request.save();
 
-        res.status(211).json({
+        // 🚨 FIXED: Standard 200 OK Response
+        res.status(200).json({
             success: true,
-            message: "Proposal submitted successfully.",
+            message: "Proposal bill submitted successfully to patient.",
             data: proposal
         });
 
     } catch (error) {
-        console.error("[CRITICAL ERROR] submitProposal:", error);
+        console.error("Submit Proposal Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

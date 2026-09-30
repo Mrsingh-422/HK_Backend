@@ -3,26 +3,25 @@ const NurseService = require('../../../models/NurseService');
 const MasterConsumable = require('../../../models/MasterConsumable');
 const CareService = require('../../../models/CareService'); // For service selection in package creation
 
-// 1. GET ALL MY SERVICES FOR PACKAGE SELECTION
-// Nurse bureau jab package banayega, toh ye API use karega list dikhane ke liye
+// GET ALL MASTER SERVICES FOR PACKAGE DROPDOWN
+// Endpoint: GET /provider/nurse/package/nurse-services
 const getAllMasterServicesForSelection = async (req, res) => {
     try {
-        // Chunki CareService template hai, hum saari services fetch karenge
-        // Taaki nurse bureau inme se pick karke package bana sake
-        const services = await CareService.find({}).sort({ category: 1 });
-        res.json({ success: true, data: services });
+        const services = await CareService.find({}).sort({ category: 1 }).lean();
+        res.json({ success: true, count: services.length, data: services });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 2. CREATE/UPDATE PACKAGE
+// CREATE / UPDATE NURSE PACKAGE (With Clean URLs & Photo Preservation)
+// Endpoint: POST /provider/nurse/package/manage OR PUT /provider/nurse/package/manage/:id
 const managePackage = async (req, res) => {
     try {
         const { id } = req.params;
         const data = req.body;
+        const nurseId = req.user.id;
 
-        // Helper to safely parse JSON
         const safeParse = (val) => {
             if (!val) return [];
             return typeof val === 'string' ? JSON.parse(val) : val;
@@ -32,78 +31,106 @@ const managePackage = async (req, res) => {
         const consumablesInput = safeParse(data.consumablesUsed);
         const selectedServices = safeParse(data.includedServices);
 
-        if (!pricingInput || !selectedServices.length) {
-            return res.status(400).json({ success: false, message: "Pricing and Services are required" });
+        if (!pricingInput || !selectedServices || selectedServices.length === 0) {
+            return res.status(400).json({ success: false, message: "Pricing and at least one included service are required." });
         }
 
         const calculate = (base, disc) => Math.round(Number(base) - (Number(base) * (Number(disc) / 100)));
 
         const pricing = {
             oneDay: { 
-                base: Number(pricingInput.oneDay.base), 
-                discount: Number(pricingInput.oneDay.discount), 
-                final: calculate(pricingInput.oneDay.base, pricingInput.oneDay.discount) 
+                base: Number(pricingInput.oneDay?.base || 0), 
+                discount: Number(pricingInput.oneDay?.discount || 0), 
+                final: calculate(pricingInput.oneDay?.base, pricingInput.oneDay?.discount) 
             },
             multipleDays: { 
-                base: Number(pricingInput.multipleDays.base), 
-                discount: Number(pricingInput.multipleDays.discount), 
-                final: calculate(pricingInput.multipleDays.base, pricingInput.multipleDays.discount) 
+                base: Number(pricingInput.multipleDays?.base || 0), 
+                discount: Number(pricingInput.multipleDays?.discount || 0), 
+                final: calculate(pricingInput.multipleDays?.base, pricingInput.multipleDays?.discount) 
             },
             hourly: { 
-                base: Number(pricingInput.hourly.base), 
-                discount: Number(pricingInput.hourly.discount), 
-                final: calculate(pricingInput.hourly.base, pricingInput.hourly.discount) 
+                base: Number(pricingInput.hourly?.base || 0), 
+                discount: Number(pricingInput.hourly?.discount || 0), 
+                final: calculate(pricingInput.hourly?.base, pricingInput.hourly?.discount) 
             }
         };
 
         let processedConsumables = [];
         for (let item of consumablesInput) {
-            const master = await MasterConsumable.findById(item.masterItemId);
+            const targetItemId = item.masterItemId || item.consumableId;
+            const master = await MasterConsumable.findById(targetItemId);
             if (master) {
+                const discount = Number(item.discountPercentage || 0);
                 processedConsumables.push({
-                    masterItemId: item.masterItemId,
-                    discountPercentage: Number(item.discountPercentage),
-                    finalPrice: calculate(master.mrp, item.discountPercentage)
+                    masterItemId: master._id,
+                    discountPercentage: discount,
+                    finalPrice: calculate(master.mrp, discount)
                 });
             }
         }
 
+        // 🚨 CLEAN URL FORMAT FOR PACKAGE BANNER PHOTOS
+        let photoUrls = undefined;
+        if (req.files && req.files['photos'] && req.files['photos'].length > 0) {
+            photoUrls = req.files['photos'].map(f => `/uploads/nurse_packages/${f.filename}`);
+        }
+
         const packageData = {
-            nurseId: req.user.id,
-            packageName: data.packageName,
-            description: data.description || "Package bundle of nursing services", // Fallback description
+            nurseId,
+            packageName: data.packageName ? String(data.packageName).trim() : "Specialized Care Package",
+            description: data.description || "Package bundle of comprehensive nursing services",
             includedServices: selectedServices,
-            pricing: pricing,
+            pricing,
             consumablesUsed: processedConsumables,
-            prescriptionRequired: data.prescriptionRequired === 'true',
-            status: 'Approved',
-            photos: req.files && req.files['photos'] ? req.files['photos'].map(f => f.path) : []
+            prescriptionRequired: data.prescriptionRequired === 'true' || data.prescriptionRequired === true,
+            status: 'Approved'
         };
+
+        // Only overwrite photos if new ones are uploaded
+        if (photoUrls) {
+            packageData.photos = photoUrls;
+        }
 
         let result;
         if (id) {
-            result = await NursePackage.findOneAndUpdate({ _id: id, nurseId: req.user.id }, packageData, { new: true });
+            result = await NursePackage.findOneAndUpdate(
+                { _id: id, nurseId }, 
+                { $set: packageData }, 
+                { new: true }
+            );
+            if (!result) return res.status(404).json({ success: false, message: "Package not found or unauthorized." });
         } else {
+            if (!packageData.photos) packageData.photos = [];
             result = await NursePackage.create(packageData);
         }
 
-        res.status(201).json({ success: true, message: "Package listed successfully!", data: result });
+        res.status(201).json({ 
+            success: true, 
+            message: "Nurse package listed successfully!", 
+            data: result 
+        });
     } catch (error) { 
-        console.error("Package Error:", error);
+        console.error("Manage Package Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
 
-// 3. GET LIST OF MY PACKAGES
+
+// GET MY PACKAGES LIST
+// Endpoint: GET /provider/nurse/package/my-packages
 const getMyPackages = async (req, res) => {
     try {
         const packages = await NursePackage.find({ nurseId: req.user.id })
-            .populate('includedServices', 'title pricing')
-            .populate('consumablesUsed.masterItemId')
+            .populate('includedServices', 'category subCategory description procedureIncluded servicesOffered')
+            .populate('consumablesUsed.masterItemId', 'itemName size mrp unitType')
             .sort({ createdAt: -1 });
-        res.json({ success: true, data: packages });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+            
+        res.json({ success: true, count: packages.length, data: packages });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 module.exports = { getAllMasterServicesForSelection, managePackage, getMyPackages };

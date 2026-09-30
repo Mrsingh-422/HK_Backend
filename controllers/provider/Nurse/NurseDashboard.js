@@ -272,17 +272,82 @@ const getBookingRequests = async (req, res) => {
     }
 };
 
+// 4. PROVIDER BOOKING ACTION (Accept / Reject with Auto-Refund & Subscription Sync)
+// Endpoint: POST /provider/nurse/dash/booking/action
 const handleBookingAction = async (req, res) => {
     try {
         const { bookingId, action, reason } = req.body;
-        const status = (action === 'Accept') ? 'Confirmed' : 'Cancelled';
-        const booking = await NurseBooking.findOneAndUpdate(
-            { _id: bookingId, nurseId: req.user.id },
-            { status, rejectionReason: reason },
-            { new: true }
-        );
-        res.json({ success: true, message: `Booking ${action}ed`, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const nurseId = req.user.id;
+
+        if (!bookingId || !action || !['Accept', 'Reject'].includes(action)) {
+            return res.status(400).json({ success: false, message: "bookingId and action ('Accept' or 'Reject') are required." });
+        }
+
+        const booking = await NurseBooking.findOne({ _id: bookingId, nurseId });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found or unauthorized." });
+        }
+
+        if (action === 'Accept') {
+            booking.status = 'Confirmed';
+            await booking.save();
+
+            // Notify user
+            try {
+                await sendPushNotification(
+                    booking.userId,
+                    'user',
+                    "Nursing Booking Confirmed! 👩‍⚕️",
+                    "The Nurse Provider has accepted your booking. A staff nurse will be assigned shortly.",
+                    { bookingId: booking._id.toString(), type: 'nurse_booking_confirmed' }
+                );
+            } catch (e) {}
+
+            return res.json({ success: true, message: "Booking accepted successfully.", data: booking });
+        }
+
+        // ==========================================
+        // REJECTION CASE: AUTO-REFUND & BENEFIT RESTORE
+        // ==========================================
+        if (action === 'Reject') {
+            booking.status = 'Cancelled';
+            booking.cancelReason = reason || "Provider unavailable at requested time.";
+
+            // 🚨 1. REFUND SYNC: Move online payment to refund queue
+            if (booking.paymentStatus === 'Paid') {
+                booking.paymentStatus = 'Refund-Initiated';
+            }
+
+            // 🚨 2. SUBSCRIPTION SYNC: Refund benefit count back to subscriber
+            if (booking.subscriptionDetails?.isSubscriptionApplied) {
+                const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+                await refundBenefitCount(booking.userId, 'freeNurseVisitsCount');
+            }
+
+            await booking.save();
+
+            // Notify user
+            try {
+                await sendPushNotification(
+                    booking.userId,
+                    'user',
+                    "Booking Declined by Provider",
+                    `Your nurse booking was declined (${reason || 'Slot Full'}). Any paid amount has been initiated for refund.`,
+                    { bookingId: booking._id.toString(), type: 'nurse_booking_declined' }
+                );
+            } catch (e) {}
+
+            return res.json({ 
+                success: true, 
+                message: "Booking rejected. Online refund initiated and subscription benefits restored.", 
+                data: booking 
+            });
+        }
+
+    } catch (error) { 
+        console.error("Handle Booking Action Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 const getAvailableStaff = async (req, res) => {

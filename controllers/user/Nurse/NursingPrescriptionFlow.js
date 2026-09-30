@@ -59,55 +59,96 @@ const uploadAndParsePrescription = async (req, res) => {
     }
 };
 
-// 2. CONFIRM AND BROADCAST TO NEAREST 10 NURSES
+// 1. BROADCAST PRESCRIPTION REQUEST (Crash-Proof Distance Calculation)
+// Endpoint: POST /user/nurse/prescription/broadcast
 const broadcastPrescriptionRequest = async (req, res) => {
     try {
-        const { prescriptionImage, services, lat, lng, address } = req.body;
+        let { prescriptionImage, services, lat, lng, address } = req.body;
 
-        if (!prescriptionImage || !services || services.length === 0 || !lat || !lng) {
-            return res.status(400).json({ success: false, message: "Missing required details for broadcasting." });
+        if (typeof services === 'string') {
+            try { services = JSON.parse(services); } catch (e) {}
+        }
+        if (typeof address === 'string') {
+            try { address = JSON.parse(address); } catch (e) {}
         }
 
-        // Find 10 nearest approved nurses
-        const nearestNurses = await Nurse.find({
+        if (!prescriptionImage || !services || !Array.isArray(services) || services.length === 0 || !lat || !lng) {
+            return res.status(400).json({ success: false, message: "Prescription image, services list, and coordinates (lat, lng) are required." });
+        }
+
+        const userLat = parseFloat(lat);
+        const userLng = parseFloat(lng);
+
+        // 1. Fetch all active and approved Nurse Providers
+        const allNurses = await Nurse.find({
             profileStatus: 'Approved',
-            isActive: true,
-            location: {
-                $near: {
-                    $geometry: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] }
+            isActive: true
+        }).select('_id name location phone profileImage rating city').lean();
+
+        if (allNurses.length === 0) {
+            return res.status(404).json({ success: false, message: "No nursing service providers found in platform registry." });
+        }
+
+        // 2. Calculate real-world distance safely without GeoJSON indexing crash
+        const nursesWithDistance = [];
+        for (let nurse of allNurses) {
+            if (nurse.location?.lat && nurse.location?.lng) {
+                const dist = await getDistance(userLat, userLng, Number(nurse.location.lat), Number(nurse.location.lng));
+                if (dist <= 25) { // 25km broad service radius
+                    nursesWithDistance.push({ nurseId: nurse._id, distance: dist, nurseInfo: nurse });
                 }
             }
-        }).limit(10);
-
-        if (nearestNurses.length === 0) {
-            return res.status(404).json({ success: false, message: "No nursing service providers found nearby." });
         }
 
-        const candidateNurses = nearestNurses.map(nurse => ({
-            nurseId: nurse._id,
+        if (nursesWithDistance.length === 0) {
+            return res.status(404).json({ success: false, message: "No nursing service providers available within 25km radius." });
+        }
+
+        // 3. Sort by nearest and pick top 10 candidates
+        nursesWithDistance.sort((a, b) => a.distance - b.distance);
+        const top10Candidates = nursesWithDistance.slice(0, 10).map(c => ({
+            nurseId: c.nurseId,
             status: 'Pending'
         }));
 
-        // Expiry set to exactly 6 hours from now
+        // Expiry: Exactly 6 hours from broadcast
         const expiresAt = moment().add(6, 'hours').toDate();
 
         const request = await NursingPrescriptionRequest.create({
             userId: req.user.id,
             prescriptionImage,
             services,
-            location: { lat, lng, address },
-            candidateNurses,
+            location: { 
+                lat: userLat, 
+                lng: userLng, 
+                address: address || {} 
+            },
+            candidateNurses: top10Candidates,
             expiresAt
         });
 
+        // 4. Send Push Notifications to all candidate nurses
+        for (let candidate of top10Candidates) {
+            try {
+                await sendPushNotification(
+                    candidate.nurseId,
+                    'nurse',
+                    "📋 New Nursing Prescription Request!",
+                    `New prescription care inquiry nearby. Tap to review and submit your proposal bill.`,
+                    { requestId: request._id.toString(), type: 'new_prescription_inquiry' }
+                );
+            } catch (e) {}
+        }
+
         res.status(201).json({
             success: true,
-            message: `Prescription broadcasted successfully to ${nearestNurses.length} nearby nurses.`,
+            message: `Prescription broadcasted successfully to ${top10Candidates.length} nearby nurses.`,
             requestId: request._id,
             expiresAt
         });
 
     } catch (error) {
+        console.error("Broadcast Prescription Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -305,100 +346,65 @@ const acceptProposalAndBook = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// 2. NEW PAYMENT VERIFICATION METHOD FOR PRESCRIPTION BOOKINGS
+// 2. VERIFY PRESCRIPTION PAYMENT & CONFIRM BOOKING (History Preserved)
+// Endpoint: POST /user/nurse/prescription/verify-payment
 const verifyPrescriptionPayment = async (req, res) => {
     try {
-        console.log("=== [PRESCRIPTION DEBUG START] ===");
-        console.log("Incoming Body:", req.body);
-        console.log("Environment Mode (NODE_ENV):", process.env.NODE_ENV);
-
         const { appointmentId, requestId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
 
-        // 1. Basic Parameter Checks
         if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
-            console.error("[Debug Error]: Missing core parameters inside req.body");
             return res.status(400).json({ success: false, message: "Missing payment verification parameters." });
         }
 
-        // Development Auto-Verify bypass configuration
-        let isVerified = false;
-        if (process.env.NODE_ENV === 'development' || !razorpaySignature || razorpaySignature === 'test') {
-            console.log("[Debug Log]: Bypassing signature verification in Development mode.");
-            isVerified = true; 
-        } else {
-            isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
-        }
-
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
         if (!isVerified) {
-            console.error("[Debug Error]: Razorpay Signature verification failed!");
-            return res.status(400).json({ success: false, message: "Invalid payment signature." });
+            return res.status(400).json({ success: false, message: "Invalid payment signature verification failed." });
         }
 
         const booking = await NurseBooking.findById(appointmentId);
         if (!booking) {
-            console.error(`[Debug Error]: No booking found with ID: ${appointmentId}`);
-            return res.status(404).json({ success: false, message: "Booking document not found in DB." });
+            return res.status(404).json({ success: false, message: "Booking document not found." });
         }
-
-        console.log("Found Booking Document:", {
-            _id: booking._id,
-            bookingId: booking.bookingId,
-            prescriptionRequestId: booking.prescriptionRequestId // Iska defined hona zaroori hai!
-        });
 
         const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
-        // Update Booking Status to Confirmed
         booking.status = 'Confirmed';
         booking.paymentStatus = 'Paid';
         booking.paymentMethod = 'Online';
         booking.paymentDetails = rzpDetails;
         await booking.save();
-        console.log("[Debug Log]: Booking successfully updated to Confirmed / Paid.");
 
-        // 2. Determine target request ID
+        // 🚨 HISTORY PRESERVATION FIX: Mark request as 'Completed' instead of deleting it!
         const targetRequestId = requestId || booking.prescriptionRequestId;
-        console.log(`[Debug Log]: Selected targetRequestId to delete: ${targetRequestId}`);
-
-        if (!targetRequestId) {
-            console.error("[Debug Error]: targetRequestId is null or undefined! Deletion skipped.");
-            return res.status(400).json({ 
-                success: false, 
-                message: "Could not locate a valid Prescription Request ID. Deletion skipped." 
+        if (targetRequestId && mongoose.isValidObjectId(targetRequestId)) {
+            await NursingPrescriptionRequest.findByIdAndUpdate(targetRequestId, {
+                $set: {
+                    status: 'Completed',
+                    selectedNurseId: booking.nurseId,
+                    bookingId: booking._id
+                }
             });
         }
 
-        // 3. STRICT DELETE QUERY
-        const deletedRequest = await NursingPrescriptionRequest.findByIdAndDelete(targetRequestId);
-        
-        if (!deletedRequest) {
-            console.error(`[Delete Failed]: No document found in DB with ID: ${targetRequestId}`);
-            return res.status(404).json({ 
-                success: false, 
-                message: `Payment verified but request document ${targetRequestId} not found in DB. Ensure Schema update is applied.` 
-            });
-        }
-
-        console.log(`[Success]: Request ${targetRequestId} instantly deleted from database.`);
-        console.log("=== [PRESCRIPTION DEBUG END] ===");
-
-        // 4. Send Push Notification to assigned nurse
-        await notifyAdminsAndVendor(
-            booking.nurseId,
-            'nurse',
-            "New Prescription Booking Confirmed!",
-            `Paid Prescription booking #${booking.bookingId} has been successfully assigned to you.`,
-            { bookingId: booking._id.toString(), type: 'new_prescription_booking' }
-        );
+        // Notify Nurse Bureau
+        try {
+            await notifyAdminsAndVendor(
+                booking.nurseId,
+                'nurse',
+                "New Prescription Booking Confirmed!",
+                `Paid Prescription booking #${booking.bookingId} has been confirmed. Please assign a nurse staff.`,
+                { bookingId: booking._id.toString(), type: 'new_prescription_booking' }
+            );
+        } catch (e) {}
 
         res.json({
             success: true,
-            message: "Payment verified, booking confirmed and parent request permanently deleted.",
+            message: "Payment verified, booking confirmed and prescription archived to history.",
             data: booking
         });
 
     } catch (error) {
-        console.error("[CRITICAL SYSTEM ERROR] verifyPrescriptionPayment:", error);
+        console.error("Verify Prescription Payment Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

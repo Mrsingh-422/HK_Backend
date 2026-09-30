@@ -663,20 +663,23 @@ const updateReturnPickupStatus = async (req, res) => {
     }
 };
 
-// ==========================================
-// 3. VERIFY CUSTOMER RETURN PICKUP VIA FIREBASE OTP
+// VERIFY RETURN PICKUP & NOTIFY PHARMACY STORE
 // Endpoint: POST /driver/pharmacy/return-pickups/verify-pickup
-// ==========================================
 const verifyAndCompleteReturnPickup = async (req, res) => {
     try {
         const { orderId, idToken, otp } = req.body;
         const driverId = req.user.id;
 
-        const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
-            'returnDetails.pickupDriverId': driverId
-        }).populate('userId', 'phone');
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(orderId) : new mongoose.Types.ObjectId() },
+                { orderId: String(orderId).trim() }
+            ],
+            'returnDetails.pickupDriverId': new mongoose.Types.ObjectId(driverId)
+        };
 
+        const order = await PharmacyBooking.findOne(query).populate('userId', 'phone name');
         if (!order) {
             return res.status(404).json({ success: false, message: "Pickup task not found or unauthorized." });
         }
@@ -687,15 +690,15 @@ const verifyAndCompleteReturnPickup = async (req, res) => {
         // 🚨 Verify Firebase Phone ID Token
         if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
             if (!idToken) {
-                return res.status(400).json({ success: false, message: "Firebase idToken is required." });
+                return res.status(400).json({ success: false, message: "Firebase idToken is required for return verification." });
             }
             const verification = await verifyFirebasePhoneToken(idToken, cleanCustomerPhone);
             if (!verification.success) {
                 return res.status(400).json({ success: false, message: verification.message });
             }
         } else if (otp) {
-            if (otp !== '123456') {
-                return res.status(400).json({ success: false, message: "Invalid Return OTP." });
+            if (otp !== '123456' && order.returnDetails.returnOTP !== otp) {
+                return res.status(400).json({ success: false, message: "Invalid Return OTP code." });
             }
         }
 
@@ -710,15 +713,32 @@ const verifyAndCompleteReturnPickup = async (req, res) => {
         order.returnDetails.collectedAt = new Date();
         await order.save();
 
-        await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
+        // Release driver status back to Available
+        await Driver.findByIdAndUpdate(driverId, { 
+            $set: { status: 'Available', isOnline: true } 
+        });
+
+        // 🚨 PUSH NOTIFICATION: Alert Pharmacy Store Counter to inspect parcel upon delivery
+        if (order.pharmacyId) {
+            try {
+                await sendPushNotification(
+                    order.pharmacyId,
+                    'pharmacy',
+                    "📦 Return Parcel Picked Up from Customer!",
+                    `Delivery partner has collected return parcel for Order #${order.orderId}. Please inspect upon arrival at store counter.`,
+                    { orderId: order._id.toString(), type: 'return_collected_by_driver' }
+                );
+            } catch (e) {}
+        }
 
         res.json({
             success: true,
-            message: "Return package collected successfully via Firebase OTP verification!",
+            message: "Return package collected successfully via OTP! Pharmacy store notified.",
             data: order.returnDetails
         });
 
     } catch (error) {
+        console.error("Verify Return Pickup Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
