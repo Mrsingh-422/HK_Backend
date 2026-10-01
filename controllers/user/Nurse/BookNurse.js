@@ -4,11 +4,14 @@ const NurseService = require('../../../models/NurseService');
 const NursePackage = require('../../../models/NursePackage');
 const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
+const CareService = require('../../../models/CareService');
+const MasterConsumable = require('../../../models/MasterConsumable');
 const { isNurseAvailable, generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const NurseConsumable = require('../../../models/MasterConsumable');
 const Coupon = require('../../../models/Coupon');
 const Review = require('../../../models/Review');
 const UserSubscription = require('../../../models/UserSubscription');
+const { getDistance } = require('../../../utils/helpers');
 
 // const { generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const mongoose = require('mongoose');
@@ -20,6 +23,12 @@ const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/
 const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
+
+// Helper function to safely escape regex special characters
+const escapeRegex = (string) => {
+    if (!string || typeof string !== 'string') return '';
+    return string.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+};
 
 
 
@@ -139,101 +148,98 @@ const getNurseDetails = async (req, res) => {
     }
 };
 
-// NEW CONTROLLER: SEARCH NURSES, SERVICES & PACKAGES WITH SUGGESTIONS
-// endpoint: GET /user/nurse/search-suggestions?q=query_text
+// 3. ENHANCED SEARCH SUGGESTIONS (Searches Provider Name, Master Services & Subcategories)
+// endpoint: GET /user/nurse/search-suggestions?query=...
 const searchNursesAndServices = async (req, res) => {
     try {
-        const { q } = req.query; // 'q' contains the typed query string
-
-        // Agar query empty hai ya sirf white spaces hain
-        if (!q || !q.trim()) {
-            return res.json({
-                success: true,
-                data: {
-                    suggestions: [],
-                    providers: [],
-                    services: [],
-                    packages: []
-                }
-            });
+        const { query } = req.query;
+        if (!query || query.trim().length < 2) {
+            return res.json({ success: true, count: 0, data: [] });
         }
 
-        const regex = new RegExp(q.trim(), 'i');
+        const safeSearch = escapeRegex(query.trim());
+        const regex = new RegExp(safeSearch, 'i');
 
-        // 1. QUERY PROVIDERS (Nurses bureaus that are Approved and Active)
-        const providers = await Nurse.find({
-            profileStatus: 'Approved',
-            isActive: true,
-            name: regex
-        })
-            .select('name profileImage city speciality experienceYears rating totalReviews isOnline location')
-            .limit(10)
-            .lean();
+        // Parallel Lookups: 1. Providers, 2. Master CSV Services, 3. Vendor Listed Services
+        const [nurses, masterServices, vendorServices] = await Promise.all([
+            Nurse.find({
+                name: regex,
+                isActive: true,
+                profileStatus: 'Approved'
+            }).select('_id name city speciality profileImage rating').limit(5).lean(),
 
-        // 2. QUERY SERVICES (Populate only if the associated provider is Active & Approved)
-        const services = await NurseService.find({
-            title: regex,
-            status: 'Approved',
-            isActive: true
-        })
-            .populate({
-                path: 'nurseId',
-                match: { profileStatus: 'Approved', isActive: true },
-                select: 'name profileImage rating city experienceYears isOnline'
-            })
-            .limit(10)
-            .lean();
+            CareService.find({
+                $or: [
+                    { category: regex },
+                    { subCategory: regex },
+                    { servicesOffered: regex }
+                ]
+            }).select('_id category subCategory oneDayOneTimePrice pricePerHour').limit(8).lean(),
 
-        // Filter out services where the provider is inactive/null due to match conditions
-        const validServices = services.filter(s => s.nurseId);
+            NurseService.find({
+                title: regex,
+                status: 'Approved'
+            }).populate('nurseId', 'name profileImage city rating isActive profileStatus').limit(5).lean()
+        ]);
 
-        // 3. QUERY PACKAGES (Populate only if associated provider is Active & Approved)
-        const packages = await NursePackage.find({
-            packageName: regex,
-            status: 'Approved',
-            isActive: true
-        })
-            .populate({
-                path: 'nurseId',
-                match: { profileStatus: 'Approved', isActive: true },
-                select: 'name profileImage rating city experienceYears isOnline'
-            })
-            .limit(10)
-            .lean();
-
-        // Filter out packages where the provider is inactive
-        const validPackages = packages.filter(p => p.nurseId);
-
-        // 4. GENERATE AUTOCOMPLETE SUGGESTIONS LIST (Flat array of strings for easy UI type-ahead)
         const suggestions = [];
 
-        // Add top matching provider names
-        providers.slice(0, 4).forEach(p => suggestions.push(p.name));
+        // 1. Map Master Services (CSV Uploads)
+        masterServices.forEach(ms => {
+            suggestions.push({
+                id: ms._id,
+                type: "Service",
+                title: ms.subCategory,
+                subtitle: `Category: ${ms.category}`,
+                startingPrice: ms.oneDayOneTimePrice || ms.pricePerHour || 0,
+                category: ms.category,
+                subCategory: ms.subCategory,
+                image: null
+            });
+        });
 
-        // Add top matching service titles
-        validServices.slice(0, 4).forEach(s => suggestions.push(s.title));
+        // 2. Map Nurse Providers
+        nurses.forEach(n => {
+            suggestions.push({
+                id: n._id,
+                type: "Provider",
+                title: n.name,
+                subtitle: `${n.speciality || 'General Nursing'} • ${n.city || ''}`,
+                startingPrice: null,
+                category: null,
+                subCategory: null,
+                image: n.profileImage || null
+            });
+        });
 
-        // Add top matching package names
-        validPackages.slice(0, 4).forEach(p => suggestions.push(p.packageName));
-
-        // Remove any duplicates from the suggestion list
-        const uniqueSuggestions = [...new Set(suggestions)];
-
-        res.json({
-            success: true,
-            data: {
-                suggestions: uniqueSuggestions, // Used for quick autocomplete dropdown
-                providers,                      // Matched Nurse bureaus
-                services: validServices,        // Matched individual treatments
-                packages: validPackages         // Matched health bundles
+        // 3. Map Specific Vendor Services
+        vendorServices.forEach(vs => {
+            if (vs.nurseId && vs.nurseId.isActive !== false && vs.nurseId.profileStatus === 'Approved') {
+                suggestions.push({
+                    id: vs._id,
+                    type: "VendorService",
+                    title: vs.title,
+                    subtitle: `Provided by: ${vs.nurseId.name} (${vs.nurseId.city || ''})`,
+                    startingPrice: vs.pricing?.oneDay?.final || vs.pricing?.hourly?.final || 0,
+                    category: null,
+                    subCategory: vs.title,
+                    image: vs.nurseId.profileImage || null
+                });
             }
         });
 
+        res.json({
+            success: true,
+            count: suggestions.length,
+            data: suggestions
+        });
+
     } catch (error) {
-        console.error("Search suggestions API error:", error);
+        console.error("Search Nurse Suggestions Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 const getNurseDeliveryConfig = async (req, res) => {
@@ -1300,103 +1306,226 @@ const getMedicalConditions = async (req, res) => {
     }
 };
 
-// 1. GET GLOBAL UNIQUE SERVICES LIST (Our Nursing Services section on Home Screen)
-// endpoint: GET /user/nurse/services/global
+// 1. GET STANDARD CATALOG SERVICES (With Available-First Sorting, Filters & Pagination)
+// endpoint: GET /user/nurse/services/global?page=1&limit=20&category=...&search=...&sortBy=available_first&hasVendorsOnly=false
 const getGlobalServicesList = async (req, res) => {
     try {
-        const services = await NurseService.find()
-            .populate({
-                path: 'nurseId',
-                select: 'name profileStatus isActive'
-            })
-            .lean();
+        const { 
+            category, 
+            search, 
+            sortBy = 'available_first', 
+            hasVendorsOnly = 'false',
+            page = 1, 
+            limit = 20 
+        } = req.query;
 
-        // Step 1: Filter only those services whose associated Nurse is Approved & Active
-        const validServices = services.filter(service =>
-            service.nurseId &&
-            service.nurseId.profileStatus === 'Approved' &&
-            service.nurseId.isActive === true &&
-            (service.status === 'Approved' || !service.status)
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 20);
+
+        let query = {};
+        if (category && category !== 'All' && category.trim() !== '') {
+            query.category = { $regex: new RegExp("^" + escapeRegex(category.trim()) + "$", "i") };
+        }
+        if (search && search.trim() !== "") {
+            const cleanSearch = escapeRegex(search.trim());
+            query.$or = [
+                { category: { $regex: cleanSearch, $options: 'i' } },
+                { subCategory: { $regex: cleanSearch, $options: 'i' } },
+                { servicesOffered: { $regex: cleanSearch, $options: 'i' } }
+            ];
+        }
+
+        // 1. Fetch master CSV services and all approved vendor services in parallel
+        const [masterServices, allVendorServices] = await Promise.all([
+            CareService.find(query).lean(),
+            NurseService.find({ status: 'Approved' })
+                .populate('nurseId', 'profileStatus isActive')
+                .lean()
+        ]);
+
+        // Filter active & approved providers only
+        const activeVendorServices = (allVendorServices || []).filter(
+            vs => vs.nurseId && vs.nurseId.isActive !== false && vs.nurseId.profileStatus === 'Approved'
         );
 
-        // Step 2: Grouping to get unique titles & lowest starting price (No Photo Reference)
-        const uniqueMap = {};
-        validServices.forEach(s => {
-            const title = s.title;
-            const price = s.pricing?.oneDay?.final || 0;
+        // 2. High-Performance in-memory enrichment
+        let enrichedServices = masterServices.map((service) => {
+            const serviceIdStr = String(service._id);
+            const subCategoryClean = (service.subCategory || '').trim().toLowerCase();
 
-            if (!uniqueMap[title]) {
-                uniqueMap[title] = {
-                    _id: s._id,
-                    title: title,
-                    description: s.description,
-                    startingPrice: price
-                };
-            } else {
-                if (price > 0 && (uniqueMap[title].startingPrice === 0 || price < uniqueMap[title].startingPrice)) {
-                    uniqueMap[title].startingPrice = price;
+            // Match vendor services linked to this master service ID or matching title
+            const matchingVendors = activeVendorServices.filter(vs => {
+                const isIdMatch = vs.careSubCategoryId && String(vs.careSubCategoryId) === serviceIdStr;
+                const isTitleMatch = vs.title && String(vs.title).trim().toLowerCase() === subCategoryClean;
+                return isIdMatch || isTitleMatch;
+            });
+
+            let minPrice = service.oneDayOneTimePrice || service.pricePerHour || 0;
+
+            if (matchingVendors.length > 0) {
+                const prices = matchingVendors.map(vs => {
+                    return Number(vs.pricing?.oneDay?.final || vs.pricing?.hourly?.final || 0);
+                }).filter(p => p > 0);
+
+                if (prices.length > 0) {
+                    minPrice = Math.min(...prices);
                 }
+            }
+
+            return {
+                _id: service._id,
+                category: service.category || "NURSING CARE",
+                subCategory: service.subCategory || "",
+                description: service.description || "",
+                procedureIncluded: service.procedureIncluded || "",
+                servicesOffered: service.servicesOffered || "NURSING CARE",
+                prescriptionRequired: String(service.prescriptionStatus).toUpperCase() === 'YES',
+                categoryUrl: service.categoryUrl || "",
+                defaultOneDayPrice: Number(service.oneDayOneTimePrice || 0),
+                defaultHourlyPrice: Number(service.pricePerHour || 0),
+                defaultMultiDayPrice: Number(service.forMultipleDaysPrice || 0),
+                minPrice: Number(minPrice || 0),
+                providerCount: matchingVendors.length,
+                hasActiveVendors: matchingVendors.length > 0
+            };
+        });
+
+        // 3. Optional Filter: Only services that have active vendor listings
+        if (hasVendorsOnly === 'true' || hasVendorsOnly === true) {
+            enrichedServices = enrichedServices.filter(s => s.hasActiveVendors === true);
+        }
+
+        // 4. SMART MULTI-TIER SORTING ENGINE (Available vendors always on top)
+        enrichedServices.sort((a, b) => {
+            // First priority: Available services on TOP
+            if (a.hasActiveVendors !== b.hasActiveVendors) {
+                return a.hasActiveVendors ? -1 : 1;
+            }
+
+            // Second priority: User selected sortBy
+            switch (sortBy) {
+                case 'price_asc':
+                    return a.minPrice - b.minPrice;
+                case 'price_desc':
+                    return b.minPrice - a.minPrice;
+                case 'popularity':
+                    return b.providerCount - a.providerCount;
+                case 'name_asc':
+                    return a.subCategory.localeCompare(b.subCategory);
+                case 'available_first':
+                default:
+                    // Highest provider count first, then lowest price
+                    if (b.providerCount !== a.providerCount) {
+                        return b.providerCount - a.providerCount;
+                    }
+                    return a.minPrice - b.minPrice;
             }
         });
 
-        const data = Object.values(uniqueMap);
+        // 5. PAGINATION SLICING
+        const totalItems = enrichedServices.length;
+        const totalPages = Math.ceil(totalItems / limitNum) || 1;
+        const skip = (pageNum - 1) * limitNum;
+        const paginatedData = enrichedServices.slice(skip, skip + limitNum);
 
-        res.json({ success: true, count: data.length, data });
+        res.status(200).json({
+            success: true,
+            pagination: {
+                totalItems,
+                totalPages,
+                currentPage: pageNum,
+                limit: limitNum,
+                hasNextPage: pageNum < totalPages,
+                hasPrevPage: pageNum > 1
+            },
+            data: paginatedData
+        });
 
     } catch (error) {
-        console.error("getGlobalServicesList Error:", error);
+        console.error("Get Global Services Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 2. GET PROVIDERS FOR A SELECTED SERVICE (Lists Nurse bureaus offering that specific service)
-// endpoint: GET /user/nurse/services/providers?serviceTitle=Dressing
+// 2. GET VENDORS OFFERING A SELECTED CSV MASTER SERVICE
+// endpoint: GET /user/nurse/services/providers?serviceId=...&subCategory=...&userLat=...&userLng=...
 const getProvidersForService = async (req, res) => {
     try {
-        const { serviceTitle } = req.query; // e.g. "Dressing"
+        const { serviceId, subCategory, userLat, userLng } = req.query;
 
-        if (!serviceTitle) {
-            return res.status(400).json({ success: false, message: "serviceTitle query parameter is required." });
+        let matchQuery = { status: 'Approved' };
+
+        const orConditions = [];
+        if (serviceId) {
+            orConditions.push({ careSubCategoryId: serviceId });
         }
 
-        // Case-insensitive exact title match
-        const serviceProviders = await NurseService.find({
-            title: new RegExp(`^${serviceTitle.trim()}$`, 'i'),
-            status: 'Approved' // Assures service is approved by admin
-        })
-            .populate({
-                path: 'nurseId',
-                match: { profileStatus: 'Approved', isActive: true }, // Assures provider is active & approved
-                select: 'name profileImage rating city experienceYears location isOnline'
-            })
+        if (subCategory && subCategory.trim() !== '') {
+            orConditions.push({ 
+                title: { $regex: new RegExp("^" + escapeRegex(subCategory.trim()) + "$", "i") } 
+            });
+        }
+
+        if (orConditions.length > 0) {
+            matchQuery.$or = orConditions;
+        }
+
+        // Fetch vendor service offerings
+        const vendorServices = await NurseService.find(matchQuery)
+            .populate('nurseId', 'name email phone city state address rating totalReviews profileImage location isActive profileStatus is24x7')
+            .populate('consumablesUsed.masterItemId', 'itemName size mrp unitType')
+            .sort({ 'pricing.oneDay.final': 1 })
             .lean();
 
-        // Filter and map valid active providers
-        const validProviders = serviceProviders
-            .filter(s => s.nurseId) // Removes inactive providers
-            .map(s => ({
-                serviceId: s._id, // 🌟 Used for booking checkout input
-                pricing: s.pricing,
-                nurseDetails: {
-                    _id: s.nurseId._id,
-                    name: s.nurseId.name,
-                    profileImage: s.nurseId.profileImage,
-                    rating: s.nurseId.rating || 0,
-                    city: s.nurseId.city,
-                    experienceYears: s.nurseId.experienceYears || 0,
-                    location: s.nurseId.location,
-                    isOnline: s.nurseId.isOnline ?? true
-                }
-            }));
+        // Filter active & approved providers only
+        const activeList = vendorServices.filter(
+            item => item.nurseId && item.nurseId.isActive !== false && item.nurseId.profileStatus === 'Approved'
+        );
+
+        // Distance Calculation
+        const providersWithDistance = await Promise.all(activeList.map(async (item) => {
+            const nurse = item.nurseId;
+            let distance = 0;
+
+            if (userLat && userLng && nurse.location?.lat && nurse.location?.lng) {
+                distance = await getDistance(
+                    parseFloat(userLat),
+                    parseFloat(userLng),
+                    Number(nurse.location.lat),
+                    Number(nurse.location.lng)
+                );
+            }
+
+            return {
+                serviceId: item._id,
+                masterServiceId: item.careSubCategoryId || null,
+                serviceTitle: item.title,
+                serviceDescription: item.description,
+                pricing: item.pricing,
+                consumablesUsed: item.consumablesUsed,
+                prescriptionRequired: item.prescriptionRequired,
+                nurseId: nurse._id,
+                nurseName: nurse.name,
+                nurseCity: nurse.city,
+                nurseAddress: nurse.address,
+                nurseRating: nurse.rating || 4.5,
+                totalReviews: nurse.totalReviews || 0,
+                profileImage: nurse.profileImage || null,
+                distance: Number(distance.toFixed(2))
+            };
+        }));
+
+        // Sort: Nearest first, then lowest price first
+        providersWithDistance.sort((a, b) => (a.distance - b.distance) || (a.pricing?.oneDay?.final - b.pricing?.oneDay?.final));
 
         res.json({
             success: true,
-            count: validProviders.length,
-            data: validProviders
+            count: providersWithDistance.length,
+            data: providersWithDistance
         });
 
     } catch (error) {
-        console.error("getProvidersForService Error:", error);
+        console.error("Get Providers For Service Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
