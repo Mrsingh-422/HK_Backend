@@ -208,28 +208,39 @@ const uploadReport = async (req, res) => {
 };
 
 
-// 7. GET REPORT TEMPLATES (Optimized: Strictly requires testNames to avoid 1000+ database dumps)
-// endpoint: GET /provider/labs/report-templates
+// 7. GET REPORT TEMPLATES (Strict Test List with Optional Gender Filter)
+// endpoint: GET /provider/labs/report-templates?testNames=CBC,LFT&gender=Female
 const getReportTemplates = async (req, res) => {
     try {
-        const { testNames } = req.query;
+        const { testNames, gender } = req.query;
         
-        // 🚨 SECURITY/PERFORMANCE GUARD: Prevent massive data dump
         if (!testNames) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Query parameter 'testNames' (comma-separated list) is required to fetch detailed parameters. Database dump is blocked." 
+                message: "Query parameter 'testNames' (comma-separated list) is required." 
             });
         }
 
         const requestedList = testNames.split(',').map(name => name.trim());
+        const targetGender = gender || 'Both';
         
-        // Only fetch requested templates from database
-        const templates = await MasterReportTemplate.find({ testName: { $in: requestedList } }).lean();
+        const query = {
+            testName: { $in: requestedList },
+            $or: [
+                { gender: targetGender },
+                { gender: 'Both' }
+            ]
+        };
+
+        const templates = await MasterReportTemplate.find(query).lean();
+
+        // Specific gender takes precedence over 'Both'
+        templates.sort((a, b) => (a.gender === 'Both' ? -1 : 1));
 
         const formattedTemplates = {};
         templates.forEach(t => {
             formattedTemplates[t.testName] = {
+                genderApplied: t.gender,
                 interpretation: t.parameters?.[0]?.interpretation || "",
                 parameters: t.parameters
             };
@@ -237,7 +248,8 @@ const getReportTemplates = async (req, res) => {
 
         res.json({ 
             success: true, 
-            count: templates.length, 
+            count: Object.keys(formattedTemplates).length, 
+            genderRequested: targetGender,
             data: formattedTemplates 
         });
     } catch (error) {
@@ -248,32 +260,43 @@ const getReportTemplates = async (req, res) => {
 
 
 
-// 8. GET REPORT TEMPLATES FOR DROPDOWN (Highly Optimized: Name & ID only with Limit 50)
-// endpoint: GET /provider/labs/report-templates/dropdown
+// 8. GET REPORT TEMPLATES FOR DROPDOWN (Gender-Aware Display with Limit 50)
+// endpoint: GET /provider/labs/report-templates/dropdown?search=...
 const getReportTemplatesDropdown = async (req, res) => {
     try {
-        const { search } = req.query; // Optional search to filter dropdown values on typing
+        const { search } = req.query;
 
         let query = {};
         if (search) {
             query.testName = { $regex: search, $options: 'i' };
         }
 
-        // 🚨 PERFORMANCE OPTIMIZATION: Only select 'testName' and limit results to 50
+        // 🚨 Select both testName & gender for accurate LIMS manual selection
         const templates = await MasterReportTemplate.find(query)
-            .select('testName')
-            .sort({ testName: 1 })
-            .limit(50); // Prevents rendering bottleneck of 1000+ rows
-        
+            .select('testName gender')
+            .sort({ testName: 1, gender: 1 })
+            .limit(50)
+            .lean();
+
+        const formattedDropdown = templates.map(t => ({
+            _id: t._id,
+            testName: t.testName,
+            gender: t.gender || 'Both',
+            displayName: t.gender && t.gender !== 'Both' 
+                ? `${t.testName} (${t.gender})` 
+                : t.testName
+        }));
+
         res.json({ 
             success: true, 
-            count: templates.length, 
-            data: templates 
+            count: formattedDropdown.length, 
+            data: formattedDropdown 
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
-}; 
+};
+
 
 // =============================================================================
 // 7. NEW: GET REPORT DATA (Frontend PDF rendering ke liye clean JSON bhejega)
@@ -290,7 +313,20 @@ const getReportData = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // Mapped: Fetch draft specifically for this patient to prevent data mix-ups
+        // 1. Target Patient Resolver
+        let targetPatient = null;
+        if (patientId && booking.patients && booking.patients.length > 0) {
+            targetPatient = booking.patients.find(p => 
+                String(p.patientId) === String(patientId) || 
+                String(p._id) === String(patientId) ||
+                (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
+            );
+        }
+        if (!targetPatient && booking.patients && booking.patients.length > 0) {
+            targetPatient = booking.patients[0];
+        }
+
+        // 2. Fetch specific draft values partitioned by patientId
         let testResults = null;
         if (booking.testResults) {
             if (patientId && booking.testResults[patientId]) {
@@ -301,13 +337,11 @@ const getReportData = async (req, res) => {
             }
         }
 
-        // --- NEW CONDITIONAL ADDRESS LOGIC ---
+        // 3. Conditional Address String Builder
         let reportCollectionAddress = null;
-
         if (booking.collectionType === 'Home Collection') {
             const addr = booking.address;
             if (addr) {
-                // Construct full formatted address string from the booking's address object
                 reportCollectionAddress = [
                     addr.houseNo,
                     addr.sector,
@@ -316,14 +350,13 @@ const getReportData = async (req, res) => {
                     addr.state,
                     addr.pincode ? `- ${addr.pincode}` : ''
                 ]
-                .filter(part => part && part.trim() !== '') // Remove empty fields
+                .filter(part => part && String(part).trim() !== '')
                 .join(', ')
-                .replace(', -', ' -'); // Clean up spacing before the pincode
+                .replace(', -', ' -');
             } else {
                 reportCollectionAddress = "Home Collection (Address Details Missing)";
             }
         } else {
-            // For 'Visit Lab', return null or a designated walk-in string
             reportCollectionAddress = "Walk-In (Visit Lab)";
         }
 
@@ -334,10 +367,17 @@ const getReportData = async (req, res) => {
                 appointmentId: booking._id,
                 appointmentDate: booking.appointmentDate,
                 barcode: booking.barcode || "E4708538",
-                collectionType: booking.collectionType, // Returned so the PDF engine/frontend knows the setup
-                collectionAddress: reportCollectionAddress, // Handled conditionally on backend
+                collectionType: booking.collectionType,
+                collectionAddress: reportCollectionAddress,
                 labName: booking.labId?.name || "HealthKangaroo Labs",
                 labAddress: `${booking.labId?.city || ''}, ${booking.labId?.state || ''}`,
+                currentPatient: targetPatient ? {
+                    patientId: targetPatient.patientId || targetPatient._id || "Self",
+                    name: targetPatient.name,
+                    age: targetPatient.age || 30,
+                    gender: targetPatient.gender || "Both",
+                    relation: targetPatient.relation || "Self"
+                } : null,
                 patients: booking.patients, 
                 testResults: testResults 
             }
@@ -347,14 +387,12 @@ const getReportData = async (req, res) => {
     }
 };
 
-// =============================================================================
-// 8. NEW: UPLOAD CLIENT GENERATED PDF (Safe from EXDEV cross-device link issues)
+// 8. UPLOAD CLIENT GENERATED PDF (Safe from EXDEV cross-device link issues)
 // endpoint: POST /provider/labs/upload-client-pdf/:orderId
-// =============================================================================
 const uploadClientGeneratedPDF = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { patientId } = req.body; // Target Patient ID
+        const { patientId } = req.body;
 
         if (!req.file) {
             return res.status(400).json({ success: false, message: "Please upload the compiled PDF file." });
@@ -365,7 +403,7 @@ const uploadClientGeneratedPDF = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // Safe Patient Resolver [1]
+        // Identify Target Patient
         let patient = null;
         if (patientId && patientId !== "undefined" && patientId !== "null") {
             patient = booking.patients.find(p => 
@@ -374,25 +412,22 @@ const uploadClientGeneratedPDF = async (req, res) => {
                 (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
             );
         }
-
         if (!patient && booking.patients && booking.patients.length > 0) {
             patient = booking.patients[0];
         }
-
         if (!patient) {
             patient = { name: "Patient", age: 30, gender: "Female" };
         }
 
-        // Unique PDF file save path
-        const reportFileName = `report-${booking.bookingId}-${patient.name.replace(/\s+/g, '_')}.pdf`;
+        const cleanPatientName = String(patient.name).trim().replace(/\s+/g, '_');
+        const reportFileName = `report-${booking.bookingId}-${cleanPatientName}.pdf`;
         const destPath = path.join(process.cwd(), 'public', 'uploads', 'user_reports', reportFileName);
 
-        // 🚨 CRITICAL PROD FIX: Safe file rename handler protecting from EXDEV cross-device link errors [cite: custom_context]
+        // Safe file move supporting container volumes (EXDEV fallback)
         try {
             fs.renameSync(req.file.path, destPath);
         } catch (renameErr) {
             if (renameErr.code === 'EXDEV') {
-                // Fallback copy-and-delete for containerized mounts/Docker/VPS
                 fs.copyFileSync(req.file.path, destPath);
                 fs.unlinkSync(req.file.path);
             } else {
@@ -400,7 +435,6 @@ const uploadClientGeneratedPDF = async (req, res) => {
             }
         }
 
-        // Sync polymorphic multi-patient database fields [1]
         if (!booking.patientReports) booking.patientReports = [];
         booking.patientReports = booking.patientReports.filter(r => String(r.patientId) !== String(patient.patientId || patient._id || "Self"));
 
@@ -412,21 +446,21 @@ const uploadClientGeneratedPDF = async (req, res) => {
             reportFile: finalReportFile
         });
 
-        // Overall state management check
+        // Check if all patients have completed reports
         const allCompleted = booking.patients.every(p => {
             const targetId = p.patientId || p._id || "Self";
             return booking.patientReports.some(r => String(r.patientId) === String(targetId));
         });
 
         booking.status = allCompleted ? 'Completed' : 'Testing';
-        booking.reportFile = finalReportFile; // Fallback reference
+        booking.reportFile = finalReportFile;
         
         booking.markModified('patientReports');
         await booking.save();
 
         res.json({
             success: true,
-            message: "Client PDF report successfully saved on server!",
+            message: `Client PDF report for ${patient.name} (${patient.gender}) successfully saved!`,
             reportUrl: finalReportFile,
             data: booking
         });
@@ -438,13 +472,12 @@ const uploadClientGeneratedPDF = async (req, res) => {
 };
 
 
-// 10. NEW: AUTO-RESOLVE TEMPLATES FOR SPECIFIC BOOKING (Smart Handshake)
-// endpoint: GET /provider/labs/report-templates/booking/:orderId
+// 10. AUTO-RESOLVE TEMPLATES FOR SPECIFIC BOOKING (Gender-Aware Filter)
 const getReportTemplatesForBooking = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const { patientId } = req.query; // Partitioned by active patient
         
-        // 🚨 DEEP POPULATION: Resolves packages and their nested clinical tests dynamically! [1]
         const booking = await LabBooking.findById(orderId)
             .populate({
                 path: 'items.packages.packageId',
@@ -459,41 +492,77 @@ const getReportTemplatesForBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // A. Extract standalone test names
-        const testNames = booking.items.tests.map(t => t.name);
-        
-        // B. 🚨 PACKAGE EXTRACTOR: Loop through packages and extract nested testName strings [1]
+        // 1. Detect patient's gender from booking.patients array
+        let detectedGender = 'Both';
+        if (booking.patients && booking.patients.length > 0) {
+            let patient = null;
+            if (patientId) {
+                patient = booking.patients.find(p => 
+                    String(p.patientId) === String(patientId) || 
+                    String(p._id) === String(patientId) ||
+                    (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
+                );
+            }
+            if (!patient) {
+                patient = booking.patients[0];
+            }
+
+            if (patient && patient.gender) {
+                const g = String(patient.gender).trim().toLowerCase();
+                if (g === 'male' || g === 'm') detectedGender = 'Male';
+                else if (g === 'female' || g === 'f') detectedGender = 'Female';
+            }
+        }
+
+        // 2. Extract standalone tests and package-included tests
+        const testNames = (booking.items?.tests || []).map(t => t.name);
         const packageTestNames = [];
         if (booking.items?.packages) {
             booking.items.packages.forEach(p => {
                 if (p.packageId && p.packageId.tests) {
                     p.packageId.tests.forEach(nt => {
-                        packageTestNames.push(nt.testName); // 👈 Nested test name [1]
+                        packageTestNames.push(nt.testName);
                     });
                 }
             });
         }
 
-        // Combine standalone and package-based tests into a single query array
         const allBookedNames = [...testNames, ...packageTestNames];
 
-        // Fuzzy regex matching
+        // Fuzzy regex matching fallback
         const regexQueries = allBookedNames.map(name => {
             const cleanName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&').trim();
             const words = cleanName.split(/\s+/).filter(w => w.length > 2);
             return new RegExp(words.join('.*'), 'i');
         });
 
+        // 3. Query Master Templates matching test names & preferred gender
         const templates = await MasterReportTemplate.find({
-            $or: [
-                { testName: { $in: allBookedNames } },
-                { testName: { $in: regexQueries } }
+            $and: [
+                {
+                    $or: [
+                        { testName: { $in: allBookedNames } },
+                        { testName: { $in: regexQueries } }
+                    ]
+                },
+                {
+                    $or: [
+                        { gender: detectedGender },
+                        { gender: 'Both' }
+                    ]
+                }
             ]
         }).lean();
 
+        // 4. Priority resolver: If both specific gender ('Male'/'Female') and 'Both' exist, prioritize specific gender
         const formattedTemplates = {};
+
+        // Sort so specific gender overrides 'Both'
+        templates.sort((a, b) => (a.gender === 'Both' ? -1 : 1));
+
         templates.forEach(t => {
             formattedTemplates[t.testName] = {
+                genderApplied: t.gender,
                 interpretation: t.parameters?.[0]?.interpretation || "",
                 parameters: t.parameters
             };
@@ -501,22 +570,22 @@ const getReportTemplatesForBooking = async (req, res) => {
 
         res.json({ 
             success: true, 
-            count: templates.length, 
+            count: Object.keys(formattedTemplates).length, 
+            detectedPatientGender: detectedGender,
             data: formattedTemplates 
         });
     } catch (error) {
+        console.error("getReportTemplatesForBooking Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// ==========================================
-// 4. SAVE DRAFT RESULTS (Partitioned by Patient ID)
-// Replacing saveDraftResults inside controllers/provider/Lab/LabsOrder.js
-// ==========================================
+// 4. SAVE DRAFT RESULTS (Partitioned by Patient ID & Gender Snapshot)
+// endpoint: POST /provider/labs/save-draft/:orderId
 const saveDraftResults = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { testValues, patientId } = req.body; // 👈 Partitioned by patientId
+        const { testValues, patientId, gender } = req.body;
 
         if (!testValues || !patientId) {
             return res.status(400).json({ success: false, message: "Both 'testValues' and 'patientId' are required." });
@@ -525,15 +594,17 @@ const saveDraftResults = async (req, res) => {
         const booking = await LabBooking.findById(orderId);
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        // Initialize object if null/empty
         if (!booking.testResults || typeof booking.testResults !== 'object') {
             booking.testResults = {};
         }
 
-        // Save progress specifically under this patient's key [1]
-        booking.testResults[patientId] = testValues;
+        // Save progress partitioned by patientId with gender snapshot
+        booking.testResults[patientId] = {
+            genderApplied: gender || 'Both',
+            savedAt: new Date(),
+            values: testValues
+        };
 
-        // Force Mongoose to save mixed type changes
         booking.markModified('testResults');
         booking.status = 'Testing';
 
@@ -550,14 +621,12 @@ const saveDraftResults = async (req, res) => {
     }
 };
 
-// ==========================================
 // 5. FETCH SAVED DRAFT RESULTS (Partitioned by Patient ID)
-// Replacing getDraftResults inside controllers/provider/Lab/LabsOrder.js
-// ==========================================
+// endpoint: GET /provider/labs/get-draft/:orderId?patientId=...
 const getDraftResults = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { patientId } = req.query; // 👈 Fetch specifically for this patient
+        const { patientId } = req.query;
 
         if (!patientId) {
             return res.status(400).json({ success: false, message: "Query parameter 'patientId' is required." });
@@ -568,12 +637,25 @@ const getDraftResults = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // Extract draft specifically for this patient
-        const draft = booking.testResults ? booking.testResults[patientId] : null;
+        const rawDraft = booking.testResults ? booking.testResults[patientId] : null;
+
+        // Backward compatibility: If draft is an array (old schema) or object (new schema)
+        let draftValues = null;
+        let genderApplied = 'Both';
+
+        if (rawDraft) {
+            if (Array.isArray(rawDraft)) {
+                draftValues = rawDraft;
+            } else if (rawDraft.values) {
+                draftValues = rawDraft.values;
+                genderApplied = rawDraft.genderApplied || 'Both';
+            }
+        }
 
         res.json({ 
             success: true, 
-            data: draft || null 
+            genderApplied,
+            data: draftValues || null 
         });
     } catch (error) {
         console.error("getDraftResults Error:", error.message);

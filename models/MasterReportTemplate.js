@@ -5,23 +5,26 @@ const masterReportTemplateSchema = new mongoose.Schema({
     testName: { 
         type: String, 
         required: true, 
-        unique: true, 
         trim: true,
-        index: true // 👈 Fast searching aur bulk CSV updates ke liye indexing lagayi hai
-    }, // e.g., "Complete Blood Count (CBC)"
+        index: true 
+    },
+    // Gender scope for the entire template: 'Male', 'Female', or 'Both'
+    gender: { 
+        type: String, 
+        enum: ['Male', 'Female', 'Both'], 
+        default: 'Both',
+        index: true
+    },
     parameters: [{
         name: { 
             type: String, 
             required: true, 
             trim: true 
-        }, // e.g., "Haemoglobin (HB)"
+        },
         unit: { 
             type: String, 
             default: "" 
-        }, // e.g., "g/dL"
-        
-        // 🚨 Note: Inhe String rakha hai taaki numeric benchmarks ("70" / "100") 
-        // aur qualitative benchmarks ("Negative" / "Absent") dono securely store ho sakein [1].
+        },
         minRef: { 
             type: String, 
             default: "" 
@@ -30,25 +33,32 @@ const masterReportTemplateSchema = new mongoose.Schema({
             type: String, 
             default: "" 
         },
-        
+        gender: {
+            type: String,
+            enum: ['Male', 'Female', 'Both'],
+            default: 'Both'
+        },
         type: { 
             type: String, 
             enum: ['numeric', 'text'], 
-            default: 'numeric' // 👈 Helper for frontend to open Numeric Keyboard dynamically [1]
+            default: 'numeric'
         },
         method: { 
             type: String, 
             default: "N/A" 
-        }, // e.g., "Spectrophotometry"
+        },
         machine: { 
             type: String, 
             default: "Automated Analyzer" 
-        }, // e.g., "Yumizen H2500"
+        },
         interpretation: { 
             type: String, 
             default: "" 
-        }, // e.g., "Low HB may indicate anemia."
+        }
     }]
 }, { timestamps: true });
+
+// Compound index to allow same test name to have distinct templates per gender
+masterReportTemplateSchema.index({ testName: 1, gender: 1 }, { unique: true });
 
 module.exports = mongoose.model('MasterReportTemplate', masterReportTemplateSchema);
