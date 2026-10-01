@@ -951,7 +951,7 @@ const rejectReturnRequest = async (req, res) => {
 };
 
 // FINAL PHARMACIST STORE VERIFICATION & RESTOCK ACTION
-// Endpoint: POST /provider/pharmacy/orders/return/confirm-store-receipt
+// endpoint: POST /provider/pharmacy/orders/return/confirm-store-receipt
 const confirmStoreReturnReceipt = async (req, res) => {
     try {
         const { orderId, decision, remarks, rejectionReason } = req.body; 
@@ -977,7 +977,10 @@ const confirmStoreReturnReceipt = async (req, res) => {
                 if (!item.medicineId) continue;
                 await MedicineInventory.findOneAndUpdate(
                     { pharmacyId, medicineId: item.medicineId },
-                    { $inc: { stock_quantity: Number(item.quantity || 1) }, $set: { is_available: true } }
+                    { 
+                        $inc: { stock_quantity: Number(item.quantity || 1) }, 
+                        $set: { is_available: true } 
+                    }
                 );
             }
 
@@ -991,6 +994,17 @@ const confirmStoreReturnReceipt = async (req, res) => {
             order.paymentStatus = order.paymentMethod === 'Online' ? 'Refund-Initiated' : 'Refunded';
             await order.save();
 
+            // Notify Customer
+            try {
+                await sendPushNotification(
+                    order.userId,
+                    'user',
+                    "Return Verified & Refund Processed!",
+                    `Your return for Order #${order.orderId} was verified at store. Refund of ₹${order.billSummary.totalAmount} has been initiated.`,
+                    { orderId: order._id.toString(), type: 'return_completed' }
+                );
+            } catch (e) {}
+
             return res.json({
                 success: true,
                 message: "Return confirmed! Stock restored to inventory and refund sent to Admin queue.",
@@ -999,7 +1013,7 @@ const confirmStoreReturnReceipt = async (req, res) => {
         }
 
         // =========================================================================
-        // CASE 2: REPLACEMENT APPROVED (🚨 FIXED: Native Stock Deduct without undefined helper crash)
+        // CASE 2: REPLACEMENT APPROVED (Deducts fresh stock & generates new Delivery OTP)
         // =========================================================================
         if (decision === 'Approve_And_Replace') {
             for (const item of order.items) {
@@ -1041,6 +1055,17 @@ const confirmStoreReturnReceipt = async (req, res) => {
             order.driverId = null; 
             await order.save();
 
+            // Notify Customer
+            try {
+                await sendPushNotification(
+                    order.userId,
+                    'user',
+                    "Replacement Dispatched!",
+                    `Fresh replacement package packed for Order #${order.orderId}. Delivery OTP: ${freshDeliveryOTP}.`,
+                    { orderId: order._id.toString(), otp: freshDeliveryOTP, type: 'replacement_packed' }
+                );
+            } catch (e) {}
+
             return res.json({
                 success: true,
                 message: "Replacement confirmed & stock deducted! Fresh Delivery OTP generated. Please assign a driver.",
@@ -1054,7 +1079,7 @@ const confirmStoreReturnReceipt = async (req, res) => {
         }
 
         // =========================================================================
-        // CASE 3: STORE REJECTION
+        // CASE 3: STORE REJECTION (Damaged / Tampered product)
         // =========================================================================
         if (decision === 'Reject_Damaged') {
             if (!rejectionReason) {
@@ -1076,6 +1101,7 @@ const confirmStoreReturnReceipt = async (req, res) => {
         return res.status(400).json({ success: false, message: "Invalid decision option." });
 
     } catch (error) {
+        console.error("Confirm Store Return Receipt Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

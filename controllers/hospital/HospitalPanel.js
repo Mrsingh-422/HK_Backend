@@ -1,3 +1,4 @@
+// controllers/hospital/HospitalPanel.js
 const Hospital = require('../../models/Hospital');
 const Ward = require('../../models/Ward');
 const Bed = require('../../models/Bed');
@@ -2831,118 +2832,108 @@ const reportHospitalNoShow = async (req, res) => {
 
 
 // --- API: TRANSFER PATIENT BED (With Automatic Split Stay Billing Engine) ---
-// Endpoint: POST /hospital/panel/admissions/transfer-bed
+// endpoint: POST /hospital/panel/admissions/transfer-bed
 const transferPatientBed = async (req, res) => {
     try {
+        const { appointmentId, newBedId, reason } = req.body;
         const hospitalId = req.user.id;
-        const { appointmentId, newBedId } = req.body;
 
         if (!appointmentId || !newBedId) {
-            return res.status(400).json({ success: false, message: "Appointment ID and New Bed ID are required." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Both appointmentId and newBedId are required for bed transfer." 
+            });
         }
 
-        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
+        // 1. Fetch current active admission
+        const appointment = await Appointment.findOne({ 
+            _id: appointmentId, 
+            hospitalId,
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
+        });
+
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission request record not found." });
-        }
-
-        const activeStates = ['Confirmed', 'In-Progress', 'Hospital-Pending'];
-        if (!activeStates.includes(appointment.status)) {
-            return res.status(400).json({ success: false, message: "Cannot transfer bed in current patient status." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Active hospital admission record not found or already discharged." 
+            });
         }
 
         const oldBedId = appointment.bedId;
-        const oldBedNumber = appointment.bedNumber || "Unassigned Bed";
-        const oldWardName = appointment.wardName || "Unassigned Ward";
 
         if (oldBedId && String(oldBedId) === String(newBedId)) {
-            return res.status(400).json({ success: false, message: "Patient is already assigned to this bed." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Patient is already assigned to this bed." 
+            });
         }
 
-        const newBed = await Bed.findById(newBedId).populate('wardId');
-        if (!newBed) {
-            return res.status(404).json({ success: false, message: "Target Bed not found in system." });
+        // 2. Check if target new bed is available
+        const targetBed = await Bed.findOne({ _id: newBedId, hospitalId });
+        if (!targetBed) {
+            return res.status(404).json({ success: false, message: "Target bed not found in this hospital." });
         }
 
-        if (newBed.status !== 'Available') {
-            return res.status(400).json({ success: false, message: `Target Bed ${newBed.bedNumber} is currently ${newBed.status}.` });
+        if (targetBed.status === 'Occupied' || targetBed.status === 'Maintenance') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Target bed (${targetBed.bedNumber}) is currently ${targetBed.status}. Please select an Available bed.` 
+            });
         }
 
-        let oldBedPricePerDay = 500;
+        const newWard = await Ward.findById(targetBed.wardId);
+        const newWardName = newWard ? newWard.name : "Special Ward";
 
-        // RELEASE OLD BED & CALCULATE SPLIT BILLING
+        // 3. Release Old Bed (Mark Available & Increment Old Ward count)
         if (oldBedId) {
             const oldBed = await Bed.findById(oldBedId);
             if (oldBed) {
-                oldBedPricePerDay = oldBed.pricePerDay || 500;
                 oldBed.status = 'Available';
                 await oldBed.save();
 
-                await Ward.findByIdAndUpdate(oldBed.wardId, { $inc: { availableBeds: 1 } });
-            }
-
-            if (appointment.startDate) {
-                const start = moment(appointment.startDate).startOf('day');
-                const now = moment().startOf('day');
-                const oldStayDays = Math.max(1, now.diff(start, 'days'));
-                const oldStayCharge = oldStayDays * oldBedPricePerDay;
-
-                appointment.specialServices.push({
-                    serviceName: `Bed Stay: ${oldWardName} - ${oldBedNumber} (${oldStayDays} days)`,
-                    price: oldStayCharge
-                });
-
-                if (!appointment.pricingBreakdown) {
-                    appointment.pricingBreakdown = { baseFee: 0, visitCharges: 0, extraCharges: 0, discountAmount: 0, subtotal: 0 };
+                if (oldBed.wardId) {
+                    await Ward.findByIdAndUpdate(oldBed.wardId, { $inc: { availableBeds: 1 } });
                 }
-
-                const originalBaseFee = appointment.pricingBreakdown.baseFee || 0;
-                if (originalBaseFee > 0) {
-                    appointment.totalAmount = Math.max(0, (appointment.totalAmount || 0) - originalBaseFee);
-                }
-                
-                appointment.pricingBreakdown.baseFee = 0; 
-                appointment.pricingBreakdown.extraCharges = (appointment.pricingBreakdown.extraCharges || 0) + oldStayCharge;
-                
-                // 🚀 SYNC FIX: Recompute Subtotal & Total Amount consistently
-                const discount = appointment.pricingBreakdown.discountAmount || 0;
-                appointment.pricingBreakdown.subtotal = (appointment.pricingBreakdown.baseFee || 0) + 
-                                                       (appointment.pricingBreakdown.visitCharges || 0) + 
-                                                       (appointment.pricingBreakdown.extraCharges || 0);
-                appointment.totalAmount = Math.max(0, appointment.pricingBreakdown.subtotal - discount);
-
-                appointment.startDate = new Date();
             }
         }
 
-        // LOCK AND OCCUPY NEW BED
-        newBed.status = 'Occupied';
-        await newBed.save();
+        // 4. Occupy New Bed (Mark Occupied & Decrement New Ward count)
+        targetBed.status = 'Occupied';
+        await targetBed.save();
 
-        await Ward.findByIdAndUpdate(newBed.wardId, { $inc: { availableBeds: -1 } });
+        if (targetBed.wardId) {
+            await Ward.findByIdAndUpdate(targetBed.wardId, { $inc: { availableBeds: -1 } });
+        }
 
-        appointment.bedId = newBedId;
-        appointment.bedNumber = newBed.bedNumber;
-        appointment.wardName = newBed.wardId ? newBed.wardId.name : "Ward";
-
-        const now = new Date();
+        // 5. Update Appointment & Log to Treatment History
+        const oldBedNumber = appointment.bedNumber || "Previous Bed";
+        appointment.bedId = targetBed._id;
+        appointment.bedNumber = targetBed.bedNumber;
+        appointment.wardName = newWardName;
 
         appointment.treatmentHistory.push({
-            action: 'Transfer-Accepted',
-            notes: `Bed shifted from ${oldWardName} (Bed: ${oldBedNumber}) to ${appointment.wardName} (Bed: ${appointment.bedNumber}).`,
-            timestamp: now
+            action: 'Initial-Assignment',
+            notes: `Bed shifted from ${oldBedNumber} to ${targetBed.bedNumber} (${newWardName}). Reason: ${reason || 'Clinical Requirement'}`,
+            timestamp: new Date()
         });
 
         await appointment.save();
 
         res.json({
             success: true,
-            message: `Patient successfully transferred to ${appointment.wardName} - ${appointment.bedNumber}. Previous stay billing successfully locked.`,
-            data: appointment
+            message: `Patient successfully shifted to ${targetBed.bedNumber} (${newWardName}).`,
+            data: {
+                appointmentId: appointment._id,
+                bookingId: appointment.bookingId,
+                newBedId: targetBed._id,
+                newBedNumber: targetBed.bedNumber,
+                wardName: newWardName,
+                status: appointment.status
+            }
         });
 
     } catch (error) {
-        console.error("Bed Transfer Error:", error);
+        console.error("Transfer Patient Bed Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

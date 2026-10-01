@@ -1781,22 +1781,53 @@ const getMyBookings = async (req, res) => {
     }
 };
 
-// 7. GET BOOKING DETAILS (For Tracking Screen)
+// GET BOOKING DETAILS (For Patient App Tracking & Multi-Patient PDF Downloads)
+// endpoint: GET /user/labs/details/:id/track
 const getBookingDetails = async (req, res) => {
     try {
-        const booking = await LabBooking.findById(req.params.id)
-            .populate('labId')
-            .populate('phlebotomistId')
-            .populate('items.tests.testId')
-            .populate('items.packages.packageId')
-            .populate({
-                path: 'items.tests.testId',
-                populate: { path: 'masterTestId' } // Deeper population for parameters
-            });
+        const { id } = req.params;
+        const userId = req.user.id;
 
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
-        res.json({ success: true, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const booking = await LabBooking.findOne({ _id: id, userId })
+            .populate('labId', 'name city address profileImage is24x7')
+            .populate('phlebotomistId', 'name phone profilePic vehicleNumber vehicleType status')
+            .populate('items.tests.testId', 'testName mainCategory sampleType reportTime discountPrice amount')
+            .populate('items.packages.packageId', 'packageName mainCategory sampleType reportTime offerPrice mrp')
+            .lean();
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found." });
+        }
+
+        // Format multi-patient report links for direct frontend download buttons
+        const patientReportList = (booking.patients || []).map(patient => {
+            const pId = patient.patientId || patient._id || "Self";
+            const reportEntry = (booking.patientReports || []).find(r => String(r.patientId) === String(pId));
+            
+            return {
+                patientId: pId,
+                patientName: patient.name,
+                gender: patient.gender || "Both",
+                age: patient.age || 30,
+                relation: patient.relation || "Self",
+                hasReport: !!reportEntry,
+                reportUrl: reportEntry ? reportEntry.reportFile : null
+            };
+        });
+
+        res.json({
+            success: true,
+            data: {
+                ...booking,
+                patientReportsList: patientReportList, // 👈 Explicit array for User App download cards
+                isReportAvailable: !!booking.reportFile || (booking.patientReports && booking.patientReports.length > 0)
+            }
+        });
+
+    } catch (error) {
+        console.error("getBookingDetails Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 // 8. CANCEL BOOKING (User Side)
 const cancelBooking = async (req, res) => {

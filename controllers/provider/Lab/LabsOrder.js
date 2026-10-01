@@ -1,10 +1,9 @@
 // controllers/provider/Lab/LabsOrder.js
-
 const LabBooking = require('../../../models/LabBooking');
 const Wallet = require('../../../models/Wallet');
-const MasterReportTemplate = require('../../../models/MasterReportTemplate'); // 👈 Imported Template Model
-const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); // Import model
-const Driver = require('../../../models/Driver');
+const MasterReportTemplate = require('../../../models/MasterReportTemplate');
+const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); 
+const MasterLabTest = require('../../../models/MasterLabTest'); 
 const moment = require('moment');
 const fs = require('fs');
 const path = require('path');
@@ -188,21 +187,78 @@ const updateProgressStatus = async (req, res) => {
     }
 };
 
-// 6. UPLOAD REPORT & COMPLETE
+// 6. UPLOAD REPORT & COMPLETE (Clean Web-URL & Multi-Patient Fallback)
+// endpoint: POST /provider/labs/upload-report/:orderId
 const uploadReport = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "PDF report required" });
+        const { orderId } = req.params;
+        const { patientId } = req.body;
+        const labId = req.user.id;
 
-        const order = await LabBooking.findOneAndUpdate(
-            { _id: req.params.orderId, labId: req.user.id },
-            { 
-                reportFile: req.file.path, 
-                status: 'Completed' 
-            },
-            { new: true }
-        );
-        res.json({ success: true, message: "Report uploaded successfully", data: order });
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: "PDF report file is required." });
+        }
+
+        // Clean relative web-accessible URL path
+        let cleanPath = req.file.path.replace(/\\/g, '/');
+        if (cleanPath.startsWith('public/')) {
+            cleanPath = cleanPath.replace('public/', '/');
+        } else if (!cleanPath.startsWith('/')) {
+            cleanPath = '/' + cleanPath;
+        }
+
+        const booking = await LabBooking.findOne({ _id: orderId, labId });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found or unauthorized." });
+        }
+
+        // Target patient identification
+        let targetPatient = null;
+        if (patientId) {
+            targetPatient = booking.patients.find(p => 
+                String(p.patientId) === String(patientId) || 
+                String(p._id) === String(patientId) ||
+                (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
+            );
+        }
+        if (!targetPatient && booking.patients && booking.patients.length > 0) {
+            targetPatient = booking.patients[0];
+        }
+
+        const resolvedPatientId = targetPatient ? (targetPatient.patientId || targetPatient._id || "Self") : "Self";
+        const resolvedPatientName = targetPatient ? targetPatient.name : "Patient";
+
+        if (!booking.patientReports) booking.patientReports = [];
+        
+        // Remove duplicate entry for this patient if re-uploaded
+        booking.patientReports = booking.patientReports.filter(r => String(r.patientId) !== String(resolvedPatientId));
+
+        booking.patientReports.push({
+            patientId: resolvedPatientId,
+            patientName: resolvedPatientName,
+            reportFile: cleanPath
+        });
+
+        // Set status to Completed if all patient reports are uploaded
+        const allCompleted = booking.patients.every(p => {
+            const tId = p.patientId || p._id || "Self";
+            return booking.patientReports.some(r => String(r.patientId) === String(tId));
+        });
+
+        booking.status = allCompleted ? 'Completed' : 'Testing';
+        booking.reportFile = cleanPath; // Fallback primary report link
+
+        booking.markModified('patientReports');
+        await booking.save();
+
+        res.json({ 
+            success: true, 
+            message: `Report uploaded successfully for ${resolvedPatientName}!`, 
+            reportUrl: cleanPath,
+            data: booking 
+        });
     } catch (error) { 
+        console.error("uploadReport Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -258,8 +314,6 @@ const getReportTemplates = async (req, res) => {
 };
 
 
-
-
 // 8. GET REPORT TEMPLATES FOR DROPDOWN (Gender-Aware Display with Limit 50)
 // endpoint: GET /provider/labs/report-templates/dropdown?search=...
 const getReportTemplatesDropdown = async (req, res) => {
@@ -298,15 +352,12 @@ const getReportTemplatesDropdown = async (req, res) => {
 };
 
 
-// =============================================================================
-// 7. NEW: GET REPORT DATA (Frontend PDF rendering ke liye clean JSON bhejega)
-// endpoint: GET /provider/labs/get-report-data/:orderId
-// =============================================================================
+// 7. GET REPORT DATA (Frontend PDF rendering data engine with mainCategory / Department metadata)
+// endpoint: GET /provider/labs/get-report-data/:orderId?patientId=...
 const getReportData = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { patientId } = req.query;
-
         // Fetch Booking with populated Lab profile
         const booking = await LabBooking.findById(orderId).populate('labId').lean();
         if (!booking) {
@@ -337,7 +388,32 @@ const getReportData = async (req, res) => {
             }
         }
 
-        // 3. Conditional Address String Builder
+        // 3. Extract actual values and attach mainCategory to testResults
+        if (testResults) {
+            const draftList = Array.isArray(testResults) ? testResults : (testResults.values || []);
+            const testNamesInReport = draftList.map(t => t.testName);
+
+            const masterTests = await MasterLabTest.find({
+                testName: { $in: testNamesInReport }
+            }).select('testName mainCategory category').lean();
+
+            const catMap = {};
+            masterTests.forEach(mt => {
+                catMap[mt.testName] = {
+                    mainCategory: mt.mainCategory || 'Pathology',
+                    category: mt.category || 'General'
+                };
+            });
+
+            // Inject mainCategory into each group for PDF Rendering
+            draftList.forEach(group => {
+                group.mainCategory = catMap[group.testName]?.mainCategory || 'Pathology';
+                group.department = `Department of ${group.mainCategory}`;
+                group.category = catMap[group.testName]?.category || 'General';
+            });
+        }
+
+        // 4. Conditional Address String Builder
         let reportCollectionAddress = null;
         if (booking.collectionType === 'Home Collection') {
             const addr = booking.address;
@@ -386,6 +462,7 @@ const getReportData = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // 8. UPLOAD CLIENT GENERATED PDF (Safe from EXDEV cross-device link issues)
 // endpoint: POST /provider/labs/upload-client-pdf/:orderId
@@ -472,19 +549,19 @@ const uploadClientGeneratedPDF = async (req, res) => {
 };
 
 
-// 10. AUTO-RESOLVE TEMPLATES FOR SPECIFIC BOOKING (Gender-Aware Filter)
+// 10. AUTO-RESOLVE TEMPLATES FOR SPECIFIC BOOKING (With Gender & Category/Department Binding)
+// endpoint: GET /provider/labs/report-templates/booking/:orderId?patientId=...
 const getReportTemplatesForBooking = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { patientId } = req.query; // Partitioned by active patient
-        
         const booking = await LabBooking.findById(orderId)
             .populate({
                 path: 'items.packages.packageId',
                 populate: {
                     path: 'tests',
                     model: 'MasterLabTest',
-                    select: 'testName'
+                    select: 'testName mainCategory category'
                 }
             });
 
@@ -536,7 +613,24 @@ const getReportTemplatesForBooking = async (req, res) => {
             return new RegExp(words.join('.*'), 'i');
         });
 
-        // 3. Query Master Templates matching test names & preferred gender
+        // 3. Fetch MasterLabTest details to get mainCategory & subcategory mapping
+        const masterTests = await MasterLabTest.find({
+            $or: [
+                { testName: { $in: allBookedNames } },
+                { testName: { $in: regexQueries } }
+            ]
+        }).select('testName mainCategory category sampleType').lean();
+
+        const masterCategoryMap = {};
+        masterTests.forEach(mt => {
+            masterCategoryMap[mt.testName] = {
+                mainCategory: mt.mainCategory || 'Pathology',
+                category: mt.category || 'General',
+                sampleType: mt.sampleType || 'Blood'
+            };
+        });
+
+        // 4. Query Master Report Templates matching test names & preferred gender
         const templates = await MasterReportTemplate.find({
             $and: [
                 {
@@ -554,14 +648,22 @@ const getReportTemplatesForBooking = async (req, res) => {
             ]
         }).lean();
 
-        // 4. Priority resolver: If both specific gender ('Male'/'Female') and 'Both' exist, prioritize specific gender
-        const formattedTemplates = {};
-
-        // Sort so specific gender overrides 'Both'
+        // Specific gender takes precedence over 'Both'
         templates.sort((a, b) => (a.gender === 'Both' ? -1 : 1));
 
+        const formattedTemplates = {};
+
         templates.forEach(t => {
+            const meta = masterCategoryMap[t.testName] || {
+                mainCategory: 'Pathology',
+                category: 'General',
+                sampleType: 'Blood'
+            };
+
             formattedTemplates[t.testName] = {
+                mainCategory: meta.mainCategory, // 👈 'Biochemistry', 'Pathology', 'Radiology', etc.
+                category: meta.category,         // 👈 Subcategory e.g., 'Electrolytes', 'Lipids'
+                sampleType: meta.sampleType,     // 👈 Sample type e.g., 'Blood', 'Urine'
                 genderApplied: t.gender,
                 interpretation: t.parameters?.[0]?.interpretation || "",
                 parameters: t.parameters
@@ -953,14 +1055,8 @@ const rejectLabPrescriptionRequest = async (req, res) => {
     }
 };
 
- // =======================================================
-
 // 1. GET ALL ELIGIBLE PHLEBOTOMISTS FOR DROPDOWN / LIST
-
-// =======================================================
-
 // Endpoint: GET /provider/labs/available-phlebotomists
-
 const getAvailablePhlebotomists = async (req, res) => {
 
     try {
@@ -996,16 +1092,9 @@ const getAvailablePhlebotomists = async (req, res) => {
     }
 
 };
- 
- 
-// =======================================================
 
 // 3. RE-ASSIGN PHLEBOTOMIST (Change Existing Driver)
-
-// =======================================================
-
 // Endpoint: PATCH /provider/labs/reassign-staff/:orderId
-
 const reassignDriverStaff = async (req, res) => {
 
     try {
@@ -1162,12 +1251,7 @@ const reassignDriverStaff = async (req, res) => {
 
 };
 
-// =======================================================
-
 // GET LIVE TRACKING DETAILS FOR MODAL POPUP
-
-// =======================================================
-
 // Endpoint: GET /provider/labs/booking-tracking/:orderId
 
 const getBookingTrackingDetails = async (req, res) => {
@@ -1364,9 +1448,7 @@ const getBookingTrackingDetails = async (req, res) => {
 
 };
 
-// =======================================================
 // GET SINGLE PHLEBOTOMIST DETAIL WITH ACTIVE PATIENT INFO
-// =======================================================
 // Endpoint: GET /provider/labs/phlebotomist-detail/:phlebotomistId
 const getPhlebotomistActiveDetail = async (req, res) => {
     try {
@@ -1509,10 +1591,10 @@ module.exports = {
     getReportData,            
     uploadClientGeneratedPDF,  
     getReportTemplates,
-    getReportTemplatesDropdown, // 👈 Added
-    getReportTemplatesForBooking, // 👈 Added
-    saveDraftResults, // 👈 Added
-    getDraftResults, // 👈 Added
+    getReportTemplatesDropdown,
+    getReportTemplatesForBooking,
+    saveDraftResults,
+    getDraftResults,
     getLabOrderHistory,
 
 

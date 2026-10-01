@@ -17,19 +17,6 @@ const labBookingSchema = new mongoose.Schema({
         default: 'Direct' 
     },
     prescriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Prescription', default: null },
-
-    // ==========================================
-    // STEP 2: PATIENT & ITEM SELECTION (Figma Screen 11-15, 30-36)
-    // ==========================================
-    // User can select multiple family members or 'Self'
-    // patients: [{
-    //     patientId: String, // ID from User.familyMember or 'Self'
-    //     name: String,
-    //     age: Number,
-    //     gender: String,
-    //     relation: String,
-    //     medicalReport: String // Optional: User uploads previous report (Screen 16)
-    // }],
         patients: [{
     patientId: { type: String, required: true }, // 'Self' or family member ID
     name: { type: String, required: true },
@@ -60,9 +47,6 @@ const labBookingSchema = new mongoose.Schema({
     }]
 }],
 
-
-    // FLOW: If Direct Booking, items will be filled now.
-    // If Prescription-Based, Lab will fill this after review (Screen 67).
     items: {
         tests: [{
             testId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabTest' },
@@ -78,9 +62,6 @@ const labBookingSchema = new mongoose.Schema({
         }]
     },
 
-    // ==========================================
-    // STEP 3: LOGISTICS & SLOTS (Figma Screen 21-25, 45-46)
-    // ==========================================
     collectionType: { type: String, enum: ['Home Collection', 'Visit Lab'], required: true },
     address: {
         name: String,
@@ -94,14 +75,9 @@ const labBookingSchema = new mongoose.Schema({
         addressType: String
     },
 
-    // FLOW: Slot selected using 'Availability' model intervals.
-    // Note: If collectionType is 'Visit Lab', address is Lab's address.
     appointmentDate: { type: Date }, 
     appointmentTime: { type: String }, // e.g. "09:00 AM - 10:00 AM"
 
-    // ==========================================
-    // STEP 4: PRICE CALCULATION (Using DeliveryCharge & Coupon Models)
-    // ==========================================
     billSummary: {
         itemTotal: { type: Number, default: 0 },       // Sum of all tests/packages
         itemDiscount: { type: Number, default: 0 },    // Lab side discount
@@ -128,9 +104,6 @@ appliedCoupon: {
         noShowFeeApplied: { type: Number, default: 0 }
     },
 
-    // ==========================================
-    // STEP 5: BOOKING LIFECYCLE (Figma Screen 26-29, 66-67)
-    // ==========================================
     status: { 
         type: String, 
         enum: [
@@ -150,9 +123,6 @@ appliedCoupon: {
         default: 'Pending'
     },
 
-    // ==========================================
-    // STEP 6: VENDOR & LOGISTICS (Figma Screen 71-75)
-    // ==========================================
     // Link to Driver model where vendorType is 'Lab'
     phlebotomistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
     
@@ -161,6 +131,12 @@ appliedCoupon: {
 
     // The final output
     reportFile: { type: String, default: null }, // Link to PDF file
+    patientReports: [{
+        patientId: { type: String, required: true },
+        patientName: { type: String },
+        reportFile: { type: String, required: true }
+    }],
+    testResults: { type: mongoose.Schema.Types.Mixed, default: {} },
     cancelReason: { type: String },
       tracking: {
         otp: { type: String, default: null }
