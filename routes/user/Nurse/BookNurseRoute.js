@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer');
 const { 
-    getNurses, getNurseDetails,searchNursesAndServices,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, getMyNurseBookings, rateNurseService,
+    getNurses, getNurseDetails,searchNursesAndServices,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon,getRegisteredHospitalsDropdown, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, getMyNurseBookings, rateNurseService,
     getAppointmentStatus, 
     uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking,getNursePackagesList,
     getNursePackageDetails,getMedicalConditions,
@@ -22,6 +22,8 @@ router.get('/packages/nurse', getGlobalPackages); // For users to see global pac
 
 
 router.get('/delivery-config/:nurseId', getNurseDeliveryConfig); // For calculating delivery charges in checkout flow
+router.get('/hospitals/dropdown', getRegisteredHospitalsDropdown);
+
 // 2. Booking Flow
 router.post('/checkout', protect('user'), checkoutNurseBooking);
 router.post('/book', protect('user'), placeNurseBooking);

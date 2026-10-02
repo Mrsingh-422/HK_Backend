@@ -204,41 +204,45 @@ const getNurseBookings = async (req, res) => {
     }
 };
 
-// Get Booking Detail (Figma Screen 7, 23)
+// GET BOOKING DETAIL (For Field Nurse Driver Mobile App)
+// endpoint: GET /driver/nurse/orders/detail/:bookingId
 const getBookingDetail = async (req, res) => {
     try {
         const { bookingId } = req.params;
+        const staffId = req.user.id;
+
         const booking = await NurseBooking.findById(bookingId)
-            .populate('userId', 'name phone')
-            .populate('selectedConsumables.consumableId');
+            .populate('userId', 'name phone profilePic gender dob')
+            .populate('nurseId', 'name phone address')
+            .populate('selectedConsumables.consumableId', 'itemName mrp unitType')
+            .lean();
 
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
-
-        const bookingObj = booking.toObject();
-
-        // 1. User का नाम निकालना
-        const userName = bookingObj.userId ? bookingObj.userId.name : null;
-
-        // 2. Patient का नाम निकालना (पहले पेशेंट का नाम)
-        const patientName = bookingObj.patients && bookingObj.patients.length > 0 
-            ? bookingObj.patients[0].name 
-            : null;
-
-        // 3. Address से name हटाना
-        if (bookingObj.address) {
-            delete bookingObj.address.name;
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // स्ट्रक्चर में बिना बदलाव किए नए फील्ड्स जोड़ना
-        const updatedBooking = {
-            ...bookingObj,
-            userName,
-            patientName
-        };
+        const userName = booking.userId ? booking.userId.name : "Patient";
+        const primaryPatientName = (booking.patients && booking.patients.length > 0) 
+            ? booking.patients[0].name 
+            : userName;
 
-        res.json({ success: true, data: updatedBooking });
+        res.status(200).json({
+            success: true,
+            data: {
+                ...booking,
+                userName,
+                patientName: primaryPatientName,
+                assessmentLocation: booking.assessmentLocation || "At Home",
+                hospitalDetails: booking.hospitalDetails || null,
+                destinationLabel: booking.assessmentLocation === 'At Hospital'
+                    ? `${booking.hospitalDetails?.hospitalName || 'Hospital'} (${booking.hospitalDetails?.wardName || 'Ward'} - Bed: ${booking.hospitalDetails?.bedNumber || 'Bed'})`
+                    : (booking.address?.houseNo ? `${booking.address.houseNo}, ${booking.address.city}` : "Home Address")
+            }
+        });
+
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Get Driver Booking Detail Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -466,10 +470,8 @@ const submitServiceCompletion = async (req, res) => {
     }
 };
 
-// ==========================================
-// 4. VERIFY FIREBASE OTP & FINALIZE SESSION
-// Endpoint: POST /driver/nurse/orders/verify-complete-otp
-// ==========================================
+// 4. VERIFY FIREBASE OTP & FINALIZE SESSION (With Auto COD Paid & Revenue Sync)
+// endpoint: POST /driver/nurse/orders/verify-complete-otp
 const verifyCompleteOtp = async (req, res) => {
     try {
         const { bookingId, idToken, otp } = req.body;
@@ -479,13 +481,13 @@ const verifyCompleteOtp = async (req, res) => {
         if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
         if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
-            return res.status(403).json({ success: false, message: "Unauthorized" });
+            return res.status(403).json({ success: false, message: "Unauthorized operation." });
         }
 
         const patientPhone = booking.address?.phone || booking.userId?.phone;
         const cleanPatientPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
 
-        // 🚨 Verify Firebase Phone Token for Completion
+        // 1. Verify Firebase Phone Token or Dev OTP
         if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
             if (!idToken) {
                 return res.status(400).json({ success: false, message: "Firebase idToken is required." });
@@ -495,7 +497,9 @@ const verifyCompleteOtp = async (req, res) => {
                 return res.status(400).json({ success: false, message: verification.message });
             }
         } else if (otp) {
-            if (otp !== '123456') return res.status(400).json({ success: false, message: "Invalid Dev OTP." });
+            if (otp !== '123456' && booking.completionOTP !== otp) {
+                return res.status(400).json({ success: false, message: "Invalid Dev OTP code." });
+            }
         }
 
         const today = new Date();
@@ -503,22 +507,38 @@ const verifyCompleteOtp = async (req, res) => {
         const isMultiDayActive = hasMultipleDays && new Date(today.setHours(0,0,0,0)) < new Date(new Date(booking.schedule.endDate).setHours(0,0,0,0));
 
         if (isMultiDayActive) {
-            booking.status = 'Assigned';
+            booking.status = 'Assigned'; // Multi-day shift continues tomorrow
         } else {
             booking.status = 'Completed';
             booking.completedAt = new Date();
+
+            // 🚨 COD AUTO-PAID FIX: Mark COD cash collected as Paid on service completion
+            if (booking.paymentMethod === 'COD') {
+                booking.paymentStatus = 'Paid';
+                if (!booking.paymentDetails) booking.paymentDetails = {};
+                booking.paymentDetails.method = 'COD';
+                booking.paymentDetails.status = 'captured';
+                booking.paymentDetails.paidAt = new Date();
+                booking.paymentDetails.amount = booking.priceBreakdown?.totalPrice || booking.totalPrice || 0;
+            }
         }
 
         await booking.save();
 
-        // Release nurse staff back to Available
+        // Release nurse staff driver back to Available
         await Driver.findByIdAndUpdate(staffId, { status: 'Available' });
 
-        res.json({ success: true, message: "Service completion verified via Firebase OTP!", data: booking });
+        res.json({ 
+            success: true, 
+            message: "Service completion verified via Firebase OTP & payment marked as Paid!", 
+            data: booking 
+        });
     } catch (error) { 
+        console.error("Verify Complete OTP Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 // Support/Contact Admin Config (Figma Screen 9)
 const getAdminContact = async (req, res) => {

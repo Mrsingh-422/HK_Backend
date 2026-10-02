@@ -170,6 +170,17 @@ subscriptionDetails: {
     userSubscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserSubscription', default: null }, // 🚨 NEW
     planName: { type: String, default: "" } // 🚨 NEW
 },
+// 🏥 Hospital Details (For in-patient / bed-side nursing care)
+    hospitalDetails: {
+        hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital', default: null }, // If HK registered hospital
+        isHKHospital: { type: Boolean, default: false },
+        hospitalName: { type: String, default: "" },
+        hospitalAddress: { type: String, default: "" },
+        city: { type: String, default: "" },
+        wardName: { type: String, default: "" },
+        bedNumber: { type: String, default: "" },
+        floorNumber: { type: String, default: "" }
+    },
 
 
 
