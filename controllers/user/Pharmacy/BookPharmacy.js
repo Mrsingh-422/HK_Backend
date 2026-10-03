@@ -1694,84 +1694,107 @@ const validateCoupon = async (req, res) => {
 // --- CHECKOUT MEDICINE ORDER (Updated with COD Check) ---
 const checkoutMedicineOrder = async (req, res) => {
     try {
-        const { couponCode, isRapid, collectionType, appointmentTime, address } = req.body;
         const userId = req.user.id;
+        const { collectionType, isRapid, address, couponCode } = req.body;
 
         const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
-        if (!cart || !cart.pharmacyCart.items.length) {
-            return res.status(400).json({ success: false, message: "Basket is empty. Please add medicines." });
+        if (!cart || !cart.pharmacyCart || cart.pharmacyCart.items.length === 0) {
+            return res.status(400).json({ success: false, message: "Pharmacy cart is empty." });
         }
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
-        
-        // 🚀 SMART COD CHECK: Passes userId (Subscribed users get true automatically)
-        const isCodAvailable = await isCodEnabled('Pharmacy', userId);
+        const items = cart.pharmacyCart.items;
 
-        const validatedItems = [];
-        for (const item of cart.pharmacyCart.items) {
-            if (!item.medicineId) continue;
+        let itemTotal = 0;
+        let rxMandatory = false;
 
-            const activeInventories = await MedicineInventory.find({
-                pharmacyId,
-                medicineId: item.medicineId._id,
-                is_available: true
+        items.forEach(i => {
+            const price = Number(i.price || 0);
+            const qty = Number(i.quantity || 1);
+            itemTotal += price * qty;
+
+            if (i.medicineId?.prescription_required === 'YES' || i.medicineId?.prescription_required === 'Yes') {
+                rxMandatory = true;
+            }
+        });
+
+        // Delivery Charges Calculation
+        let standardDeliveryCharge = 0;
+        let rapidCharge = 0;
+
+        if (collectionType === 'Home Delivery') {
+            const deliveryConfig = await DeliveryCharge.findOne({ vendorId: pharmacyId });
+            standardDeliveryCharge = deliveryConfig?.fixedPrice || 40;
+            if (isRapid) {
+                rapidCharge = deliveryConfig?.fastDeliveryExtra || 29;
+            }
+        }
+
+        // Evaluate Subscription Benefit for Pharmacy Delivery
+        const deliveryBenefit = await checkAndApplyBenefit(userId, 'freePharmacyDeliveriesCount', standardDeliveryCharge);
+        const finalDeliveryCharge = collectionType === 'Home Delivery' ? deliveryBenefit.amount : 0;
+
+        // Coupon Discount
+        let couponDiscount = 0;
+        let validCouponId = null;
+
+        if (couponCode) {
+            const coupon = await Coupon.findOne({ 
+                couponName: couponCode.toUpperCase(), 
+                isActive: true,
+                expiryDate: { $gte: new Date() }
             });
 
-            const totalAvailableStock = activeInventories.reduce((sum, inv) => sum + (inv.stock_quantity || 0), 0);
-
-            if (totalAvailableStock < item.quantity) {
-                return res.status(400).json({
-                    success: false,
-                    errorType: "OUT_OF_STOCK",
-                    message: `Item '${item.name}' has insufficient stock. Total available: ${totalAvailableStock} units.`
-                });
+            if (coupon && itemTotal >= coupon.minOrderAmount) {
+                if (!coupon.vendorId || coupon.vendorId.toString() === pharmacyId.toString() || coupon.vendorType === 'All' || coupon.vendorType === 'Pharmacy') {
+                    couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                    validCouponId = coupon._id;
+                }
             }
-            validatedItems.push(item);
         }
 
-        const rxMandatory = validatedItems.some(item =>
-            item.medicineId?.prescription_required?.toUpperCase() === "YES"
-        );
+        const totalPayable = Math.max(0, (itemTotal - couponDiscount) + finalDeliveryCharge + rapidCharge);
 
-        if (collectionType === 'Home Delivery' && (!address || !address.houseNo)) {
-            return res.status(400).json({ success: false, message: "Please provide a valid delivery address." });
-        }
-
-        const bill = await calculatePharmacyBillHelper(
-            pharmacyId, validatedItems, 1, collectionType, couponCode, isRapid, appointmentTime, userId
-        );
-
-        res.json({
+        res.status(200).json({
             success: true,
-            message: "Checkout validated successfully",
             data: {
                 pharmacyId,
-                billSummary: bill,
                 rxMandatory,
-                items: validatedItems.map(i => ({
-                    id: i.medicineId._id,
-                    name: i.name,
-                    qty: i.quantity,
-                    price: i.price,
-                    total: i.price * i.quantity
-                })),
-                orderRestrictions: {
-                    canPlaceOrder: true,
-                    needsPrescription: rxMandatory,
-                    isCodAvailable: isCodAvailable // 👈 FIX: Ab sahi variable pass hoga (100% True for Subscribers)
+                billSummary: {
+                    itemTotal,
+                    couponDiscount: Math.round(couponDiscount),
+                    couponId: validCouponId,
+                    deliveryCharge: finalDeliveryCharge,
+                    originalDeliveryCharge: standardDeliveryCharge,
+                    rapidDeliveryCharge: rapidCharge,
+                    totalAmount: Math.round(totalPayable)
+                },
+                subscriptionBenefit: {
+                    isApplied: deliveryBenefit.isApplied,
+                    hasActiveSubscription: deliveryBenefit.hasActiveSubscription,
+                    isBenefitExhausted: deliveryBenefit.isBenefitExhausted,
+                    remainingCount: deliveryBenefit.remainingCount,
+                    planName: deliveryBenefit.planName,
+                    exhaustedMessage: deliveryBenefit.exhaustedMessage || (deliveryBenefit.isBenefitExhausted ? "Your subscription free pharmacy delivery quota is exhausted. Standard delivery fee applied." : "")
                 }
             }
         });
 
     } catch (error) {
-        console.error("CHECKOUT_ERROR:", error);
-        res.status(500).json({ success: false, message: "Internal server error during checkout." });
+        console.error("Pharmacy Checkout Summary Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // PLACE PHARMACY ORDER (With Stock Validation, COD/Subscription Check & Push Notification)
 // endpoint: POST /user/pharmacy/place-order
 const placeOrder = async (req, res) => {
+    console.log(`\n==================================================================`);
+    console.log(`🚀 [DEBUG: placeOrder] -> INCOMING REQUEST TRIGGERED`);
+    console.log(`👤 User ID        :`, req.user?.id || req.user?._id);
+    console.log(`📦 Request Body   :`, JSON.stringify(req.body, null, 2));
+    console.log(`📂 Uploaded Files :`, req.files ? Object.keys(req.files) : 'No files');
+    console.log(`==================================================================`);
     try {
         let {
             pharmacyId,

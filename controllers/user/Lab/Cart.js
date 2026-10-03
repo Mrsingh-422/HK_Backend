@@ -13,26 +13,50 @@ const Medicine = require('../../../models/Medicine');
 const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Coupon = require('../../../models/Coupon');
+const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
 
 
-const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid, vendorType) => {
+const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid, vendorType, userId = null) => {
     let itemTotal = 0;
     
     if (vendorType === 'Pharmacy') {
-        // Medicine Calculation
-        items.forEach(item => { itemTotal += (item.price * item.quantity); });
+        items.forEach(item => { itemTotal += (Number(item.price || 0) * Number(item.quantity || 1)); });
     } else {
-        // Lab Calculation (Tests + Packages)
-        items.forEach(item => { itemTotal += (item.price * (patientsCount || 1)); });
+        items.forEach(item => { itemTotal += (Number(item.price || 0) * (Number(patientsCount) || 1)); });
     }
 
-    let deliveryCharge = 0;
+    let standardDeliveryCharge = 0;
     let rapidCharge = 0;
     const charges = await DeliveryCharge.findOne({ vendorId });
 
     if (charges) {
-        deliveryCharge = charges.fixedPrice || 40;
-        if (isRapid) rapidCharge = (charges.fastDeliveryExtra || 29) * (patientsCount || 1);
+        standardDeliveryCharge = charges.fixedPrice || 40;
+        if (isRapid) rapidCharge = (charges.fastDeliveryExtra || 29) * (Number(patientsCount) || 1);
+    }
+
+    // --- Subscription Benefit Evaluation ---
+    let finalDeliveryCharge = standardDeliveryCharge;
+    let deliverySubscriptionBenefit = {
+        isApplied: false,
+        hasActiveSubscription: false,
+        isBenefitExhausted: false,
+        remainingCount: 0,
+        exhaustedMessage: ""
+    };
+
+    if (userId) {
+        const benefitKey = vendorType === 'Pharmacy' ? 'freePharmacyDeliveriesCount' : 'freeLabDeliveriesCount';
+        const evalResult = await checkAndApplyBenefit(userId, benefitKey, standardDeliveryCharge);
+        
+        finalDeliveryCharge = evalResult.amount;
+        deliverySubscriptionBenefit = {
+            isApplied: evalResult.isApplied,
+            hasActiveSubscription: evalResult.hasActiveSubscription,
+            isBenefitExhausted: evalResult.isBenefitExhausted,
+            remainingCount: evalResult.remainingCount,
+            planName: evalResult.planName || "",
+            exhaustedMessage: evalResult.exhaustedMessage || (evalResult.isBenefitExhausted ? "Your subscription free delivery quota is exhausted. Standard delivery fee applied." : "")
+        };
     }
 
     let couponDiscount = 0;
@@ -40,16 +64,25 @@ const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid
     if (couponCode) {
         const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
         if (coupon && itemTotal >= coupon.minOrderAmount) {
-            // Check if coupon belongs to this vendor or is Global (All)
-            if (coupon.vendorId?.toString() === vendorId.toString() || coupon.vendorType === 'All') {
+            if (coupon.vendorId?.toString() === vendorId.toString() || coupon.vendorType === 'All' || coupon.vendorType === vendorType) {
                 couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
                 couponId = coupon._id;
             }
         }
     }
 
-    const totalAmount = (itemTotal - couponDiscount) + deliveryCharge + rapidCharge;
-    return { itemTotal, couponDiscount, couponId, deliveryCharge, rapidDeliveryCharge: rapidCharge, totalAmount };
+    const totalAmount = Math.max(0, (itemTotal - couponDiscount) + finalDeliveryCharge + rapidCharge);
+
+    return { 
+        itemTotal, 
+        couponDiscount, 
+        couponId, 
+        deliveryCharge: finalDeliveryCharge, 
+        originalDeliveryCharge: standardDeliveryCharge,
+        rapidDeliveryCharge: rapidCharge, 
+        totalAmount,
+        deliverySubscriptionBenefit
+    };
 };
 
 /////////////////////////////////////////////////////////////////////////////

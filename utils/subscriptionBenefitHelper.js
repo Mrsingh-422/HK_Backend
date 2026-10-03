@@ -6,21 +6,83 @@ const UserSubscription = require('../models/UserSubscription');
  */
 const checkAndApplyBenefit = async (userId, benefitField, originalAmount) => {
     try {
-        if (!userId) return { amount: originalAmount, isApplied: false };
-        
+        const fallbackAmount = Number(originalAmount || 0);
+        if (!userId) {
+            return {
+                amount: fallbackAmount,
+                isApplied: false,
+                hasActiveSubscription: false,
+                isBenefitExhausted: false,
+                remainingCount: 0,
+                subId: null,
+                planName: "",
+                benefitField
+            };
+        }
+
         const activeSub = await UserSubscription.findOne({
             userId,
             status: 'Active',
             endDate: { $gt: new Date() }
+        }).populate({
+            path: 'planId',
+            select: 'name categoryId diseaseIds'
         });
 
-        if (activeSub && activeSub.remainingBenefits[benefitField] > 0) {
-            return { amount: 0, isApplied: true, subId: activeSub._id };
+        if (activeSub) {
+            const remainingCount = Number(activeSub.remainingBenefits?.[benefitField] || 0);
+            const planTitle = activeSub.planId?.name || "Active Care Plan";
+
+            if (remainingCount > 0) {
+                return {
+                    amount: 0,
+                    isApplied: true,
+                    hasActiveSubscription: true,
+                    isBenefitExhausted: false,
+                    remainingCount: remainingCount,
+                    subId: activeSub._id,
+                    planName: planTitle,
+                    benefitField,
+                    message: `Free ${benefitField.replace('Count', '')} applied successfully via ${planTitle}.`
+                };
+            } else {
+                // Subscription active hai par is particular benefit ka balance 0 ho chuka hai
+                return {
+                    amount: fallbackAmount,
+                    isApplied: false,
+                    hasActiveSubscription: true,
+                    isBenefitExhausted: true,
+                    remainingCount: 0,
+                    subId: activeSub._id,
+                    planName: planTitle,
+                    benefitField,
+                    exhaustedMessage: `Your ${planTitle} quota for free delivery/service has been exhausted. Standard charges have been applied.`
+                };
+            }
         }
-        return { amount: originalAmount, isApplied: false };
+
+        return {
+            amount: fallbackAmount,
+            isApplied: false,
+            hasActiveSubscription: false,
+            isBenefitExhausted: false,
+            remainingCount: 0,
+            subId: null,
+            planName: "",
+            benefitField
+        };
     } catch (error) {
         console.error(`Benefit evaluation error for ${benefitField}:`, error);
-        return { amount: originalAmount, isApplied: false };
+        return {
+            amount: Number(originalAmount || 0),
+            isApplied: false,
+            hasActiveSubscription: false,
+            isBenefitExhausted: false,
+            remainingCount: 0,
+            subId: null,
+            planName: "",
+            benefitField
+        };
     }
 };
 

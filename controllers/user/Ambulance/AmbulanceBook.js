@@ -658,16 +658,117 @@ const getFinalFare = async (params, userId) => {
 // --- 1. CHECKOUT API (Updated with COD Check) ---
 const calculateAmbulanceFare = async (req, res) => {
     try {
-        // 🚀 SMART COD CHECK: Passes req.user.id
-        const isCodAllowed = await isCodEnabled('Ambulance', req.user ? req.user.id : null);
-        const fare = await getFinalFare(req.body, req.user ? req.user.id : null);
-        
-        res.json({ 
-            success: true, 
-            isCodAvailable: isCodAllowed, // 👈 True for subscribers
-            data: fare 
+        const userId = req.user ? req.user.id : null;
+        const { 
+            ambulanceId, 
+            serviceType, 
+            distanceInKm = 5, 
+            staffType, 
+            couponCode 
+        } = req.body;
+
+        if (!ambulanceId) {
+            return res.status(400).json({ success: false, message: "ambulanceId is required." });
+        }
+
+        const ambulance = await Ambulance.findById(ambulanceId);
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        // Accidental SOS cases are 100% Free
+        if (serviceType === 'Accident emergency') {
+            return res.json({
+                success: true,
+                isFreeAccidental: true,
+                data: {
+                    ambulanceCharge: 0,
+                    originalAmbulanceCharge: 2000,
+                    supportingStaffCharge: 0,
+                    subtotal: 0,
+                    discount: 0,
+                    total: 0
+                }
+            });
+        }
+
+        const fixedPrice = ambulance.pricing?.fixedPrice || 1000;
+        const baseDist = ambulance.pricing?.baseDistance || 5;
+        const perKm = ambulance.pricing?.pricePerKM || 20;
+
+        let travelCharge = fixedPrice;
+        if (Number(distanceInKm) > baseDist) {
+            travelCharge += (Number(distanceInKm) - baseDist) * perKm;
+        }
+
+        // Staff Charges
+        let staffCharge = 0;
+        if (staffType) {
+            const types = Array.isArray(staffType) ? staffType : staffType.split(',').map(s => s.trim().toLowerCase());
+            if (types.includes('doctor') && ambulance.supportStaff?.doctor?.available) {
+                staffCharge += Number(ambulance.supportStaff.doctor.price || 500);
+            }
+            if (types.includes('nurse') && ambulance.supportStaff?.nurse?.available) {
+                staffCharge += Number(ambulance.supportStaff.nurse.price || 300);
+            }
+        }
+
+        const originalAmbulanceCharge = travelCharge;
+
+        // Evaluate Subscription Benefit for Ambulance Trip
+        const ambBenefit = await checkAndApplyBenefit(userId, 'freeAmbulanceTripsCount', travelCharge);
+        const finalAmbulanceCharge = ambBenefit.amount;
+
+        const subtotal = finalAmbulanceCharge + staffCharge;
+
+        let discount = 0;
+        let couponObj = null;
+
+        if (couponCode) {
+            const coupon = await Coupon.findOne({
+                couponName: couponCode.toUpperCase(),
+                isActive: true,
+                expiryDate: { $gte: new Date() }
+            });
+
+            if (coupon && subtotal >= coupon.minOrderAmount) {
+                discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                couponObj = {
+                    couponId: coupon._id,
+                    couponCode: coupon.couponName,
+                    discountValue: Math.round(discount)
+                };
+            }
+        }
+
+        const totalPayable = Math.max(0, Math.round(subtotal - discount));
+
+        res.json({
+            success: true,
+            isFreeAccidental: false,
+            data: {
+                ambulanceCharge: finalAmbulanceCharge,
+                originalAmbulanceCharge,
+                supportingStaffCharge: staffCharge,
+                subtotal: Math.round(subtotal),
+                discount: Math.round(discount),
+                total: totalPayable,
+                couponDetails: couponObj
+            },
+            subscriptionBenefit: {
+                isApplied: ambBenefit.isApplied,
+                hasActiveSubscription: ambBenefit.hasActiveSubscription,
+                isBenefitExhausted: ambBenefit.isBenefitExhausted,
+                remainingCount: ambBenefit.remainingCount,
+                planName: ambBenefit.planName,
+                exhaustedMessage: ambBenefit.exhaustedMessage || (ambBenefit.isBenefitExhausted ? "Your subscription free ambulance trip quota has been exhausted. Standard fare applied." : "")
+            }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+    } catch (error) {
+        console.error("Calculate Ambulance Fare Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 

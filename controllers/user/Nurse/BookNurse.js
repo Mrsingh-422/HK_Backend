@@ -548,7 +548,8 @@ const getRegisteredHospitalsDropdown = async (req, res) => {
 // endpoint: POST /user/nurse/checkout
 const checkoutNurseBooking = async (req, res) => {
     try {
-        let {
+        const userId = req.user.id;
+        const {
             nurseId,
             serviceId,
             packageId,
@@ -559,170 +560,120 @@ const checkoutNurseBooking = async (req, res) => {
             startTime,
             endTime,
             isFasterService,
-            patientCount,
-            selectedConsumables,
-            couponCode,
-            assessmentLocation,
-            hospitalDetails
+            patientCount = 1,
+            selectedConsumables = [],
+            couponCode
         } = req.body;
 
-        const userId = req.user.id;
-
-        if (!nurseId || (!serviceId && !packageId) || !selectedType || !startDate) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "nurseId, serviceId/packageId, selectedType, and startDate are required." 
-            });
+        if (!nurseId) {
+            return res.status(400).json({ success: false, message: "nurseId is required." });
         }
 
         const isPkg = isPackage === true || isPackage === 'true';
-        let baseServicePrice = 0;
-        let itemTitle = "Nurse Care";
+        let baseRate = 0;
+        let title = "";
 
-        // Fetch pricing from NurseService or NursePackage
-        if (isPkg) {
-            const pkg = await NursePackage.findOne({ _id: packageId, nurseId });
-            if (!pkg) return res.status(404).json({ success: false, message: "Nurse Package not found." });
-            itemTitle = pkg.packageName;
-
-            if (selectedType === 'For Multiple Days') baseServicePrice = pkg.pricing.multipleDays.final;
-            else if (selectedType === 'Acc. To Per/Hours') baseServicePrice = pkg.pricing.hourly.final;
-            else baseServicePrice = pkg.pricing.oneDay.final;
-        } else {
-            const svc = await NurseService.findOne({ _id: serviceId, nurseId });
+        if (isPkg && packageId) {
+            const pkg = await NursePackage.findById(packageId);
+            if (!pkg) return res.status(404).json({ success: false, message: "Package not found." });
+            title = pkg.packageName;
+            if (selectedType === 'For Multiple Days') baseRate = pkg.pricing?.multipleDays?.final || 0;
+            else if (selectedType === 'Acc. To Per/Hours') baseRate = pkg.pricing?.hourly?.final || 0;
+            else baseRate = pkg.pricing?.oneDay?.final || 0;
+        } else if (serviceId) {
+            const svc = await NurseService.findById(serviceId);
             if (!svc) return res.status(404).json({ success: false, message: "Nurse Service not found." });
-            itemTitle = svc.title;
-
-            if (selectedType === 'For Multiple Days') baseServicePrice = svc.pricing.multipleDays.final;
-            else if (selectedType === 'Acc. To Per/Hours') baseServicePrice = svc.pricing.hourly.final;
-            else baseServicePrice = svc.pricing.oneDay.final;
+            title = svc.title;
+            if (selectedType === 'For Multiple Days') baseRate = svc.pricing?.multipleDays?.final || 0;
+            else if (selectedType === 'Acc. To Per/Hours') baseRate = svc.pricing?.hourly?.final || 0;
+            else baseRate = svc.pricing?.oneDay?.final || 0;
+        } else {
+            return res.status(400).json({ success: false, message: "Either serviceId or packageId is required." });
         }
 
-        // Multiplier calculation
-        const pCount = Math.max(1, parseInt(patientCount) || 1);
-        let durationUnits = 1;
+        const pCount = Math.max(1, Number(patientCount || 1));
+        const originalBaseServicePrice = baseRate * pCount;
 
-        if (selectedType === 'For Multiple Days' && endDate) {
-            const startM = moment(startDate).startOf('day');
-            const endM = moment(endDate).endOf('day');
-            durationUnits = Math.max(1, endM.diff(startM, 'days') + 1);
-        } else if (selectedType === 'Acc. To Per/Hours' && startTime && endTime) {
-            const startT = moment(startTime, "HH:mm");
-            const endT = moment(endTime, "HH:mm");
-            durationUnits = Math.max(1, endT.diff(startT, 'hours'));
+        // 1. Evaluate Subscription Benefit on Nurse Visit Fee
+        const visitBenefit = await checkAndApplyBenefit(userId, 'freeNurseVisitsCount', originalBaseServicePrice);
+        const finalBaseServicePrice = visitBenefit.amount;
+
+        // Consumables Calculation
+        const consumableTotal = selectedConsumables.reduce((sum, item) => sum + (Number(item.price || 0)), 0);
+
+        // Express / Faster Service Delivery Calculation
+        let fasterCharge = 0;
+        let deliveryBenefit = { isApplied: false, isBenefitExhausted: false, remainingCount: 0 };
+
+        if (isFasterService) {
+            const deliveryConfig = await DeliveryCharge.findOne({ vendorId: nurseId });
+            const standardFastFee = deliveryConfig?.fastDeliveryExtra || 50;
+
+            // 2. Evaluate Subscription Benefit on Nurse Fast Travel / Delivery
+            deliveryBenefit = await checkAndApplyBenefit(userId, 'freeNurseDeliveriesCount', standardFastFee);
+            fasterCharge = deliveryBenefit.amount;
         }
 
-        const totalBaseFee = baseServicePrice * durationUnits * pCount;
-        let originalBasePrice = totalBaseFee;
-        let finalBasePrice = totalBaseFee;
-        let isSubscriptionApplied = false;
+        const subtotal = finalBaseServicePrice + consumableTotal + fasterCharge;
 
-        // Subscription Benefit check
-        const benefitCheck = await checkAndApplyBenefit(userId, 'freeNurseVisitsCount', totalBaseFee);
-        if (benefitCheck.isApplied) {
-            finalBasePrice = 0;
-            isSubscriptionApplied = true;
-        }
-
-        // Consumables calculation
-        let consumableTotal = 0;
-        if (selectedConsumables && Array.isArray(selectedConsumables)) {
-            selectedConsumables.forEach(c => {
-                consumableTotal += (Number(c.price || 0) * Number(c.quantity || 1));
-            });
-        }
-
-        // Surcharges & Extra charges
-        const fasterServiceCharge = (isFasterService === true || isFasterService === 'true') ? 100 : 0;
-        const slotSurcharge = 0;
-        const subtotal = finalBasePrice + consumableTotal + slotSurcharge + fasterServiceCharge;
-
-        // Coupon calculation
+        // Coupon Discount
         let couponDiscount = 0;
-        let appliedCoupon = null;
+        let couponId = null;
 
         if (couponCode) {
             const coupon = await Coupon.findOne({
-                couponName: String(couponCode).trim().toUpperCase(),
+                couponName: couponCode.toUpperCase(),
                 isActive: true,
                 expiryDate: { $gte: new Date() }
             });
 
             if (coupon && subtotal >= coupon.minOrderAmount) {
-                couponDiscount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
-                appliedCoupon = {
-                    couponId: coupon._id,
-                    couponName: coupon.couponName,
-                    discountPercentage: coupon.discountPercentage,
-                    maxDiscount: coupon.maxDiscount,
-                    minOrderAmount: coupon.minOrderAmount
-                };
+                if (!coupon.vendorId || coupon.vendorId.toString() === nurseId.toString() || coupon.vendorType === 'All' || coupon.vendorType === 'Nurse') {
+                    couponDiscount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                    couponId = coupon._id;
+                }
             }
         }
 
         const taxAmount = Math.round((subtotal - couponDiscount) * 0.05); // 5% GST
         const totalPrice = Math.max(0, Math.round((subtotal - couponDiscount) + taxAmount));
 
-        // 🚨 Smart COD Check: Checks User subscription first, then Admin policy
-        const isCodAllowed = await isCodEnabled('Nurse', userId);
-
-        // 🏥 Hospital Details Auto-Resolution
-        let resolvedHospital = null;
-        if (assessmentLocation === 'At Hospital' && hospitalDetails) {
-            if (hospitalDetails.hospitalId) {
-                const hosp = await Hospital.findById(hospitalDetails.hospitalId).select('name address city state location').lean();
-                if (hosp) {
-                    resolvedHospital = {
-                        hospitalId: hosp._id,
-                        isHKHospital: true,
-                        hospitalName: hosp.name,
-                        hospitalAddress: hosp.address || "",
-                        city: hosp.city || "",
-                        wardName: hospitalDetails.wardName || "",
-                        bedNumber: hospitalDetails.bedNumber || "",
-                        floorNumber: hospitalDetails.floorNumber || ""
-                    };
-                }
-            } else {
-                resolvedHospital = {
-                    hospitalId: null,
-                    isHKHospital: false,
-                    hospitalName: hospitalDetails.hospitalName || "",
-                    hospitalAddress: hospitalDetails.hospitalAddress || "",
-                    city: hospitalDetails.city || "",
-                    wardName: hospitalDetails.wardName || "",
-                    bedNumber: hospitalDetails.bedNumber || "",
-                    floorNumber: hospitalDetails.floorNumber || ""
-                };
-            }
-        }
-
         res.status(200).json({
             success: true,
-            isCodAvailable: isCodAllowed, // 👈 Root level flag for Frontend UI radio button
             breakdown: {
-                itemTitle,
                 pCount,
-                durationUnits,
-                selectedType,
-                baseServicePrice: finalBasePrice,
-                originalBasePrice,
-                isSubscriptionApplied,
-                slotSurcharge,
+                originalBaseServicePrice,
+                baseServicePrice: finalBaseServicePrice,
+                slotSurcharge: 0,
                 consumableTotal,
-                fasterServiceCharge,
+                fasterServiceCharge: fasterCharge,
                 couponDiscount: Math.round(couponDiscount),
                 taxAmount,
                 totalPrice,
-                isCodAvailable: isCodAllowed, // 👈 Breakdown level flag
-                appliedCoupon,
-                assessmentLocation: assessmentLocation || 'At Home',
-                hospitalDetails: resolvedHospital
+                appliedCoupon: couponId
+            },
+            subscriptionBenefits: {
+                visitBenefit: {
+                    isApplied: visitBenefit.isApplied,
+                    hasActiveSubscription: visitBenefit.hasActiveSubscription,
+                    isBenefitExhausted: visitBenefit.isBenefitExhausted,
+                    remainingCount: visitBenefit.remainingCount,
+                    planName: visitBenefit.planName,
+                    exhaustedMessage: visitBenefit.exhaustedMessage || (visitBenefit.isBenefitExhausted ? "Your subscription free nurse visit quota is exhausted. Standard visit fee applied." : "")
+                },
+                deliveryBenefit: {
+                    isApplied: deliveryBenefit.isApplied,
+                    hasActiveSubscription: deliveryBenefit.hasActiveSubscription,
+                    isBenefitExhausted: deliveryBenefit.isBenefitExhausted,
+                    remainingCount: deliveryBenefit.remainingCount,
+                    planName: deliveryBenefit.planName,
+                    exhaustedMessage: deliveryBenefit.exhaustedMessage || (deliveryBenefit.isBenefitExhausted ? "Your subscription free nurse delivery quota is exhausted." : "")
+                }
             }
         });
 
     } catch (error) {
-        console.error("Checkout Nurse Booking Error:", error);
+        console.error("Nurse Checkout Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
