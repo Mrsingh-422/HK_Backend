@@ -18,6 +18,7 @@ const {
     getAvailableCoupons ,validateLabCoupon,
     getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,
     getWomenCategories,getWomenTestsByCategory,
+    retryLabPayment,
     
     // Prescription Flow
     scanLabPrescription,searchMasterTestsForPrescription,
@@ -25,7 +26,8 @@ const {
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
-    verifyLabPrescriptionPayment
+    verifyLabPrescriptionPayment,
+
     
 } = require('../../../controllers/user/Lab/BookLab');
 
@@ -80,6 +82,8 @@ router.post('/checkout', protect('user'), checkoutLabBooking);
 router.get('/main-categories', protect('user'), getUniqueMainCategories);
 router.post('/confirm-prescription', protect('user'), confirmPrescriptionBooking); // Prescription Flow Part 2
 router.post('/verify-payment', protect('user'), verifyLabPayment); // NEW
+
+router.post('/retry-payment', protect('user'), retryLabPayment);
 router.post('/upload-prescription', protect('user'), prescriptionUploads.array('prescriptionImages', 5), uploadPrescriptionFlow);
 
 // Discovery & Logistics
