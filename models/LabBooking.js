@@ -126,7 +126,7 @@ appliedCoupon: {
     // Link to Driver model where vendorType is 'Lab'
     phlebotomistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
     
-    paymentStatus: { type: String, enum: ['Pending', 'Done', 'Failed', 'Refunded'], default: 'Pending' },
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Done', 'Failed', 'Refunded','Refund-Initiated'], default: 'Pending' },
     paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet', 'Online'] },
 
     // The final output
