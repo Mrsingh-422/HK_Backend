@@ -127,7 +127,10 @@ appliedCoupon: {
     phlebotomistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
     
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Done', 'Failed', 'Refunded','Refund-Initiated'], default: 'Pending' },
-    paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet', 'Online'] },
+    paymentMethod: { type: String, enum: [
+        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
+        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater'
+    ], default: 'COD' },
 
     // The final output
     reportFile: { type: String, default: null }, // Link to PDF file
