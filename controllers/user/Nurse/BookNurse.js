@@ -315,13 +315,13 @@ const checkRangeAvailability = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 // =========================================================================
-// 📅 GET NURSE AVAILABILITY (CALENDAR DATES & MULTI-DAY PRICING SYNC)
+// 📅 GET NURSE AVAILABILITY (RETURNS VENDOR FIXEDPRICE & EXPRESS CHARGES)
 // Endpoint: GET /user/nurse/availability/:nurseId
 // =========================================================================
 const getNurseAvailability = async (req, res) => {
     try {
         const { nurseId } = req.params;
-        const { serviceId, packageId, isPackage, type = 'One day One Time' } = req.query;
+        const { serviceId, packageId, isPackage, type = 'One day One Time', selectedDate } = req.query;
 
         // 1. Fetch Target Service or Package
         let targetItem = null;
@@ -331,34 +331,42 @@ const getNurseAvailability = async (req, res) => {
             targetItem = await NurseService.findById(serviceId).lean();
         }
 
-        // Base price extraction
         const baseOneDayPrice = targetItem?.pricing?.oneDay?.final || 1800;
         const baseMultiDayPrice = targetItem?.pricing?.multipleDays?.final || baseOneDayPrice;
         const baseHourlyPrice = targetItem?.pricing?.hourly?.final || 200;
 
-        // 2. Fetch Bureau Availability Settings
-        let availability = await Availability.findOne({ vendorId: nurseId }).lean();
-        if (!availability) {
-            availability = {
-                startTime: "08:00",
-                endTime: "20:00",
-                slotDuration: 60,
-                premiumDates: [],
-                premiumSlots: [],
-                unavailableSlots: []
-            };
-        }
+        // 2. Fetch Availability Settings & Vendor Delivery Charges
+        const nurseObjId = mongoose.Types.ObjectId.isValid(nurseId) ? new mongoose.Types.ObjectId(nurseId) : nurseId;
+        const [availability, deliveryConfig] = await Promise.all([
+            Availability.findOne({ vendorId: nurseObjId }).lean(),
+            DeliveryCharge.findOne({ $or: [{ vendorId: nurseObjId }, { vendorId: nurseId }] }).lean()
+        ]);
 
-        const premiumDatesList = availability.premiumDates || [];
-        const premiumSlotsList = availability.premiumSlots || [];
-        const unavailableSlots = availability.unavailableSlots || [];
+        const avail = availability || {
+            startTime: "08:00",
+            endTime: "20:00",
+            slotDuration: 60,
+            premiumDates: [],
+            premiumSlots: [],
+            unavailableSlots: []
+        };
 
-        // 3. Generate 30-Day Calendar with exact mode-based pricing
+        const premiumDatesList = avail.premiumDates || [];
+        const premiumSlotsList = avail.premiumSlots || [];
+        const unavailableSlots = avail.unavailableSlots || [];
+        
+        // Exact vendor values from DeliveryCharge model
+        const expressChargeRate = deliveryConfig?.fastDeliveryExtra !== undefined ? Number(deliveryConfig.fastDeliveryExtra) : 100;
+        const travelBaseFee = deliveryConfig?.fixedPrice !== undefined ? Number(deliveryConfig.fixedPrice) : 50;
+
+        const now = moment();
+        const activeDateStr = selectedDate ? moment(selectedDate).format('YYYY-MM-DD') : now.format('YYYY-MM-DD');
+        const isBookingToday = (activeDateStr === now.format('YYYY-MM-DD'));
+
+        // 3. Generate 30-Day Calendar
         const calendar = [];
-        const today = moment();
-
         for (let i = 0; i < 30; i++) {
-            const dateMoment = today.clone().add(i, 'days');
+            const dateMoment = now.clone().add(i, 'days');
             const dateStr = dateMoment.format('YYYY-MM-DD');
 
             const matchedPremiumDate = premiumDatesList.find(p => p.date === dateStr);
@@ -374,7 +382,7 @@ const getNurseAvailability = async (req, res) => {
                     isPremium,
                     extraFee,
                     oneDayPrice: baseOneDayPrice + extraFee,
-                    multipleDayPrice: baseMultiDayPrice + extraFee, // 👈 Exact Multiple Days Rate
+                    multipleDayPrice: baseMultiDayPrice + extraFee,
                     hourlyPrice: baseHourlyPrice
                 }
             });
@@ -382,29 +390,58 @@ const getNurseAvailability = async (req, res) => {
 
         // 4. Generate Time Slots Grid
         const timeSlots = [];
-        const startHour = moment(availability.startTime || "08:00", "HH:mm");
-        const endHour = moment(availability.endTime || "20:00", "HH:mm");
-        const slotStep = availability.slotDuration || 60;
+        const startHour = moment(avail.startTime || "08:00", "HH:mm");
+        const endHour = moment(avail.endTime || "20:00", "HH:mm");
+        const slotStep = avail.slotDuration || 60;
 
         let currentSlot = startHour.clone();
         while (currentSlot.isBefore(endHour)) {
             const slotTime24 = currentSlot.format("HH:mm");
-            const isBlocked = unavailableSlots.includes(slotTime24);
+            const isManuallyBlocked = unavailableSlots.includes(slotTime24);
 
-            if (!isBlocked) {
+            let isDisabled = isManuallyBlocked;
+            let isExpressWindow = false;
+            let statusLabel = "Available";
+
+            if (isBookingToday) {
+                const slotMoment = moment(`${activeDateStr} ${slotTime24}`, 'YYYY-MM-DD HH:mm');
+                const diffMinutes = slotMoment.diff(now, 'minutes');
+
+                if (diffMinutes < 60) {
+                    isDisabled = true;
+                    statusLabel = diffMinutes < 0 ? "Past" : "Closed (< 1h)";
+                } else if (diffMinutes >= 60 && diffMinutes < 240) {
+                    isExpressWindow = true;
+                    statusLabel = "1-4h Express Rush";
+                } else {
+                    isExpressWindow = false;
+                    statusLabel = "Standard";
+                }
+            }
+
+            if (!isManuallyBlocked) {
                 const matchedPremiumSlot = premiumSlotsList.find(s => s.time === slotTime24);
                 const isPremiumSlot = !!matchedPremiumSlot && Number(matchedPremiumSlot.extraFee || 0) > 0;
                 const slotExtraFee = isPremiumSlot ? Number(matchedPremiumSlot.extraFee) : 0;
+
+                const expressAddon = isExpressWindow ? expressChargeRate : 0;
+                const totalSlotPriceWithExpress = baseHourlyPrice + slotExtraFee + expressAddon;
 
                 timeSlots.push({
                     time: slotTime24,
                     displayTime: currentSlot.format("hh:mm A"),
                     slotPremiumFee: slotExtraFee,
+                    expressExtraFee: expressAddon,
                     hourlyBasePrice: baseHourlyPrice,
                     totalHourlyPrice: baseHourlyPrice + slotExtraFee,
-                    isAvailable: true
+                    totalSlotPriceWithExpress,
+                    isExpressWindow,
+                    isDisabled,
+                    statusLabel,
+                    isAvailable: !isDisabled
                 });
             }
+
             currentSlot.add(slotStep, 'minutes');
         }
 
@@ -413,6 +450,11 @@ const getNurseAvailability = async (req, res) => {
             data: {
                 calendar,
                 timeSlots,
+                selectedDate: activeDateStr,
+                deliveryConfig: {
+                    travelBaseFee,
+                    expressChargeRate
+                },
                 baseRates: {
                     oneDay: baseOneDayPrice,
                     multipleDays: baseMultiDayPrice,
@@ -566,7 +608,7 @@ const getRegisteredHospitalsDropdown = async (req, res) => {
 };
 
 // =========================================================================
-// 🧮 HELPER: CALCULATE PRICING (MULTI-HOUR & 1ST-HOUR PEAK SURCHARGE RULE)
+// 🧮 HELPER: CALCULATE PRICING (STRICT VENDOR FIXEDPRICE & MUTUAL RUSH LOGIC)
 // =========================================================================
 const calculateNurseBookingBreakdown = async ({
     nurseId,
@@ -606,7 +648,6 @@ const calculateNurseBookingBreakdown = async ({
         const endM = moment(endDate || startDate).startOf('day');
         stayDays = Math.max(1, endM.diff(startM, 'days') + 1);
         
-        // Use Multiple Days per-day rate
         const perDayRate = targetItem.pricing?.multipleDays?.final || targetItem.pricing?.oneDay?.final || 0;
         unitBaseFee = perDayRate * stayDays;
 
@@ -617,26 +658,24 @@ const calculateNurseBookingBreakdown = async ({
             const durationMinutes = eTime.diff(sTime, 'minutes');
             totalHours = Math.max(1, Math.round(durationMinutes / 60));
         }
-        // Base rate is multiplied across all chosen hours
         const hourlyRate = targetItem.pricing?.hourly?.final || 0;
         unitBaseFee = hourlyRate * totalHours;
 
     } else {
-        // 'One day One Time' default
         unitBaseFee = targetItem.pricing?.oneDay?.final || 0;
     }
 
     const patients = Number(patientCount) || 1;
     const baseServicePrice = Math.round(unitBaseFee * patients);
 
-    // 3. Dynamic Premium Surcharge Evaluation
+    // 3. Dynamic Premium Surcharges (Day 1 Peak Date + 1st Hour Peak Slot)
     let datePremiumFee = 0;
     let slotPremiumFee = 0;
 
-    const availabilityConfig = await Availability.findOne({ vendorId: nurseId }).lean();
+    const nurseObjId = mongoose.Types.ObjectId.isValid(nurseId) ? new mongoose.Types.ObjectId(nurseId) : nurseId;
+    const availabilityConfig = await Availability.findOne({ vendorId: nurseObjId }).lean();
 
     if (availabilityConfig) {
-        // A. DATE PREMIUM: Checked ONLY on Start Date / First Day (even in Multi-Day)
         const startDateFormatted = moment(startDate).format('YYYY-MM-DD');
         if (availabilityConfig.premiumDates && Array.isArray(availabilityConfig.premiumDates)) {
             const matchedDate = availabilityConfig.premiumDates.find(p => p.date === startDateFormatted);
@@ -645,7 +684,6 @@ const calculateNurseBookingBreakdown = async ({
             }
         }
 
-        // B. TIME SLOT PREMIUM: Checked ONLY for 1st hour / Start Slot (Not repeated for remaining hours)
         if (startTime) {
             const startSlotFormatted = moment(startTime, ["HH:mm", "hh:mm A"]).format('HH:mm');
             if (availabilityConfig.premiumSlots && Array.isArray(availabilityConfig.premiumSlots)) {
@@ -657,7 +695,6 @@ const calculateNurseBookingBreakdown = async ({
         }
     }
 
-    // Total Surcharge = Date Premium (Day 1) + Slot Premium (Hour 1)
     const slotSurcharge = datePremiumFee + slotPremiumFee;
 
     // 4. Consumables Calculation
@@ -669,16 +706,77 @@ const calculateNurseBookingBreakdown = async ({
         });
     }
 
-    // 5. Faster / Express Delivery Charge
-    let fasterServiceCharge = 0;
-    if (isFasterService === true || isFasterService === 'true') {
-        const deliveryChargeConfig = await DeliveryCharge.findOne({ vendorId: nurseId }).lean();
-        fasterServiceCharge = Number(deliveryChargeConfig?.fastDeliveryExtra || 100);
+    // 5. Fetch Vendor Delivery/Travel Charge Document (Robust ObjectId & String Query)
+    const deliveryChargeConfig = await DeliveryCharge.findOne({
+        $or: [
+            { vendorId: nurseObjId },
+            { vendorId: String(nurseId) },
+            { vendorId: nurseId }
+        ]
+    }).lean();
+
+    const vendorFixedPrice = Number(deliveryChargeConfig?.fixedPrice !== undefined ? deliveryChargeConfig.fixedPrice : 50);
+    const vendorFastExtra = Number(deliveryChargeConfig?.fastDeliveryExtra !== undefined ? deliveryChargeConfig.fastDeliveryExtra : 100);
+    const freeThreshold = Number(deliveryChargeConfig?.freeDeliveryThreshold !== undefined ? deliveryChargeConfig.freeDeliveryThreshold : 0);
+
+    // ⚡ 6. Real-Time Emergency 1-4 Hour Window Evaluation
+    const now = moment();
+    const isBookingToday = moment(startDate).format('YYYY-MM-DD') === now.format('YYYY-MM-DD');
+    let isExpressRequired = false;
+    let hoursDiffFromNow = null;
+
+    if (isBookingToday && startTime) {
+        const slotMoment = moment(`${startDate} ${startTime}`, ["YYYY-MM-DD HH:mm", "YYYY-MM-DD hh:mm A"]);
+        const diffMinutes = slotMoment.diff(now, 'minutes');
+        hoursDiffFromNow = diffMinutes / 60;
+
+        if (diffMinutes < 60) {
+            throw new Error("Cannot book slot within 1 hour. Minimum 1 hour preparation time is required for nurse dispatch.");
+        }
+
+        if (diffMinutes >= 60 && diffMinutes < 240) {
+            isExpressRequired = true;
+        }
     }
 
-    // 6. Subtotal & Coupon Discount
-    const subtotal = baseServicePrice + slotSurcharge + consumableTotal + fasterServiceCharge;
+    // 🚨 7. MUTUALLY EXCLUSIVE LOGIC (Rush Charge vs Base Fixed Travel Fare)
+    const isExpressActive = (isFasterService === true || isFasterService === 'true' || isExpressRequired);
+    
+    // Check if free threshold is met (Only when threshold > 0 and base price >= threshold)
+    const isFreeThresholdMet = (freeThreshold > 0 && baseServicePrice >= freeThreshold);
 
+    let fasterServiceCharge = 0;
+    let travelFee = 0;
+
+    if (isExpressActive) {
+        // CASE A: Express Rush Active -> Apply Rush Fee, Base Fixed Travel Fee becomes 0
+        fasterServiceCharge = vendorFastExtra;
+        travelFee = 0;
+    } else if (isFreeThresholdMet) {
+        // CASE B: Order exceeds vendor free delivery threshold
+        fasterServiceCharge = 0;
+        travelFee = 0;
+    } else {
+        // CASE C: Standard Booking -> Vendor fixedPrice ALWAYS applies
+        fasterServiceCharge = 0;
+        travelFee = vendorFixedPrice;
+    }
+
+    // 8. Subscription Benefit Integration (Waives service base fee if subscription available)
+    let finalBaseServicePrice = baseServicePrice;
+    let isSubscriptionApplied = false;
+
+    if (userId) {
+        const visitBenefit = await checkAndApplyBenefit(userId, 'freeNurseVisitsCount', baseServicePrice);
+        if (visitBenefit.isApplied) {
+            finalBaseServicePrice = 0;
+            isSubscriptionApplied = true;
+        }
+    }
+
+    const subtotal = finalBaseServicePrice + slotSurcharge + consumableTotal + travelFee + fasterServiceCharge;
+
+    // 9. Coupon Application
     let couponDiscount = 0;
     let appliedCouponObj = null;
 
@@ -706,20 +804,7 @@ const calculateNurseBookingBreakdown = async ({
         }
     }
 
-    // 7. Subscription Benefit Integration
-    let finalBaseServicePrice = baseServicePrice;
-    let isSubscriptionApplied = false;
-
-    if (userId) {
-        const benefitCheck = await checkAndApplyBenefit(userId, 'freeNurseVisitsCount', baseServicePrice);
-        if (benefitCheck.isApplied) {
-            finalBaseServicePrice = 0;
-            isSubscriptionApplied = true;
-        }
-    }
-
-    const calculatedSubtotal = finalBaseServicePrice + slotSurcharge + consumableTotal + fasterServiceCharge;
-    const finalTotalPrice = Math.max(0, Math.round(calculatedSubtotal - couponDiscount));
+    const finalTotalPrice = Math.max(0, Math.round(subtotal - couponDiscount));
 
     return {
         targetItem,
@@ -733,7 +818,12 @@ const calculateNurseBookingBreakdown = async ({
             slotPremiumFee,
             slotSurcharge,
             consumableTotal,
+            travelFee: travelFee, // 👈 Exact vendor fixedPrice
+            originalTravelFee: vendorFixedPrice,
             fasterServiceCharge,
+            freeDeliveryThreshold: freeThreshold,
+            isExpressRequired,
+            hoursDiffFromNow: hoursDiffFromNow !== null ? Number(hoursDiffFromNow.toFixed(1)) : null,
             couponDiscount,
             taxAmount: 0,
             totalPrice: finalTotalPrice,
@@ -744,7 +834,7 @@ const calculateNurseBookingBreakdown = async ({
 };
 
 // =========================================================================
-// 1. CHECKOUT SUMMARY API
+// 1. CHECKOUT SUMMARY API (OUTPUTS DIRECT ROOT & DATA BREAKDOWNS)
 // Endpoint: POST /user/nurse/checkout
 // =========================================================================
 const checkoutNurseBooking = async (req, res) => {
@@ -791,14 +881,22 @@ const checkoutNurseBooking = async (req, res) => {
             userId
         });
 
-        // Check COD status for user
+        // Check COD status
         const isCodAvailable = await isCodEnabled('Nurse', userId);
 
         res.status(200).json({
             success: true,
             message: "Nurse checkout calculation completed.",
             isCodAvailable,
-            breakdown
+            durationUnits: selectedType === 'Acc. To Per/Hours' ? breakdown.totalHours : breakdown.totalDays,
+            pCount: breakdown.pCount,
+            breakdown,
+            data: {
+                isCodAvailable,
+                durationUnits: selectedType === 'Acc. To Per/Hours' ? breakdown.totalHours : breakdown.totalDays,
+                pCount: breakdown.pCount,
+                breakdown
+            }
         });
 
     } catch (error) {
@@ -808,7 +906,7 @@ const checkoutNurseBooking = async (req, res) => {
 };
 
 // =========================================================================
-// 2. PLACE NURSE BOOKING API
+// 2. PLACE NURSE BOOKING API (MANDATORY TRAVEL FARE + COD / RAZORPAY)
 // Endpoint: POST /user/nurse/book
 // =========================================================================
 const placeNurseBooking = async (req, res) => {
@@ -838,7 +936,7 @@ const placeNurseBooking = async (req, res) => {
             });
         }
 
-        // 1. Calculate price breakdown with active surcharges
+        // 1. Calculate price breakdown with active surcharges & travel fare
         const { targetItem, breakdown } = await calculateNurseBookingBreakdown({
             nurseId,
             serviceId,
@@ -859,7 +957,6 @@ const placeNurseBooking = async (req, res) => {
         const totalPayable = breakdown.totalPrice;
         const bookingId = `HKN-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
 
-        // OTPs for visit start & complete
         const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
         const endOtp = Math.floor(1000 + Math.random() * 9000).toString();
 
@@ -884,6 +981,7 @@ const placeNurseBooking = async (req, res) => {
                 originalBasePrice: breakdown.originalBasePrice,
                 slotSurcharge: breakdown.slotSurcharge,
                 consumableTotal: breakdown.consumableTotal,
+                travelFee: breakdown.travelFee,
                 couponDiscount: breakdown.couponDiscount,
                 fasterServiceCharge: breakdown.fasterServiceCharge,
                 taxAmount: breakdown.taxAmount || 0,
