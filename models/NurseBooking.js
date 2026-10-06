@@ -96,7 +96,7 @@ const nurseBookingSchema = new mongoose.Schema({
     
     status: { 
         type: String, 
-         enum: ['Pending', 'Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed', 'Cancelled'],  
+         enum: ['Pending', 'Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed', 'Cancelled','No-Show'],  
         default: 'Pending' 
     },
     selectedConsumables: [{

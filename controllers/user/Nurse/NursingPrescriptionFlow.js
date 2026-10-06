@@ -3,9 +3,11 @@ const Nurse = require('../../../models/Nurse');
 const NurseBooking = require('../../../models/NurseBooking');
 const moment = require('moment');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 
+const { getDistance } = require('../../../utils/helpers');
 const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay');
-const { notifyAdminsAndVendor } = require('../../../utils/notification');
+const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification');
 
 // 1. UPLOAD PRESCRIPTION & PARSE (AI Integration)
 const uploadAndParsePrescription = async (req, res) => {
@@ -59,12 +61,13 @@ const uploadAndParsePrescription = async (req, res) => {
     }
 };
 
-// 1. BROADCAST PRESCRIPTION REQUEST (Crash-Proof Distance Calculation)
+// BROADCAST PRESCRIPTION REQUEST (Crash-Proof Distance & Top 10 Candidate Match)
 // Endpoint: POST /user/nurse/prescription/broadcast
 const broadcastPrescriptionRequest = async (req, res) => {
     try {
         let { prescriptionImage, services, lat, lng, address } = req.body;
 
+        // Parse JSON string inputs if sent via FormData
         if (typeof services === 'string') {
             try { services = JSON.parse(services); } catch (e) {}
         }
@@ -73,7 +76,10 @@ const broadcastPrescriptionRequest = async (req, res) => {
         }
 
         if (!prescriptionImage || !services || !Array.isArray(services) || services.length === 0 || !lat || !lng) {
-            return res.status(400).json({ success: false, message: "Prescription image, services list, and coordinates (lat, lng) are required." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Prescription image, services list, and coordinates (lat, lng) are required." 
+            });
         }
 
         const userLat = parseFloat(lat);
@@ -86,7 +92,10 @@ const broadcastPrescriptionRequest = async (req, res) => {
         }).select('_id name location phone profileImage rating city').lean();
 
         if (allNurses.length === 0) {
-            return res.status(404).json({ success: false, message: "No nursing service providers found in platform registry." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "No nursing service providers found in platform registry." 
+            });
         }
 
         // 2. Calculate real-world distance safely without GeoJSON indexing crash
@@ -94,14 +103,17 @@ const broadcastPrescriptionRequest = async (req, res) => {
         for (let nurse of allNurses) {
             if (nurse.location?.lat && nurse.location?.lng) {
                 const dist = await getDistance(userLat, userLng, Number(nurse.location.lat), Number(nurse.location.lng));
-                if (dist <= 25) { // 25km broad service radius
+                if (dist <= 25) { // 25km service radius
                     nursesWithDistance.push({ nurseId: nurse._id, distance: dist, nurseInfo: nurse });
                 }
             }
         }
 
         if (nursesWithDistance.length === 0) {
-            return res.status(404).json({ success: false, message: "No nursing service providers available within 25km radius." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "No nursing service providers available within 25km radius." 
+            });
         }
 
         // 3. Sort by nearest and pick top 10 candidates
@@ -262,7 +274,8 @@ const getRequestProposals = async (req, res) => {
     }
 };
 
-// 4. ACCEPT A PROPOSAL AND INITIATE BOOKING
+// ACCEPT A PROPOSAL AND INITIATE BOOKING (Null-Safe Address & Price Calculation)
+// Endpoint: POST /user/nurse/prescription/accept
 const acceptProposalAndBook = async (req, res) => {
     try {
         const { requestId, proposalId } = req.body;
@@ -293,14 +306,14 @@ const acceptProposalAndBook = async (req, res) => {
         // 2. Generate Razorpay Order strictly for selected proposal amount
         const rzpOrder = await createRazorpayOrder(selectedProposal.priceBreakdown.totalPrice, `rx_receipt_${bId}`);
 
-        // 3. Create booking document in 'Pending' status 
-        // Note: request is NOT deleted here, keeping it alive for safety
+        // 3. Create booking document in 'Pending' status with safe address parsing
+        const addr = request.location?.address || {};
         const booking = await NurseBooking.create({
             userId: req.user.id,
             nurseId: selectedProposal.nurseId,
             bookingId: bId,
             bookingType: 'Prescription',
-            prescriptionRequestId: requestId, // Saved reference for payment verification step
+            prescriptionRequestId: requestId,
             serviceDetails: {
                 title: `Prescription Service Booking`,
                 type: "Prescription Request",
@@ -316,20 +329,23 @@ const acceptProposalAndBook = async (req, res) => {
                 fasterServiceCharge: 0
             },
             address: {
-                houseNo: request.location.address.houseNo,
-                landmark: request.location.address.landmark,
-                city: request.location.address.city,
-                state: request.location.address.state,
-                pincode: request.location.address.pincode
+                name: addr.name || req.user.name || "Patient",
+                phone: addr.phone || req.user.phone || "",
+                houseNo: addr.houseNo || "",
+                landmark: addr.landmark || "",
+                city: addr.city || "",
+                state: addr.state || "",
+                pincode: addr.pincode || "",
+                addressType: addr.addressType || "Home"
             },
             assessmentLocation: 'At Home',
             paymentMethod: 'Online',
-            status: 'Pending', // Holds at Pending stage
+            status: 'Pending',
             paymentStatus: 'Pending',
             prescriptionImage: request.prescriptionImage
         });
 
-        // 4. Returns Razorpay initialization payload for the Mobile Client
+        // 4. Return Razorpay initialization payload for client
         return res.status(200).json({
             success: true,
             message: "Razorpay order generated successfully. Complete payment to confirm booking.",
@@ -343,9 +359,11 @@ const acceptProposalAndBook = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("Accept Proposal Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 // 2. VERIFY PRESCRIPTION PAYMENT & CONFIRM BOOKING (History Preserved)
 // Endpoint: POST /user/nurse/prescription/verify-payment
 const verifyPrescriptionPayment = async (req, res) => {

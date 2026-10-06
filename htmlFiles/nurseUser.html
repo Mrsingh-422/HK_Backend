@@ -709,6 +709,121 @@
     <!-- 🧠 CLIENT LOGIC & REAL-TIME EVENT ENGINE -->
     <!-- ========================================================================= -->
     <script>
+        // Handles time slot selection across One Day, Multi-Day & Hourly modes
+function selectTimeSlot(time, extraFee = 0) {
+    appState.startTime = time;
+    const isHourly = (appState.frequencyMode === 'Acc. To Per/Hours');
+
+    if (isHourly) {
+        appState.endTime = moment(time, 'HH:mm').add(appState.hourlyDurationHours || 1, 'hours').format('HH:mm');
+    } else {
+        appState.endTime = null;
+    }
+
+    // Highlight selected slot
+    document.querySelectorAll('.slot-pill').forEach(s => s.classList.remove('active'));
+    const activeSlot = document.getElementById(`slot-time-${time}`);
+    if (activeSlot) activeSlot.classList.add('active');
+
+    // Update bottom label text
+    const summaryLabel = document.getElementById('hourlyWindowSummary');
+    if (summaryLabel) {
+        summaryLabel.innerText = isHourly 
+            ? `${moment(time, 'HH:mm').format('hh:mm A')} - ${moment(appState.endTime, 'HH:mm').format('hh:mm A')}`
+            : `${moment(time, 'HH:mm').format('hh:mm A')} Arrival`;
+    }
+    
+    // Premium Surcharge notification badge
+    const badge = document.getElementById('slotPremiumBadge');
+    if (badge) {
+        if (Number(extraFee) > 0) {
+            badge.classList.remove('hidden');
+            badge.innerText = `+₹${extraFee} Peak Slot Surcharge`;
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+}
+
+// =========================================================================
+// ⏰ MULTI-HOUR SELECTION & FIRST-HOUR SURCHARGE HANDLER
+// =========================================================================
+function handleSlotCardClick(time, extraFee = 0) {
+    const isHourly = (appState.frequencyMode === 'Acc. To Per/Hours');
+
+    if (isHourly) {
+        // Multi-hour range logic: First click sets start, second click sets end
+        if (!appState.startTime || (appState.startTime && appState.endTime && appState.hourlyDurationHours > 1)) {
+            appState.startTime = time;
+            appState.endTime = moment(time, 'HH:mm').add(1, 'hour').format('HH:mm');
+            appState.hourlyDurationHours = 1;
+        } else {
+            const sMoment = moment(appState.startTime, 'HH:mm');
+            const clickedMoment = moment(time, 'HH:mm');
+
+            if (clickedMoment.isBefore(sMoment)) {
+                // Clicked earlier slot -> Reset start to this slot
+                appState.startTime = time;
+                appState.endTime = moment(time, 'HH:mm').add(1, 'hour').format('HH:mm');
+                appState.hourlyDurationHours = 1;
+            } else if (clickedMoment.isSame(sMoment)) {
+                // Clicked same slot -> 1 hour
+                appState.endTime = sMoment.clone().add(1, 'hour').format('HH:mm');
+                appState.hourlyDurationHours = 1;
+            } else {
+                // Clicked later slot -> Set end time to clicked slot + 1 hour (e.g. 08:00 to 10:00 -> 08:00 to 11:00 = 3 hrs)
+                const endWindow = clickedMoment.clone().add(1, 'hour');
+                appState.endTime = endWindow.format('HH:mm');
+                appState.hourlyDurationHours = Math.round(endWindow.diff(sMoment, 'minutes') / 60);
+            }
+        }
+    } else {
+        // One Day / Multi-Day: Sets Arrival Start Time
+        appState.startTime = time;
+        appState.endTime = null;
+        appState.hourlyDurationHours = 1;
+    }
+
+    // Highlight all slot pills in the active window
+    document.querySelectorAll('.slot-pill').forEach(s => s.classList.remove('active'));
+
+    if (isHourly && appState.startTime && appState.endTime) {
+        const sM = moment(appState.startTime, 'HH:mm');
+        const eM = moment(appState.endTime, 'HH:mm');
+
+        document.querySelectorAll('.slot-pill').forEach(slotEl => {
+            const slotTimeStr = slotEl.id.replace('slot-time-', '');
+            const slotM = moment(slotTimeStr, 'HH:mm');
+            if ((slotM.isSame(sM) || slotM.isAfter(sM)) && slotM.isBefore(eM)) {
+                slotEl.classList.add('active');
+            }
+        });
+    } else {
+        const activeSlot = document.getElementById(`slot-time-${time}`);
+        if (activeSlot) activeSlot.classList.add('active');
+    }
+
+    // Update Bottom Summary Label
+    const summaryLabel = document.getElementById('hourlyWindowSummary');
+    if (summaryLabel) {
+        summaryLabel.innerText = isHourly 
+            ? `${moment(appState.startTime, 'HH:mm').format('hh:mm A')} - ${moment(appState.endTime, 'HH:mm').format('hh:mm A')} (${appState.hourlyDurationHours} Hour${appState.hourlyDurationHours > 1 ? 's' : ''})`
+            : `${moment(appState.startTime, 'HH:mm').format('hh:mm A')} (Nurse Arrival Time)`;
+    }
+    
+    // Peak Surcharge Badge (Shows 1st Hour Surcharge Note)
+    const badge = document.getElementById('slotPremiumBadge');
+    if (badge) {
+        if (Number(extraFee) > 0) {
+            badge.classList.remove('hidden');
+            badge.innerText = isHourly 
+                ? `+₹${extraFee} Peak Surcharge (1st Hour Only)` 
+                : `+₹${extraFee} Peak Slot Surcharge`;
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+}
         let API_BASE_URL = "http://localhost:5002";
         let USER_TOKEN = localStorage.getItem('hk_user_token') || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5OTg0MDcxM2UzMzNhMzQyMjI3ZWRjOCIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzkxMTM5NDQzLCJleHAiOjQ5NDQ3Mzk0NDN9.r4M6YuFdRMQCaPfDXzrF5ij-HBL_isLk_pF-tZ0h858";
         
@@ -1041,54 +1156,70 @@
 
         // --- 3. DYNAMIC SCHEDULER, PREMIUM DATES & SLOTS HIGHLIGHTS ---
         async function selectServiceForScheduling(itemId, isPkg) {
-            appState.isPackage = isPkg;
-            const d = appState.selectedNurseData;
+    appState.isPackage = isPkg;
+    const d = appState.selectedNurseData;
 
-            const servicesList = Array.isArray(d.services) ? d.services : [];
-            const packagesList = Array.isArray(d.packages) ? d.packages : [];
-            const nurseObj = d.nurse || d.profile || d;
+    const servicesList = Array.isArray(d.services) ? d.services : [];
+    const packagesList = Array.isArray(d.packages) ? d.packages : [];
+    const nurseObj = d.nurse || d.profile || d;
 
-            if (isPkg) {
-                appState.selectedPackage = packagesList.find(p => p._id === itemId) || packagesList[0];
-                appState.selectedService = null;
-            } else {
-                appState.selectedService = servicesList.find(s => s._id === itemId) || servicesList[0];
-                appState.selectedPackage = null;
-            }
+    if (isPkg) {
+        appState.selectedPackage = packagesList.find(p => p._id === itemId) || packagesList[0];
+        appState.selectedService = null;
+    } else {
+        appState.selectedService = servicesList.find(s => s._id === itemId) || servicesList[0];
+        appState.selectedPackage = null;
+    }
 
-            const item = isPkg ? appState.selectedPackage : appState.selectedService;
-            document.getElementById('sched-item-badge').innerText = isPkg ? "SPECIALIZED CARE PACKAGE" : "DAILY CARE PROCEDURE";
-            document.getElementById('sched-item-title').innerText = isPkg ? item.packageName : item.title;
-            document.getElementById('sched-item-bureau').innerText = `Provider: ${nurseObj.name || 'HealTouch Nursing Service'}`;
-            document.getElementById('sched-item-price').innerText = `₹${item.pricing?.oneDay?.final || item.pricing?.multipleDays?.final || 0}`;
+    const item = isPkg ? appState.selectedPackage : appState.selectedService;
+    document.getElementById('sched-item-badge').innerText = isPkg ? "SPECIALIZED CARE PACKAGE" : "DAILY CARE PROCEDURE";
+    document.getElementById('sched-item-title').innerText = isPkg ? item.packageName : item.title;
+    document.getElementById('sched-item-bureau').innerText = `Provider: ${nurseObj.name || 'HealTouch Nursing Service'}`;
 
-            navigateTo('screen-scheduler');
-            selectFrequencyMode('One day One Time');
-            renderConsumablesChecklist(item);
-        }
+    navigateTo('screen-scheduler');
+    selectFrequencyMode('One day One Time');
+    renderConsumablesChecklist(item);
+}
 
         function selectFrequencyMode(mode) {
-            appState.frequencyMode = mode;
-            ['oneday', 'multiday', 'hourly'].forEach(m => {
-                const el = document.getElementById(`mode-${m}`);
-                const isMatch = (m === 'oneday' && mode === 'One day One Time') ||
-                                (m === 'multiday' && mode === 'For Multiple Days') ||
-                                (m === 'hourly' && mode === 'Acc. To Per/Hours');
-                el.className = isMatch
-                    ? 'border-2 border-emerald-500 bg-emerald-50/50 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition'
-                    : 'border-2 border-slate-200 hover:border-emerald-300 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition';
-            });
+    appState.frequencyMode = mode;
+    ['oneday', 'multiday', 'hourly'].forEach(m => {
+        const el = document.getElementById(`mode-${m}`);
+        const isMatch = (m === 'oneday' && mode === 'One day One Time') ||
+                        (m === 'multiday' && mode === 'For Multiple Days') ||
+                        (m === 'hourly' && mode === 'Acc. To Per/Hours');
+        el.className = isMatch
+            ? 'border-2 border-emerald-500 bg-emerald-50/50 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition'
+            : 'border-2 border-slate-200 hover:border-emerald-300 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition';
+    });
 
-            const isHourly = (mode === 'Acc. To Per/Hours');
-            document.getElementById('hourlySlotsSection').classList.toggle('hidden', !isHourly);
-            document.getElementById('dailyTimeBox').classList.toggle('hidden', isHourly);
+    // 🚀 TIME SLOTS SECTION IS NOW ALWAYS VISIBLE IN ALL 3 MODES
+    document.getElementById('hourlySlotsSection').classList.remove('hidden');
 
-            loadAvailabilityCalendar();
-        }
+    // Update section titles based on mode
+    const isHourly = (mode === 'Acc. To Per/Hours');
+    const slotSectionHeader = document.querySelector('#hourlySlotsSection h4');
+    if (slotSectionHeader) {
+        slotSectionHeader.innerHTML = isHourly 
+            ? `<i class="fas fa-clock text-emerald-500"></i> 3. Select Hourly Time Window`
+            : `<i class="fas fa-clock text-emerald-500"></i> 3. Choose Nurse Arrival Time Slot`;
+    }
+
+    // Hide the legacy arrival text input box
+    const dailyBox = document.getElementById('dailyTimeBox');
+    if (dailyBox) dailyBox.classList.add('hidden');
+
+    loadAvailabilityCalendar();
+}
 
         async function loadAvailabilityCalendar() {
     const grid = document.getElementById('schedulerCalendarGrid');
+    const slotGrid = document.getElementById('hourlySlotsGrid');
+    
     grid.innerHTML = `<div class="text-center py-10 col-span-7 text-xs text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading availability...</div>`;
+    if (slotGrid) {
+        slotGrid.innerHTML = `<div class="text-center py-4 col-span-full text-xs text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading slots...</div>`;
+    }
 
     const itemId = appState.isPackage ? appState.selectedPackage?._id : appState.selectedService?._id;
     const query = `serviceId=${!appState.isPackage ? itemId : ''}&packageId=${appState.isPackage ? itemId : ''}&isPackage=${appState.isPackage}&type=${encodeURIComponent(appState.frequencyMode)}`;
@@ -1097,13 +1228,23 @@
         const res = await fetch(`${API_BASE_URL}/user/nurse/availability/${appState.selectedNurseId}?${query}`);
         const json = await res.json();
         
-        // Read directly from data wrapper
         const payload = json.data || json;
         const calendarDays = Array.isArray(payload.calendar) ? payload.calendar : [];
         const timeSlotsList = Array.isArray(payload.timeSlots) ? payload.timeSlots : [];
 
+        // Update Top Banner Base Unit Price based on active frequency mode
+        const item = appState.isPackage ? appState.selectedPackage : appState.selectedService;
+        let currentModePrice = item?.pricing?.oneDay?.final || 1800;
+        if (appState.frequencyMode === 'For Multiple Days') {
+            currentModePrice = item?.pricing?.multipleDays?.final || currentModePrice;
+        } else if (appState.frequencyMode === 'Acc. To Per/Hours') {
+            currentModePrice = item?.pricing?.hourly?.final || 200;
+        }
+        document.getElementById('sched-item-price').innerText = `₹${currentModePrice}`;
+
         grid.innerHTML = "";
 
+        // 1. Render Calendar Days (Shows Multiple Days rate when in Multiple Days mode)
         if (calendarDays.length > 0) {
             calendarDays.forEach(day => {
                 const dStr = day.date;
@@ -1111,12 +1252,17 @@
                 const isSelected = (dStr === appState.startDate || dStr === appState.endDate);
                 const isPremium = day.pricing?.isPremium || false;
                 const extraFee = Number(day.pricing?.extraFee || 0);
-                const displayPrice = day.pricing?.oneDayPrice || day.pricing?.multipleDayPrice || 1800;
+
+                // 🚨 MULTI-DAY PRICE DISPLAY FIX: Picks multipleDayPrice in multi-day mode
+                const displayPrice = (appState.frequencyMode === 'For Multiple Days')
+                    ? (day.pricing?.multipleDayPrice || currentModePrice + extraFee)
+                    : (appState.frequencyMode === 'Acc. To Per/Hours' 
+                        ? (day.pricing?.hourlyPrice || currentModePrice)
+                        : (day.pricing?.oneDayPrice || currentModePrice + extraFee));
 
                 const cell = document.createElement('div');
                 cell.className = `cal-day-cell ${isSelected ? 'selected' : ''} ${day.isDisabled ? 'disabled' : ''} ${isPremium ? 'is-premium-date' : ''}`;
                 cell.id = `cal-day-${dStr}`;
-                // Pass dateStr and extraFee to click handler
                 cell.onclick = () => { 
                     if (!day.isDisabled) handleCalendarDateClick(dStr, extraFee); 
                 };
@@ -1124,31 +1270,41 @@
                 cell.innerHTML = `
                     <span class="text-xs font-black">${dateNum}</span>
                     <span class="text-[9px] font-black ${isPremium ? 'text-red-500' : 'text-emerald-600'}">₹${displayPrice}</span>
-                    ${isPremium ? `<span class="text-[7px] text-red-500 font-extrabold uppercase tracking-tight">+₹${extraFee} Peak</span>` : ''}
+                    ${isPremium && extraFee > 0 ? `<span class="text-[7px] text-red-500 font-extrabold uppercase tracking-tight">+₹${extraFee} Peak</span>` : ''}
                 `;
                 grid.appendChild(cell);
             });
-        } else {
-            grid.innerHTML = `<p class="text-xs text-slate-400 col-span-7 py-6 text-center">No calendar dates available.</p>`;
         }
 
-        // Render Hourly Slots with Premium Badges
-        if (appState.frequencyMode === 'Acc. To Per/Hours') {
-            const slotGrid = document.getElementById('hourlySlotsGrid');
+        // 2. Render Time Slots Grid (Supports Multi-Hour Range Selection)
+        if (slotGrid) {
             if (timeSlotsList.length > 0) {
+                const isHourly = (appState.frequencyMode === 'Acc. To Per/Hours');
+
                 slotGrid.innerHTML = timeSlotsList.map(s => {
-                    const isPremiumSlot = Number(s.slotPremiumFee || 0) > 0;
+                    const extraFee = Number(s.slotPremiumFee || 0);
+                    const isPremiumSlot = extraFee > 0;
+                    const isSelected = (s.time === appState.startTime);
+
                     return `
-                        <div onclick="selectHourlySlot('${s.time}', ${s.slotPremiumFee || 0})" id="slot-time-${s.time}" class="slot-pill ${s.time === appState.startTime ? 'active' : ''} ${isPremiumSlot ? 'is-premium-slot' : ''}">
+                        <div onclick="handleSlotCardClick('${s.time}', ${extraFee})" id="slot-time-${s.time}" class="slot-pill ${isSelected ? 'active' : ''} ${isPremiumSlot ? 'is-premium-slot' : ''}">
                             <span class="text-xs font-bold block">${s.displayTime}</span>
                             <span class="text-[10px] ${isPremiumSlot ? 'text-purple-700 font-black' : 'text-emerald-600 font-bold'}">
-                                ₹${s.totalHourlyPrice} ${isPremiumSlot ? `(+₹${s.slotPremiumFee})` : ''}
+                                ${isHourly ? `₹${s.totalHourlyPrice}` : (isPremiumSlot ? `+₹${extraFee} Peak` : 'Standard')}
                             </span>
                         </div>
                     `;
                 }).join('');
+
+                // Auto-select starting slot
+                if (!appState.startTime && timeSlotsList[0]) {
+                    handleSlotCardClick(timeSlotsList[0].time, timeSlotsList[0].slotPremiumFee || 0);
+                } else if (appState.startTime) {
+                    const activeSlot = timeSlotsList.find(s => s.time === appState.startTime);
+                    handleSlotCardClick(appState.startTime, activeSlot ? activeSlot.slotPremiumFee : 0);
+                }
             } else {
-                slotGrid.innerHTML = `<p class="text-xs text-slate-400 col-span-full py-4 text-center">No hourly slots available.</p>`;
+                slotGrid.innerHTML = `<p class="text-xs text-slate-400 col-span-full py-4 text-center">No arrival time slots configured.</p>`;
             }
         }
 
@@ -1347,8 +1503,6 @@
 
         async function recalculateLiveCheckout() {
     const itemId = appState.isPackage ? appState.selectedPackage?._id : appState.selectedService?._id;
-    
-    // Strict Boolean Read: True only when user ticks checkbox
     const isExpressChecked = Boolean(document.getElementById('chkExpressNurse')?.checked);
 
     Swal.showLoading();
@@ -1368,7 +1522,7 @@
                 startTime: appState.startTime,
                 endTime: appState.endTime,
                 assessmentLocation: appState.assessmentVenue,
-                isFasterService: isExpressChecked, // 👈 Sends true only when checked
+                isFasterService: isExpressChecked,
                 patientCount: appState.selectedPatients.length || 1,
                 selectedConsumables: appState.selectedConsumables,
                 couponCode: appState.couponCode
@@ -1378,20 +1532,35 @@
         const json = await res.json();
         Swal.close();
 
-        if (json.success && json.data) {
-            const b = json.data.breakdown;
+        if (json.success) {
+            // 🛡️ Safe breakdown extraction
+            const b = json.breakdown || json.data?.breakdown;
+            if (!b) return;
+
             appState.calculatedBill = b;
 
-            // Summary Texts
-            document.getElementById('billDurationUnits').innerText = `${json.data.durationUnits} ${appState.frequencyMode === 'Acc. To Per/Hours' ? 'Hrs' : 'Days'}`;
-            document.getElementById('billPatientCount').innerText = `${json.data.pCount} Patient`;
+            // Summary Units
+            const durationLabel = appState.frequencyMode === 'Acc. To Per/Hours' 
+                ? `${b.totalHours || 1} Hr(s)` 
+                : `${b.totalDays || 1} Day(s)`;
+                
+            document.getElementById('billDurationUnits').innerText = durationLabel;
+            document.getElementById('billPatientCount').innerText = `${b.pCount || 1} Patient`;
             document.getElementById('billBaseFee').innerText = `₹${b.baseServicePrice}`;
 
-            // 1. Surcharge Row (Dynamic Toggle)
+            // 1. Dynamic Slot & Date Premium Surcharge Row
             const slotRow = document.getElementById('billSlotSurchargeRow');
             if (Number(b.slotSurcharge || 0) > 0) {
                 slotRow.classList.remove('hidden');
-                document.getElementById('billSlotSurcharge').innerText = `+₹${b.slotSurcharge}`;
+                let surchargeBreakdownText = `+₹${b.slotSurcharge}`;
+                if (b.datePremiumFee > 0 && b.slotPremiumFee > 0) {
+                    surchargeBreakdownText += ` (Date: +₹${b.datePremiumFee}, Slot: +₹${b.slotPremiumFee})`;
+                } else if (b.datePremiumFee > 0) {
+                    surchargeBreakdownText += ` (Peak Date)`;
+                } else if (b.slotPremiumFee > 0) {
+                    surchargeBreakdownText += ` (Peak Slot)`;
+                }
+                document.getElementById('billSlotSurcharge').innerText = surchargeBreakdownText;
             } else {
                 slotRow.classList.add('hidden');
             }
@@ -1406,9 +1575,9 @@
             }
 
             // 3. Travel Fee Row
-            document.getElementById('billTravelFee').innerText = (b.travelFee === 0) ? 'FREE (₹0)' : `₹${b.travelFee}`;
+            document.getElementById('billTravelFee').innerText = 'FREE (₹0)';
 
-            // 4. Express Dispatch Row (Shown ONLY when fasterServiceCharge > 0)
+            // 4. Express Dispatch Row
             const expRow = document.getElementById('billExpressRow');
             if (Number(b.fasterServiceCharge || 0) > 0) {
                 expRow.classList.remove('hidden');
@@ -1426,32 +1595,27 @@
                 coupRow.classList.add('hidden');
             }
 
-            // 6. Grand Total (No 5% GST added)
+            // 6. Grand Total (Pure base + surcharges, 0% Tax)
             document.getElementById('billGrandTotal').innerText = `₹${b.totalPrice}`;
 
-            // 7. Subscription Alert Callout
+            // 7. Subscription Badge Notification
             const subBox = document.getElementById('subscriptionCalloutBox');
-            const visitSub = json.data.subscriptionBenefits?.visitBenefit;
-            if (visitSub && visitSub.hasActiveSubscription) {
+            if (b.isSubscriptionApplied) {
                 subBox.classList.remove('hidden');
-                if (visitSub.isApplied) {
-                    subBox.className = "p-4 rounded-2xl text-xs font-bold space-y-1 bg-emerald-50 text-emerald-700 border border-emerald-200";
-                    subBox.innerHTML = `✨ Free Nurse Visit applied via ${visitSub.planName} (${visitSub.remainingCount} remaining).`;
-                } else if (visitSub.isBenefitExhausted) {
-                    subBox.className = "p-4 rounded-2xl text-xs font-bold space-y-1 bg-amber-50 text-amber-800 border border-amber-200";
-                    subBox.innerHTML = `⚠️ ${visitSub.exhaustedMessage}`;
-                }
+                subBox.className = "p-4 rounded-2xl text-xs font-bold space-y-1 bg-emerald-50 text-emerald-700 border border-emerald-200";
+                subBox.innerHTML = `✨ Free Nurse Visit applied via active Subscription Plan (Base fee waived to ₹0).`;
             } else {
                 subBox.classList.add('hidden');
             }
 
-            document.getElementById('codPaymentOption').style.display = json.data.isCodAvailable ? 'flex' : 'none';
+            // 8. COD Toggle Visibility
+            const isCod = (json.isCodAvailable !== undefined) ? json.isCodAvailable : (json.data?.isCodAvailable ?? true);
+            document.getElementById('codPaymentOption').style.display = isCod ? 'flex' : 'none';
         }
     } catch (err) {
         Swal.close();
         console.error("Checkout calculation error:", err);
-    }
-}
+    }}
 
 
         async function loadApplicableCoupons() {
@@ -1479,108 +1643,116 @@
 
         // --- 6. PLACE ORDER & PAYMENT EXECUTION ---
         async function executeFinalNurseBooking() {
-            if (!USER_TOKEN) {
-                return Swal.fire("Authentication Required", "Please paste your user token in top bar.", "warning");
-            }
+    if (!USER_TOKEN) {
+        return Swal.fire("Authentication Required", "Please paste your user token in the top bar.", "warning");
+    }
 
-            const paymentMethod = document.querySelector('input[name="paymentMethodRadio"]:checked')?.value || 'Online';
-            const isExpress = document.getElementById('chkExpressNurse')?.checked || false;
-            const itemId = appState.isPackage ? appState.selectedPackage._id : appState.selectedService._id;
+    const paymentMethod = document.querySelector('input[name="paymentMethodRadio"]:checked')?.value || 'Online';
+    const isExpress = document.getElementById('chkExpressNurse')?.checked || false;
+    const itemId = appState.isPackage ? appState.selectedPackage._id : appState.selectedService._id;
 
-            const payload = {
-                nurseId: appState.selectedNurseId,
-                serviceId: !appState.isPackage ? itemId : null,
-                packageId: appState.isPackage ? itemId : null,
-                isPackage: appState.isPackage,
-                selectedType: appState.frequencyMode,
-                assessmentLocation: appState.assessmentVenue,
-                paymentMethod: paymentMethod,
-                isFasterService: isExpress,
-                couponCode: appState.couponCode,
-                schedule: {
-                    duration: appState.frequencyMode,
-                    startDate: appState.startDate,
-                    endDate: appState.endDate || appState.startDate,
-                    startTime: appState.startTime,
-                    endTime: appState.endTime
-                },
-                patients: appState.selectedPatients,
-                address: appState.selectedAddress,
-                healthDetails: {
-                    height: document.getElementById('patientHeightInput').value,
-                    language: document.getElementById('patientLanguageInput').value,
-                    specialInstructions: document.getElementById('patientNotesInput').value
-                },
-                hospitalDetails: appState.assessmentVenue === 'At Hospital' ? {
-                    hospitalName: document.getElementById('hospNameInput').value,
-                    wardName: document.getElementById('hospWardInput').value
-                } : null,
-                selectedConsumables: appState.selectedConsumables
-            };
+    const payload = {
+        nurseId: appState.selectedNurseId,
+        serviceId: !appState.isPackage ? itemId : null,
+        packageId: appState.isPackage ? itemId : null,
+        isPackage: appState.isPackage,
+        selectedType: appState.frequencyMode,
+        assessmentLocation: appState.assessmentVenue,
+        paymentMethod: paymentMethod,
+        isFasterService: isExpress,
+        couponCode: appState.couponCode,
+        schedule: {
+            duration: appState.frequencyMode,
+            startDate: appState.startDate,
+            endDate: appState.endDate || appState.startDate,
+            startTime: appState.startTime || "09:00",
+            endTime: appState.endTime
+        },
+        patients: appState.selectedPatients,
+        address: appState.selectedAddress || {
+            name: appState.userProfile?.name || "Recipient",
+            phone: appState.userProfile?.phone || "",
+            houseNo: "Default Address",
+            city: "Chandigarh",
+            addressType: "Home"
+        },
+        healthDetails: {
+            height: document.getElementById('patientHeightInput').value,
+            language: document.getElementById('patientLanguageInput').value,
+            specialInstructions: document.getElementById('patientNotesInput').value
+        },
+        hospitalDetails: appState.assessmentVenue === 'At Hospital' ? {
+            hospitalName: document.getElementById('hospNameInput').value,
+            wardName: document.getElementById('hospWardInput').value
+        } : null,
+        selectedConsumables: appState.selectedConsumables
+    };
 
-            const btn = document.getElementById('btnConfirmNurseBooking');
-            btn.disabled = true;
-            btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Initializing Booking...`;
+    const btn = document.getElementById('btnConfirmNurseBooking');
+    btn.disabled = true;
+    btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Confirming Booking...`;
 
-            try {
-                const res = await fetch(`${API_BASE_URL}/user/nurse/book`, {
-                    method: 'POST',
-                    headers: getHeaders(),
-                    body: JSON.stringify(payload)
-                });
+    try {
+        const res = await fetch(`${API_BASE_URL}/user/nurse/book`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload)
+        });
 
-                const json = await res.json();
+        const json = await res.json();
 
-                if (!res.ok || !json.success) {
-                    throw new Error(json.message || "Booking submission failed.");
-                }
-
-                // COD / Confirmed Case
-                if (paymentMethod === 'COD' || json.status === 'Confirmed') {
-                    Swal.fire({
-                        icon: 'success',
-                        title: 'Booking Confirmed!',
-                        text: `Your nurse booking #${json.bookingId} is confirmed.`,
-                        confirmButtonColor: '#00b894'
-                    }).then(() => {
-                        openLiveTrackingScreen(json.bookingId || json.data?.bookingId);
-                    });
-                    return;
-                }
-
-                // Online Razorpay Checkout Case
-                const options = {
-                    key: json.key_id,
-                    amount: json.amount,
-                    currency: "INR",
-                    name: "Health Kangaroo Nursing",
-                    description: `Care Booking #${json.bookingId}`,
-                    order_id: json.razorpayOrderId,
-                    handler: async function (rzpResponse) {
-                        await verifyOnlinePaymentSignature(rzpResponse, json.bookingId);
-                    },
-                    prefill: {
-                        name: appState.userProfile?.name || "Patient",
-                        contact: appState.userProfile?.phone || ""
-                    },
-                    theme: { color: "#00b894" }
-                };
-
-                const rzp = new window.Razorpay(options);
-                rzp.on('payment.failed', function () {
-                    Swal.fire("Payment Failed", "Transaction dropped. You can retry payment anytime from My Appointments.", "error");
-                    navigateTo('screen-my-bookings');
-                    loadUserBookingsHistory();
-                });
-                rzp.open();
-
-            } catch (err) {
-                Swal.fire("Booking Error", err.message, "error");
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = `<span>Place & Confirm Booking</span> <i class="fas fa-check-circle"></i>`;
-            }
+        if (!res.ok || !json.success) {
+            throw new Error(json.message || "Booking submission failed.");
         }
+
+        const bookingId = json.bookingId || json.data?.bookingId;
+
+        // CASE 1: COD OR 100% FREE SUBSCRIPTION CASE
+        if (paymentMethod === 'COD' || json.data?.paymentStatus === 'Paid' || json.status === 'Confirmed' || !json.razorpayOrderId) {
+            Swal.fire({
+                icon: 'success',
+                title: 'Booking Confirmed!',
+                text: `Your nurse appointment #${bookingId} has been successfully placed.`,
+                confirmButtonColor: '#00b894'
+            }).then(() => {
+                openLiveTrackingScreen(bookingId);
+            });
+            return;
+        }
+
+        // CASE 2: RAZORPAY ONLINE CHECKOUT
+        const options = {
+            key: json.key_id,
+            amount: json.amount,
+            currency: "INR",
+            name: "Health Kangaroo Nursing",
+            description: `Care Booking #${bookingId}`,
+            order_id: json.razorpayOrderId,
+            handler: async function (rzpResponse) {
+                await verifyOnlinePaymentSignature(rzpResponse, bookingId);
+            },
+            prefill: {
+                name: appState.userProfile?.name || "Patient",
+                contact: appState.userProfile?.phone || ""
+            },
+            theme: { color: "#00b894" }
+        };
+
+        const rzp = new window.Razorpay(options);
+        rzp.on('payment.failed', function () {
+            Swal.fire("Payment Incomplete", "Transaction dropped. You can retry payment anytime from My Appointments.", "warning");
+            navigateTo('screen-my-bookings');
+            loadUserBookingsHistory();
+        });
+        rzp.open();
+
+    } catch (err) {
+        Swal.fire("Booking Error", err.message, "error");
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span>Place & Confirm Booking</span> <i class="fas fa-check-circle"></i>`;
+    }
+}
 
         async function verifyOnlinePaymentSignature(rzpResponse, bookingId) {
             Swal.showLoading();
