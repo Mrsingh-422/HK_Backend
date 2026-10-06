@@ -470,15 +470,18 @@ const submitServiceCompletion = async (req, res) => {
     }
 };
 
-// 4. VERIFY FIREBASE OTP & FINALIZE SESSION (With Auto COD Paid & Revenue Sync)
-// endpoint: POST /driver/nurse/orders/verify-complete-otp
+// @desc    Verify Completion OTP with Multi-Day Daily OTP Regeneration & Extra Consumables Sync
+// @route   POST /driver/nurse/orders/verify-complete-otp
+// @access  Private (Driver)
 const verifyCompleteOtp = async (req, res) => {
     try {
         const { bookingId, idToken, otp } = req.body;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findById(bookingId).populate('userId', 'phone');
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+        const booking = await NurseBooking.findById(bookingId).populate('userId', 'phone name');
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
 
         if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
             return res.status(403).json({ success: false, message: "Unauthorized operation." });
@@ -498,21 +501,39 @@ const verifyCompleteOtp = async (req, res) => {
             }
         } else if (otp) {
             if (otp !== '123456' && booking.completionOTP !== otp) {
-                return res.status(400).json({ success: false, message: "Invalid Dev OTP code." });
+                return res.status(400).json({ success: false, message: "Invalid Completion OTP code." });
             }
         }
 
+        // 2. Doorstep Consumables & Extra Charges Synchronization
+        const extraConsumables = Number(booking.totalConsumableCharges || 0);
+        const extraService = Number(booking.extraServicePayment || 0);
+        const onSpotAddons = extraConsumables + extraService;
+
+        if (onSpotAddons > 0) {
+            if (!booking.priceBreakdown) booking.priceBreakdown = {};
+            booking.priceBreakdown.consumableTotal = Number(booking.priceBreakdown.consumableTotal || 0) + extraConsumables;
+            booking.priceBreakdown.totalPrice = Number(booking.priceBreakdown.totalPrice || booking.totalPrice || 0) + onSpotAddons;
+            booking.totalPrice = booking.priceBreakdown.totalPrice;
+            console.log(`📦 [DEBUG: verifyCompleteOtp] Synced on-spot charges: +₹${onSpotAddons} (New Grand Total: ₹${booking.totalPrice})`);
+        }
+
+        // 3. Multi-Day vs Single Day Lifecycle Evaluation
         const today = new Date();
-        const hasMultipleDays = booking.schedule?.duration === 'For Multiple Days' && booking.schedule?.endDate;
+        const hasMultipleDays = (booking.schedule?.duration === 'For Multiple Days' && booking.schedule?.endDate);
         const isMultiDayActive = hasMultipleDays && new Date(today.setHours(0,0,0,0)) < new Date(new Date(booking.schedule.endDate).setHours(0,0,0,0));
 
         if (isMultiDayActive) {
-            booking.status = 'Assigned'; // Multi-day shift continues tomorrow
+            // 🚨 MULTI-DAY ACTIVE: Session completed for today, regenerate fresh OTPs for tomorrow's visit!
+            booking.status = 'Assigned';
+            booking.serviceOTP = Math.floor(1000 + Math.random() * 9000).toString();
+            booking.completionOTP = Math.floor(1000 + Math.random() * 9000).toString();
+            console.log(`🔄 [DEBUG: verifyCompleteOtp] Multi-day session active. Regenerated Tomorrow's Start OTP: ${booking.serviceOTP}, End OTP: ${booking.completionOTP}`);
         } else {
+            // SINGLE DAY OR FINAL DAY: Complete the entire booking
             booking.status = 'Completed';
             booking.completedAt = new Date();
 
-            // 🚨 COD AUTO-PAID FIX: Mark COD cash collected as Paid on service completion
             if (booking.paymentMethod === 'COD') {
                 booking.paymentStatus = 'Paid';
                 if (!booking.paymentDetails) booking.paymentDetails = {};
@@ -525,17 +546,35 @@ const verifyCompleteOtp = async (req, res) => {
 
         await booking.save();
 
-        // Release nurse staff driver back to Available
+        // 4. Release Staff Nurse back to Available state
         await Driver.findByIdAndUpdate(staffId, { status: 'Available' });
+
+        // 5. Notify Patient
+        try {
+            await sendPushNotification(
+                booking.userId,
+                'user',
+                isMultiDayActive ? "Today's Nursing Session Completed! 👩‍⚕️" : "Nursing Care Service Completed! ✨",
+                isMultiDayActive 
+                    ? `Today's session finished. Tomorrow's Start OTP is: ${booking.serviceOTP}.`
+                    : `Your nursing service session #${booking.bookingId} has been successfully completed.`,
+                { bookingId: booking._id.toString(), type: 'nurse_session_completed' }
+            );
+        } catch (e) {}
 
         res.json({ 
             success: true, 
-            message: "Service completion verified via Firebase OTP & payment marked as Paid!", 
+            message: isMultiDayActive 
+                ? "Today's session completed! Tomorrow's fresh OTPs generated and staff released." 
+                : "Service completed successfully and marked as Paid!", 
+            isMultiDayActive,
+            nextSessionStartOtp: isMultiDayActive ? booking.serviceOTP : null,
             data: booking 
         });
+
     } catch (error) { 
         console.error("Verify Complete OTP Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in complete OTP verification." }); 
     }
 };
 

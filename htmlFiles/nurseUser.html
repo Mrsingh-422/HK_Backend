@@ -3,445 +3,2207 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Kangaroo | Premium Elder Care Plans</title>
+    <title>Health Kangaroo | Comprehensive Nursing Care Ecosystem</title>
     
-    <!-- UI Frameworks -->
+    <!-- UI Frameworks & Icons -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    
+    <!-- External Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 
     <style>
         :root {
-            --primary: #00b894;
-            --primary-dark: #009677;
-            --secondary: #6c5ce7;
-            --bg-soft: #f4f7f6;
+            --hk-primary: #00b894;
+            --hk-primary-dark: #009677;
+            --hk-primary-soft: #f0fdf4;
+            --hk-secondary: #0984e3;
+            --hk-purple: #6c5ce7;
+            --hk-dark: #1e293b;
+            --hk-bg: #f8fafc;
+            --hk-border: #e2e8f0;
         }
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--bg-soft); }
-        
-        .custom-shadow { box-shadow: 0 20px 50px rgba(0,0,0,0.05); }
-        .glass-nav { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); }
-        
-        /* Plan Card Animations */
-        .plan-card { transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        .plan-card:hover { transform: translateY(-10px); }
-        
-        /* Tab Slider */
-        .tab-active { color: white; background: var(--primary); }
-        
-        /* Scrollbar */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e0; border-radius: 10px; }
 
-        .benefit-list i { color: #00b894; font-size: 0.8rem; }
-        .purple-badge { background: #f3f0ff; color: #6c5ce7; }
+        body { 
+            font-family: 'Plus Jakarta Sans', sans-serif; 
+            background-color: var(--hk-bg); 
+            color: var(--hk-dark); 
+            letter-spacing: -0.3px;
+        }
+
+        .custom-shadow { box-shadow: 0 15px 40px rgba(0,0,0,0.04); }
+        .glass-nav { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(16px); }
         
-        .screen-transition { transition: opacity 0.5s ease; }
-        .hidden-screen { display: none; opacity: 0; }
+        .screen-view { display: none; opacity: 0; transform: translateY(12px); transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+        .screen-view.active { display: block; opacity: 1; transform: translateY(0); }
+
+        .card-hk { 
+            background: #ffffff; 
+            border-radius: 28px; 
+            border: 1.5px solid var(--hk-border); 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.03); 
+            transition: all 0.3s ease; 
+        }
+        .card-hk:hover { transform: translateY(-4px); box-shadow: 0 20px 45px rgba(0,0,0,0.07); }
+
+        .btn-hk { 
+            background: var(--hk-primary); 
+            color: #ffffff; 
+            border-radius: 20px; 
+            font-weight: 800; 
+            padding: 14px 28px; 
+            transition: all 0.3s ease; 
+            box-shadow: 0 8px 24px rgba(0,184,148,0.25); 
+        }
+        .btn-hk:hover { background: var(--hk-primary-dark); transform: scale(1.02); }
+
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+        .cal-day-cell { 
+            min-height: 72px; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            border-radius: 18px; 
+            cursor: pointer; 
+            border: 1.5px solid #f1f5f9; 
+            background: #ffffff;
+            transition: all 0.2s; 
+            position: relative;
+        }
+        .cal-day-cell:hover { border-color: var(--hk-primary); }
+        .cal-day-cell.selected { background: var(--hk-primary) !important; color: #fff !important; border-color: var(--hk-primary-dark) !important; }
+        .cal-day-cell.selected span, .cal-day-cell.selected small { color: #fff !important; }
+        .cal-day-cell.in-range { background: #e6fcf5 !important; border-color: #a7f3d0 !important; }
+        .cal-day-cell.is-premium-date { border-color: #fca5a5; background: #fff5f5; }
+        .cal-day-cell.disabled { opacity: 0.25; cursor: not-allowed; pointer-events: none; }
+
+        .slot-pill { 
+            border: 2px solid var(--hk-border); 
+            border-radius: 20px; 
+            padding: 14px 10px; 
+            text-align: center; 
+            cursor: pointer; 
+            transition: all 0.2s; 
+            background: #fff;
+            position: relative;
+        }
+        .slot-pill.active { border-color: var(--hk-primary); background: var(--hk-primary-soft); color: var(--hk-primary-dark); font-weight: 800; box-shadow: 0 4px 15px rgba(0,184,148,0.15); }
+        .slot-pill.is-premium-slot { border-color: #e9d5ff; background: #faf5ff; }
+
+        .timeline-dot::before {
+            content: '';
+            position: absolute;
+            left: -29px;
+            top: 4px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #cbd5e1;
+            border: 3px solid #ffffff;
+        }
+        .timeline-dot.completed::before { background: var(--hk-primary); box-shadow: 0 0 0 3px rgba(0,184,148,0.2); }
+        .timeline-dot.current::before { background: #f59e0b; box-shadow: 0 0 0 4px rgba(245,158,11,0.2); }
     </style>
 </head>
-<body class="text-gray-800">
+<body class="min-h-screen flex flex-col pb-20">
 
-    <!-- NAVBAR -->
-    <nav class="fixed top-0 w-full z-50 glass-nav border-b border-gray-100 py-4 px-6 md:px-12 flex justify-between items-center">
-        <div class="flex items-center gap-2">
-            <div class="w-10 h-10 bg-[#00b894] rounded-xl flex items-center justify-center text-white shadow-lg">
-                <i class="fas fa-hand-holding-heart text-xl"></i>
-            </div>
-            <span class="text-xl font-extrabold tracking-tight text-gray-900">HealthKangaroo <span class="text-[#00b894]">Plans</span></span>
+    <!-- ========================================================================= -->
+    <!-- ⚙️ TOP CONFIG & SERVER TELEMETRY BAR -->
+    <!-- ========================================================================= -->
+    <div class="bg-slate-900 text-white text-xs px-6 py-3 border-b border-slate-800 flex flex-wrap justify-between items-center gap-4 sticky top-0 z-50">
+        <div class="flex items-center gap-3">
+            <span class="flex h-2.5 w-2.5 relative">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </span>
+            <span class="font-bold text-slate-300">HK Live Environment:</span>
+            <input type="text" id="cfg-server-url" value="http://localhost:5002" class="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-emerald-400 font-mono text-xs w-48 focus:outline-none">
         </div>
-        <div class="flex items-center gap-6">
-            <button onclick="resetFlow()" class="text-sm font-bold text-gray-500 hover:text-teal-600 transition">Browse Plans</button>
-            <button class="bg-gray-900 text-white px-6 py-2 rounded-full font-bold text-sm shadow-xl hover:bg-black transition">Sign In</button>
+
+        <div class="flex items-center gap-3 flex-grow max-w-xl">
+            <span class="text-slate-400 font-bold whitespace-nowrap">User JWT Token:</span>
+            <input type="text" id="cfg-user-token" placeholder="Paste active user JWT token..." class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1 font-mono text-slate-200 text-xs focus:outline-none" oninput="saveLocalSessionToken(this.value)">
+            <button onclick="saveAndReloadSession()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1 rounded-lg transition whitespace-nowrap">Connect</button>
         </div>
-    </nav>
+    </div>
 
-    <!-- MAIN CONTENT CONTAINER -->
-    <main class="mt-24 pb-20 px-4 md:px-12 max-w-7xl mx-auto">
-
-        <!-- ========================================== -->
-        <!-- SCREEN 1: PLAN EXPLORATION -->
-        <!-- ========================================== -->
-        <section id="screen-plans" class="screen-transition">
-            <div class="text-center mb-12">
-                <h1 class="text-4xl md:text-5xl font-extrabold text-gray-900 mb-4">Our <span class="text-teal-600 underline decoration-teal-200">Subscription</span> Plans</h1>
-                <p class="text-gray-500 max-w-2xl mx-auto font-medium">Choose a care plan that fits your family's needs. We provide verified professional nurses and care managers at your doorstep.</p>
+    <!-- ========================================================================= -->
+    <!-- 🦘 PRIMARY APP HEADER & NAVIGATION -->
+    <!-- ========================================================================= -->
+    <header class="glass-nav border-b border-slate-100 sticky top-10 z-40 px-6 lg:px-16 py-4 flex justify-between items-center shadow-xs">
+        <div class="flex items-center gap-3 cursor-pointer" onclick="navigateTo('screen-discovery')">
+            <div class="w-11 h-11 bg-emerald-500 text-white rounded-2xl flex items-center justify-center shadow-md shadow-emerald-500/20 text-xl font-black">
+                <i class="fas fa-hand-holding-medical"></i>
             </div>
+            <div>
+                <h1 class="text-xl font-black text-slate-900 leading-tight">Health<span class="text-emerald-500">Kangaroo</span></h1>
+                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nursing Care & Home Hospital</p>
+            </div>
+        </div>
 
-            <!-- MAIN CATEGORY TABS -->
-            <div class="flex justify-center mb-12">
-                <div class="bg-white p-1.5 rounded-2xl shadow-sm border border-gray-100 flex gap-2 overflow-x-auto no-scrollbar">
-                    <button onclick="switchCategory('Elder Care Plan')" id="btn-elder" class="px-8 py-3 rounded-xl font-bold text-sm transition-all tab-active">
-                        <i class="fas fa-user-friends mr-2"></i> Elder Care Plan
-                    </button>
-                    <button onclick="switchCategory('Condition Management Plan')" id="btn-condition" class="px-8 py-3 rounded-xl font-bold text-sm text-gray-500 hover:bg-gray-50 transition-all">
-                        <i class="fas fa-stethoscope mr-2"></i> Condition Management Plan
-                    </button>
-                    <button onclick="switchCategory('Elite Plan')" id="btn-elite" class="px-8 py-3 rounded-xl font-bold text-sm text-gray-500 hover:bg-gray-50 transition-all">
-                        <i class="fas fa-crown mr-2"></i> Elite Plan
-                    </button>
+        <!-- Navigation Tabs -->
+        <nav class="hidden md:flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+            <button onclick="navigateTo('screen-discovery')" id="nav-btn-discovery" class="px-5 py-2 rounded-xl text-xs font-bold text-emerald-600 bg-white shadow-xs transition">
+                <i class="fas fa-search-location mr-1.5"></i> Find Nurses
+            </button>
+            <button onclick="navigateTo('screen-prescription')" id="nav-btn-prescription" class="px-5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900 transition">
+                <i class="fas fa-file-prescription mr-1.5"></i> AI Prescription
+            </button>
+            <button onclick="navigateTo('screen-my-bookings'); loadUserBookingsHistory();" id="nav-btn-bookings" class="px-5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900 transition">
+                <i class="fas fa-calendar-check mr-1.5"></i> My Appointments
+            </button>
+            <button onclick="navigateTo('screen-rx-history'); loadUserPrescriptionHistory();" id="nav-btn-rx-history" class="px-5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900 transition">
+                <i class="fas fa-bullhorn mr-1.5"></i> Broadcast Inquiries
+            </button>
+        </nav>
+
+        <!-- Current User Profile Bubble -->
+        <div class="flex items-center gap-3">
+            <div id="userProfileDisplay" class="text-right hidden sm:block">
+                <p id="usr-display-name" class="text-xs font-bold text-slate-800">User Session</p>
+                <p id="usr-display-phone" class="text-[10px] text-slate-400 font-mono">+91 --</p>
+            </div>
+            <div class="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-black border border-emerald-200" id="usr-avatar">
+                U
+            </div>
+        </div>
+    </header>
+
+    <!-- ========================================================================= -->
+    <!-- 📱 MAIN VIEWPORT CONTAINER -->
+    <!-- ========================================================================= -->
+    <main class="max-w-7xl mx-auto w-full p-4 sm:p-8 flex-grow">
+
+        <!-- ========================================================================= -->
+        <!-- 🌟 SCREEN 1: DISCOVERY & CATALOG -->
+        <!-- ========================================================================= -->
+        <section id="screen-discovery" class="screen-view active space-y-10">
+            
+            <div class="text-center max-w-3xl mx-auto space-y-4 pt-4">
+                <span class="bg-emerald-50 text-emerald-600 border border-emerald-200/60 px-4 py-1.5 rounded-full text-xs font-extrabold uppercase tracking-wider inline-block">
+                    Verified Healthcare Professionals
+                </span>
+                <h2 class="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight leading-tight">
+                    Professional Nursing Care <br><span class="text-emerald-500">At Your Home & Hospital</span>
+                </h2>
+                <p class="text-sm text-slate-500 font-medium">
+                    Certified nurses for post-operative recovery, elderly assistance, wound dressing, ICU care, and routine medical visits.
+                </p>
+
+                <!-- Search Bar -->
+                <div class="relative max-w-2xl mx-auto pt-2">
+                    <div class="flex items-center bg-white border-2 border-slate-200 focus-within:border-emerald-500 rounded-3xl p-2 shadow-xl shadow-slate-200/50 transition">
+                        <i class="fas fa-search text-slate-400 ml-4 mr-2"></i>
+                        <input type="text" id="mainSearchInput" placeholder="Search nurse by name, speciality, or service (e.g. Wound Care, ICU)..." class="w-full bg-transparent text-xs sm:text-sm font-semibold text-slate-800 outline-none px-2" oninput="fetchSearchSuggestions(this.value)">
+                        <button onclick="executeNurseDiscoveryQuery()" class="btn-hk py-3 px-6 text-xs whitespace-nowrap">Search</button>
+                    </div>
+                    <div id="searchSuggestionsBox" class="hidden absolute left-0 right-0 top-16 bg-white border border-slate-100 rounded-3xl shadow-2xl p-4 text-left z-30 space-y-2 max-h-80 overflow-y-auto"></div>
                 </div>
             </div>
 
-            <!-- CURRENCY TOGGLE (Anvayaa Style) -->
-            <div class="flex justify-center items-center gap-4 mb-12">
-                <span class="text-xs font-bold text-gray-400 uppercase tracking-widest">INR (₹)</span>
-                <div class="w-12 h-6 bg-teal-100 rounded-full p-1 flex justify-end cursor-pointer">
-                    <div class="w-4 h-4 bg-teal-600 rounded-full shadow-md"></div>
+            <!-- Global Nursing Categories -->
+            <div class="space-y-4">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h3 class="text-xl font-black text-slate-900">Featured Nursing Services</h3>
+                        <p class="text-xs text-slate-400 font-medium">Standard clinical procedures delivered at your doorstep</p>
+                    </div>
                 </div>
-                <span class="text-xs font-bold text-teal-600 uppercase tracking-widest">USD ($)</span>
+                <div id="globalServicesReel" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4"></div>
             </div>
 
-            <!-- PLANS GRID -->
-            <div id="plans-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                <!-- Plan Cards will be injected by JavaScript -->
+            <!-- Verified Nurse Bureaus Directory Grid -->
+            <div class="space-y-6 pt-4">
+                <div class="flex flex-wrap justify-between items-center gap-4 border-b border-slate-200 pb-4">
+                    <div>
+                        <h3 class="text-xl font-black text-slate-900">Verified Nurse Providers & Bureaus</h3>
+                        <p class="text-xs text-slate-400 font-medium">Top-rated certified bureaus near your location</p>
+                    </div>
+                </div>
+                <div id="nursesDirectoryGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
             </div>
+
         </section>
 
+        <!-- ========================================================================= -->
+        <!-- 🏥 SCREEN 2: NURSE BUREAU PROFILE & SERVICES CATALOG -->
+        <!-- ========================================================================= -->
+        <section id="screen-nurse-profile" class="screen-view space-y-8">
+            <button onclick="navigateTo('screen-discovery')" class="inline-flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-slate-900 transition">
+                <i class="fas fa-arrow-left"></i> Back to Nurse Directory
+            </button>
 
-        <!-- ========================================== -->
-        <!-- SCREEN 2: CHECKOUT & PAYMENT -->
-        <!-- ========================================== -->
-        <section id="screen-checkout" class="screen-transition hidden-screen">
-            <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-12 pt-10">
+            <!-- Bureau Hero Profile Banner -->
+            <div id="nurseHeroBox" class="card-hk p-8 bg-gradient-to-br from-emerald-600 to-teal-700 text-white relative overflow-hidden">
+                <div class="text-center py-10"><i class="fas fa-spinner fa-spin text-3xl"></i></div>
+            </div>
+
+            <!-- Service vs Package Catalogue Tabs -->
+            <div class="flex border-b border-slate-200 gap-6 text-sm font-bold">
+                <button id="bureau-tab-services" onclick="switchBureauCatalogueTab('services')" class="pb-3 border-b-2 border-emerald-500 text-emerald-600 transition">
+                    Daily Care Procedures (<span id="bureau-services-count">0</span>)
+                </button>
+                <button id="bureau-tab-packages" onclick="switchBureauCatalogueTab('packages')" class="pb-3 border-b-2 border-transparent text-slate-400 hover:text-slate-700 transition">
+                    Care Packages (<span id="bureau-packages-count">0</span>)
+                </button>
+                <button id="bureau-tab-reviews" onclick="switchBureauCatalogueTab('reviews')" class="pb-3 border-b-2 border-transparent text-slate-400 hover:text-slate-700 transition">
+                    Ratings & Reviews (<span id="bureau-reviews-count">0</span>)
+                </button>
+            </div>
+
+            <div id="bureauServicesList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+            <div id="bureauPackagesList" class="hidden grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+            <div id="bureauReviewsList" class="hidden space-y-4 max-w-3xl"></div>
+        </section>
+
+        <!-- ========================================================================= -->
+        <!-- 📅 SCREEN 3: SCHEDULING, DYNAMIC PREMIUM DATES & HOURLY SLOTS -->
+        <!-- ========================================================================= -->
+        <section id="screen-scheduler" class="screen-view max-w-4xl mx-auto space-y-8">
+            <button onclick="navigateTo('screen-nurse-profile')" class="inline-flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-slate-900 transition">
+                <i class="fas fa-arrow-left"></i> Back to Bureau Profile
+            </button>
+
+            <!-- Selected Item Header Banner (Matches User Screenshot) -->
+            <div class="card-hk p-7 bg-slate-900 text-white flex flex-wrap justify-between items-center gap-4 shadow-xl">
+                <div>
+                    <span class="text-[10px] font-black uppercase text-emerald-400 tracking-widest block" id="sched-item-badge">DAILY CARE PROCEDURE</span>
+                    <h3 class="text-2xl font-black mt-1" id="sched-item-title">Selected Care Procedure</h3>
+                    <p class="text-xs text-slate-400 mt-0.5" id="sched-item-bureau">Provider: HealTouch Nursing Service</p>
+                </div>
+                <div class="text-right">
+                    <span class="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">Base Unit Price</span>
+                    <strong class="text-3xl font-black text-emerald-400" id="sched-item-price">₹0</strong>
+                </div>
+            </div>
+
+            <!-- 1. Frequency Mode Selector -->
+            <div class="card-hk p-6 space-y-4">
+                <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                    <i class="fas fa-stopwatch text-emerald-500"></i> 1. Select Service Frequency Mode
+                </h4>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4" id="modeSelectorGrid">
+                    <div onclick="selectFrequencyMode('One day One Time')" id="mode-oneday" class="border-2 border-emerald-500 bg-emerald-50/50 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition">
+                        <span class="text-xs font-black text-slate-800 block">One Day (Single Visit)</span>
+                        <small class="text-[10px] text-slate-500 font-bold block">Routine clinical checkup or procedure</small>
+                    </div>
+                    <div onclick="selectFrequencyMode('For Multiple Days')" id="mode-multiday" class="border-2 border-slate-200 hover:border-emerald-300 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition">
+                        <span class="text-xs font-black text-slate-800 block">For Multiple Days</span>
+                        <small class="text-[10px] text-slate-500 font-bold block">Continuous daily stay & healing</small>
+                    </div>
+                    <div onclick="selectFrequencyMode('Acc. To Per/Hours')" id="mode-hourly" class="border-2 border-slate-200 hover:border-emerald-300 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition">
+                        <span class="text-xs font-black text-slate-800 block">Acc. To Per/Hours</span>
+                        <small class="text-[10px] text-slate-500 font-bold block">Custom hourly attending session</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. Date Selection (Calendar with Premium Date Highlights) -->
+            <div class="card-hk p-6 space-y-4" id="calendarSection">
+                <div class="flex justify-between items-center">
+                    <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                        <i class="fas fa-calendar-alt text-emerald-500"></i> 2. Choose Service Date(s)
+                    </h4>
+                    <span id="selectedDatesRangeLabel" class="text-xs font-black text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">Select Date</span>
+                </div>
+
+                <!-- Premium Date Notice Alert (Dynamic) -->
+                <div id="premiumDateNotice" class="hidden p-3 rounded-xl text-xs bg-red-50 text-red-700 border border-red-200 flex items-center gap-2">
+                    <i class="fas fa-star text-red-500"></i>
+                    <span><strong>Premium Date Surcharge:</strong> <span id="premiumDateNoticeText">₹0 extra fee applied for weekend/festival schedule.</span></span>
+                </div>
+
+                <!-- Interactive 30-Day Calendar Grid -->
+                <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                    <div class="calendar-grid mb-2">
+                        <span class="text-[11px] font-black text-slate-400 text-center">Sun</span>
+                        <span class="text-[11px] font-black text-slate-400 text-center">Mon</span>
+                        <span class="text-[11px] font-black text-slate-400 text-center">Tue</span>
+                        <span class="text-[11px] font-black text-slate-400 text-center">Wed</span>
+                        <span class="text-[11px] font-black text-slate-400 text-center">Thu</span>
+                        <span class="text-[11px] font-black text-slate-400 text-center">Fri</span>
+                        <span class="text-[11px] font-black text-slate-400 text-center">Sat</span>
+                    </div>
+                    <div id="schedulerCalendarGrid" class="calendar-grid"></div>
+                </div>
+
+                <div id="dailyTimeBox" class="pt-2 flex items-center gap-4">
+                    <label class="text-xs font-bold text-slate-700 whitespace-nowrap">Expected Nurse Arrival Time:</label>
+                    <input type="time" id="schedArrivalTime" value="09:00" class="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none">
+                </div>
+            </div>
+
+            <!-- 3. Hourly Slots Picker (With Premium Slots Highlight) -->
+            <div id="hourlySlotsSection" class="hidden card-hk p-6 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                        <i class="fas fa-clock text-emerald-500"></i> 3. Select Hourly Time Window
+                    </h4>
+                    <span class="text-[10px] text-purple-600 font-bold bg-purple-50 px-2 py-0.5 rounded">⭐ Purple = Premium Slot</span>
+                </div>
+
+                <div id="hourlySlotsGrid" class="grid grid-cols-3 sm:grid-cols-4 gap-3"></div>
                 
-                <!-- Left: Order Summary -->
-                <div class="space-y-6">
-                    <h2 class="text-3xl font-black">Booking Summary</h2>
-                    <div id="checkout-card" class="bg-white p-8 rounded-[40px] shadow-2xl border border-teal-50">
-                        <!-- Content Injected -->
+                <div class="flex justify-between items-center bg-slate-50 p-3.5 rounded-2xl text-xs font-bold text-slate-700">
+                    <span>Duration: <strong class="text-emerald-600 font-black">1 Hour</strong></span>
+                    <span>Window: <strong class="text-slate-900 font-black" id="hourlyWindowSummary">09:00 AM - 10:00 AM</strong></span>
+                    <span id="slotPremiumBadge" class="hidden text-xs text-red-600 font-black">+₹50 Premium</span>
+                </div>
+            </div>
+
+            <!-- 4. Clinical Consumables Checklist -->
+            <div class="card-hk p-6 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                        <i class="fas fa-band-aid text-emerald-500"></i> 4. Include Clinical Consumables & Bandages
+                    </h4>
+                    <span class="text-xs text-slate-400">Optional Add-ons</span>
+                </div>
+                <div id="consumablesChecklist" class="space-y-3 max-h-64 overflow-y-auto pr-2"></div>
+            </div>
+
+            <button onclick="proceedToPatientAndAddressScreen()" class="btn-hk w-full py-4 text-sm flex items-center justify-center gap-2">
+                Continue to Patient & Address Details <i class="fas fa-arrow-right"></i>
+            </button>
+        </section>
+
+        <!-- ========================================================================= -->
+        <!-- 👤 SCREEN 4: PATIENTS, VENUE & ADDRESS -->
+        <!-- ========================================================================= -->
+        <section id="screen-patient-address" class="screen-view max-w-4xl mx-auto space-y-8">
+            <button onclick="navigateTo('screen-scheduler')" class="inline-flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-slate-900 transition">
+                <i class="fas fa-arrow-left"></i> Back to Schedule
+            </button>
+
+            <!-- 1. Venue Selector -->
+            <div class="card-hk p-6 space-y-4">
+                <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                    <i class="fas fa-map-marker-alt text-emerald-500"></i> 1. Care Venue / Location
+                </h4>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div onclick="selectAssessmentVenue('At Home')" id="venue-home" class="border-2 border-emerald-500 bg-emerald-50/50 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition">
+                        <i class="fas fa-home text-emerald-600 text-xl mb-1"></i>
+                        <span class="text-xs font-black text-slate-800 block">At Patient's Home</span>
+                        <small class="text-[10px] text-slate-500 font-bold block">Doorstep nurse visit</small>
+                    </div>
+                    <div onclick="selectAssessmentVenue('At Hospital')" id="venue-hospital" class="border-2 border-slate-200 hover:border-emerald-300 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition">
+                        <i class="fas fa-hospital text-slate-600 text-xl mb-1"></i>
+                        <span class="text-xs font-black text-slate-800 block">At Hospital / In-Patient</span>
+                        <small class="text-[10px] text-slate-500 font-bold block">Bedside hospital attendant</small>
                     </div>
                 </div>
 
-                <!-- Right: Payment Simulation -->
-                <div class="bg-white p-10 rounded-[40px] shadow-2xl space-y-8">
-                    <h3 class="text-xl font-bold border-b pb-4">Secure Checkout</h3>
-                    <div class="space-y-4">
-                        <div class="border-2 border-teal-500 bg-teal-50 p-4 rounded-2xl flex items-center justify-between cursor-pointer">
-                            <div class="flex items-center gap-3">
-                                <i class="fas fa-credit-card text-teal-600"></i>
-                                <span class="font-bold">Credit / Debit Card</span>
-                            </div>
-                            <div class="w-5 h-5 rounded-full border-4 border-teal-500"></div>
+                <div id="hospitalDetailsBox" class="hidden bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3 pt-4">
+                    <p class="text-[11px] font-black uppercase text-slate-500">In-Patient Ward Details</p>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <input type="text" id="hospNameInput" placeholder="Hospital Name (e.g. Fortis Hospital)" class="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold">
+                        <input type="text" id="hospWardInput" placeholder="Ward / Room Name (e.g. ICU Bed 4)" class="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. Patient Selector -->
+            <div class="card-hk p-6 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                        <i class="fas fa-users text-emerald-500"></i> 2. Choose Patient(s) for Care
+                    </h4>
+                    <button onclick="promptAddFamilyMember()" class="text-xs font-bold text-emerald-600 hover:underline">+ Add Family Member</button>
+                </div>
+                <div id="patientsBubbleGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-4"></div>
+            </div>
+
+            <!-- 3. Address Selector -->
+            <div id="addressSelectSection" class="card-hk p-6 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                        <i class="fas fa-map-pin text-emerald-500"></i> 3. Select Home Address
+                    </h4>
+                    <button onclick="promptAddNewAddress()" class="text-xs font-bold text-emerald-600 hover:underline">+ Add New Address</button>
+                </div>
+                <div id="savedAddressesGrid" class="space-y-3"></div>
+            </div>
+
+            <!-- 4. Vitals & Instructions -->
+            <div class="card-hk p-6 space-y-3">
+                <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider">Patient Health Details & Notes</h4>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input type="text" id="patientHeightInput" placeholder="Height (e.g. 5 ft 8 in)" class="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-800">
+                    <input type="text" id="patientLanguageInput" value="English, Hindi" placeholder="Preferred Language" class="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-800">
+                </div>
+                <textarea id="patientNotesInput" rows="2" placeholder="Special medical instructions (e.g. Post-op wound care, gentle dressing required)..." class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-medium outline-none focus:border-emerald-500"></textarea>
+            </div>
+
+            <button onclick="evaluateAndGoToCheckout()" class="btn-hk w-full py-4 text-sm flex items-center justify-center gap-2">
+                Verify Bill & Proceed to Payment <i class="fas fa-arrow-right"></i>
+            </button>
+        </section>
+
+        <!-- ========================================================================= -->
+        <!-- 💳 SCREEN 5: FINAL CHECKOUT & SUMMARY (Strict 0% Tax / Clean Toggle) -->
+        <!-- ========================================================================= -->
+        <section id="screen-checkout" class="screen-view max-w-4xl mx-auto space-y-8">
+            <button onclick="navigateTo('screen-patient-address')" class="inline-flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-slate-900 transition">
+                <i class="fas fa-arrow-left"></i> Back to Patient & Address
+            </button>
+
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                
+                <!-- Left: Toggles, Express & Coupons -->
+                <div class="lg:col-span-7 space-y-6">
+                    
+                    <!-- Express 1-Hour Travel Toggle -->
+                    <div class="card-hk p-6 border-2 border-emerald-100 bg-emerald-50/30 flex justify-between items-center gap-4">
+                        <div>
+                            <span class="text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-md">Fast Response</span>
+                            <h4 class="text-sm font-black text-slate-800 mt-1">1-Hour Express Nurse Dispatch</h4>
+                            <p class="text-xs text-slate-500">Nurse reaches within 60 mins for emergency care</p>
                         </div>
-                        <div class="border-2 border-gray-100 p-4 rounded-2xl flex items-center justify-between cursor-not-allowed opacity-50">
-                            <div class="flex items-center gap-3">
-                                <i class="fas fa-university text-gray-400"></i>
-                                <span class="font-bold">Net Banking</span>
-                            </div>
+                        <input type="checkbox" id="chkExpressNurse" class="w-6 h-6 accent-emerald-500 cursor-pointer" onchange="recalculateLiveCheckout()">
+                    </div>
+
+                    <!-- Coupon Code -->
+                    <div class="card-hk p-6 space-y-3">
+                        <h4 class="text-xs font-black uppercase text-slate-500">Promotions & Coupons</h4>
+                        <div class="flex gap-2">
+                            <input type="text" id="chkCouponInput" placeholder="Enter coupon code (e.g. CARE50)..." class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold uppercase tracking-wider outline-none focus:border-emerald-500">
+                            <button onclick="applyCouponCode()" class="bg-slate-900 hover:bg-black text-white px-5 py-2 rounded-xl text-xs font-bold transition">Apply</button>
+                        </div>
+                        <div id="couponsListDisplay" class="pt-2 flex flex-wrap gap-2"></div>
+                    </div>
+
+                    <!-- Payment Mode -->
+                    <div class="card-hk p-6 space-y-3">
+                        <h4 class="text-xs font-black uppercase text-slate-500">Select Payment Method</h4>
+                        
+                        <div class="space-y-2">
+                            <label class="flex items-center justify-between p-4 border-2 border-emerald-500 bg-emerald-50/30 rounded-2xl cursor-pointer">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-credit-card text-emerald-600 text-lg"></i>
+                                    <div>
+                                        <span class="text-xs font-black text-slate-800 block">Pay Online via Razorpay</span>
+                                        <small class="text-[10px] text-slate-400">UPI, Cards, NetBanking, Wallets</small>
+                                    </div>
+                                </div>
+                                <input type="radio" name="paymentMethodRadio" value="Online" checked class="accent-emerald-500 w-4 h-4">
+                            </label>
+
+                            <label id="codPaymentOption" class="flex items-center justify-between p-4 border-2 border-slate-200 rounded-2xl cursor-pointer">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-money-bill-wave text-slate-600 text-lg"></i>
+                                    <div>
+                                        <span class="text-xs font-black text-slate-800 block">Cash on Delivery (Pay on Visit)</span>
+                                        <small class="text-[10px] text-slate-400">Pay cash upon nurse completion</small>
+                                    </div>
+                                </div>
+                                <input type="radio" name="paymentMethodRadio" value="COD" class="accent-emerald-500 w-4 h-4">
+                            </label>
                         </div>
                     </div>
 
-                    <div class="space-y-4 pt-6">
-                        <input type="text" placeholder="Card Holder Name" class="w-full bg-gray-50 p-4 rounded-2xl border-none focus:ring-2 focus:ring-teal-500 outline-none font-medium">
-                        <input type="text" placeholder="Card Number" class="w-full bg-gray-50 p-4 rounded-2xl border-none focus:ring-2 focus:ring-teal-500 outline-none font-medium">
+                </div>
+
+                <!-- Right: Summary Bill Card -->
+                <div class="lg:col-span-5 card-hk p-6 space-y-5 sticky top-36">
+                    <h3 class="text-lg font-black text-slate-900 border-b border-slate-100 pb-3">Booking Summary</h3>
+
+                    <div id="subscriptionCalloutBox" class="hidden p-4 rounded-2xl text-xs font-bold space-y-1"></div>
+
+                    <div class="space-y-2.5 text-xs">
+                        <div class="flex justify-between text-slate-600">
+                            <span>Base Care Fee (<span id="billDurationUnits">1 Day</span> x <span id="billPatientCount">1 Patient</span>):</span>
+                            <strong class="text-slate-800" id="billBaseFee">₹0</strong>
+                        </div>
+
+                        <div id="billSlotSurchargeRow" class="hidden flex justify-between text-purple-600">
+                            <span>⭐ Premium Date / Slot Surcharge:</span>
+                            <strong id="billSlotSurcharge">+₹0</strong>
+                        </div>
+
+                        <div id="billConsumablesRow" class="hidden flex justify-between text-slate-600">
+                            <span>Add-on Consumables:</span>
+                            <strong id="billConsumables">+₹0</strong>
+                        </div>
+
+                        <div id="billTravelRow" class="flex justify-between text-slate-600">
+                            <span>Travel / Home Visit Charge:</span>
+                            <strong id="billTravelFee">FREE (₹0)</strong>
+                        </div>
+
+                        <div id="billExpressRow" class="hidden flex justify-between text-amber-600">
+                            <span>⚡ 1-Hour Express Dispatch:</span>
+                            <strong id="billExpressFee">+₹0</strong>
+                        </div>
+
+                        <div id="billCouponRow" class="hidden flex justify-between text-emerald-600 font-bold">
+                            <span>Coupon Savings:</span>
+                            <strong id="billCouponDiscount">-₹0</strong>
+                        </div>
+
+                        <div class="border-t-2 border-dashed border-slate-200 pt-3 flex justify-between items-baseline text-slate-900">
+                            <span class="text-sm font-black">Total Payable:</span>
+                            <strong class="text-2xl font-black text-emerald-600" id="billGrandTotal">₹0</strong>
+                        </div>
                     </div>
 
-                    <button onclick="simulatePayment()" class="w-full bg-teal-600 text-white py-5 rounded-[25px] font-black text-lg shadow-2xl shadow-teal-200 hover:bg-teal-700 transition transform hover:scale-105 active:scale-95">
-                        PAY & SUBSCRIBE NOW
+                    <button id="btnConfirmNurseBooking" onclick="executeFinalNurseBooking()" class="btn-hk w-full py-4 text-sm shadow-xl flex items-center justify-center gap-2">
+                        <span>Place & Confirm Booking</span> <i class="fas fa-check-circle"></i>
                     </button>
-                    <p class="text-center text-xs text-gray-400 font-medium">Transaction protected by 256-bit SSL encryption</p>
                 </div>
+
             </div>
         </section>
 
+        <!-- ========================================================================= -->
+        <!-- 📍 SCREEN 6: LIVE TRACKING, 5-STEP TIMELINE -->
+        <!-- ========================================================================= -->
+        <section id="screen-live-track" class="screen-view max-w-4xl mx-auto space-y-8">
+            <button onclick="navigateTo('screen-my-bookings'); loadUserBookingsHistory();" class="inline-flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-slate-900 transition">
+                <i class="fas fa-arrow-left"></i> Back to My Appointments
+            </button>
 
-        <!-- ========================================== -->
-        <!-- SCREEN 3: POST-PURCHASE DASHBOARD -->
-        <!-- ========================================== -->
-        <section id="screen-dashboard" class="screen-transition hidden-screen">
-            <div class="max-w-5xl mx-auto space-y-12">
-                <div class="bg-gradient-to-r from-teal-600 to-blue-600 p-12 rounded-[50px] text-white flex flex-col md:flex-row items-center justify-between shadow-2xl relative overflow-hidden">
-                    <div class="relative z-10">
-                        <h2 class="text-4xl font-black mb-4">Welcome to Your Care Plan!</h2>
-                        <p class="text-teal-100 font-medium max-w-md">Your optimal health and comfort is our priority. Our administrators are currently reviewing your location to assign the best Nurse Bureau.</p>
+            <!-- Header Card -->
+            <div class="card-hk p-6 bg-slate-900 text-white flex flex-wrap justify-between items-center gap-4">
+                <div>
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="text-[10px] font-black uppercase text-emerald-400 bg-emerald-500/20 px-2.5 py-0.5 rounded-full" id="track-order-status">Confirmed</span>
+                        <span class="text-xs font-mono text-slate-400" id="track-order-id">#HKN----</span>
                     </div>
-                    <div class="mt-8 md:mt-0 relative z-10 text-center">
-                        <div class="bg-white/20 backdrop-blur-md p-6 rounded-3xl">
-                            <p class="text-xs font-bold uppercase tracking-widest text-teal-100 mb-2">Current Status</p>
-                            <span class="bg-yellow-400 text-gray-900 px-6 py-2 rounded-full font-black text-sm animate-pulse">Assigning Professional Bureau...</span>
-                        </div>
-                    </div>
-                    <i class="fas fa-briefcase-medical absolute -bottom-10 -right-10 text-white/10 text-[200px]"></i>
+                    <h3 class="text-xl font-black" id="track-service-title">Nursing Procedure</h3>
+                    <p class="text-xs text-slate-400" id="track-schedule-text">Schedule: --</p>
                 </div>
 
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    <!-- Plan Details -->
-                    <div class="lg:col-span-2 bg-white p-10 rounded-[40px] custom-shadow">
-                        <h3 class="text-2xl font-black mb-8">Plan Utilities</h3>
-                        <div id="dashboard-benefits" class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <!-- Populated via JS -->
-                        </div>
+                <div class="flex items-center gap-3">
+                    <div class="bg-emerald-500/10 border border-emerald-500/30 p-3 rounded-2xl text-center">
+                        <span class="text-[9px] font-black text-emerald-400 uppercase tracking-widest block">Start OTP</span>
+                        <strong class="text-xl font-mono font-black text-emerald-300 tracking-wider" id="track-start-otp">----</strong>
                     </div>
-
-                    <!-- Bureau Assignment Status -->
-                    <div class="bg-white p-10 rounded-[40px] custom-shadow text-center">
-                        <div class="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <i class="fas fa-user-md text-4xl text-gray-300"></i>
-                        </div>
-                        <h4 class="text-xl font-bold mb-2">Assigned Bureau</h4>
-                        <p class="text-gray-400 text-sm font-medium leading-relaxed">Admin will assign a verified Nurse Provider within 2-4 business hours based on your city.</p>
-                        <hr class="my-8 border-gray-50">
-                        <button class="w-full border-2 border-gray-100 text-gray-400 py-4 rounded-3xl font-bold text-sm cursor-not-allowed">CHAT WITH NURSE</button>
+                    <div class="bg-amber-500/10 border border-amber-500/30 p-3 rounded-2xl text-center">
+                        <span class="text-[9px] font-black text-amber-400 uppercase tracking-widest block">End OTP</span>
+                        <strong class="text-xl font-mono font-black text-amber-300 tracking-wider" id="track-end-otp">----</strong>
                     </div>
                 </div>
             </div>
+
+            <!-- Staff Card -->
+            <div id="trackStaffCard" class="card-hk p-6 flex flex-wrap justify-between items-center gap-4">
+                <div class="flex items-center gap-4">
+                    <img id="track-staff-img" src="https://ui-avatars.com/api/?name=Nurse&background=00b894&color=fff" class="w-14 h-14 rounded-2xl object-cover border-2 border-emerald-200">
+                    <div>
+                        <span class="text-[9px] font-black uppercase text-slate-400 tracking-wider">Assigned Staff Nurse</span>
+                        <h4 class="text-base font-black text-slate-800" id="track-staff-name">Assigning verified staff...</h4>
+                        <p class="text-xs text-slate-500 font-bold" id="track-staff-phone"><i class="fas fa-phone mr-1"></i> --</p>
+                    </div>
+                </div>
+                <span id="track-staff-status-badge" class="text-xs font-black px-3 py-1 rounded-full bg-slate-100 text-slate-600">Pending Assignment</span>
+            </div>
+
+            <!-- 5-Step Timeline -->
+            <div class="card-hk p-8 space-y-6">
+                <h4 class="text-sm font-black text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-3">
+                    Live Service Timeline
+                </h4>
+                <div id="trackingTimelineSteps" class="space-y-6 border-l-2 border-slate-200 ml-6 pl-6 relative"></div>
+            </div>
+
+            <div class="flex gap-4">
+                <button onclick="promptCancelNurseBooking()" id="btnTrackCancel" class="w-1/2 py-4 rounded-2xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs transition">
+                    Cancel Booking
+                </button>
+                <button onclick="promptRateNurseBooking()" id="btnTrackRate" class="w-1/2 py-4 rounded-2xl bg-slate-900 hover:bg-black text-white font-bold text-xs transition">
+                    Rate Service ⭐
+                </button>
+            </div>
+        </section>
+
+        <!-- ========================================================================= -->
+        <!-- 📋 SCREEN 7: AI PRESCRIPTION UPLOAD & 10-NEAREST BUREAU BROADCAST -->
+        <!-- ========================================================================= -->
+        <section id="screen-prescription" class="screen-view max-w-4xl mx-auto space-y-8">
+            <div class="text-center max-w-2xl mx-auto space-y-2">
+                <h2 class="text-2xl sm:text-4xl font-black text-slate-900">Upload Doctor's Prescription</h2>
+                <p class="text-xs text-slate-500 font-medium">Our AI reads required nursing procedures and broadcasts inquiries to the 10 nearest verified bureaus for competitive proposal bills.</p>
+            </div>
+
+            <div class="card-hk p-8 text-center border-2 border-dashed border-emerald-300 bg-emerald-50/20 space-y-4 cursor-pointer hover:bg-emerald-50/40 transition" onclick="document.getElementById('rxUploadFileInput').click()">
+                <input type="file" id="rxUploadFileInput" class="hidden" accept="image/*,application/pdf" onchange="handlePrescriptionFileSelection(this)">
+                <div class="w-16 h-16 bg-emerald-500 text-white rounded-3xl flex items-center justify-center text-2xl mx-auto shadow-lg shadow-emerald-500/20">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                </div>
+                <div>
+                    <h4 class="font-black text-slate-800 text-sm" id="rxUploadPromptText">Click to Upload Prescription File</h4>
+                    <p class="text-xs text-slate-400">Supports JPG, PNG, and PDF (Max 10MB)</p>
+                </div>
+            </div>
+
+            <div id="rxDetectedBox" class="hidden card-hk p-6 space-y-4">
+                <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                    <h4 class="text-xs font-black uppercase text-slate-700 flex items-center gap-2">
+                        <i class="fas fa-robot text-emerald-500"></i> AI Detected Procedures & Notes
+                    </h4>
+                    <button onclick="addCustomRxServiceRow()" class="text-xs font-bold text-emerald-600 hover:underline">+ Add Procedure</button>
+                </div>
+
+                <div id="rxDetectedServicesList" class="space-y-3"></div>
+
+                <button onclick="executeBroadcastPrescription()" id="btnBroadcastRx" class="btn-hk w-full py-4 text-xs">
+                    Broadcast Inquiry to 10 Nearest Bureaus 📢
+                </button>
+            </div>
+        </section>
+
+        <!-- ========================================================================= -->
+        <!-- 📑 SCREEN 8: MY APPOINTMENTS HISTORY -->
+        <!-- ========================================================================= -->
+        <section id="screen-my-bookings" class="screen-view space-y-6">
+            <div class="flex justify-between items-center border-b border-slate-200 pb-4">
+                <div>
+                    <h2 class="text-2xl font-black text-slate-900">My Nurse Bookings</h2>
+                    <p class="text-xs text-slate-400 font-medium">All upcoming, active and historical nursing sessions</p>
+                </div>
+                <button onclick="loadUserBookingsHistory()" class="btn-hk py-2 px-4 text-xs font-bold"><i class="fas fa-sync-alt mr-1"></i> Refresh</button>
+            </div>
+
+            <div id="myBookingsListGrid" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
+        </section>
+
+        <!-- ========================================================================= -->
+        <!-- 📡 SCREEN 9: BROADCASTED PRESCRIPTION INQUIRIES & PROPOSALS -->
+        <!-- ========================================================================= -->
+        <section id="screen-rx-history" class="screen-view space-y-6">
+            <div class="flex justify-between items-center border-b border-slate-200 pb-4">
+                <div>
+                    <h2 class="text-2xl font-black text-slate-900">Broadcasted Prescription Requests</h2>
+                    <p class="text-xs text-slate-400 font-medium">View and compare live proposal bills submitted by nurse bureaus</p>
+                </div>
+                <button onclick="loadUserPrescriptionHistory()" class="btn-hk py-2 px-4 text-xs font-bold"><i class="fas fa-sync-alt mr-1"></i> Refresh</button>
+            </div>
+
+            <div id="myRxInquiriesGrid" class="space-y-6"></div>
         </section>
 
     </main>
 
-    <!-- FOOTER -->
-    <footer class="py-12 bg-white border-t border-gray-100 mt-20">
-        <div class="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-8">
-            <div class="text-gray-400 text-sm font-medium">© 2026 HealthKangaroo Nursing Ecosystem. All Rights Reserved.</div>
-            <div class="flex gap-8">
-                <a href="#" class="text-gray-400 hover:text-teal-600 transition"><i class="fab fa-facebook-f"></i></a>
-                <a href="#" class="text-gray-400 hover:text-teal-600 transition"><i class="fab fa-twitter"></i></a>
-                <a href="#" class="text-gray-400 hover:text-teal-600 transition"><i class="fab fa-linkedin-in"></i></a>
+    <!-- Modal: Proposals Comparison -->
+    <div id="proposalsModal" class="hidden fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white max-w-2xl w-full rounded-[2.5rem] p-8 space-y-6 max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div class="flex justify-between items-start border-b border-slate-100 pb-4">
+                <div>
+                    <span class="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full">Proposals Comparison</span>
+                    <h3 class="text-xl font-black text-slate-900 mt-1" id="propModalTitle">Inquiry Proposals</h3>
+                </div>
+                <button onclick="closeProposalsModal()" class="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 flex items-center justify-center font-bold">✕</button>
             </div>
+
+            <div id="proposalsListArea" class="space-y-4"></div>
         </div>
-    </footer>
+    </div>
 
-    <!-- JAVASCRIPT LOGIC -->
+    <!-- ========================================================================= -->
+    <!-- 🧠 CLIENT LOGIC & REAL-TIME EVENT ENGINE -->
+    <!-- ========================================================================= -->
     <script>
-        // --- MASTER DATA ---
-        const CARE_PLANS = [
-            {
-                id: '1',
-                mainCategory: 'Elder Care Plan',
-                name: 'Basic Annual Care',
-                price: 85,
-                tagline: "Trusted round-the-clock care so you can relax, even if you're far away.",
-                theme: '#00b894',
-                exclusiveCover: '38,000',
-                benefits: [
-                    { category: 'Health Assistance', items: ['Fixing doctor appointments', '6 accompanied doctor visits', 'Medicine delivery at home'] },
-                    { category: 'Emergency', items: ['On-demand ambulance on call', '24/7 non-medical crisis support', 'Unlimited care manager visits'] }
-                ]
-            },
-            {
-                id: '2',
-                mainCategory: 'Elder Care Plan',
-                name: 'Optimal Annual Plan',
-                price: 125,
-                tagline: "More extensive care for specific services your loved ones need.",
-                theme: '#0984e3',
-                exclusiveCover: '63,000',
-                benefits: [
-                    { category: 'Health Assistance', items: ['Everything in Basic Plan', 'At-home diagnostics & X-rays', '12 accompanied doctor visits'] },
-                    { category: 'Comfort', items: ['Home repairs and maintenance', 'Doorstep grocery delivery', 'Plumber, electrician, and carpenter'] }
-                ]
-            },
-            {
-                id: '3',
-                mainCategory: 'Elder Care Plan',
-                name: 'Comprehensive Annual',
-                price: 175,
-                tagline: "Complete peace of mind offering full support for well-being.",
-                theme: '#6c5ce7',
-                exclusiveCover: '80,000',
-                benefits: [
-                    { category: 'Daily Care', items: ['Essential arrangements for Daily Maid', 'Fresh homemade meal delivery', 'Phone and internet how-to help'] },
-                    { category: 'Leisure', items: ['Planning family events', 'Day outings & park walks', '48 companionship visits'] }
-                ]
-            },
-            {
-                id: '4',
-                mainCategory: 'Condition Management Plan',
-                name: 'Dementia Care Plan',
-                price: 381,
-                tagline: "Specialized care, fun activities, and regular visits to keep them safe and happy.",
-                theme: '#e17055',
-                exclusiveCover: '50,000',
-                benefits: [
-                    { category: 'Specialized', items: ['Virtual assessment by specialized team', 'Cognitive stimulation like jigsaw puzzles', 'Behavioral pattern tracking'] }
-                ]
-            },
-            {
-                id: '5',
-                mainCategory: 'Condition Management Plan',
-                name: 'Dialysis Care Plan',
-                price: 325,
-                tagline: "Regular nursing and support for dialysis patients at home.",
-                theme: '#d63031',
-                exclusiveCover: '40,000',
-                benefits: [
-                    { category: 'Clinical', items: ['Home physiotherapy sessions', 'Post-dialysis health monitoring', 'Dietary tracking'] }
-                ]
-            },
-            {
-                id: '6',
-                mainCategory: 'Elite Plan',
-                name: 'Concierge Elite Plan',
-                price: 999,
-                tagline: "Designed exclusively for level of care beyond standard senior support.",
-                theme: '#2d3436',
-                exclusiveCover: '150,000',
-                benefits: [
-                    { category: 'Exclusivity', items: ['Bespoke wellness routines', 'Pure companionship', 'Premium healthcare manager'] }
-                ]
-            }
-        ];
-
-        let state = {
-            currentCategory: 'Elder Care Plan',
-            selectedPlan: null,
-            activeSubscription: null
+        let API_BASE_URL = "http://localhost:5002";
+        let USER_TOKEN = localStorage.getItem('hk_user_token') || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5OTg0MDcxM2UzMzNhMzQyMjI3ZWRjOCIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzkxMTM5NDQzLCJleHAiOjQ5NDQ3Mzk0NDN9.r4M6YuFdRMQCaPfDXzrF5ij-HBL_isLk_pF-tZ0h858";
+        
+        let appState = {
+            userProfile: null,
+            savedAddresses: [],
+            selectedNurseId: null,
+            selectedNurseData: null,
+            selectedService: null,
+            selectedPackage: null,
+            isPackage: false,
+            frequencyMode: 'One day One Time',
+            startDate: moment().format('YYYY-MM-DD'),
+            endDate: moment().format('YYYY-MM-DD'),
+            startTime: '09:00',
+            endTime: '10:00',
+            hourlyDurationHours: 1,
+            assessmentVenue: 'At Home',
+            selectedPatients: [],
+            selectedAddress: null,
+            selectedConsumables: [],
+            couponCode: '',
+            calculatedBill: null,
+            activeTrackingBookingId: null,
+            uploadedRxFilePath: null,
+            detectedRxServices: []
         };
 
-        // --- NAVIGATION & TABS ---
-        function switchCategory(cat) {
-            state.currentCategory = cat;
-            
-            // Update UI buttons
-            document.querySelectorAll('[id^="btn-"]').forEach(btn => {
-                btn.classList.remove('tab-active');
-                btn.classList.add('text-gray-500');
-            });
-            const activeBtnId = cat === 'Elder Care Plan' ? 'btn-elder' : (cat === 'Elite Plan' ? 'btn-elite' : 'btn-condition');
-            document.getElementById(activeBtnId).classList.add('tab-active');
-            document.getElementById(activeBtnId).classList.remove('text-gray-500');
+        window.onload = async () => {
+            const savedUrl = localStorage.getItem('hk_api_base');
+            if (savedUrl) API_BASE_URL = savedUrl;
+            document.getElementById('cfg-server-url').value = API_BASE_URL;
+            document.getElementById('cfg-user-token').value = USER_TOKEN;
 
-            renderPlans();
+            if (USER_TOKEN) {
+                await fetchUserProfileData();
+            }
+            loadGlobalServices();
+            loadGlobalPackages();
+            executeNurseDiscoveryQuery();
+        };
+
+        function getHeaders(isFormData = false) {
+            const headers = {};
+            if (USER_TOKEN) headers['Authorization'] = `Bearer ${USER_TOKEN}`;
+            if (!isFormData) headers['Content-Type'] = 'application/json';
+            return headers;
         }
 
-        // --- RENDERING ENGINE ---
-        function renderPlans() {
-            const grid = document.getElementById('plans-grid');
-            const filtered = CARE_PLANS.filter(p => p.mainCategory === state.currentCategory);
-            
-            grid.innerHTML = filtered.map(p => `
-                <div class="plan-card bg-white rounded-[40px] p-8 custom-shadow border border-gray-50 flex flex-col">
-                    <h2 class="text-xl font-black mb-1">${p.name}</h2>
-                    <div class="text-4xl font-black text-gray-900 mb-4">$${p.price}<span class="text-sm text-gray-400">/mo *</span></div>
-                    <p class="text-xs font-bold text-gray-400 mb-6 uppercase tracking-widest">Billed yearly (taxes at actuals)</p>
-                    
-                    <p class="text-sm text-gray-500 font-medium mb-8 leading-relaxed">${p.tagline}</p>
-                    
-                    <button onclick="goToCheckout('${p.id}')" class="w-full py-4 rounded-2xl bg-white border-2 border-teal-600 text-teal-600 font-black text-sm hover:bg-teal-600 hover:text-white transition-all flex justify-between items-center px-6 mb-10 group">
-                        Buy Now <i class="fas fa-arrow-right group-hover:translate-x-1 transition"></i>
-                    </button>
+        function saveLocalSessionToken(token) {
+            USER_TOKEN = token.trim();
+            localStorage.setItem('hk_user_token', USER_TOKEN);
+        }
 
-                    <div class="flex-grow space-y-6">
-                        ${p.benefits.map(b => `
-                            <div>
-                                <div class="flex justify-between items-center cursor-pointer mb-3">
-                                    <span class="text-xs font-black uppercase text-gray-400 tracking-wider">${b.category}</span>
-                                    <i class="fas fa-chevron-up text-[10px] text-gray-300"></i>
-                                </div>
-                                <ul class="benefit-list space-y-3">
-                                    ${b.items.map(item => `
-                                        <li class="flex items-start gap-3 text-sm font-semibold">
-                                            <i class="fas fa-check mt-1"></i>
-                                            <span>${item}</span>
-                                        </li>
-                                    `).join('')}
-                                </ul>
+        function saveAndReloadSession() {
+            const url = document.getElementById('cfg-server-url').value.trim();
+            const token = document.getElementById('cfg-user-token').value.trim();
+            if (url) localStorage.setItem('hk_api_base', url);
+            if (token) localStorage.setItem('hk_user_token', token);
+            window.location.reload();
+        }
+
+        function navigateTo(screenId) {
+            document.querySelectorAll('.screen-view').forEach(s => s.classList.remove('active'));
+            const target = document.getElementById(screenId);
+            if (target) target.classList.add('active');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        async function fetchUserProfileData() {
+            try {
+                const [profRes, addrRes] = await Promise.all([
+                    fetch(`${API_BASE_URL}/api/auth/user/profile`, { headers: getHeaders() }),
+                    fetch(`${API_BASE_URL}/api/auth/user/addresses`, { headers: getHeaders() })
+                ]);
+                const profData = await profRes.json();
+                const addrData = await addrRes.json();
+
+                if (profData.success && profData.data) {
+                    appState.userProfile = profData.data;
+                    document.getElementById('usr-display-name').innerText = profData.data.name || 'User';
+                    document.getElementById('usr-display-phone').innerText = profData.data.phone || '';
+                    document.getElementById('usr-avatar').innerText = (profData.data.name || 'U')[0].toUpperCase();
+
+                    appState.selectedPatients = [{
+                        patientId: 'Self',
+                        name: profData.data.name || 'Self',
+                        age: profData.data.dob ? (moment().diff(moment(profData.data.dob), 'years')) : 28,
+                        gender: profData.data.gender || 'Male'
+                    }];
+                }
+
+                if (addrData.success && addrData.data) {
+                    appState.savedAddresses = addrData.data;
+                    if (addrData.data.length > 0) {
+                        appState.selectedAddress = addrData.data.find(a => a.isDefault) || addrData.data[0];
+                    }
+                }
+            } catch (err) {
+                console.error("Profile sync failed:", err);
+            }
+        }
+
+        async function loadGlobalServices() {
+            const container = document.getElementById('globalServicesReel');
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/services/global`);
+                const json = await res.json();
+                if (json.success && json.data.length > 0) {
+                    container.innerHTML = json.data.map(svc => `
+                        <div onclick="document.getElementById('mainSearchInput').value='${svc.category}'; executeNurseDiscoveryQuery();" class="card-hk p-4 text-center cursor-pointer hover:border-emerald-500 bg-white space-y-2">
+                            <div class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center text-lg mx-auto">
+                                <i class="fas fa-stethoscope"></i>
                             </div>
-                        `).join('')}
-                    </div>
+                            <h4 class="text-xs font-black text-slate-800 truncate">${svc.category}</h4>
+                            <span class="text-[9px] font-bold text-slate-400 block">${svc.providerCount || 1}+ Bureaus</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {}
+        }
 
-                    <div class="mt-10 p-5 rounded-3xl purple-badge flex justify-between items-center">
-                        <span class="text-xs font-bold leading-tight">Exclusive Expenses Worth <br> <b class="text-sm">₹${p.exclusiveCover} Covered</b></span>
-                        <i class="fas fa-chevron-down text-xs"></i>
+        async function loadGlobalPackages() {
+            const container = document.getElementById('globalPackagesReel');
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/packages/list`);
+                const json = await res.json();
+                if (json.success && json.data.length > 0) {
+                    container.innerHTML = json.data.slice(0, 3).map(pkg => `
+                        <div class="card-hk p-6 flex flex-col justify-between space-y-4">
+                            <div>
+                                <span class="bg-purple-50 text-purple-700 text-[10px] font-black uppercase px-2.5 py-1 rounded-lg">Care Bundle</span>
+                                <h4 class="text-lg font-black text-slate-900 mt-2">${pkg.packageName}</h4>
+                                <p class="text-xs text-slate-500 mt-1 line-clamp-2">${pkg.description || 'Comprehensive care plan.'}</p>
+                            </div>
+                            <div class="flex justify-between items-baseline pt-4 border-t border-slate-100">
+                                <div>
+                                    <span class="text-[10px] text-slate-400 font-bold block">Starts From</span>
+                                    <strong class="text-xl font-black text-emerald-600">₹${pkg.pricing?.oneDay?.final || 0}</strong>
+                                </div>
+                                <button onclick="openNurseProfile('${pkg.nurseId?._id || pkg.nurseId}')" class="btn-hk py-2.5 px-5 text-xs">View Bureau</button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {}
+        }
+
+        async function executeNurseDiscoveryQuery() {
+            const container = document.getElementById('nursesDirectoryGrid');
+            const searchKeyword = document.getElementById('mainSearchInput').value.trim();
+
+            container.innerHTML = `<div class="text-center py-16 col-span-full text-slate-400 text-xs"><i class="fas fa-spinner fa-spin mr-2"></i>Finding nearby nurse bureaus...</div>`;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/list`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ search: searchKeyword || undefined, userLat: 30.7046, userLng: 76.7179 })
+                });
+                const json = await res.json();
+
+                if (json.success && json.data.length > 0) {
+                    container.innerHTML = json.data.map(nurse => `
+                        <div class="card-hk p-6 flex flex-col justify-between space-y-5">
+                            <div class="flex items-start gap-4">
+                                <img src="${nurse.profileImage ? (nurse.profileImage.startsWith('http') ? nurse.profileImage : API_BASE_URL + nurse.profileImage) : 'https://ui-avatars.com/api/?name=' + encodeURIComponent(nurse.name) + '&background=00b894&color=fff'}" class="w-16 h-16 rounded-2xl object-cover border-2 border-emerald-100">
+                                <div class="flex-grow text-left">
+                                    <div class="flex justify-between items-start">
+                                        <h4 class="text-base font-black text-slate-900">${nurse.name}</h4>
+                                        <span class="text-xs font-black text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full">⭐ ${nurse.rating || '4.8'}</span>
+                                    </div>
+                                    <p class="text-xs font-bold text-slate-500">${nurse.speciality || 'General Nursing Care'}</p>
+                                    <p class="text-[11px] text-slate-400 mt-1"><i class="fas fa-map-marker-alt text-emerald-500 mr-1"></i> ${nurse.city || 'Chandigarh'}</p>
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-50 p-3 rounded-2xl flex justify-between items-center text-xs">
+                                <div class="text-left">
+                                    <span class="text-[10px] text-slate-400 font-bold block">Experience</span>
+                                    <strong class="text-slate-800">${nurse.experienceYears || '5+'} Years</strong>
+                                </div>
+                                <div class="text-right">
+                                    <span class="text-[10px] text-slate-400 font-bold block">Starts at</span>
+                                    <strong class="text-emerald-600 font-black">₹${nurse.startingPrice || 600} / visit</strong>
+                                </div>
+                            </div>
+
+                            <button onclick="openNurseProfile('${nurse._id}')" class="btn-hk w-full py-3 text-xs flex items-center justify-center gap-2">
+                                View Profile & Book <i class="fas fa-arrow-right"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = `<div class="text-center py-16 col-span-full text-slate-400 text-xs">No registered nurse bureaus matched.</div>`;
+                }
+            } catch (err) {
+                container.innerHTML = `<div class="text-center py-16 col-span-full text-red-500 text-xs">Failed to load nurse directory.</div>`;
+            }
+        }
+
+        async function fetchSearchSuggestions(val) {
+            const box = document.getElementById('searchSuggestionsBox');
+            if (!val || val.length < 2) { box.classList.add('hidden'); return; }
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/search-suggestions?query=${encodeURIComponent(val)}`);
+                const json = await res.json();
+                if (json.success && json.data.length > 0) {
+                    box.classList.remove('hidden');
+                    box.innerHTML = json.data.map(item => `
+                        <div onclick="document.getElementById('mainSearchInput').value='${item.title}'; executeNurseDiscoveryQuery(); document.getElementById('searchSuggestionsBox').classList.add('hidden');" class="p-2 hover:bg-slate-50 rounded-xl cursor-pointer flex justify-between items-center text-xs">
+                            <span class="font-bold text-slate-800">${item.title}</span>
+                            <span class="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded">${item.type}</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {}
+        }
+
+        // --- 2. NURSE PROFILE VIEW & CATALOGUE ---
+        async function openNurseProfile(nurseId) {
+            appState.selectedNurseId = nurseId;
+            navigateTo('screen-nurse-profile');
+            const hero = document.getElementById('nurseHeroBox');
+            hero.innerHTML = `<div class="text-center py-12"><i class="fas fa-spinner fa-spin text-3xl text-white"></i></div>`;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/details/${nurseId}`);
+                const json = await res.json();
+
+                if (!json.success || !json.data) throw new Error(json.message || "Bureau not found");
+
+                const d = json.data;
+                appState.selectedNurseData = d;
+
+                const nurseObj = d.nurse || d.profile || d;
+                const servicesList = Array.isArray(d.services) ? d.services : [];
+                const packagesList = Array.isArray(d.packages) ? d.packages : [];
+                const reviewsList = Array.isArray(d.reviews) ? d.reviews : [];
+
+                const imgUrl = nurseObj.profileImage 
+                    ? (nurseObj.profileImage.startsWith('http') ? nurseObj.profileImage : API_BASE_URL + (nurseObj.profileImage.startsWith('/') ? '' : '/') + nurseObj.profileImage) 
+                    : 'https://ui-avatars.com/api/?name=' + encodeURIComponent(nurseObj.name || 'Nurse') + '&background=fff&color=00b894';
+
+                hero.innerHTML = `
+                    <div class="flex flex-wrap items-center justify-between gap-6 relative z-10 text-left">
+                        <div class="flex items-center gap-6">
+                            <img src="${imgUrl}" class="w-24 h-24 rounded-3xl object-cover border-4 border-white/30 shadow-xl bg-white">
+                            <div class="space-y-1">
+                                <span class="bg-white/20 text-white text-[10px] font-black uppercase px-3 py-1 rounded-full">Verified Bureau</span>
+                                <h2 class="text-2xl font-black">${nurseObj.name || 'Certified Nurse Bureau'}</h2>
+                                <p class="text-xs text-emerald-100 font-medium">${nurseObj.speciality || 'Critical Care'} &bull; ${nurseObj.experienceYears || '5'} Yrs Experience</p>
+                                <p class="text-xs text-emerald-100"><i class="fas fa-map-marker-alt mr-1"></i> ${nurseObj.address || nurseObj.city || 'Chandigarh'}, Punjab</p>
+                            </div>
+                        </div>
+                        <div class="text-right bg-white/10 backdrop-blur-md p-4 rounded-3xl border border-white/20">
+                            <span class="text-xs text-emerald-100 font-bold block">Patient Rating</span>
+                            <strong class="text-3xl font-black">⭐ ${nurseObj.rating || '4.8'}</strong>
+                            <span class="text-[10px] text-emerald-200 block">${nurseObj.totalReviews || reviewsList.length || '0'} reviews</span>
+                        </div>
                     </div>
+                `;
+
+                // Render Services
+                document.getElementById('bureau-services-count').innerText = servicesList.length;
+                document.getElementById('bureauServicesList').innerHTML = servicesList.map(svc => `
+                    <div class="card-hk p-6 flex flex-col justify-between space-y-4 text-left">
+                        <div>
+                            <span class="text-[9px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Daily Care</span>
+                            <h4 class="text-base font-black text-slate-900 mt-2">${svc.title}</h4>
+                            <p class="text-xs text-slate-500 mt-1 line-clamp-2">${svc.description || 'Standard nursing procedure'}</p>
+                        </div>
+                        <div class="pt-4 border-t border-slate-100 flex justify-between items-center">
+                            <div>
+                                <span class="text-[9px] text-slate-400 font-bold block">1-Day Rate</span>
+                                <strong class="text-lg font-black text-emerald-600">₹${svc.pricing?.oneDay?.final || 0}</strong>
+                            </div>
+                            <button onclick="selectServiceForScheduling('${svc._id}', false)" class="btn-hk py-2 px-5 text-xs">Book Service</button>
+                        </div>
+                    </div>
+                `).join('') || `<p class="text-xs text-slate-400 col-span-full py-6 text-center">No services listed.</p>`;
+
+                // Render Packages
+                document.getElementById('bureau-packages-count').innerText = packagesList.length;
+                document.getElementById('bureauPackagesList').innerHTML = packagesList.map(pkg => `
+                    <div class="card-hk p-6 flex flex-col justify-between space-y-4 text-left">
+                        <div>
+                            <span class="text-[9px] font-black uppercase text-purple-600 bg-purple-50 px-2 py-0.5 rounded">Bundle Plan</span>
+                            <h4 class="text-base font-black text-slate-900 mt-2">${pkg.packageName}</h4>
+                            <p class="text-xs text-slate-500 mt-1 line-clamp-2">${pkg.description || 'Specialized bundle package'}</p>
+                        </div>
+                        <div class="pt-4 border-t border-slate-100 flex justify-between items-center">
+                            <div>
+                                <span class="text-[9px] text-slate-400 font-bold block">Package Base</span>
+                                <strong class="text-lg font-black text-purple-600">₹${pkg.pricing?.oneDay?.final || pkg.pricing?.multipleDays?.final || 0}</strong>
+                            </div>
+                            <button onclick="selectServiceForScheduling('${pkg._id}', true)" class="btn-hk py-2 px-5 text-xs bg-purple-600 hover:bg-purple-700">Book Package</button>
+                        </div>
+                    </div>
+                `).join('') || `<p class="text-xs text-slate-400 col-span-full py-6 text-center">No packages listed.</p>`;
+
+                // Render Reviews
+                document.getElementById('bureau-reviews-count').innerText = reviewsList.length;
+                document.getElementById('bureauReviewsList').innerHTML = reviewsList.map(r => `
+                    <div class="card-hk p-5 space-y-2 text-left">
+                        <div class="flex justify-between items-center">
+                            <span class="font-bold text-xs text-slate-800">${r.userName || 'Verified Patient'}</span>
+                            <span class="text-xs text-amber-500 font-bold">⭐ ${r.rating} / 5</span>
+                        </div>
+                        <p class="text-xs text-slate-500 font-medium">"${r.comment || 'Excellent service.'}"</p>
+                        <small class="text-[10px] text-slate-400">${moment(r.createdAt).format('DD MMM YYYY')}</small>
+                    </div>
+                `).join('') || `<p class="text-xs text-slate-400 py-6 text-center">No reviews yet.</p>`;
+
+            } catch (err) {
+                hero.innerHTML = `<div class="text-center py-8 text-white"><p class="font-bold">Failed to load bureau profile.</p></div>`;
+            }
+        }
+
+        function switchBureauCatalogueTab(tab) {
+            ['services', 'packages', 'reviews'].forEach(t => {
+                document.getElementById(`bureau-tab-${t}`).className = (t === tab)
+                    ? 'pb-3 border-b-2 border-emerald-500 text-emerald-600 transition'
+                    : 'pb-3 border-b-2 border-transparent text-slate-400 hover:text-slate-700 transition';
+                
+                const box = document.getElementById(t === 'services' ? 'bureauServicesList' : (t === 'packages' ? 'bureauPackagesList' : 'bureauReviewsList'));
+                if (box) box.classList.toggle('hidden', t !== tab);
+            });
+        }
+
+        // --- 3. DYNAMIC SCHEDULER, PREMIUM DATES & SLOTS HIGHLIGHTS ---
+        async function selectServiceForScheduling(itemId, isPkg) {
+            appState.isPackage = isPkg;
+            const d = appState.selectedNurseData;
+
+            const servicesList = Array.isArray(d.services) ? d.services : [];
+            const packagesList = Array.isArray(d.packages) ? d.packages : [];
+            const nurseObj = d.nurse || d.profile || d;
+
+            if (isPkg) {
+                appState.selectedPackage = packagesList.find(p => p._id === itemId) || packagesList[0];
+                appState.selectedService = null;
+            } else {
+                appState.selectedService = servicesList.find(s => s._id === itemId) || servicesList[0];
+                appState.selectedPackage = null;
+            }
+
+            const item = isPkg ? appState.selectedPackage : appState.selectedService;
+            document.getElementById('sched-item-badge').innerText = isPkg ? "SPECIALIZED CARE PACKAGE" : "DAILY CARE PROCEDURE";
+            document.getElementById('sched-item-title').innerText = isPkg ? item.packageName : item.title;
+            document.getElementById('sched-item-bureau').innerText = `Provider: ${nurseObj.name || 'HealTouch Nursing Service'}`;
+            document.getElementById('sched-item-price').innerText = `₹${item.pricing?.oneDay?.final || item.pricing?.multipleDays?.final || 0}`;
+
+            navigateTo('screen-scheduler');
+            selectFrequencyMode('One day One Time');
+            renderConsumablesChecklist(item);
+        }
+
+        function selectFrequencyMode(mode) {
+            appState.frequencyMode = mode;
+            ['oneday', 'multiday', 'hourly'].forEach(m => {
+                const el = document.getElementById(`mode-${m}`);
+                const isMatch = (m === 'oneday' && mode === 'One day One Time') ||
+                                (m === 'multiday' && mode === 'For Multiple Days') ||
+                                (m === 'hourly' && mode === 'Acc. To Per/Hours');
+                el.className = isMatch
+                    ? 'border-2 border-emerald-500 bg-emerald-50/50 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition'
+                    : 'border-2 border-slate-200 hover:border-emerald-300 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition';
+            });
+
+            const isHourly = (mode === 'Acc. To Per/Hours');
+            document.getElementById('hourlySlotsSection').classList.toggle('hidden', !isHourly);
+            document.getElementById('dailyTimeBox').classList.toggle('hidden', isHourly);
+
+            loadAvailabilityCalendar();
+        }
+
+        async function loadAvailabilityCalendar() {
+    const grid = document.getElementById('schedulerCalendarGrid');
+    grid.innerHTML = `<div class="text-center py-10 col-span-7 text-xs text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading availability...</div>`;
+
+    const itemId = appState.isPackage ? appState.selectedPackage?._id : appState.selectedService?._id;
+    const query = `serviceId=${!appState.isPackage ? itemId : ''}&packageId=${appState.isPackage ? itemId : ''}&isPackage=${appState.isPackage}&type=${encodeURIComponent(appState.frequencyMode)}`;
+
+    try {
+        const res = await fetch(`${API_BASE_URL}/user/nurse/availability/${appState.selectedNurseId}?${query}`);
+        const json = await res.json();
+        
+        // Read directly from data wrapper
+        const payload = json.data || json;
+        const calendarDays = Array.isArray(payload.calendar) ? payload.calendar : [];
+        const timeSlotsList = Array.isArray(payload.timeSlots) ? payload.timeSlots : [];
+
+        grid.innerHTML = "";
+
+        if (calendarDays.length > 0) {
+            calendarDays.forEach(day => {
+                const dStr = day.date;
+                const dateNum = moment(dStr).date();
+                const isSelected = (dStr === appState.startDate || dStr === appState.endDate);
+                const isPremium = day.pricing?.isPremium || false;
+                const extraFee = Number(day.pricing?.extraFee || 0);
+                const displayPrice = day.pricing?.oneDayPrice || day.pricing?.multipleDayPrice || 1800;
+
+                const cell = document.createElement('div');
+                cell.className = `cal-day-cell ${isSelected ? 'selected' : ''} ${day.isDisabled ? 'disabled' : ''} ${isPremium ? 'is-premium-date' : ''}`;
+                cell.id = `cal-day-${dStr}`;
+                // Pass dateStr and extraFee to click handler
+                cell.onclick = () => { 
+                    if (!day.isDisabled) handleCalendarDateClick(dStr, extraFee); 
+                };
+
+                cell.innerHTML = `
+                    <span class="text-xs font-black">${dateNum}</span>
+                    <span class="text-[9px] font-black ${isPremium ? 'text-red-500' : 'text-emerald-600'}">₹${displayPrice}</span>
+                    ${isPremium ? `<span class="text-[7px] text-red-500 font-extrabold uppercase tracking-tight">+₹${extraFee} Peak</span>` : ''}
+                `;
+                grid.appendChild(cell);
+            });
+        } else {
+            grid.innerHTML = `<p class="text-xs text-slate-400 col-span-7 py-6 text-center">No calendar dates available.</p>`;
+        }
+
+        // Render Hourly Slots with Premium Badges
+        if (appState.frequencyMode === 'Acc. To Per/Hours') {
+            const slotGrid = document.getElementById('hourlySlotsGrid');
+            if (timeSlotsList.length > 0) {
+                slotGrid.innerHTML = timeSlotsList.map(s => {
+                    const isPremiumSlot = Number(s.slotPremiumFee || 0) > 0;
+                    return `
+                        <div onclick="selectHourlySlot('${s.time}', ${s.slotPremiumFee || 0})" id="slot-time-${s.time}" class="slot-pill ${s.time === appState.startTime ? 'active' : ''} ${isPremiumSlot ? 'is-premium-slot' : ''}">
+                            <span class="text-xs font-bold block">${s.displayTime}</span>
+                            <span class="text-[10px] ${isPremiumSlot ? 'text-purple-700 font-black' : 'text-emerald-600 font-bold'}">
+                                ₹${s.totalHourlyPrice} ${isPremiumSlot ? `(+₹${s.slotPremiumFee})` : ''}
+                            </span>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                slotGrid.innerHTML = `<p class="text-xs text-slate-400 col-span-full py-4 text-center">No hourly slots available.</p>`;
+            }
+        }
+
+    } catch (err) {
+        console.error("Availability error:", err);
+        grid.innerHTML = `<div class="text-center py-6 col-span-7 text-xs text-red-500">Failed to load calendar data.</div>`;
+    }
+}
+
+
+        function handleCalendarDateClick(dateStr, extraFee = 0) {
+    if (appState.frequencyMode === 'One day One Time' || appState.frequencyMode === 'Acc. To Per/Hours') {
+        appState.startDate = dateStr;
+        appState.endDate = dateStr;
+    } else {
+        // Multi-day selection logic (Start & End pick)
+        if (!appState.startDate || (appState.startDate && appState.endDate)) {
+            appState.startDate = dateStr;
+            appState.endDate = null;
+        } else {
+            if (moment(dateStr).isBefore(moment(appState.startDate))) {
+                appState.startDate = dateStr;
+                appState.endDate = null;
+            } else {
+                appState.endDate = dateStr;
+            }
+        }
+    }
+
+    // Dynamic Surcharge Notice Banner
+    const noticeBox = document.getElementById('premiumDateNotice');
+    if (Number(extraFee) > 0) {
+        noticeBox.classList.remove('hidden');
+        document.getElementById('premiumDateNoticeText').innerText = `+₹${extraFee} surcharge applied on start date (${moment(dateStr).format('DD MMM YYYY')}) for peak holiday/weekend schedule.`;
+    } else {
+        noticeBox.classList.add('hidden');
+    }
+
+    const label = document.getElementById('selectedDatesRangeLabel');
+    if (appState.endDate) {
+        label.innerText = `${moment(appState.startDate).format('DD MMM')} to ${moment(appState.endDate).format('DD MMM YYYY')}`;
+    } else {
+        label.innerText = moment(appState.startDate).format('DD MMM YYYY');
+    }
+
+    // Highlight active cells
+    document.querySelectorAll('.cal-day-cell').forEach(c => c.classList.remove('selected', 'in-range'));
+    const startCell = document.getElementById(`cal-day-${appState.startDate}`);
+    if (startCell) startCell.classList.add('selected');
+    if (appState.endDate) {
+        const endCell = document.getElementById(`cal-day-${appState.endDate}`);
+        if (endCell) endCell.classList.add('selected');
+    }}
+
+        function selectHourlySlot(time, extraFee = 0) {
+    appState.startTime = time;
+    appState.endTime = moment(time, 'HH:mm').add(appState.hourlyDurationHours, 'hours').format('HH:mm');
+
+    document.querySelectorAll('.slot-pill').forEach(s => s.classList.remove('active'));
+    const activeSlot = document.getElementById(`slot-time-${time}`);
+    if (activeSlot) activeSlot.classList.add('active');
+
+    document.getElementById('hourlyWindowSummary').innerText = `${moment(time, 'HH:mm').format('hh:mm A')} - ${moment(appState.endTime, 'HH:mm').format('hh:mm A')}`;
+    
+    const badge = document.getElementById('slotPremiumBadge');
+    if (Number(extraFee) > 0) {
+        badge.classList.remove('hidden');
+        badge.innerText = `+₹${extraFee} Premium Surcharge`;
+    } else {
+        badge.classList.add('hidden');
+    }
+}
+
+        function renderConsumablesChecklist(item) {
+            const list = document.getElementById('consumablesChecklist');
+            appState.selectedConsumables = [];
+            const consumables = item.consumablesUsed || [];
+
+            if (consumables.length === 0) {
+                list.innerHTML = `<p class="text-xs text-slate-400 py-2 text-left">No specific consumables required.</p>`;
+                return;
+            }
+
+            list.innerHTML = consumables.map(c => `
+                <label class="flex items-center justify-between p-3.5 border border-slate-200 rounded-2xl bg-white hover:border-emerald-400 cursor-pointer transition">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" onchange="toggleConsumableSelection('${c.masterItemId?._id || c._id}', '${c.masterItemId?.itemName || 'Item'}', ${c.finalPrice || 50}, this.checked)" class="w-4 h-4 accent-emerald-500">
+                        <div class="text-left">
+                            <span class="text-xs font-bold text-slate-800 block">${c.masterItemId?.itemName || 'Sterile Dressing'}</span>
+                            <small class="text-[10px] text-slate-400">${c.masterItemId?.size || 'Standard Size'}</small>
+                        </div>
+                    </div>
+                    <strong class="text-xs font-black text-emerald-600">₹${c.finalPrice || 50}</strong>
+                </label>
+            `).join('');
+        }
+
+        function toggleConsumableSelection(id, name, price, isChecked) {
+            if (isChecked) {
+                appState.selectedConsumables.push({ consumableId: id, itemName: name, price });
+            } else {
+                appState.selectedConsumables = appState.selectedConsumables.filter(c => c.consumableId !== id);
+            }
+        }
+
+        // --- 4. PATIENT & ADDRESS SELECTION ---
+        async function proceedToPatientAndAddressScreen() {
+            if (appState.frequencyMode === 'For Multiple Days' && (!appState.startDate || !appState.endDate)) {
+                return Swal.fire("Date Range Missing", "Please select both check-in and check-out dates.", "warning");
+            }
+            if (appState.frequencyMode === 'Acc. To Per/Hours' && !appState.startTime) {
+                return Swal.fire("Time Slot Missing", "Please choose an hourly starting slot.", "warning");
+            }
+
+            navigateTo('screen-patient-address');
+            renderPatientBubbles();
+            renderSavedAddresses();
+        }
+
+        function selectAssessmentVenue(venue) {
+            appState.assessmentVenue = venue;
+            document.getElementById('venue-home').className = (venue === 'At Home')
+                ? 'border-2 border-emerald-500 bg-emerald-50/50 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition'
+                : 'border-2 border-slate-200 hover:border-emerald-300 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition';
+
+            document.getElementById('venue-hospital').className = (venue === 'At Hospital')
+                ? 'border-2 border-emerald-500 bg-emerald-50/50 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition'
+                : 'border-2 border-slate-200 hover:border-emerald-300 p-4 rounded-2xl cursor-pointer text-center space-y-1 transition';
+
+            document.getElementById('hospitalDetailsBox').classList.toggle('hidden', venue !== 'At Hospital');
+            document.getElementById('addressSelectSection').classList.toggle('hidden', venue === 'At Hospital');
+        }
+
+        function renderPatientBubbles() {
+            const grid = document.getElementById('patientsBubbleGrid');
+            const selfPatient = { patientId: 'Self', name: appState.userProfile?.name || 'Self', age: 30, gender: 'Male', relation: 'Self' };
+            const allPatients = [selfPatient, ...(appState.userProfile?.familyMember || []).map(f => ({
+                patientId: f._id,
+                name: f.memberName,
+                age: f.dob ? moment().diff(moment(f.dob), 'years') : 30,
+                gender: f.gender,
+                relation: f.relation
+            }))];
+
+            grid.innerHTML = allPatients.map((p, idx) => `
+                <div onclick="togglePatientSelection('${p.patientId}', '${p.name}', ${p.age}, '${p.gender}', this)" id="pat-bubble-${p.patientId}" class="p-4 border-2 ${idx === 0 ? 'border-emerald-500 bg-emerald-50/40' : 'border-slate-200'} rounded-2xl cursor-pointer text-center space-y-1 transition">
+                    <span class="text-xs font-black text-slate-800 block">${p.name}</span>
+                    <small class="text-[10px] text-slate-400 font-bold block">${p.relation} &bull; ${p.age} Yrs</small>
                 </div>
             `).join('');
         }
 
-        // --- FLOW CONTROLS ---
-        function goToCheckout(id) {
-            state.selectedPlan = CARE_PLANS.find(p => p.id === id);
-            
-            const card = document.getElementById('checkout-card');
-            card.innerHTML = `
-                <div class="flex items-center gap-4 mb-8 text-teal-600">
-                    <i class="fas fa-shield-halved text-2xl"></i>
-                    <h4 class="font-black tracking-tight">${state.selectedPlan.mainCategory}</h4>
+        function togglePatientSelection(pId, name, age, gender, el) {
+            const exists = appState.selectedPatients.some(p => p.patientId === pId);
+            if (exists) {
+                if (appState.selectedPatients.length === 1) return Swal.fire("Minimum 1 Patient", "At least one patient must be selected.", "info");
+                appState.selectedPatients = appState.selectedPatients.filter(p => p.patientId !== pId);
+                el.className = 'p-4 border-2 border-slate-200 rounded-2xl cursor-pointer text-center space-y-1 transition';
+            } else {
+                appState.selectedPatients.push({ patientId: pId, name, age, gender });
+                el.className = 'p-4 border-2 border-emerald-500 bg-emerald-50/40 rounded-2xl cursor-pointer text-center space-y-1 transition';
+            }
+        }
+
+        function renderSavedAddresses() {
+            const grid = document.getElementById('savedAddressesGrid');
+            if (appState.savedAddresses.length === 0) {
+                grid.innerHTML = `<p class="text-xs text-slate-400 py-3">No saved addresses found.</p>`;
+                return;
+            }
+
+            grid.innerHTML = appState.savedAddresses.map((addr, idx) => `
+                <label class="flex items-start justify-between p-4 border-2 ${idx === 0 ? 'border-emerald-500 bg-emerald-50/30' : 'border-slate-200'} rounded-2xl cursor-pointer transition text-left">
+                    <div class="flex items-start gap-3">
+                        <input type="radio" name="addressRadio" onchange="appState.selectedAddress = ${JSON.stringify(addr).replace(/"/g, '&quot;')}" ${idx === 0 ? 'checked' : ''} class="w-4 h-4 accent-emerald-500 mt-0.5">
+                        <div class="space-y-0.5">
+                            <span class="text-xs font-black text-slate-800">${addr.name || 'Recipient'} (${addr.addressType || 'Home'})</span>
+                            <p class="text-xs text-slate-500 font-medium">${addr.houseNo}, ${addr.sector || ''}, ${addr.city}</p>
+                            <small class="text-[10px] text-slate-400 font-mono">${addr.phone}</small>
+                        </div>
+                    </div>
+                </label>
+            `).join('');
+        }
+
+        // --- 5. CHECKOUT & SUMMARY BILL ---
+        async function evaluateAndGoToCheckout() {
+            if (appState.assessmentVenue === 'At Home' && !appState.selectedAddress) {
+                return Swal.fire("Address Missing", "Please select a delivery address.", "warning");
+            }
+
+            navigateTo('screen-checkout');
+            await recalculateLiveCheckout();
+            loadApplicableCoupons();
+        }
+
+        async function recalculateLiveCheckout() {
+    const itemId = appState.isPackage ? appState.selectedPackage?._id : appState.selectedService?._id;
+    
+    // Strict Boolean Read: True only when user ticks checkbox
+    const isExpressChecked = Boolean(document.getElementById('chkExpressNurse')?.checked);
+
+    Swal.showLoading();
+
+    try {
+        const res = await fetch(`${API_BASE_URL}/user/nurse/checkout`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify({
+                nurseId: appState.selectedNurseId,
+                serviceId: !appState.isPackage ? itemId : null,
+                packageId: appState.isPackage ? itemId : null,
+                isPackage: appState.isPackage,
+                selectedType: appState.frequencyMode,
+                startDate: appState.startDate,
+                endDate: appState.endDate || appState.startDate,
+                startTime: appState.startTime,
+                endTime: appState.endTime,
+                assessmentLocation: appState.assessmentVenue,
+                isFasterService: isExpressChecked, // 👈 Sends true only when checked
+                patientCount: appState.selectedPatients.length || 1,
+                selectedConsumables: appState.selectedConsumables,
+                couponCode: appState.couponCode
+            })
+        });
+
+        const json = await res.json();
+        Swal.close();
+
+        if (json.success && json.data) {
+            const b = json.data.breakdown;
+            appState.calculatedBill = b;
+
+            // Summary Texts
+            document.getElementById('billDurationUnits').innerText = `${json.data.durationUnits} ${appState.frequencyMode === 'Acc. To Per/Hours' ? 'Hrs' : 'Days'}`;
+            document.getElementById('billPatientCount').innerText = `${json.data.pCount} Patient`;
+            document.getElementById('billBaseFee').innerText = `₹${b.baseServicePrice}`;
+
+            // 1. Surcharge Row (Dynamic Toggle)
+            const slotRow = document.getElementById('billSlotSurchargeRow');
+            if (Number(b.slotSurcharge || 0) > 0) {
+                slotRow.classList.remove('hidden');
+                document.getElementById('billSlotSurcharge').innerText = `+₹${b.slotSurcharge}`;
+            } else {
+                slotRow.classList.add('hidden');
+            }
+
+            // 2. Consumables Row
+            const conRow = document.getElementById('billConsumablesRow');
+            if (Number(b.consumableTotal || 0) > 0) {
+                conRow.classList.remove('hidden');
+                document.getElementById('billConsumables').innerText = `+₹${b.consumableTotal}`;
+            } else {
+                conRow.classList.add('hidden');
+            }
+
+            // 3. Travel Fee Row
+            document.getElementById('billTravelFee').innerText = (b.travelFee === 0) ? 'FREE (₹0)' : `₹${b.travelFee}`;
+
+            // 4. Express Dispatch Row (Shown ONLY when fasterServiceCharge > 0)
+            const expRow = document.getElementById('billExpressRow');
+            if (Number(b.fasterServiceCharge || 0) > 0) {
+                expRow.classList.remove('hidden');
+                document.getElementById('billExpressFee').innerText = `+₹${b.fasterServiceCharge}`;
+            } else {
+                expRow.classList.add('hidden');
+            }
+
+            // 5. Coupon Row
+            const coupRow = document.getElementById('billCouponRow');
+            if (Number(b.couponDiscount || 0) > 0) {
+                coupRow.classList.remove('hidden');
+                document.getElementById('billCouponDiscount').innerText = `-₹${b.couponDiscount}`;
+            } else {
+                coupRow.classList.add('hidden');
+            }
+
+            // 6. Grand Total (No 5% GST added)
+            document.getElementById('billGrandTotal').innerText = `₹${b.totalPrice}`;
+
+            // 7. Subscription Alert Callout
+            const subBox = document.getElementById('subscriptionCalloutBox');
+            const visitSub = json.data.subscriptionBenefits?.visitBenefit;
+            if (visitSub && visitSub.hasActiveSubscription) {
+                subBox.classList.remove('hidden');
+                if (visitSub.isApplied) {
+                    subBox.className = "p-4 rounded-2xl text-xs font-bold space-y-1 bg-emerald-50 text-emerald-700 border border-emerald-200";
+                    subBox.innerHTML = `✨ Free Nurse Visit applied via ${visitSub.planName} (${visitSub.remainingCount} remaining).`;
+                } else if (visitSub.isBenefitExhausted) {
+                    subBox.className = "p-4 rounded-2xl text-xs font-bold space-y-1 bg-amber-50 text-amber-800 border border-amber-200";
+                    subBox.innerHTML = `⚠️ ${visitSub.exhaustedMessage}`;
+                }
+            } else {
+                subBox.classList.add('hidden');
+            }
+
+            document.getElementById('codPaymentOption').style.display = json.data.isCodAvailable ? 'flex' : 'none';
+        }
+    } catch (err) {
+        Swal.close();
+        console.error("Checkout calculation error:", err);
+    }
+}
+
+
+        async function loadApplicableCoupons() {
+            const container = document.getElementById('couponsListDisplay');
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/coupons/${appState.selectedNurseId}`);
+                const json = await res.json();
+                if (json.success && json.data.length > 0) {
+                    container.innerHTML = json.data.map(c => `
+                        <span onclick="document.getElementById('chkCouponInput').value='${c.couponName}'; applyCouponCode();" class="cursor-pointer bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200 px-3 py-1 rounded-lg text-[10px] font-black uppercase transition">
+                            🎟️ ${c.couponName} (${c.discountPercentage}% OFF)
+                        </span>
+                    `).join('');
+                }
+            } catch (e) {}
+        }
+
+        async function applyCouponCode() {
+            const code = document.getElementById('chkCouponInput').value.trim();
+            if (!code) return;
+            appState.couponCode = code.toUpperCase();
+            await recalculateLiveCheckout();
+            Swal.fire({ icon: 'success', title: 'Coupon Applied!', timer: 1500, showConfirmButton: false });
+        }
+
+        // --- 6. PLACE ORDER & PAYMENT EXECUTION ---
+        async function executeFinalNurseBooking() {
+            if (!USER_TOKEN) {
+                return Swal.fire("Authentication Required", "Please paste your user token in top bar.", "warning");
+            }
+
+            const paymentMethod = document.querySelector('input[name="paymentMethodRadio"]:checked')?.value || 'Online';
+            const isExpress = document.getElementById('chkExpressNurse')?.checked || false;
+            const itemId = appState.isPackage ? appState.selectedPackage._id : appState.selectedService._id;
+
+            const payload = {
+                nurseId: appState.selectedNurseId,
+                serviceId: !appState.isPackage ? itemId : null,
+                packageId: appState.isPackage ? itemId : null,
+                isPackage: appState.isPackage,
+                selectedType: appState.frequencyMode,
+                assessmentLocation: appState.assessmentVenue,
+                paymentMethod: paymentMethod,
+                isFasterService: isExpress,
+                couponCode: appState.couponCode,
+                schedule: {
+                    duration: appState.frequencyMode,
+                    startDate: appState.startDate,
+                    endDate: appState.endDate || appState.startDate,
+                    startTime: appState.startTime,
+                    endTime: appState.endTime
+                },
+                patients: appState.selectedPatients,
+                address: appState.selectedAddress,
+                healthDetails: {
+                    height: document.getElementById('patientHeightInput').value,
+                    language: document.getElementById('patientLanguageInput').value,
+                    specialInstructions: document.getElementById('patientNotesInput').value
+                },
+                hospitalDetails: appState.assessmentVenue === 'At Hospital' ? {
+                    hospitalName: document.getElementById('hospNameInput').value,
+                    wardName: document.getElementById('hospWardInput').value
+                } : null,
+                selectedConsumables: appState.selectedConsumables
+            };
+
+            const btn = document.getElementById('btnConfirmNurseBooking');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Initializing Booking...`;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/book`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify(payload)
+                });
+
+                const json = await res.json();
+
+                if (!res.ok || !json.success) {
+                    throw new Error(json.message || "Booking submission failed.");
+                }
+
+                // COD / Confirmed Case
+                if (paymentMethod === 'COD' || json.status === 'Confirmed') {
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Booking Confirmed!',
+                        text: `Your nurse booking #${json.bookingId} is confirmed.`,
+                        confirmButtonColor: '#00b894'
+                    }).then(() => {
+                        openLiveTrackingScreen(json.bookingId || json.data?.bookingId);
+                    });
+                    return;
+                }
+
+                // Online Razorpay Checkout Case
+                const options = {
+                    key: json.key_id,
+                    amount: json.amount,
+                    currency: "INR",
+                    name: "Health Kangaroo Nursing",
+                    description: `Care Booking #${json.bookingId}`,
+                    order_id: json.razorpayOrderId,
+                    handler: async function (rzpResponse) {
+                        await verifyOnlinePaymentSignature(rzpResponse, json.bookingId);
+                    },
+                    prefill: {
+                        name: appState.userProfile?.name || "Patient",
+                        contact: appState.userProfile?.phone || ""
+                    },
+                    theme: { color: "#00b894" }
+                };
+
+                const rzp = new window.Razorpay(options);
+                rzp.on('payment.failed', function () {
+                    Swal.fire("Payment Failed", "Transaction dropped. You can retry payment anytime from My Appointments.", "error");
+                    navigateTo('screen-my-bookings');
+                    loadUserBookingsHistory();
+                });
+                rzp.open();
+
+            } catch (err) {
+                Swal.fire("Booking Error", err.message, "error");
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<span>Place & Confirm Booking</span> <i class="fas fa-check-circle"></i>`;
+            }
+        }
+
+        async function verifyOnlinePaymentSignature(rzpResponse, bookingId) {
+            Swal.showLoading();
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/verify-payment`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({
+                        bookingId: bookingId,
+                        razorpay_payment_id: rzpResponse.razorpay_payment_id,
+                        razorpay_order_id: rzpResponse.razorpay_order_id,
+                        razorpay_signature: rzpResponse.razorpay_signature
+                    })
+                });
+
+                const json = await res.json();
+                Swal.close();
+
+                if (json.success) {
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Payment Verified!',
+                        text: `Your nurse session is confirmed. Start OTP: ${json.serviceOTP || 'Active'}.`,
+                        confirmButtonColor: '#00b894'
+                    }).then(() => {
+                        openLiveTrackingScreen(bookingId);
+                    });
+                } else {
+                    Swal.fire("Verification Error", json.message || "Payment verification failed.", "error");
+                }
+            } catch (e) {
+                Swal.fire("Verification Error", e.message, "error");
+            }
+        }
+
+        // --- 7. LIVE ORDER TRACKING SCREEN ---
+        // @desc    Live Nurse Order Tracking with Real-Time Staff, OTPs and 5-Step Timeline
+async function openLiveTrackingScreen(targetId) {
+    if (!targetId || targetId === 'undefined' || targetId === 'null') {
+        return Swal.fire("Tracking Error", "Invalid order reference ID.", "warning");
+    }
+
+    appState.activeTrackingBookingId = targetId;
+    navigateTo('screen-live-track');
+
+    // Show initial loading placeholders
+    document.getElementById('track-order-status').innerText = "Loading...";
+    document.getElementById('track-order-id').innerText = "#HKN----";
+    document.getElementById('track-service-title').innerText = "Fetching Appointment Details...";
+    document.getElementById('track-schedule-text').innerText = "Schedule: Loading...";
+    document.getElementById('track-start-otp').innerText = "----";
+    document.getElementById('track-end-otp').innerText = "----";
+    document.getElementById('trackingTimelineSteps').innerHTML = `<div class="text-xs text-slate-400 py-4"><i class="fas fa-spinner fa-spin mr-2"></i>Loading live timeline...</div>`;
+
+    try {
+        const res = await fetch(`${API_BASE_URL}/user/nurse/track/${targetId}`, { 
+            headers: getHeaders() 
+        });
+        const json = await res.json();
+
+        if (!json.success || !json.data) {
+            throw new Error(json.message || "Failed to load tracking data from server.");
+        }
+
+        const b = json.data;
+
+        // 1. Order Header Info
+        document.getElementById('track-order-status').innerText = b.status || 'Confirmed';
+        document.getElementById('track-order-id').innerText = `#${b.bookingId || 'HKN'}`;
+        document.getElementById('track-service-title').innerText = b.serviceDetails?.title || 'Nursing Care Procedure';
+
+        // 2. Schedule Text Formatting
+        let schedText = "Standard Schedule";
+        if (b.schedule?.formattedSchedule) {
+            schedText = b.schedule.formattedSchedule;
+        } else if (b.schedule?.startDate) {
+            const sDate = moment(b.schedule.startDate).format('DD MMM YYYY');
+            const sTime = b.schedule.startTime || '09:00';
+            const eTime = b.schedule.endTime || '10:00';
+            schedText = `${sDate} (${sTime} - ${eTime})`;
+        }
+        document.getElementById('track-schedule-text').innerText = `Schedule: ${schedText} &bull; ${b.assessmentLocation || 'At Home'}`;
+
+        // 3. Dual OTPs Display
+        document.getElementById('track-start-otp').innerText = b.serviceOTP || '----';
+        document.getElementById('track-end-otp').innerText = b.completionOTP || '----';
+
+        // 4. Assigned Staff Nurse Details
+        if (b.assignedStaff && b.assignedStaff.name) {
+            document.getElementById('track-staff-name').innerText = b.assignedStaff.name;
+            document.getElementById('track-staff-phone').innerHTML = `<i class="fas fa-phone mr-1 text-emerald-500"></i> ${b.assignedStaff.phone || '--'} &bull; Vehicle: ${b.assignedStaff.vehicleNumber || 'Standard'}`;
+            document.getElementById('track-staff-status-badge').className = "text-xs font-black px-3 py-1 rounded-full bg-emerald-100 text-emerald-700";
+            document.getElementById('track-staff-status-badge').innerText = b.assignedStaff.status || "Active Duty";
+
+            if (b.assignedStaff.profilePic) {
+                const pPic = b.assignedStaff.profilePic.startsWith('http') 
+                    ? b.assignedStaff.profilePic 
+                    : API_BASE_URL + (b.assignedStaff.profilePic.startsWith('/') ? '' : '/') + b.assignedStaff.profilePic;
+                document.getElementById('track-staff-img').src = pPic;
+            }
+        } else {
+            document.getElementById('track-staff-name').innerText = "Assigning verified nurse staff...";
+            document.getElementById('track-staff-phone').innerText = "Bureau is dispatching the nearest certified nurse.";
+            document.getElementById('track-staff-status-badge').className = "text-xs font-black px-3 py-1 rounded-full bg-slate-100 text-slate-500";
+            document.getElementById('track-staff-status-badge').innerText = "Pending Assignment";
+            document.getElementById('track-staff-img').src = `https://ui-avatars.com/api/?name=Staff+Nurse&background=00b894&color=fff`;
+        }
+
+        // 5. 5-Step Dynamic Service Timeline Rendering
+        const timelineBox = document.getElementById('trackingTimelineSteps');
+        const steps = Array.isArray(b.trackingTimeline) && b.trackingTimeline.length > 0 ? b.trackingTimeline : [
+            { step: 1, title: "Booking Confirmed", description: "Order confirmed via " + (b.paymentMethod || 'Online'), isCompleted: true, isCurrent: b.status === 'Confirmed' },
+            { step: 2, title: "Staff Nurse Assigned", description: b.assignedStaff ? `Staff Nurse ${b.assignedStaff.name} assigned` : "Assigning certified nurse", isCompleted: !!b.assignedStaff, isCurrent: b.status === 'Assigned' },
+            { step: 3, title: "Nurse En-Route to Location", description: "Nurse departing to patient destination", isCompleted: ['Arrived', 'Service-Started', 'Completed'].includes(b.status), isCurrent: b.status === 'On-The-Way' },
+            { step: 4, title: "Care Session In-Progress", description: `Service timer active. Share Start OTP: ${b.serviceOTP || '----'}`, isCompleted: b.status === 'Completed', isCurrent: ['Service-Started', 'Arrived'].includes(b.status) },
+            { step: 5, title: "Service Completed", description: "Session finished and verified by patient", isCompleted: b.status === 'Completed', isCurrent: b.status === 'Completed' }
+        ];
+
+        timelineBox.innerHTML = steps.map(step => `
+            <div class="relative timeline-dot ${step.isCompleted ? 'completed' : (step.isCurrent ? 'current' : '')} text-left">
+                <div class="flex justify-between items-center">
+                    <h5 class="text-xs font-black ${step.isCompleted ? 'text-slate-900' : 'text-slate-500'}">${step.title}</h5>
+                    <span class="text-[10px] text-slate-400 font-mono">${step.time ? moment(step.time).format('hh:mm A') : '--:--'}</span>
                 </div>
-                <h3 class="text-2xl font-black mb-2">${state.selectedPlan.name}</h3>
-                <p class="text-gray-400 text-sm font-bold mb-8 uppercase tracking-widest leading-loose">Annual Subscription</p>
-                
-                <div class="space-y-4 border-t border-gray-50 pt-8">
-                    <div class="flex justify-between font-bold text-gray-500">
-                        <span>Platform Fee (Yearly)</span>
-                        <span>$${state.selectedPlan.price * 12}</span>
+                <p class="text-[11px] text-slate-500 mt-0.5">${step.description}</p>
+            </div>
+        `).join('');
+
+        // 6. Action Buttons State (Cancel / Rate)
+        const canCancel = ['Pending', 'Confirmed', 'Assigned', 'On-The-Way'].includes(b.status);
+        document.getElementById('btnTrackCancel').style.display = canCancel ? 'block' : 'none';
+        document.getElementById('btnTrackRate').style.display = (b.status === 'Completed') ? 'block' : 'none';
+
+    } catch (err) {
+        console.error("Live track error:", err);
+        Swal.fire("Tracking Error", err.message || "Unable to load live tracking details.", "error");
+    }
+}
+
+        // --- 8. MY APPOINTMENTS HISTORY ---
+        async function loadUserBookingsHistory() {
+    if (!USER_TOKEN) {
+        return Swal.fire("Login Required", "Please enter your User JWT Token in the top configuration bar.", "warning");
+    }
+
+    const container = document.getElementById('myBookingsListGrid');
+    container.innerHTML = `<div class="text-center py-16 col-span-full text-slate-400 text-xs"><i class="fas fa-spinner fa-spin mr-2"></i>Loading your appointments...</div>`;
+
+    try {
+        const res = await fetch(`${API_BASE_URL}/user/nurse/my-appointments`, { 
+            headers: getHeaders() 
+        });
+        const json = await res.json();
+
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+            container.innerHTML = json.data.map(b => {
+                const isPendingPayment = (b.status === 'Pending' && b.paymentMethod === 'Online' && b.paymentStatus === 'Pending');
+                const isCompleted = (b.status === 'Completed');
+                const isCancelled = (b.status === 'Cancelled');
+
+                // Determine target identifier for tracking
+                const targetId = b._id || b.bookingId;
+
+                // Status Badge Coloring
+                let badgeClass = "bg-blue-100 text-blue-700";
+                if (isPendingPayment) badgeClass = "bg-amber-100 text-amber-800 animate-pulse";
+                else if (isCompleted) badgeClass = "bg-emerald-100 text-emerald-700";
+                else if (isCancelled) badgeClass = "bg-red-100 text-red-700";
+
+                const displayDate = b.schedule?.formattedSchedule || b.formattedDate || 'Scheduled Visit';
+                const serviceTitle = b.serviceDetails?.title || 'Nursing Care Service';
+                const bureauName = b.nurseBureau?.name || 'HealTouch Nursing Service';
+                const totalAmount = b.billSummary?.totalAmount || 0;
+
+                return `
+                    <div class="card-hk p-6 space-y-4 text-left">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <span class="text-[10px] font-mono font-bold text-slate-400 block">#${b.bookingId || 'HKN'}</span>
+                                <h4 class="text-base font-black text-slate-900 mt-0.5">${serviceTitle}</h4>
+                                <p class="text-xs text-slate-500 font-bold">${bureauName}</p>
+                            </div>
+                            <div class="text-right">
+                                <span class="text-[10px] font-black uppercase px-2.5 py-1 rounded-full ${badgeClass}">
+                                    ${isPendingPayment ? 'Payment Incomplete' : b.status}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-50 p-3.5 rounded-2xl grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                                <span class="text-[10px] text-slate-400 font-bold block">Schedule Timing</span>
+                                <strong class="text-slate-800">${displayDate}</strong>
+                            </div>
+                            <div class="text-right">
+                                <span class="text-[10px] text-slate-400 font-bold block">Total Amount</span>
+                                <strong class="text-emerald-600 font-black">₹${totalAmount}</strong>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-3 pt-2">
+                            ${isPendingPayment ? `
+                                <button onclick="handleRetryPayment('${targetId}')" class="btn-hk py-2.5 px-4 text-xs w-full bg-amber-500 hover:bg-amber-600">
+                                    <i class="fas fa-redo mr-1"></i> Retry Online Payment
+                                </button>
+                            ` : `
+                                <button onclick="openLiveTrackingScreen('${targetId}')" class="btn-hk py-2.5 px-4 text-xs w-full">
+                                    <i class="fas fa-location-arrow mr-1"></i> Live Track Session
+                                </button>
+                            `}
+                        </div>
                     </div>
-                    <div class="flex justify-between font-bold text-gray-500">
-                        <span>GST (18%)</span>
-                        <span>$${Math.round(state.selectedPlan.price * 12 * 0.18)}</span>
-                    </div>
-                    <div class="flex justify-between text-2xl font-black pt-6 text-gray-900">
-                        <span>Total Pay</span>
-                        <span>$${Math.round(state.selectedPlan.price * 12 * 1.18)}</span>
-                    </div>
+                `;
+            }).join('');
+        } else {
+            container.innerHTML = `
+                <div class="text-center py-16 col-span-full text-slate-400 text-xs card-hk">
+                    <i class="fas fa-calendar-times text-4xl text-slate-300 mb-3 block"></i>
+                    No nursing appointments found. Book a nurse from the directory.
                 </div>
             `;
-
-            showScreen('screen-checkout');
         }
+    } catch (err) {
+        console.error("Booking history fetch error:", err);
+        container.innerHTML = `<div class="text-center py-16 col-span-full text-red-500 text-xs">Failed to load booking history (${err.message}).</div>`;
+    }}
 
-        async function simulatePayment() {
-            Swal.fire({
-                title: 'Processing Payment',
-                html: 'Securing your care plan...',
-                timer: 2000,
-                timerProgressBar: true,
-                didOpen: () => { Swal.showLoading() }
-            }).then(() => {
-                state.activeSubscription = state.selectedPlan;
-                renderDashboard();
-                showScreen('screen-dashboard');
-                
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Subscription Active!',
-                    text: 'You are now a Health Kangaroo member.',
-                    confirmButtonColor: '#00b894'
+        async function handleRetryPayment(bookingId) {
+            Swal.showLoading();
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/retry-payment`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ bookingId })
                 });
-            });
+                const json = await res.json();
+                Swal.close();
+
+                if (!json.success) return Swal.fire("Retry Failed", json.message, "error");
+
+                const options = {
+                    key: json.key_id,
+                    amount: json.amount,
+                    currency: "INR",
+                    name: "Health Kangaroo Nursing",
+                    description: `Retry Payment for #${json.bookingId}`,
+                    order_id: json.razorpayOrderId,
+                    handler: async function (rzpResponse) {
+                        await verifyOnlinePaymentSignature(rzpResponse, json.bookingId);
+                    },
+                    theme: { color: "#00b894" }
+                };
+                const rzp = new window.Razorpay(options);
+                rzp.open();
+            } catch (e) {
+                Swal.fire("Error", e.message, "error");
+            }
         }
 
-        function renderDashboard() {
-            const p = state.activeSubscription;
-            const container = document.getElementById('dashboard-benefits');
-            
-            container.innerHTML = p.benefits.map(b => `
-                <div class="bg-gray-50 p-6 rounded-3xl border border-gray-100">
-                    <h5 class="text-xs font-black uppercase text-teal-600 mb-4 tracking-widest">${b.category}</h5>
-                    <ul class="space-y-3">
-                        ${b.items.map(item => `
-                            <li class="flex items-center gap-3 text-sm font-bold">
-                                <div class="w-6 h-6 bg-teal-100 rounded-full flex items-center justify-center text-[10px] text-teal-600">
-                                    <i class="fas fa-check"></i>
-                                </div>
-                                ${item}
-                            </li>
-                        `).join('')}
-                    </ul>
+        async function promptCancelNurseBooking() {
+            const { value: reason } = await Swal.fire({
+                title: 'Cancel Nursing Appointment?',
+                input: 'textarea',
+                inputPlaceholder: 'Reason for cancellation...',
+                showCancelButton: true,
+                confirmButtonColor: '#d63031',
+                confirmButtonText: 'Confirm Cancel'
+            });
+
+            if (!reason) return;
+            Swal.showLoading();
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/cancel/${appState.activeTrackingBookingId}`, {
+                    method: 'PATCH',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ reason })
+                });
+                const json = await res.json();
+                Swal.close();
+                if (json.success) {
+                    Swal.fire("Cancelled", json.message, "success").then(() => {
+                        navigateTo('screen-my-bookings');
+                        loadUserBookingsHistory();
+                    });
+                }
+            } catch (e) {}
+        }
+
+        async function promptRateNurseBooking() {
+            const { value: formValues } = await Swal.fire({
+                title: 'Rate Your Experience ⭐',
+                html: `
+                    <div class="space-y-3 text-left">
+                        <label class="text-xs font-bold text-slate-600">Rating:</label>
+                        <select id="swalRatingVal" class="w-full p-2 border rounded-xl font-bold">
+                            <option value="5">⭐⭐⭐⭐⭐ (5/5) Excellent</option>
+                            <option value="4">⭐⭐⭐⭐ (4/5) Very Good</option>
+                            <option value="3">⭐⭐⭐ (3/5) Average</option>
+                        </select>
+                        <label class="text-xs font-bold text-slate-600">Review:</label>
+                        <textarea id="swalCommentVal" placeholder="Write feedback..." class="w-full p-2 border rounded-xl text-xs"></textarea>
+                    </div>
+                `,
+                showCancelButton: true,
+                confirmButtonText: 'Submit Review',
+                preConfirm: () => ({
+                    rating: document.getElementById('swalRatingVal').value,
+                    comment: document.getElementById('swalCommentVal').value
+                })
+            });
+
+            if (!formValues) return;
+            try {
+                await fetch(`${API_BASE_URL}/user/nurse/rate`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({
+                        bookingId: appState.activeTrackingBookingId,
+                        rating: Number(formValues.rating),
+                        comment: formValues.comment
+                    })
+                });
+                Swal.fire("Thank You!", "Your review has been submitted.", "success");
+            } catch (e) {}
+        }
+
+        // --- 9. AI PRESCRIPTION UPLOAD & BROADCAST ---
+        async function handlePrescriptionFileSelection(input) {
+            if (!input.files || !input.files[0]) return;
+            const file = input.files[0];
+
+            document.getElementById('rxUploadPromptText').innerText = `Analyzing: ${file.name}...`;
+            Swal.showLoading();
+
+            const formData = new FormData();
+            formData.append('prescriptionImage', file);
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/prescription/upload`, {
+                    method: 'POST',
+                    headers: getHeaders(true),
+                    body: formData
+                });
+                const json = await res.json();
+                Swal.close();
+
+                if (json.success) {
+                    appState.uploadedRxFilePath = json.prescriptionImage;
+                    appState.detectedRxServices = json.detectedServices || [
+                        { title: "Wound Dressing Care", description: "Daily sterile dressing required" }
+                    ];
+
+                    document.getElementById('rxDetectedBox').classList.remove('hidden');
+                    renderDetectedRxServicesList();
+                }
+            } catch (e) {
+                Swal.fire("Error", e.message, "error");
+            }
+        }
+
+        function renderDetectedRxServicesList() {
+            const container = document.getElementById('rxDetectedServicesList');
+            container.innerHTML = appState.detectedRxServices.map((svc, idx) => `
+                <div class="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex justify-between items-center text-xs text-left">
+                    <div>
+                        <strong class="text-slate-800 block">${svc.title}</strong>
+                        <span class="text-[11px] text-slate-500">${svc.description}</span>
+                    </div>
+                    <button onclick="appState.detectedRxServices.splice(${idx}, 1); renderDetectedRxServicesList();" class="text-red-500 font-bold"><i class="fas fa-trash"></i></button>
                 </div>
             `).join('');
         }
 
-        function showScreen(screenId) {
-            document.querySelectorAll('section').forEach(s => {
-                s.classList.add('hidden-screen');
-                s.style.display = 'none';
+        async function addCustomRxServiceRow() {
+            const { value: title } = await Swal.fire({
+                title: 'Add Clinical Procedure',
+                input: 'text',
+                inputPlaceholder: 'Procedure name...',
+                showCancelButton: true
             });
-            const target = document.getElementById(screenId);
-            target.style.display = screenId === 'screen-plans' ? 'block' : (screenId === 'screen-checkout' ? 'grid' : 'block');
-            setTimeout(() => target.classList.remove('hidden-screen'), 50);
+            if (title) {
+                appState.detectedRxServices.push({ title, description: "Manually specified" });
+                renderDetectedRxServicesList();
+            }
         }
 
-        function resetFlow() {
-            state.activeSubscription = null;
-            showScreen('screen-plans');
+        async function executeBroadcastPrescription() {
+            const btn = document.getElementById('btnBroadcastRx');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Broadcasting...`;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/prescription/broadcast`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({
+                        prescriptionImage: appState.uploadedRxFilePath,
+                        services: appState.detectedRxServices,
+                        lat: 30.7046,
+                        lng: 76.7179,
+                        address: appState.selectedAddress || { houseNo: "House 909", city: "Chandigarh" }
+                    })
+                });
+
+                const json = await res.json();
+                if (json.success) {
+                    Swal.fire("Inquiry Broadcasted! 📢", "Broadcast sent to nearest bureaus. You will receive proposal bills shortly.", "success").then(() => {
+                        navigateTo('screen-rx-history');
+                        loadUserPrescriptionHistory();
+                    });
+                }
+            } catch (e) {
+                Swal.fire("Error", e.message, "error");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Broadcast Inquiry to 10 Nearest Bureaus 📢";
+            }
         }
 
-        // Initialize
-        renderPlans();
+        async function loadUserPrescriptionHistory() {
+            if (!USER_TOKEN) return;
+            const container = document.getElementById('myRxInquiriesGrid');
+            container.innerHTML = `<div class="text-center py-16 text-slate-400 text-xs"><i class="fas fa-spinner fa-spin mr-2"></i>Loading inquiries...</div>`;
 
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/prescription/history`, { headers: getHeaders() });
+                const json = await res.json();
+
+                if (json.success && json.data.length > 0) {
+                    container.innerHTML = json.data.map(req => `
+                        <div class="card-hk p-6 space-y-4 text-left">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <span class="text-[10px] font-mono font-bold text-slate-400">Request #${req.requestId}</span>
+                                    <h4 class="text-base font-black text-slate-900 mt-0.5">${req.services?.[0]?.title || 'Prescription Care'} (${req.services?.length || 1} items)</h4>
+                                </div>
+                                <span class="text-xs font-black px-3 py-1 rounded-full ${req.requestStatus === 'Completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 animate-pulse'}">
+                                    ${req.requestStatus}
+                                </span>
+                            </div>
+
+                            <div class="bg-slate-50 p-4 rounded-2xl flex justify-between items-center text-xs">
+                                <div>
+                                    <span class="text-[10px] text-slate-400 font-bold block">Received Proposals</span>
+                                    <strong class="text-slate-800">${req.proposals?.length || 0} Submitted Bills</strong>
+                                </div>
+                                <button onclick="openProposalsModal('${req.requestId}')" class="btn-hk py-2 px-5 text-xs">
+                                    Compare & Accept Bills (${req.proposals?.length || 0})
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = `<div class="text-center py-16 text-slate-400 text-xs">No broadcasted inquiries placed yet.</div>`;
+                }
+            } catch (e) {}
+        }
+
+        async function openProposalsModal(requestId) {
+            document.getElementById('proposalsModal').classList.remove('hidden');
+            const list = document.getElementById('proposalsListArea');
+            list.innerHTML = `<div class="text-center py-8 text-xs text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>Fetching proposal bills...</div>`;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/prescription/proposals/${requestId}`, { headers: getHeaders() });
+                const json = await res.json();
+
+                if (json.success && json.proposals.length > 0) {
+                    list.innerHTML = json.proposals.map(p => `
+                        <div class="p-5 border-2 border-slate-200 hover:border-emerald-500 rounded-2xl bg-white space-y-4 transition text-left">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h4 class="font-black text-sm text-slate-900">${p.nurseId?.name || 'Verified Nurse Bureau'}</h4>
+                                    <p class="text-xs text-slate-400 font-bold">⭐ ${p.nurseId?.rating || '4.8'} &bull; ${p.nurseId?.city || 'Chandigarh'}</p>
+                                </div>
+                                <strong class="text-2xl font-black text-emerald-600">₹${p.priceBreakdown?.totalPrice || 0}</strong>
+                            </div>
+                            <button onclick="acceptProposalAndPay('${requestId}', '${p._id}')" class="btn-hk w-full py-3 text-xs flex items-center justify-center gap-2">
+                                Accept Proposal & Pay <i class="fas fa-check"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                } else {
+                    list.innerHTML = `<p class="text-xs text-slate-400 text-center py-8">No proposals submitted yet.</p>`;
+                }
+            } catch (e) {}
+        }
+
+        async function acceptProposalAndPay(requestId, proposalId) {
+            Swal.showLoading();
+            try {
+                const res = await fetch(`${API_BASE_URL}/user/nurse/prescription/accept`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ requestId, proposalId })
+                });
+                const json = await res.json();
+                Swal.close();
+
+                if (!json.success) return Swal.fire("Error", json.message, "error");
+
+                closeProposalsModal();
+
+                const options = {
+                    key: json.key_id,
+                    amount: json.amount,
+                    currency: "INR",
+                    name: "Health Kangaroo Nursing",
+                    description: `Prescription Booking #${json.bookingId}`,
+                    order_id: json.razorpayOrderId,
+                    handler: async function (rzpResponse) {
+                        const vRes = await fetch(`${API_BASE_URL}/user/nurse/prescription/verify-payment`, {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            body: JSON.stringify({
+                                appointmentId: json.appointmentId,
+                                requestId: json.requestId,
+                                razorpay_payment_id: rzpResponse.razorpay_payment_id,
+                                razorpay_order_id: rzpResponse.razorpay_order_id,
+                                razorpay_signature: rzpResponse.razorpay_signature
+                            })
+                        });
+                        const vJson = await vRes.json();
+                        if (vJson.success) {
+                            Swal.fire("Confirmed!", "Nurse booked.", "success").then(() => {
+                                openLiveTrackingScreen(json.bookingId);
+                            });
+                        }
+                    },
+                    theme: { color: "#00b894" }
+                };
+
+                const rzp = new window.Razorpay(options);
+                rzp.open();
+            } catch (e) {}
+        }
+
+        function closeProposalsModal() {
+            document.getElementById('proposalsModal').classList.add('hidden');
+        }
+
+        // --- 10. MODAL HELPERS ---
+        async function promptAddNewAddress() {
+            const { value: formValues } = await Swal.fire({
+                title: 'Add Home Address 📍',
+                html: `
+                    <div class="space-y-3 text-left">
+                        <input id="swalAddrName" placeholder="Recipient Name" value="${appState.userProfile?.name || ''}" class="w-full p-2.5 border rounded-xl text-xs font-bold">
+                        <input id="swalAddrPhone" placeholder="Contact Phone" value="${appState.userProfile?.phone || ''}" class="w-full p-2.5 border rounded-xl text-xs font-bold">
+                        <input id="swalAddrHouse" placeholder="House / Flat No, Sector" class="w-full p-2.5 border rounded-xl text-xs font-bold">
+                        <input id="swalAddrCity" placeholder="City" value="Chandigarh" class="w-full p-2.5 border rounded-xl text-xs font-bold">
+                    </div>
+                `,
+                showCancelButton: true,
+                confirmButtonText: 'Save Address',
+                preConfirm: () => ({
+                    name: document.getElementById('swalAddrName').value,
+                    phone: document.getElementById('swalAddrPhone').value,
+                    houseNo: document.getElementById('swalAddrHouse').value,
+                    city: document.getElementById('swalAddrCity').value,
+                    addressType: "Home"
+                })
+            });
+
+            if (!formValues || !formValues.houseNo) return;
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/auth/user/add-address`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify(formValues)
+                });
+                const json = await res.json();
+                if (json.success) {
+                    await fetchUserProfileData();
+                    renderSavedAddresses();
+                }
+            } catch (e) {}
+        }
+
+        async function promptAddFamilyMember() {
+            const { value: formValues } = await Swal.fire({
+                title: 'Add Family Member 👨‍👩‍👧',
+                html: `
+                    <div class="space-y-3 text-left">
+                        <input id="swalFamName" placeholder="Full Name" class="w-full p-2.5 border rounded-xl text-xs font-bold">
+                        <select id="swalFamRel" class="w-full p-2.5 border rounded-xl text-xs font-bold">
+                            <option value="Father">Father</option>
+                            <option value="Mother">Mother</option>
+                            <option value="Spouse">Spouse</option>
+                            <option value="Child">Child</option>
+                            <option value="Other">Other</option>
+                        </select>
+                        <select id="swalFamGender" class="w-full p-2.5 border rounded-xl text-xs font-bold">
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                        </select>
+                        <input id="swalFamAge" type="number" placeholder="Age" class="w-full p-2.5 border rounded-xl text-xs font-bold">
+                    </div>
+                `,
+                showCancelButton: true,
+                confirmButtonText: 'Add Member',
+                preConfirm: () => ({
+                    memberName: document.getElementById('swalFamName').value,
+                    relation: document.getElementById('swalFamRel').value,
+                    gender: document.getElementById('swalFamGender').value,
+                    dob: moment().subtract(document.getElementById('swalFamAge').value, 'years').format('YYYY-MM-DD')
+                })
+            });
+
+            if (!formValues || !formValues.memberName) return;
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/auth/user/add-family`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify(formValues)
+                });
+                const json = await res.json();
+                if (json.success) {
+                    await fetchUserProfileData();
+                    renderPatientBubbles();
+                }
+            } catch (e) {}
+        }
     </script>
 </body>
 </html>

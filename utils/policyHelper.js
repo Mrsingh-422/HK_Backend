@@ -12,16 +12,17 @@ const UserSubscription = require('../models/UserSubscription'); // 👈 Imported
 const hasDriverStarted = (booking, vendorType) => {
     switch (vendorType) {
         case 'Lab':
-            return !!booking.startedAt || !['Pending', 'Confirmed', 'Under Review'].includes(booking.status);
+            return !!booking.startedAt || ['Sample Collected', 'Sample Deposited', 'Testing', 'Report Generated', 'Completed'].includes(booking.status);
         case 'Nurse':
-            return !!booking.schedule?.startTime || !['Pending', 'Confirmed'].includes(booking.status);
+            // 🚨 PRECISE CHECK: Only penalize if staff is physically On-The-Way, Arrived, or Service-Started
+            return ['On-The-Way', 'Arrived', 'Service-Started', 'Completed'].includes(booking.status);
         case 'Ambulance':
         case 'Ambulance-Accident':
         case 'Ambulance-Medical':
         case 'Ambulance-Referral':
-            return ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'].includes(booking.status);
+            return ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route', 'Delivered'].includes(booking.status);
         case 'Pharmacy':
-            return !!booking.startedAt || ['PickedUp', 'OutForDelivery', 'ReachedLocation'].includes(booking.deliveryStatus);
+            return !!booking.startedAt || ['PickedUp', 'OutForDelivery', 'ReachedLocation', 'Delivered'].includes(booking.deliveryStatus);
         case 'Doctor':
             if (booking.consultationType === 'Home Visit') {
                 return !!booking.tracking?.startedAt || booking.status === 'In-Progress';

@@ -3009,139 +3009,140 @@ const getLatestAddedMedicines = async (req, res) => {
     }
 };
 
-// GET OTC MEDICINES WITH OPTIONAL CATEGORY FILTER
+// @desc    Get OTC / Non-Prescription Medicines with In-Stock First & Out-of-Stock at the End
+// @route   GET /user/pharmacy/non-prescription-list
+// @access  Public / User
 const getNonPrescriptionMedicines = async (req, res) => {
     try {
-        const { category, subCategory, page = 1 } = req.query;
-        const limit = 20;
-        const skip = (parseInt(page) - 1) * limit;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { search, category, pharmacyId } = req.query;
 
-        const filter = {
+        // 1. Strict filter for Non-Prescription (OTC) Medicines
+        let matchQuery = {
             prescription_required: { $regex: /^(no|false)$/i }
         };
 
-        if (category) {
-            const breadcrumbRegex = subCategory
-                ? new RegExp(`^${category}\\s*>\\s*${subCategory}`, 'i')
-                : new RegExp(`^${category}\\s*>`, 'i');
-            filter.bread_crumb = breadcrumbRegex;
+        if (search && search.trim() !== '') {
+            matchQuery.$or = [
+                { name: { $regex: search.trim(), $options: 'i' } },
+                { salt_composition: { $regex: search.trim(), $options: 'i' } },
+                { manufacturers: { $regex: search.trim(), $options: 'i' } }
+            ];
         }
 
+        if (category && category !== 'All' && category.trim() !== '') {
+            matchQuery.bread_crumb = { $regex: category.trim(), $options: 'i' };
+        }
+
+        // 2. Aggregate pipeline to lookup inventory stock & sort in-stock items first
         const pipeline = [
-            { $match: filter },
+            { $match: matchQuery },
             {
                 $lookup: {
                     from: "medicineinventories",
-                    localField: "_id",
-                    foreignField: "medicineId",
-                    as: "inventory",
+                    let: { medId: "$_id" },
                     pipeline: [
-                        { $match: { is_available: true, stock_quantity: { $gt: 0 } } },
-                        { $sort: { vendor_price: 1 } },
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ["$medicineId", "$$medId"] },
+                                        { $eq: ["$is_available", true] },
+                                        { $gt: ["$stock_quantity", 0] },
+                                        ...(pharmacyId && mongoose.isValidObjectId(pharmacyId)
+                                            ? [{ $eq: ["$pharmacyId", new mongoose.Types.ObjectId(pharmacyId)] }]
+                                            : [])
+                                    ]
+                                }
+                            }
+                        },
+                        { $sort: { vendor_price: 1, expiry_date: 1 } },
                         { $limit: 1 }
-                    ]
+                    ],
+                    as: "inventoryData"
                 }
             },
             {
                 $addFields: {
-                    numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
-                    numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
-                    numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
-                    numInventoryMRP: { $toDouble: { $arrayElemAt: ["$inventory.mrp", 0] } }, // 👈 Added: Fetch batch MRP [cite: 1.1.2]
-                    isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
-                }
-            },
-            {
-                $addFields: {
-                    minimumPrice: {
-                        $cond: [
-                            "$isInventoryAvailable",
-                            "$numInventoryPrice",
-                            "$numDocBestPrice"
-                        ]
-                    },
-                    minimumMRP: { // 👈 Added: Dynamic MRP based on batch [cite: 1.1.2]
-                        $cond: [
-                            "$isInventoryAvailable",
-                            "$numInventoryMRP",
-                            "$numMRP"
-                        ]
-                    },
-                    isAvailable: "$isInventoryAvailable"
-                }
-            },
-            {
-                $addFields: {
-                    discountPercentage: {
+                    bestOffer: { $arrayElemAt: ["$inventoryData", 0] },
+                    // Flag: 1 if in stock, 0 if out of stock
+                    stockPriority: {
                         $cond: {
-                            if: { $gt: ["$minimumMRP", 0] },
-                            then: {
-                                $round: [
-                                    {
-                                        $multiply: [
-                                            { $divide: [{ $subtract: ["$minimumMRP", "$minimumPrice"] }, "$minimumMRP"] },
-                                            100
-                                        ]
-                                    },
-                                    0
-                                ]
-                            },
+                            if: { $gt: [{ $size: "$inventoryData" }, 0] },
+                            then: 1,
                             else: 0
                         }
                     }
                 }
             },
+            // 🚨 Sorting: In-stock items (stockPriority: 1) appear first, Out-of-stock (stockPriority: 0) pushed to last
             {
-                // 🚨 OVERWRITE best_price, mrp, and discont_percent with live values [cite: 1.1.2]
-                $addFields: {
-                    mrp: { $toString: "$minimumMRP" }, // Overwrite MRP with batch MRP! [cite: 1.1.2]
-                    best_price: {
-                        $cond: {
-                            if: "$isInventoryAvailable",
-                            then: { $toString: "$minimumPrice" },
-                            else: "$best_price"
-                        }
-                    },
-                    discont_percent: {
-                        $cond: {
-                            if: { $gt: ["$discountPercentage", 0] },
-                            then: { $concat: [{ $toString: "$discountPercentage" }, "%"] },
-                            else: "$discont_percent"
-                        }
-                    }
+                $sort: {
+                    stockPriority: -1,
+                    createdAt: -1
                 }
             },
             {
-                $project: {
-                    inventory: 0,
-                    numMRP: 0,
-                    numDocBestPrice: 0,
-                    numInventoryPrice: 0,
-                    numInventoryMRP: 0,
-                    isInventoryAvailable: 0,
-                    minimumPrice: 0,
-                    minimumMRP: 0,
-                    discountPercentage: 0
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
                 }
-            },
-            { $skip: skip },
-            { $limit: limit }
+            }
         ];
 
-        const [data, total] = await Promise.all([
-            Medicine.aggregate(pipeline),
-            Medicine.countDocuments(filter)
-        ]);
+        const result = await Medicine.aggregate(pipeline);
+        const total = result[0]?.metadata[0]?.total || 0;
+        const medicines = result[0]?.data || [];
 
-        res.json({
+        // 3. Format response items with lowest price, batch MRP, and availability flag
+        const formattedList = medicines.map(med => {
+            const bestOffer = med.bestOffer;
+            const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
+            const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(med.mrp || 0);
+
+            let discountPercent = med.discont_percent || "0%";
+            if (lowestPrice !== null && batchMrp > 0) {
+                discountPercent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
+            }
+
+            return {
+                _id: med._id,
+                name: med.name,
+                manufacturers: med.manufacturers || "",
+                salt_composition: med.salt_composition || "",
+                packaging: med.packaging || "",
+                mrp: batchMrp > 0 ? batchMrp.toString() : (med.mrp || "0"),
+                best_price: lowestPrice !== null ? lowestPrice.toString() : (med.best_price || med.mrp || "0"),
+                discont_percent: discountPercent,
+                prescription_required: med.prescription_required || "No",
+                image_url: med.image_url || [],
+                bread_crumb: med.bread_crumb || "",
+                primary_use: med.primary_use || "",
+                description: med.description || "",
+                
+                // Inventory Snapshot
+                isAvailable: lowestPrice !== null,
+                availableStock: bestOffer ? bestOffer.stock_quantity : 0,
+                vendor_id: bestOffer ? bestOffer.pharmacyId : null,
+                isReturnAllowed: bestOffer ? Boolean(bestOffer.isReturnAllowed) : false,
+                isReplacementAllowed: bestOffer ? Boolean(bestOffer.isReplacementAllowed) : false
+            };
+        });
+
+        res.status(200).json({
             success: true,
             total,
-            currentPage: parseInt(page),
             totalPages: Math.ceil(total / limit),
-            data
+            currentPage: page,
+            count: formattedList.length,
+            data: formattedList
         });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("getNonPrescriptionMedicines Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in fetching OTC medicines." });
     }
 };
 

@@ -88,62 +88,55 @@ const getNurses = async (req, res) => {
     }
 };
 
+// @desc    Get Detailed Nurse Bureau Profile with Services, Packages & Reviews
+// @route   GET /user/nurse/details/:id
+// @access  Public / User
 const getNurseDetails = async (req, res) => {
     try {
-        const nurseId = req.params.id;
-        if (!nurseId) return res.status(400).json({ message: "Nurse ID required" });
+        const { id } = req.params;
 
-        const nurse = await Nurse.findById(nurseId).lean();
+        if (!mongoose.isValidObjectId(id)) {
+            return res.status(400).json({ success: false, message: "Invalid Nurse Bureau ID format." });
+        }
 
-        // 🚨 CRITICAL CHECK: Block access if nurse is inactive by Admin
+        // 1. Fetch Nurse Bureau Profile
+        const nurse = await Nurse.findById(id).select('-password -token').lean();
         if (!nurse || nurse.isActive === false) {
-            return res.status(404).json({ success: false, message: "Nurse profile is inactive or not found." });
+            return res.status(404).json({ success: false, message: "Nurse Bureau not found or account is inactive." });
         }
 
-        const reviews = await Review.find({
-            targetId: nurseId,
-            targetType: 'Nurse'
-        }).select('rating').lean();
-
-        let averageRating = 4.8;
-        if (reviews.length > 0) {
-            const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-            averageRating = Number((totalRating / reviews.length).toFixed(1));
-        }
-
-        const recentReviews = await Review.find({ targetId: nurseId, targetType: 'Nurse' })
-            .select('userName rating comment createdAt')
-            .sort({ createdAt: -1 })
-            .limit(3)
-            .lean();
-
-        const [services, packages, config] = await Promise.all([
-            NurseService.find({ nurseId, status: 'Approved' })
-                .populate('consumablesUsed.masterItemId')
+        // 2. Fetch Active Services, Packages, and Reviews in parallel
+        const [services, packages, reviews] = await Promise.all([
+            NurseService.find({ nurseId: id, status: 'Approved' })
+                .populate('consumablesUsed.masterItemId', 'itemName size mrp unitType')
                 .lean(),
-            NursePackage.find({ nurseId, status: 'Approved' })
-                .populate('includedServices')
-                .populate('consumablesUsed.masterItemId')
+            NursePackage.find({ nurseId: id, status: 'Approved' })
+                .populate('includedServices', 'category subCategory description procedureIncluded')
+                .populate('consumablesUsed.masterItemId', 'itemName size mrp unitType')
                 .lean(),
-            Availability.findOne({ vendorId: nurseId }).lean()
+            Review.find({ targetId: id, targetType: 'Nurse' })
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .lean()
         ]);
 
-        res.json({
+        return res.status(200).json({
             success: true,
             data: {
-                ...nurse,
-                rating: averageRating,
-                totalReviews: reviews.length,
+                nurse: {
+                    ...nurse,
+                    rating: nurse.rating || 4.8,
+                    totalReviews: nurse.totalReviews || reviews.length || 0
+                },
                 services: services || [],
                 packages: packages || [],
-                availability: config || null,
-                recentReviews,
-                isOnline: nurse.isOnline ?? true // Sends online status to UI
+                reviews: reviews || []
             }
         });
-    } catch (e) {
-        console.error("Critical Details Error:", e);
-        res.status(500).json({ success: false, message: "Server encountered an error loading details" });
+
+    } catch (error) {
+        console.error("getNurseDetails Error:", error);
+        return res.status(500).json({ success: false, message: error.message || "Internal Server Error in fetching nurse details." });
     }
 };
 
@@ -544,22 +537,28 @@ const getRegisteredHospitalsDropdown = async (req, res) => {
     }
 };
 
-// 2. CHECKOUT SUMMARY CALCULATION (With Dual Root & Breakdown COD Support)
-// endpoint: POST /user/nurse/checkout
+// @desc    Evaluate Nurse Checkout Summary with First-Selection Premium Surcharge Rule & Zero GST
+// @route   POST /user/nurse/checkout
+// @access  Private (User)
 const checkoutNurseBooking = async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "User not authenticated." });
+        }
+
         const {
             nurseId,
             serviceId,
             packageId,
-            isPackage,
-            selectedType,
+            isPackage = false,
+            selectedType = 'One day One Time',
             startDate,
             endDate,
             startTime,
             endTime,
-            isFasterService,
+            assessmentLocation = 'At Home',
+            isFasterService = false,
             patientCount = 1,
             selectedConsumables = [],
             couponCode
@@ -569,664 +568,848 @@ const checkoutNurseBooking = async (req, res) => {
             return res.status(400).json({ success: false, message: "nurseId is required." });
         }
 
-        const isPkg = isPackage === true || isPackage === 'true';
-        let baseRate = 0;
+        const isPkg = (isPackage === true || isPackage === 'true');
+        let baseUnitRate = 0;
         let title = "";
 
+        // 1. Fetch Service / Package Price
         if (isPkg && packageId) {
             const pkg = await NursePackage.findById(packageId);
-            if (!pkg) return res.status(404).json({ success: false, message: "Package not found." });
+            if (!pkg) return res.status(404).json({ success: false, message: "Nurse Package not found." });
             title = pkg.packageName;
-            if (selectedType === 'For Multiple Days') baseRate = pkg.pricing?.multipleDays?.final || 0;
-            else if (selectedType === 'Acc. To Per/Hours') baseRate = pkg.pricing?.hourly?.final || 0;
-            else baseRate = pkg.pricing?.oneDay?.final || 0;
+            if (selectedType === 'For Multiple Days') baseUnitRate = Number(pkg.pricing?.multipleDays?.final || 0);
+            else if (selectedType === 'Acc. To Per/Hours') baseUnitRate = Number(pkg.pricing?.hourly?.final || 0);
+            else baseUnitRate = Number(pkg.pricing?.oneDay?.final || 0);
         } else if (serviceId) {
             const svc = await NurseService.findById(serviceId);
             if (!svc) return res.status(404).json({ success: false, message: "Nurse Service not found." });
             title = svc.title;
-            if (selectedType === 'For Multiple Days') baseRate = svc.pricing?.multipleDays?.final || 0;
-            else if (selectedType === 'Acc. To Per/Hours') baseRate = svc.pricing?.hourly?.final || 0;
-            else baseRate = svc.pricing?.oneDay?.final || 0;
+            if (selectedType === 'For Multiple Days') baseUnitRate = Number(svc.pricing?.multipleDays?.final || 0);
+            else if (selectedType === 'Acc. To Per/Hours') baseUnitRate = Number(svc.pricing?.hourly?.final || 0);
+            else baseUnitRate = Number(svc.pricing?.oneDay?.final || 0);
         } else {
             return res.status(400).json({ success: false, message: "Either serviceId or packageId is required." });
         }
 
+        // 2. Duration Multiplier (Days vs Hours vs 1-Day)
         const pCount = Math.max(1, Number(patientCount || 1));
-        const originalBaseServicePrice = baseRate * pCount;
+        let durationMultiplier = 1;
+        let totalStayDays = 1;
+        let totalHours = 1;
 
-        // 1. Evaluate Subscription Benefit on Nurse Visit Fee
-        const visitBenefit = await checkAndApplyBenefit(userId, 'freeNurseVisitsCount', originalBaseServicePrice);
-        const finalBaseServicePrice = visitBenefit.amount;
+        const cleanStart = startDate && startDate !== 'undefined' ? moment(startDate).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
+        const cleanEnd = endDate && endDate !== 'undefined' ? moment(endDate).format('YYYY-MM-DD') : cleanStart;
 
-        // Consumables Calculation
-        const consumableTotal = selectedConsumables.reduce((sum, item) => sum + (Number(item.price || 0)), 0);
-
-        // Express / Faster Service Delivery Calculation
-        let fasterCharge = 0;
-        let deliveryBenefit = { isApplied: false, isBenefitExhausted: false, remainingCount: 0 };
-
-        if (isFasterService) {
-            const deliveryConfig = await DeliveryCharge.findOne({ vendorId: nurseId });
-            const standardFastFee = deliveryConfig?.fastDeliveryExtra || 50;
-
-            // 2. Evaluate Subscription Benefit on Nurse Fast Travel / Delivery
-            deliveryBenefit = await checkAndApplyBenefit(userId, 'freeNurseDeliveriesCount', standardFastFee);
-            fasterCharge = deliveryBenefit.amount;
+        if (selectedType === 'For Multiple Days') {
+            const startM = moment(cleanStart).startOf('day');
+            const endM = moment(cleanEnd).startOf('day');
+            totalStayDays = Math.max(1, endM.diff(startM, 'days') + 1);
+            durationMultiplier = totalStayDays;
+        } else if (selectedType === 'Acc. To Per/Hours' && startTime && endTime) {
+            const startM = moment(startTime, 'HH:mm');
+            const endM = moment(endTime, 'HH:mm');
+            totalHours = Math.max(1, endM.diff(startM, 'hours'));
+            durationMultiplier = totalHours;
         }
 
-        const subtotal = finalBaseServicePrice + consumableTotal + fasterCharge;
+        const calculatedBaseServicePrice = baseUnitRate * durationMultiplier * pCount;
 
-        // Coupon Discount
-        let couponDiscount = 0;
-        let couponId = null;
+        // 3. 🚨 FIRST-SELECTION PREMIUM SURCHARGE CALCULATION ONLY (Strict Rule)
+        let slotSurcharge = 0;
+        let isPremiumApplied = false;
+        let premiumSourceLabel = "";
 
-        if (couponCode) {
-            const coupon = await Coupon.findOne({
-                couponName: couponCode.toUpperCase(),
-                isActive: true,
-                expiryDate: { $gte: new Date() }
-            });
+        const availabilityConfig = await Availability.findOne({ vendorId: nurseId, vendorType: 'Nurse' });
 
-            if (coupon && subtotal >= coupon.minOrderAmount) {
-                if (!coupon.vendorId || coupon.vendorId.toString() === nurseId.toString() || coupon.vendorType === 'All' || coupon.vendorType === 'Nurse') {
-                    couponDiscount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
-                    couponId = coupon._id;
+        if (availabilityConfig) {
+            // A. Multi-Day / One-Day Mode: Sirf First Selected Date (cleanStart) ka premium check hoga
+            if (selectedType !== 'Acc. To Per/Hours' && availabilityConfig.premiumDates && availabilityConfig.premiumDates.length > 0) {
+                const matchedDate = availabilityConfig.premiumDates.find(p => p.date === cleanStart);
+                if (matchedDate && Number(matchedDate.extraFee) > 0) {
+                    slotSurcharge = Number(matchedDate.extraFee);
+                    isPremiumApplied = true;
+                    premiumSourceLabel = `Premium Date Surcharge (${moment(cleanStart).format('DD MMM')})`;
+                }
+            }
+
+            // B. Hourly Mode: Sirf First Start Time Slot (startTime) ka premium check hoga
+            if (selectedType === 'Acc. To Per/Hours' && startTime && availabilityConfig.premiumSlots && availabilityConfig.premiumSlots.length > 0) {
+                const cleanStartFormatted = startTime.includes(':') ? startTime.split(':')[0].padStart(2, '0') + ":" + startTime.split(':')[1] : startTime;
+                
+                const matchedSlot = availabilityConfig.premiumSlots.find(ps => {
+                    if (!ps.time) return false;
+                    return ps.time === cleanStartFormatted || ps.time === startTime || ps.time.startsWith(startTime.split(':')[0]);
+                });
+
+                if (matchedSlot && Number(matchedSlot.extraFee) > 0) {
+                    slotSurcharge = Number(matchedSlot.extraFee); // Added once only (NOT multiplied by total hours!)
+                    isPremiumApplied = true;
+                    premiumSourceLabel = `Premium Time Slot Surcharge (${startTime})`;
                 }
             }
         }
 
-        const taxAmount = Math.round((subtotal - couponDiscount) * 0.05); // 5% GST
-        const totalPrice = Math.max(0, Math.round((subtotal - couponDiscount) + taxAmount));
+        // 4. Subscription Benefit Evaluation
+        const visitBenefit = await checkAndApplyBenefit(userId, 'freeNurseVisitsCount', calculatedBaseServicePrice);
+        const finalBaseServicePrice = visitBenefit.amount;
+
+        // 5. Consumables
+        const consumableTotal = selectedConsumables.reduce((sum, item) => sum + Number(item.price || 0), 0);
+
+        // 6. Travel / Express Delivery Calculation (Mutually Exclusive)
+        let standardTravelFee = 0;
+        let fasterServiceCharge = 0;
+        const isFaster = (isFasterService === true || isFasterService === 'true');
+
+        if (assessmentLocation === 'At Home') {
+            const deliveryConfig = await DeliveryCharge.findOne({ vendorId: nurseId, vendorType: 'Nurse' });
+            const baseTravelFee = Number(deliveryConfig?.fixedPrice !== undefined ? deliveryConfig.fixedPrice : 50);
+            const expressFastFee = Number(deliveryConfig?.fastDeliveryExtra !== undefined ? deliveryConfig.fastDeliveryExtra : 95);
+
+            if (isFaster) {
+                standardTravelFee = 0;
+                fasterServiceCharge = expressFastFee;
+            } else {
+                standardTravelFee = baseTravelFee;
+                fasterServiceCharge = 0;
+            }
+        } else {
+            standardTravelFee = 0;
+            fasterServiceCharge = isFaster ? 95 : 0;
+        }
+
+        let travelBenefit = { isApplied: false, hasActiveSubscription: false, isBenefitExhausted: false, remainingCount: 0 };
+        let finalTravelFee = 0;
+
+        if (assessmentLocation === 'At Home' && !isFaster && standardTravelFee > 0) {
+            travelBenefit = await checkAndApplyBenefit(userId, 'freeNurseDeliveriesCount', standardTravelFee);
+            finalTravelFee = travelBenefit.amount;
+        }
+
+        // 7. Coupon Discount
+        const currentServiceSubtotal = finalBaseServicePrice + slotSurcharge + consumableTotal;
+        let couponDiscount = 0;
+        let validCouponId = null;
+
+        if (couponCode && typeof couponCode === 'string' && couponCode.trim() !== '' && couponCode !== 'undefined') {
+            const cleanCode = couponCode.trim().toUpperCase();
+            const coupon = await Coupon.findOne({
+                couponName: cleanCode,
+                isActive: true,
+                expiryDate: { $gte: new Date() }
+            });
+
+            if (coupon && currentServiceSubtotal >= coupon.minOrderAmount) {
+                if (!coupon.vendorId || String(coupon.vendorId) === String(nurseId) || coupon.vendorType === 'All' || coupon.vendorType === 'Nurse') {
+                    couponDiscount = Math.min((currentServiceSubtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                    validCouponId = coupon._id;
+                }
+            }
+        }
+
+        // 8. Total Amount (0% Tax / No GST Added)
+        const totalPayable = Math.max(0, Math.round((currentServiceSubtotal - couponDiscount) + finalTravelFee + fasterServiceCharge));
+        const isCodAvailable = await isCodEnabled('Nurse', userId);
 
         res.status(200).json({
             success: true,
-            breakdown: {
+            data: {
+                nurseId,
+                title,
+                isPackage: isPkg,
+                selectedType,
+                assessmentLocation,
                 pCount,
-                originalBaseServicePrice,
-                baseServicePrice: finalBaseServicePrice,
-                slotSurcharge: 0,
-                consumableTotal,
-                fasterServiceCharge: fasterCharge,
-                couponDiscount: Math.round(couponDiscount),
-                taxAmount,
-                totalPrice,
-                appliedCoupon: couponId
-            },
-            subscriptionBenefits: {
-                visitBenefit: {
-                    isApplied: visitBenefit.isApplied,
-                    hasActiveSubscription: visitBenefit.hasActiveSubscription,
-                    isBenefitExhausted: visitBenefit.isBenefitExhausted,
-                    remainingCount: visitBenefit.remainingCount,
-                    planName: visitBenefit.planName,
-                    exhaustedMessage: visitBenefit.exhaustedMessage || (visitBenefit.isBenefitExhausted ? "Your subscription free nurse visit quota is exhausted. Standard visit fee applied." : "")
+                durationUnits: durationMultiplier,
+                isCodAvailable,
+                breakdown: {
+                    baseUnitRate,
+                    durationMultiplier,
+                    patientCount: pCount,
+                    originalBaseServicePrice: calculatedBaseServicePrice,
+                    baseServicePrice: finalBaseServicePrice,
+                    slotSurcharge: Math.round(slotSurcharge), // 👈 First selection only!
+                    isPremiumApplied,
+                    premiumSourceLabel,
+                    consumableTotal: Math.round(consumableTotal),
+                    travelFee: finalTravelFee,
+                    originalTravelFee: standardTravelFee,
+                    fasterServiceCharge: Math.round(fasterServiceCharge),
+                    couponDiscount: Math.round(couponDiscount),
+                    couponId: validCouponId,
+                    taxAmount: 0,
+                    totalPrice: totalPayable
                 },
-                deliveryBenefit: {
-                    isApplied: deliveryBenefit.isApplied,
-                    hasActiveSubscription: deliveryBenefit.hasActiveSubscription,
-                    isBenefitExhausted: deliveryBenefit.isBenefitExhausted,
-                    remainingCount: deliveryBenefit.remainingCount,
-                    planName: deliveryBenefit.planName,
-                    exhaustedMessage: deliveryBenefit.exhaustedMessage || (deliveryBenefit.isBenefitExhausted ? "Your subscription free nurse delivery quota is exhausted." : "")
+                subscriptionBenefits: {
+                    visitBenefit: {
+                        isApplied: visitBenefit.isApplied,
+                        hasActiveSubscription: visitBenefit.hasActiveSubscription,
+                        isBenefitExhausted: visitBenefit.isBenefitExhausted,
+                        remainingCount: visitBenefit.remainingCount,
+                        planName: visitBenefit.planName || "",
+                        benefitField: "freeNurseVisitsCount",
+                        exhaustedMessage: visitBenefit.exhaustedMessage || (visitBenefit.isBenefitExhausted ? "Your subscription free nurse visit quota has been exhausted. Standard charges have been applied." : "")
+                    },
+                    travelBenefit: {
+                        isApplied: travelBenefit.isApplied,
+                        hasActiveSubscription: travelBenefit.hasActiveSubscription,
+                        isBenefitExhausted: travelBenefit.isBenefitExhausted,
+                        remainingCount: travelBenefit.remainingCount,
+                        planName: travelBenefit.planName || "",
+                        benefitField: "freeNurseDeliveriesCount",
+                        exhaustedMessage: travelBenefit.exhaustedMessage || ""
+                    }
                 }
             }
         });
 
     } catch (error) {
-        console.error("Nurse Checkout Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("checkoutNurseBooking Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in nurse checkout." });
     }
 };
 
-// 3. PLACE NURSE BOOKING (Secure Server-Side Price & Consumable Validation)
-// endpoint: POST /user/nurse/book
+// @desc    Place Nurse Booking with First-Selection Premium Surcharge Rule & 0% GST
+// @route   POST /user/nurse/book
+// @access  Private (User)
 const placeNurseBooking = async (req, res) => {
     try {
-        let {
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "User not authenticated." });
+        }
+
+        const {
             nurseId,
             serviceId,
             packageId,
-            isPackage,
+            isPackage = false,
+            selectedType = 'One day One Time',
             schedule,
-            patients,
-            healthDetails,
+            patients = [],
             address,
+            healthDetails,
             assessmentLocation = 'At Home',
+            selectedConsumables = [],
             hospitalDetails,
-            selectedConsumables,
+            isFasterService = false,
             paymentMethod = 'COD',
-            couponCode,
-            isFasterService
+            couponCode
         } = req.body;
 
-        const userId = req.user.id;
-
-        // 1. Safe JSON String Parsers
-        if (typeof schedule === 'string') { try { schedule = JSON.parse(schedule); } catch (e) {} }
-        if (typeof patients === 'string') { try { patients = JSON.parse(patients); } catch (e) {} }
-        if (typeof address === 'string') { try { address = JSON.parse(address); } catch (e) {} }
-        if (typeof hospitalDetails === 'string') { try { hospitalDetails = JSON.parse(hospitalDetails); } catch (e) {} }
-        if (typeof selectedConsumables === 'string') { try { selectedConsumables = JSON.parse(selectedConsumables); } catch (e) {} }
-
-        if (!nurseId || (!serviceId && !packageId) || !schedule || !schedule.startDate) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "nurseId, serviceId/packageId, and schedule are required." 
-            });
+        if (!nurseId) {
+            return res.status(400).json({ success: false, message: "nurseId is required." });
         }
 
-        // 2. Smart COD Check
-        if (paymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Nurse', userId);
-            if (!isCodAllowed) {
+        // 1. Safe Parsers
+        let parsedSchedule = typeof schedule === 'string' ? JSON.parse(schedule) : (schedule || {});
+        let parsedPatients = typeof patients === 'string' ? JSON.parse(patients) : (patients || []);
+        let parsedAddress = typeof address === 'string' ? JSON.parse(address) : (address || {});
+        let parsedConsumables = typeof selectedConsumables === 'string' ? JSON.parse(selectedConsumables) : (selectedConsumables || []);
+        let parsedHospital = typeof hospitalDetails === 'string' ? JSON.parse(hospitalDetails) : (hospitalDetails || {});
+
+        const isPkg = (isPackage === true || isPackage === 'true');
+        let baseUnitRate = 0;
+        let serviceTitle = "";
+        let procedureIncluded = "";
+        let servicesOffered = "NURSING CARE";
+
+        if (isPkg && packageId) {
+            const pkg = await NursePackage.findById(packageId);
+            if (!pkg) return res.status(404).json({ success: false, message: "Package not found." });
+            serviceTitle = pkg.packageName;
+            procedureIncluded = pkg.description || "";
+            if (selectedType === 'For Multiple Days') baseUnitRate = Number(pkg.pricing?.multipleDays?.final || 0);
+            else if (selectedType === 'Acc. To Per/Hours') baseUnitRate = Number(pkg.pricing?.hourly?.final || 0);
+            else baseUnitRate = Number(pkg.pricing?.oneDay?.final || 0);
+        } else if (serviceId) {
+            const svc = await NurseService.findById(serviceId);
+            if (!svc) return res.status(404).json({ success: false, message: "Service not found." });
+            serviceTitle = svc.title;
+            procedureIncluded = svc.procedureIncluded || "";
+            servicesOffered = svc.servicesOffered || "NURSING CARE";
+            if (selectedType === 'For Multiple Days') baseUnitRate = Number(svc.pricing?.multipleDays?.final || 0);
+            else if (selectedType === 'Acc. To Per/Hours') baseUnitRate = Number(svc.pricing?.hourly?.final || 0);
+            else baseUnitRate = Number(svc.pricing?.oneDay?.final || 0);
+        } else {
+            return res.status(400).json({ success: false, message: "Either serviceId or packageId is required." });
+        }
+
+        // 2. Duration Multiplier
+        const pCount = Math.max(1, parsedPatients.length || 1);
+        let durationMultiplier = 1;
+        const startDate = parsedSchedule.startDate || req.body.startDate || moment().format('YYYY-MM-DD');
+        const endDate = parsedSchedule.endDate || req.body.endDate || startDate;
+        const startTime = parsedSchedule.startTime || req.body.startTime || "09:00";
+        const endTime = parsedSchedule.endTime || req.body.endTime || "10:00";
+
+        if (selectedType === 'For Multiple Days' && startDate && endDate) {
+            const startM = moment(startDate).startOf('day');
+            const endM = moment(endDate).startOf('day');
+            durationMultiplier = Math.max(1, endM.diff(startM, 'days') + 1);
+        } else if (selectedType === 'Acc. To Per/Hours' && startTime && endTime) {
+            const startM = moment(startTime, 'HH:mm');
+            const endM = moment(endTime, 'HH:mm');
+            durationMultiplier = Math.max(1, endM.diff(startM, 'hours'));
+        }
+
+        const calculatedBaseServicePrice = baseUnitRate * durationMultiplier * pCount;
+
+        // 3. First Selection Premium Surcharge Only
+        let slotSurcharge = 0;
+        const availabilityConfig = await Availability.findOne({ vendorId: nurseId, vendorType: 'Nurse' });
+        if (availabilityConfig) {
+            if (selectedType !== 'Acc. To Per/Hours' && availabilityConfig.premiumDates?.length > 0) {
+                const sDateClean = moment(startDate).format('YYYY-MM-DD');
+                const matchedDate = availabilityConfig.premiumDates.find(p => p.date === sDateClean);
+                if (matchedDate) slotSurcharge = Number(matchedDate.extraFee || 0);
+            }
+
+            if (selectedType === 'Acc. To Per/Hours' && startTime && availabilityConfig.premiumSlots?.length > 0) {
+                const matchedSlot = availabilityConfig.premiumSlots.find(ps => {
+                    if (!ps.time) return false;
+                    return ps.time === startTime || ps.time.startsWith(startTime.split(':')[0]);
+                });
+                if (matchedSlot) slotSurcharge = Number(matchedSlot.extraFee || 0);
+            }
+        }
+
+        const visitBenefit = await checkAndApplyBenefit(userId, 'freeNurseVisitsCount', calculatedBaseServicePrice);
+        const finalBaseServicePrice = visitBenefit.amount;
+        const consumableTotal = parsedConsumables.reduce((sum, item) => sum + Number(item.price || 0), 0);
+
+        // 4. Travel Fee
+        let standardTravelFee = 0;
+        let fasterServiceCharge = 0;
+        const isFaster = (isFasterService === true || isFasterService === 'true');
+
+        if (assessmentLocation === 'At Home') {
+            const deliveryConfig = await DeliveryCharge.findOne({ vendorId: nurseId, vendorType: 'Nurse' });
+            const baseTravelFee = Number(deliveryConfig?.fixedPrice !== undefined ? deliveryConfig.fixedPrice : 50);
+            const expressFastFee = Number(deliveryConfig?.fastDeliveryExtra !== undefined ? deliveryConfig.fastDeliveryExtra : 95);
+
+            if (isFaster) {
+                standardTravelFee = 0;
+                fasterServiceCharge = expressFastFee;
+            } else {
+                standardTravelFee = baseTravelFee;
+                fasterServiceCharge = 0;
+            }
+        }
+
+        let travelBenefit = { isApplied: false };
+        let finalTravelFee = 0;
+        if (assessmentLocation === 'At Home' && !isFaster && standardTravelFee > 0) {
+            travelBenefit = await checkAndApplyBenefit(userId, 'freeNurseDeliveriesCount', standardTravelFee);
+            finalTravelFee = travelBenefit.amount;
+        }
+
+        // 5. Coupon
+        const currentServiceSubtotal = finalBaseServicePrice + slotSurcharge + consumableTotal;
+        let couponDiscount = 0;
+        let validCouponId = null;
+        let couponNameApplied = "";
+
+        if (couponCode && typeof couponCode === 'string' && couponCode.trim() !== '' && couponCode !== 'undefined') {
+            const cleanCode = couponCode.trim().toUpperCase();
+            const coupon = await Coupon.findOne({
+                couponName: cleanCode,
+                isActive: true,
+                expiryDate: { $gte: new Date() }
+            });
+
+            if (coupon && currentServiceSubtotal >= coupon.minOrderAmount) {
+                if (!coupon.vendorId || String(coupon.vendorId) === String(nurseId) || coupon.vendorType === 'All' || coupon.vendorType === 'Nurse') {
+                    couponDiscount = Math.min((currentServiceSubtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                    validCouponId = coupon._id;
+                    couponNameApplied = coupon.couponName;
+                }
+            }
+        }
+
+        const totalPrice = Math.max(0, Math.round((currentServiceSubtotal - couponDiscount) + finalTravelFee + fasterServiceCharge));
+
+        const isCod = (paymentMethod === 'COD');
+        if (isCod) {
+            const codAllowed = await isCodEnabled('Nurse', userId);
+            if (!codAllowed) {
                 return res.status(400).json({
                     success: false,
-                    message: "Cash on Delivery is currently disabled for Nurse bookings. Please pay online to confirm."
+                    errorStep: "COD_DISABLED",
+                    message: "Cash on Delivery is currently disabled for this nurse provider. Please pay online."
                 });
             }
         }
 
-        // 3. Resolve Hospital / Home Address & GPS Coordinates
-        let finalAddress = address || {};
-        let finalHospitalDetails = {
-            hospitalId: null,
-            isHKHospital: false,
-            hospitalName: "",
-            hospitalAddress: "",
-            city: "",
-            wardName: "",
-            bedNumber: "",
-            floorNumber: ""
-        };
+        const bookingId = `HKN-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
 
-        if (assessmentLocation === 'At Hospital') {
-            if (hospitalDetails && hospitalDetails.hospitalId) {
-                const hosp = await Hospital.findById(hospitalDetails.hospitalId).lean();
-                if (!hosp) {
-                    return res.status(404).json({ success: false, message: "Selected HK Hospital not found." });
-                }
-
-                finalHospitalDetails = {
-                    hospitalId: hosp._id,
-                    isHKHospital: true,
-                    hospitalName: hosp.name,
-                    hospitalAddress: hosp.address || "",
-                    city: hosp.city || "",
-                    wardName: hospitalDetails.wardName || "General Ward",
-                    bedNumber: hospitalDetails.bedNumber || "Bed 01",
-                    floorNumber: hospitalDetails.floorNumber || ""
-                };
-
-                finalAddress = {
-                    name: `${hosp.name} (${finalHospitalDetails.wardName} - ${finalHospitalDetails.bedNumber})`,
-                    phone: finalAddress.phone || req.user.phone || "",
-                    houseNo: `${finalHospitalDetails.wardName}, Bed: ${finalHospitalDetails.bedNumber}${finalHospitalDetails.floorNumber ? ', Floor: ' + finalHospitalDetails.floorNumber : ''}`,
-                    sector: hosp.name,
-                    city: hosp.city || "",
-                    state: hosp.state || "",
-                    addressType: "Hospital"
-                };
-            } else if (hospitalDetails && hospitalDetails.hospitalName) {
-                finalHospitalDetails = {
-                    hospitalId: null,
-                    isHKHospital: false,
-                    hospitalName: hospitalDetails.hospitalName.trim(),
-                    hospitalAddress: hospitalDetails.hospitalAddress || "",
-                    city: hospitalDetails.city || "",
-                    wardName: hospitalDetails.wardName || "Ward",
-                    bedNumber: hospitalDetails.bedNumber || "Bed",
-                    floorNumber: hospitalDetails.floorNumber || ""
-                };
-
-                finalAddress = {
-                    name: `${finalHospitalDetails.hospitalName} (${finalHospitalDetails.wardName} - ${finalHospitalDetails.bedNumber})`,
-                    phone: finalAddress.phone || req.user.phone || "",
-                    houseNo: `${finalHospitalDetails.wardName}, Bed: ${finalHospitalDetails.bedNumber}`,
-                    sector: finalHospitalDetails.hospitalAddress || finalHospitalDetails.hospitalName,
-                    city: finalHospitalDetails.city || "",
-                    addressType: "Hospital"
-                };
-            }
+        let rzpOrder = null;
+        if (!isCod && totalPrice > 0) {
+            rzpOrder = await createRazorpayOrder(totalPrice, `rcpt_${bookingId}`);
         }
 
-        // 4. Server-Side Service Pricing Verification
-        const isPkg = isPackage === true || isPackage === 'true';
-        let baseServicePrice = 0;
-        let serviceSnapshot = {};
+        const initialStatus = isCod ? 'Confirmed' : 'Pending';
 
-        if (isPkg) {
-            const pkg = await NursePackage.findOne({ _id: packageId, nurseId });
-            if (!pkg) return res.status(404).json({ success: false, message: "Nurse Package not found." });
-            
-            serviceSnapshot = {
-                title: pkg.packageName,
-                type: "Package",
-                duration: schedule.duration || "Package",
-                basePrice: pkg.pricing.oneDay.final,
-                servicesOffered: "NURSING PACKAGE"
-            };
-
-            if (schedule.duration === 'For Multiple Days') baseServicePrice = pkg.pricing.multipleDays.final;
-            else if (schedule.duration === 'Acc. To Per/Hours') baseServicePrice = pkg.pricing.hourly.final;
-            else baseServicePrice = pkg.pricing.oneDay.final;
-        } else {
-            const svc = await NurseService.findOne({ _id: serviceId, nurseId });
-            if (!svc) return res.status(404).json({ success: false, message: "Nurse Service not found." });
-
-            serviceSnapshot = {
-                title: svc.title,
-                type: svc.type || "Daily Care",
-                duration: schedule.duration || "One day One Time",
-                basePrice: svc.pricing.oneDay.final,
-                procedureIncluded: svc.procedureIncluded || "",
-                servicesOffered: svc.servicesOffered || "NURSING CARE"
-            };
-
-            if (schedule.duration === 'For Multiple Days') baseServicePrice = svc.pricing.multipleDays.final;
-            else if (schedule.duration === 'Acc. To Per/Hours') baseServicePrice = svc.pricing.hourly.final;
-            else baseServicePrice = svc.pricing.oneDay.final;
-        }
-
-        const pCount = Math.max(1, (patients && Array.isArray(patients)) ? patients.length : 1);
-        let durationUnits = 1;
-
-        if (schedule.duration === 'For Multiple Days' && schedule.endDate) {
-            const startM = moment(schedule.startDate).startOf('day');
-            const endM = moment(schedule.endDate).endOf('day');
-            durationUnits = Math.max(1, endM.diff(startM, 'days') + 1);
-        } else if (schedule.duration === 'Acc. To Per/Hours' && schedule.startTime && schedule.endTime) {
-            const startT = moment(schedule.startTime, "HH:mm");
-            const endT = moment(schedule.endTime, "HH:mm");
-            durationUnits = Math.max(1, endT.diff(startT, 'hours'));
-        }
-
-        const totalBaseFee = baseServicePrice * durationUnits * pCount;
-        let originalBasePrice = totalBaseFee;
-        let finalBasePrice = totalBaseFee;
-        let isSubscriptionApplied = false;
-
-        const benefitCheck = await checkAndApplyBenefit(userId, 'freeNurseVisitsCount', totalBaseFee);
-        if (benefitCheck.isApplied) {
-            finalBasePrice = 0;
-            isSubscriptionApplied = true;
-        }
-
-        // 5. 🔒 SECURITY HARDENED: Server-Side Consumables Verification (Zero Trust on Client Price)
-        let verifiedConsumables = [];
-        let consumableTotal = 0;
-
-        if (selectedConsumables && Array.isArray(selectedConsumables)) {
-            for (let item of selectedConsumables) {
-                const targetId = item.consumableId || item.masterItemId || item._id;
-                if (!targetId) continue;
-
-                const masterItem = await MasterConsumable.findById(targetId);
-                if (masterItem) {
-                    const qty = Math.max(1, Number(item.quantity || 1));
-                    // Check if nurse bureau offered a specific discounted price
-                    let verifiedPrice = masterItem.mrp;
-                    const itemTotal = verifiedPrice * qty;
-
-                    consumableTotal += itemTotal;
-                    verifiedConsumables.push({
-                        consumableId: masterItem._id,
-                        itemName: masterItem.itemName,
-                        price: verifiedPrice,
-                        quantity: qty,
-                        unitType: masterItem.unitType || 'Piece'
-                    });
-                }
-            }
-        }
-
-        const fasterServiceCharge = (isFasterService === true || isFasterService === 'true') ? 100 : 0;
-        const subtotal = finalBasePrice + consumableTotal + fasterServiceCharge;
-
-        // 6. Server-Side Coupon Re-validation
-        let couponDiscount = 0;
-        let appliedCouponObj = null;
-
-        if (couponCode) {
-            const coupon = await Coupon.findOne({
-                couponName: String(couponCode).trim().toUpperCase(),
-                isActive: true,
-                expiryDate: { $gte: new Date() }
-            });
-
-            if (coupon && subtotal >= coupon.minOrderAmount) {
-                couponDiscount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
-                appliedCouponObj = {
-                    couponId: coupon._id,
-                    couponName: coupon.couponName,
-                    discountAmount: Math.round(couponDiscount)
-                };
-            }
-        }
-
-        const taxAmount = Math.round((subtotal - couponDiscount) * 0.05);
-        const totalPrice = Math.max(0, Math.round((subtotal - couponDiscount) + taxAmount));
-
-        const customBookingId = `HKN-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
-
-        const bookingData = {
+        const newBooking = await NurseBooking.create({
+            bookingId,
             userId,
             nurseId,
-            serviceId: isPkg ? null : serviceId,
+            serviceId: !isPkg ? serviceId : null,
             packageId: isPkg ? packageId : null,
-            bookingId: customBookingId,
             bookingType: 'Regular',
-            serviceDetails: serviceSnapshot,
+            serviceDetails: {
+                title: serviceTitle,
+                type: selectedType,
+                duration: `${durationMultiplier} ${selectedType === 'Acc. To Per/Hours' ? 'Hours' : 'Days'}`,
+                basePrice: baseUnitRate,
+                procedureIncluded,
+                servicesOffered
+            },
             priceBreakdown: {
-                baseServicePrice: finalBasePrice,
-                originalBasePrice,
-                slotSurcharge: 0,
-                consumableTotal,
+                baseServicePrice: finalBaseServicePrice,
+                originalBasePrice: calculatedBaseServicePrice,
+                slotSurcharge: Math.round(slotSurcharge),
+                consumableTotal: Math.round(consumableTotal),
                 couponDiscount: Math.round(couponDiscount),
-                fasterServiceCharge,
-                taxAmount,
+                fasterServiceCharge: Math.round(fasterServiceCharge),
+                taxAmount: 0,
                 totalPrice
             },
-            couponCode: couponCode ? String(couponCode).trim().toUpperCase() : null,
-            appliedCoupon: appliedCouponObj,
-            patients: (patients && Array.isArray(patients)) ? patients : [{ name: "Self", relation: "Self" }],
+            couponCode: couponNameApplied || null,
+            appliedCoupon: validCouponId ? {
+                couponId: validCouponId,
+                discountAmount: Math.round(couponDiscount),
+                couponName: couponNameApplied
+            } : null,
+            patients: parsedPatients.length > 0 ? parsedPatients : [{ patientId: 'Self', name: req.user?.name || 'Self', age: 30, gender: 'Male' }],
             assessmentLocation,
-            hospitalDetails: finalHospitalDetails,
-            healthDetails: healthDetails || {},
+            healthDetails: typeof healthDetails === 'string' ? JSON.parse(healthDetails) : (healthDetails || {}),
             schedule: {
-                duration: schedule.duration || 'One day One Time',
-                startDate: new Date(schedule.startDate),
-                endDate: schedule.endDate ? new Date(schedule.endDate) : new Date(schedule.startDate),
-                startTime: schedule.startTime || "09:00",
-                endTime: schedule.endTime || null
+                duration: selectedType,
+                startDate: new Date(startDate),
+                endDate: new Date(endDate),
+                startTime,
+                endTime
             },
-            address: finalAddress,
-            selectedConsumables: verifiedConsumables,
+            address: parsedAddress,
+            selectedConsumables: parsedConsumables,
+            hospitalDetails: parsedHospital,
             paymentMethod,
-            paymentStatus: paymentMethod === 'COD' || totalPrice === 0 ? 'Pending' : 'Pending',
-            status: 'Pending'
-        };
+            paymentStatus: 'Pending',
+            status: initialStatus,
+            serviceOTP: Math.floor(1000 + Math.random() * 9000).toString(),
+            completionOTP: Math.floor(1000 + Math.random() * 9000).toString()
+        });
 
-        const booking = await NurseBooking.create(bookingData);
+        if (isCod || totalPrice === 0) {
+            if (visitBenefit.isApplied) await deductBenefitCount(userId, 'freeNurseVisitsCount');
+            if (travelBenefit.isApplied) await deductBenefitCount(userId, 'freeNurseDeliveriesCount');
+            if (validCouponId) await Coupon.findByIdAndUpdate(validCouponId, { $push: { usedBy: { userId, usageCount: 1 } } });
 
-        // Deduct subscription count if free
-        if (isSubscriptionApplied && (paymentMethod === 'COD' || totalPrice === 0)) {
-            await deductBenefitCount(userId, 'freeNurseVisitsCount');
-        }
-
-        // Razorpay integration if online payment
-        if (paymentMethod !== 'COD' && totalPrice > 0) {
-            const rzpOrder = await createRazorpayOrder(totalPrice, `rcpt_${customBookingId}`);
-            
-            booking.paymentDetails = {
-                razorpayOrderId: rzpOrder.id,
-                amount: totalPrice,
-                currency: "INR",
-                status: "created"
-            };
-            await booking.save();
+            try {
+                await notifyAdminsAndVendor(
+                    nurseId,
+                    'nurse',
+                    "👩‍⚕️ New Nursing Booking Received (COD)!",
+                    `Booking #${bookingId} received for ₹${totalPrice}.`,
+                    { bookingId: newBooking._id.toString(), type: 'new_nurse_booking' }
+                );
+            } catch (e) {}
 
             return res.status(201).json({
                 success: true,
-                message: "Razorpay order initiated. Complete payment to confirm.",
-                key_id: process.env.RAZORPAY_KEY_ID,
-                amount: rzpOrder.amount,
-                razorpayOrderId: rzpOrder.id,
-                bookingId: customBookingId,
-                bookingMongoId: booking._id,
-                appointmentId: booking._id
+                message: "Nurse booking placed successfully!",
+                bookingId: newBooking.bookingId,
+                status: newBooking.status,
+                data: newBooking
             });
         }
 
-        // Alert Nurse Bureau
-        try {
-            await sendPushNotification(
-                nurseId,
-                'nurse',
-                "New Home/Hospital Nursing Booking!",
-                `New booking #${customBookingId} (${assessmentLocation === 'At Hospital' ? finalHospitalDetails.hospitalName : 'Home Care'}). Tap to assign staff.`,
-                { bookingId: booking._id.toString(), type: 'new_nurse_booking' }
-            );
-        } catch (e) {}
-
-        res.status(201).json({
+        return res.status(201).json({
             success: true,
-            message: "Nursing booking confirmed!",
-            bookingId: customBookingId,
-            data: booking
+            message: "Razorpay order initialized. Complete payment to confirm booking.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount,
+            razorpayOrderId: rzpOrder.id,
+            bookingId: newBooking.bookingId,
+            bookingMongoId: newBooking._id,
+            status: "Pending",
+            data: newBooking
         });
 
     } catch (error) {
-        console.error("Place Nurse Booking Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("placeNurseBooking Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in nurse booking." });
     }
 };
 
-// VERIFY NURSE PAYMENT (Secured IDOR Protection & Multi-Parameter Lookup)
-// endpoint: POST /user/nurse/verify-payment
+// @desc    Verify Razorpay Payment Signature for Nurse Booking & Confirm Order
+// @route   POST /user/nurse/verify-payment
+// @access  Private (User)
 const verifyNursePayment = async (req, res) => {
     try {
-        const userId = req.user.id; // 👈 Authenticated User ID from Token
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "User not authenticated." });
+        }
 
         let body = req.body || {};
         if (typeof body === 'string') {
             try { body = JSON.parse(body); } catch (e) {}
         }
-        if (body.response && typeof body.response === 'object') {
-            body = { ...body, ...body.response };
-        }
-        if (body.data && typeof body.data === 'object') {
-            body = { ...body, ...body.data };
-        }
-        if (body.paymentDetails && typeof body.paymentDetails === 'object') {
-            body = { ...body, ...body.paymentDetails };
-        }
+        if (body.response && typeof body.response === 'object') body = { ...body, ...body.response };
+        if (body.data && typeof body.data === 'object') body = { ...body, ...body.data };
 
-        const rzpPaymentId = body.razorpay_payment_id || 
-                             body.razorpayPaymentId || 
-                             body.paymentId || 
-                             body.payment_id || 
-                             body.paymentID;
+        const rzpPaymentId = body.razorpay_payment_id || body.razorpayPaymentId || body.paymentId || body.payment_id;
+        const rzpOrderId = body.razorpay_order_id || body.razorpayOrderId || body.orderId || body.order_id;
+        const rzpSignature = body.razorpay_signature || body.razorpaySignature || body.signature;
 
-        const rzpOrderId = body.razorpay_order_id || 
-                           body.razorpayOrderId || 
-                           body.orderId || 
-                           body.order_id || 
-                           body.orderID;
-
-        const rzpSignature = body.razorpay_signature || 
-                             body.razorpaySignature || 
-                             body.signature || 
-                             body.razorpay_sign;
-
-        const targetId = body.appointmentId || 
-                         body.bookingMongoId || 
-                         body.bookingId || 
-                         body.booking_id || 
-                         body.appointment_id || 
-                         body.id;
+        const targetBookingId = body.bookingId || body.bookingMongoId || body.id || body._id;
 
         if (!rzpPaymentId) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Missing razorpay_payment_id." 
+                errorStep: "MISSING_PAYMENT_ID",
+                message: "Missing payment transaction ID (razorpay_payment_id / razorpayPaymentId)." 
             });
         }
 
-        // 1. Signature Verification
-        let isVerified = false;
-        if (rzpOrderId && rzpSignature) {
-            isVerified = verifyRazorpaySignature(rzpOrderId, rzpPaymentId, rzpSignature);
-        }
-
-        if (!isVerified && (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV)) {
-            console.warn("⚠️ [DEV NOTICE]: Signature mismatch bypassed in development mode for test runner.");
-            isVerified = true;
-        }
-
-        if (!isVerified && process.env.NODE_ENV === 'production') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Signature verification failed. Invalid transaction signature." 
-            });
-        }
-
-        // 2. 🔒 IDOR SECURITY CHECK: Bind query to authenticated userId
+        // Find Pending Booking
+        const isObjectId = mongoose.isValidObjectId(targetBookingId);
         const searchConditions = [];
 
-        if (targetId) {
-            if (mongoose.isValidObjectId(targetId)) {
-                searchConditions.push({ _id: targetId });
-            }
-            searchConditions.push({ bookingId: String(targetId).trim() });
-        }
+        if (isObjectId) searchConditions.push({ _id: new mongoose.Types.ObjectId(targetBookingId) });
+        if (targetBookingId) searchConditions.push({ bookingId: String(targetBookingId).trim() });
+        if (rzpOrderId) searchConditions.push({ "paymentDetails.razorpayOrderId": String(rzpOrderId).trim() });
 
-        if (rzpOrderId) {
-            searchConditions.push({ 'paymentDetails.razorpayOrderId': rzpOrderId });
-        }
+        let booking = await NurseBooking.findOne({
+            userId,
+            $or: searchConditions
+        });
 
-        let booking = null;
-        if (searchConditions.length > 0) {
-            booking = await NurseBooking.findOne({ 
-                userId, // 👈 Strictly prevents User A from confirming User B's booking
-                $or: searchConditions 
-            });
-        }
-
-        // Fallback search for latest pending booking of this user
         if (!booking) {
-            const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
             booking = await NurseBooking.findOne({
                 userId,
-                paymentStatus: 'Pending',
-                createdAt: { $gte: fifteenMinsAgo }
+                status: 'Pending',
+                paymentStatus: 'Pending'
             }).sort({ createdAt: -1 });
         }
 
         if (!booking) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Booking record not found or unauthorized access." 
+                errorStep: "BOOKING_NOT_FOUND",
+                message: "Nurse booking record not found for verification." 
             });
         }
 
-        // 3. Map Real Payment Details
-        let rzpDetails = null;
+        // Signature Verification
+        let isVerified = false;
+        if (rzpOrderId && rzpSignature) {
+            isVerified = verifyRazorpaySignature(rzpOrderId, rzpPaymentId, rzpSignature);
+        }
+
+        if (!isVerified && (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV)) {
+            isVerified = true;
+        }
+
+        if (!isVerified && process.env.NODE_ENV === 'production') {
+            booking.paymentStatus = 'Failed';
+            booking.status = 'Cancelled';
+            await booking.save();
+            return res.status(400).json({ 
+                success: false, 
+                errorStep: "SIGNATURE_MISMATCH",
+                message: "Payment signature verification failed." 
+            });
+        }
+
+        let paymentRecord = null;
         try {
             if (rzpSignature) {
-                rzpDetails = await fetchAndMapRazorpayPayment(rzpPaymentId, rzpSignature);
+                paymentRecord = await fetchAndMapRazorpayPayment(rzpPaymentId, rzpSignature);
             }
-        } catch (fetchErr) {}
+        } catch (e) {}
 
-        if (!rzpDetails) {
-            rzpDetails = {
+        const rawGatewayMethod = (paymentRecord?.method || "Online").toLowerCase();
+        let standardizedMethod = "Online";
+        if (rawGatewayMethod === "upi") standardizedMethod = "UPI";
+        else if (rawGatewayMethod === "card") standardizedMethod = "Card";
+        else if (rawGatewayMethod === "netbanking") standardizedMethod = "Netbanking";
+
+        if (!paymentRecord) {
+            paymentRecord = {
                 razorpayPaymentId: rzpPaymentId,
                 razorpayOrderId: rzpOrderId || "",
                 razorpaySignature: rzpSignature || "",
-                method: 'Online',
-                amount: booking.priceBreakdown?.totalPrice || booking.totalPrice || 0,
+                method: rawGatewayMethod,
+                amount: Number(booking.priceBreakdown?.totalPrice || 0),
+                currency: "INR",
                 status: 'captured',
                 paidAt: new Date()
             };
         }
 
+        // Update to Confirmed & Paid
+        booking.status = 'Confirmed';
         booking.paymentStatus = 'Paid';
-        booking.paymentMethod = 'Online';
-        booking.paymentDetails = rzpDetails;
-        
-        if (booking.status === 'Pending') {
-            booking.status = 'Confirmed';
-        }
-
+        booking.paymentMethod = standardizedMethod;
+        booking.paymentDetails = paymentRecord;
         await booking.save();
 
-        // 4. Deduct Subscription benefit count if applied
-        if (booking.priceBreakdown?.originalBasePrice > 0 && booking.priceBreakdown?.baseServicePrice === 0) {
-            await deductBenefitCount(booking.userId, 'freeNurseVisitsCount');
+        // Deduct Quotas
+        if (booking.priceBreakdown?.baseServicePrice === 0) {
+            await deductBenefitCount(userId, 'freeNurseVisitsCount');
+        }
+        if (booking.priceBreakdown?.fasterServiceCharge === 0 && booking.assessmentLocation === 'At Home') {
+            await deductBenefitCount(userId, 'freeNurseDeliveriesCount');
         }
 
-        // 5. Notify Nurse Bureau
+        if (booking.appliedCoupon?.couponId) {
+            await Coupon.findByIdAndUpdate(booking.appliedCoupon.couponId, {
+                $push: { usedBy: { userId, usageCount: 1 } }
+            });
+        }
+
+        // Notify Nurse Bureau
         try {
-            await sendPushNotification(
+            await notifyAdminsAndVendor(
                 booking.nurseId,
                 'nurse',
-                "💳 Payment Verified for Nursing Booking!",
-                `Paid booking #${booking.bookingId} is confirmed. Please assign a nurse staff.`,
-                { bookingId: booking._id.toString(), type: 'nurse_booking_paid' }
+                "👩‍⚕️ New Paid Nursing Booking Confirmed!",
+                `Booking #${booking.bookingId} for ₹${booking.priceBreakdown.totalPrice} has been confirmed. Please assign staff.`,
+                { bookingId: booking._id.toString(), type: 'new_nurse_booking' }
             );
         } catch (e) {}
 
+        return res.status(200).json({
+            success: true,
+            message: "Payment successfully verified and nurse booking confirmed!",
+            bookingId: booking.bookingId,
+            serviceOTP: booking.serviceOTP,
+            data: booking
+        });
+
+    } catch (error) {
+        console.error("verifyNursePayment Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in payment verification." });
+    }
+};
+
+// @desc    Retry Online Payment for a Pending Nurse Booking
+// @route   POST /user/nurse/retry-payment
+// @access  Private (User)
+const retryNursePayment = async (req, res) => {
+    try {
+        const userId = req.user?.id || req.user?._id;
+        const { bookingId } = req.body;
+
+        if (!bookingId) {
+            return res.status(400).json({ success: false, message: "bookingId is required." });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            userId,
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(bookingId) : new mongoose.Types.ObjectId() },
+                { bookingId: String(bookingId).trim() }
+            ]
+        };
+
+        const booking = await NurseBooking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Nurse booking record not found." });
+        }
+
+        if (booking.paymentStatus === 'Paid' || booking.status === 'Confirmed') {
+            return res.status(400).json({ success: false, message: "This booking is already paid and confirmed." });
+        }
+
+        if (booking.paymentMethod === 'COD') {
+            return res.status(400).json({ success: false, message: "This is a Cash on Delivery booking." });
+        }
+
+        const totalPayable = Number(booking.priceBreakdown?.totalPrice || 0);
+        if (totalPayable <= 0) {
+            return res.status(400).json({ success: false, message: "Payable amount is ₹0." });
+        }
+
+        const receiptId = `rcpt_retry_${booking.bookingId}_${Date.now().toString().slice(-4)}`;
+        const rzpOrder = await createRazorpayOrder(totalPayable, receiptId);
+
+        if (!booking.paymentDetails) booking.paymentDetails = {};
+        booking.paymentDetails.razorpayOrderId = rzpOrder.id;
+        booking.paymentMethod = 'Online';
+        booking.paymentStatus = 'Pending';
+        await booking.save();
+
+        return res.status(200).json({
+            success: true,
+            message: "Fresh Razorpay payment order generated.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount,
+            razorpayOrderId: rzpOrder.id,
+            bookingId: booking.bookingId,
+            bookingMongoId: booking._id,
+            totalPayable
+        });
+
+    } catch (error) {
+        console.error("retryNursePayment Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in retryNursePayment." });
+    }
+};
+
+// @desc    Get Detailed Live Nurse Service Tracking Timeline, Staff Location & Session Timer
+// @route   GET /user/nurse/track/:id
+// @access  Private (User)
+// @desc    Get Detailed Live Nurse Service Tracking Timeline, Staff Location & Session Timer
+// @route   GET /user/nurse/track/:id
+// @access  Private (User)
+const getAppointmentStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user?.id || req.user?._id;
+
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            userId,
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(id) : new mongoose.Types.ObjectId() },
+                { bookingId: String(id).trim() }
+            ]
+        };
+
+        const booking = await NurseBooking.findOne(query)
+            .populate('nurseId', 'name speciality profileImage city address phone rating location')
+            .populate('assignedStaffId', 'name phone vehicleNumber profilePic vehicleType location status')
+            .populate('serviceId', 'title description')
+            .populate('packageId', 'packageName description')
+            .lean();
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Nurse booking record not found." });
+        }
+
+        const isExpress = Number(booking.priceBreakdown?.fasterServiceCharge || 0) > 0;
+        const isHospital = booking.assessmentLocation === 'At Hospital';
+
+        // 5-Step Nurse Service Progress Timeline
+        const trackingTimeline = [
+            {
+                step: 1,
+                title: "Booking Confirmed",
+                description: `Order confirmed via ${booking.paymentMethod || 'COD'}`,
+                time: booking.createdAt,
+                isCompleted: true,
+                isCurrent: booking.status === 'Confirmed' || booking.status === 'Pending'
+            },
+            {
+                step: 2,
+                title: "Staff Nurse Assigned",
+                description: booking.assignedStaffId ? `Staff Nurse ${booking.assignedStaffId.name} assigned` : "Assigning certified nurse",
+                time: ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed'].includes(booking.status) ? booking.updatedAt : null,
+                isCompleted: ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed'].includes(booking.status),
+                isCurrent: booking.status === 'Assigned'
+            },
+            {
+                step: 3,
+                title: isExpress ? "Nurse En-Route (Express 1-Hr)" : "Nurse En-Route to Location",
+                description: booking.assignedStaffId ? `Nurse is on the way to ${isHospital ? 'hospital ward' : 'doorstep'}` : "Nurse departing shortly",
+                time: booking.startedAt || null,
+                isCompleted: ['Arrived', 'Service-Started', 'Completed'].includes(booking.status),
+                isCurrent: booking.status === 'On-The-Way'
+            },
+            {
+                step: 4,
+                title: "Care Session In-Progress",
+                description: `Service timer active. Share Start OTP: ${booking.serviceOTP || '----'}`,
+                time: booking.startedAt || null,
+                isCompleted: ['Service-Started', 'Completed'].includes(booking.status),
+                isCurrent: ['Service-Started', 'Arrived'].includes(booking.status)
+            },
+            {
+                step: 5,
+                title: "Service Completed",
+                description: "Session finished. Completion OTP verified",
+                time: booking.completedAt || null,
+                isCompleted: booking.status === 'Completed',
+                isCurrent: booking.status === 'Completed'
+            }
+        ];
+
         res.status(200).json({
             success: true,
-            message: "Payment successfully verified and booking confirmed!",
             data: {
                 _id: booking._id,
                 bookingId: booking.bookingId,
                 status: booking.status,
                 paymentStatus: booking.paymentStatus,
-                paymentMethod: booking.paymentMethod,
-                amountPaid: booking.priceBreakdown?.totalPrice || booking.totalPrice || 0
-            }
-        });
-
-    } catch (error) {
-        console.error("Verify Nurse Payment Error:", error);
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-// GET APPOINTMENT STATUS & LIVE TRACKING FOR PATIENT APP
-// endpoint: GET /user/nurse/track/:id
-const getAppointmentStatus = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const userId = req.user.id;
-
-        const booking = await NurseBooking.findOne({ _id: id, userId })
-            .populate('nurseId', 'name phone email speciality profileImage city address rating')
-            .populate('assignedStaffId', 'name phone profilePic vehicleNumber vehicleType status location')
-            .populate('selectedConsumables.consumableId', 'itemName mrp unitType')
-            .lean();
-
-        if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking record not found." });
-        }
-
-        res.status(200).json({
-            success: true,
-            data: {
-                bookingId: booking._id,
-                bookingIdCustom: booking.bookingId || "N/A",
-                status: booking.status,
-                assessmentLocation: booking.assessmentLocation || "At Home",
+                paymentMethod: booking.paymentMethod || 'COD',
+                isCod: (booking.paymentMethod === 'COD'),
+                assessmentLocation: booking.assessmentLocation,
                 hospitalDetails: booking.hospitalDetails || null,
-                address: booking.address,
-                schedule: booking.schedule,
                 serviceDetails: booking.serviceDetails,
-                priceBreakdown: booking.priceBreakdown,
-                paymentStatus: booking.paymentStatus,
-                paymentMethod: booking.paymentMethod,
-                patients: booking.patients,
-                nurseBureau: booking.nurseId,
+
+                serviceOTP: booking.serviceOTP || null,
+                completionOTP: booking.completionOTP || null,
+
+                startedAt: booking.startedAt || null,
+                completedAt: booking.completedAt || null,
+                serviceNotes: booking.serviceNotes || null,
+                progressPhotos: booking.progressPhotos || [],
+
+                schedule: {
+                    duration: booking.schedule?.duration,
+                    startDate: booking.schedule?.startDate ? moment(booking.schedule.startDate).format('YYYY-MM-DD') : null,
+                    endDate: booking.schedule?.endDate ? moment(booking.schedule.endDate).format('YYYY-MM-DD') : null,
+                    startTime: booking.schedule?.startTime,
+                    endTime: booking.schedule?.endTime
+                },
+
+                // 🚨 FIXED: Replaced undefined `b` variable with `booking`
+                billSummary: {
+                    baseServicePrice: Number(booking.priceBreakdown?.baseServicePrice || 0),
+                    originalBasePrice: Number(booking.priceBreakdown?.originalBasePrice || booking.priceBreakdown?.baseServicePrice || 0),
+                    slotSurcharge: Number(booking.priceBreakdown?.slotSurcharge || 0),
+                    consumableTotal: Number(booking.priceBreakdown?.consumableTotal || 0),
+                    fasterServiceCharge: Number(booking.priceBreakdown?.fasterServiceCharge || 0),
+                    couponDiscount: Number(booking.priceBreakdown?.couponDiscount || 0),
+                    taxAmount: Number(booking.priceBreakdown?.taxAmount || 0),
+                    totalAmount: Number(booking.priceBreakdown?.totalPrice || 0)
+                },
+
+                nurseBureau: {
+                    id: booking.nurseId?._id || null,
+                    name: booking.nurseId?.name || "Nurse Bureau",
+                    speciality: booking.nurseId?.speciality || "General Nursing",
+                    city: booking.nurseId?.city || "",
+                    phone: booking.nurseId?.phone || "",
+                    image: booking.nurseId?.profileImage || null,
+                    rating: booking.nurseId?.rating || 4.8
+                },
+
                 assignedStaff: booking.assignedStaffId ? {
                     id: booking.assignedStaffId._id,
                     name: booking.assignedStaffId.name,
                     phone: booking.assignedStaffId.phone,
-                    profilePic: booking.assignedStaffId.profilePic || null,
-                    vehicleNumber: booking.assignedStaffId.vehicleNumber || null,
-                    vehicleType: booking.assignedStaffId.vehicleType || null,
+                    vehicleNumber: booking.assignedStaffId.vehicleNumber,
+                    profilePic: booking.assignedStaffId.profilePic,
                     status: booking.assignedStaffId.status,
-                    location: booking.assignedStaffId.location || { lat: 0, lng: 0 }
+                    currentLocation: booking.assignedStaffId.location || { lat: 0, lng: 0 }
                 } : null,
-                startedAt: booking.startedAt,
-                completedAt: booking.completedAt,
-                serviceNotes: booking.serviceNotes,
-                progressPhotos: booking.progressPhotos || []
+
+                patients: booking.patients || [],
+                selectedConsumables: booking.selectedConsumables || [],
+                deliveryAddress: booking.address || null,
+                trackingTimeline
             }
         });
 
     } catch (error) {
-        console.error("Get Appointment Status Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("getAppointmentStatus Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in tracking nurse appointment." });
     }
 };
 
@@ -1244,34 +1427,132 @@ const uploadBookingPrescription = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// @desc    Get User Nurse Bookings with Service Mode, Duration & Status Badges
+// @route   GET /user/nurse/my-appointments
+// @access  Private (User)
 const getMyNurseBookings = async (req, res) => {
     try {
-        // Query params se page aur limit lein (Default: page 1, limit 10)
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        const userId = req.user?.id || req.user?._id;
+        const { status, page = 1, limit = 10 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Skip calculate karein (ex: page 2 pe jana hai to 10 records skip honge)
-        const skip = (page - 1) * limit;
+        let query = { userId };
+        if (status && status !== 'All') {
+            query.status = status;
+        }
 
-        // Total count nikalne ke liye (taaki frontend pagination UI bana sake)
-        const total = await NurseBooking.countDocuments({ userId: req.user.id });
-
-        const bookings = await NurseBooking.find({ userId: req.user.id })
-            .populate('nurseId', 'name profileImage speciality')
+        const totalBookings = await NurseBooking.countDocuments(query);
+        const bookings = await NurseBooking.find(query)
+            .populate('nurseId', 'name speciality profileImage city address phone rating')
+            .populate('assignedStaffId', 'name phone vehicleNumber profilePic')
+            .populate('serviceId', 'title description')
+            .populate('packageId', 'packageName description')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(parseInt(limit))
+            .lean();
 
-        res.json({
-            success: true,
-            count: bookings.length,
-            totalItems: total, // Total kitne records hain
-            totalPages: Math.ceil(total / limit), // Kitne total pages banenge
-            currentPage: page,
-            data: bookings
+        const formattedBookings = bookings.map(b => {
+            const isExpress = Number(b.priceBreakdown?.fasterServiceCharge || 0) > 0;
+            const isHospital = b.assessmentLocation === 'At Hospital';
+
+            let modeLabel = "Standard Home Visit";
+            let modeType = "STANDARD_HOME";
+
+            if (isHospital) {
+                modeLabel = "Hospital Bedside Care";
+                modeType = "HOSPITAL_CARE";
+            } else if (isExpress) {
+                modeLabel = "Express Priority Visit";
+                modeType = "EXPRESS_VISIT";
+            } else if (b.schedule?.duration === 'For Multiple Days') {
+                modeLabel = `Multi-Day Care (${b.serviceDetails?.duration || ''})`;
+                modeType = "MULTI_DAY";
+            } else if (b.schedule?.duration === 'Acc. To Per/Hours') {
+                modeLabel = `Hourly Care (${b.serviceDetails?.duration || ''})`;
+                modeType = "HOURLY";
+            }
+
+            return {
+                _id: b._id,
+                bookingId: b.bookingId,
+                status: b.status,
+                paymentStatus: b.paymentStatus,
+                paymentMethod: b.paymentMethod || 'COD',
+                isCod: (b.paymentMethod === 'COD'),
+                bookingType: b.bookingType || 'Regular',
+                createdAt: b.createdAt,
+                formattedDate: moment(b.createdAt).format('DD MMM YYYY, hh:mm A'),
+
+                serviceDetails: b.serviceDetails,
+                assessmentLocation: b.assessmentLocation,
+                hospitalDetails: b.hospitalDetails || null,
+
+                deliveryMode: {
+                    type: modeType,
+                    label: modeLabel,
+                    isExpress,
+                    fasterServiceCharge: b.priceBreakdown?.fasterServiceCharge || 0,
+                    slotSurcharge: b.priceBreakdown?.slotSurcharge || 0
+                },
+
+                schedule: {
+                    duration: b.schedule?.duration,
+                    startDate: b.schedule?.startDate ? moment(b.schedule.startDate).format('YYYY-MM-DD') : null,
+                    endDate: b.schedule?.endDate ? moment(b.schedule.endDate).format('YYYY-MM-DD') : null,
+                    formattedSchedule: `${moment(b.schedule?.startDate).format('DD MMM YYYY')} (${b.schedule?.startTime || ''} - ${b.schedule?.endTime || ''})`,
+                    startTime: b.schedule?.startTime,
+                    endTime: b.schedule?.endTime
+                },
+
+                billSummary: {
+                    baseServicePrice: Number(b.priceBreakdown?.baseServicePrice || 0),
+                    originalBasePrice: Number(b.priceBreakdown?.originalBasePrice || b.priceBreakdown?.baseServicePrice || 0),
+                    slotSurcharge: Number(b.priceBreakdown?.slotSurcharge || 0),
+                    consumableTotal: Number(b.priceBreakdown?.consumableTotal || 0),
+                    fasterServiceCharge: Number(b.priceBreakdown?.fasterServiceCharge || 0),
+                    couponDiscount: Number(b.priceBreakdown?.couponDiscount || 0),
+                    taxAmount: Number(b.priceBreakdown?.taxAmount || 0),
+                    totalAmount: Number(b.priceBreakdown?.totalPrice || 0)
+                },
+
+                nurseBureau: {
+                    id: b.nurseId?._id || null,
+                    name: b.nurseId?.name || "Nurse Provider",
+                    speciality: b.nurseId?.speciality || "General Nursing",
+                    city: b.nurseId?.city || "",
+                    phone: b.nurseId?.phone || "",
+                    image: b.nurseId?.profileImage || null,
+                    rating: b.nurseId?.rating || 4.8
+                },
+
+                assignedStaff: b.assignedStaffId ? {
+                    id: b.assignedStaffId._id,
+                    name: b.assignedStaffId.name,
+                    phone: b.assignedStaffId.phone,
+                    vehicleNumber: b.assignedStaffId.vehicleNumber,
+                    profilePic: b.assignedStaffId.profilePic
+                } : null,
+
+                serviceOTP: b.serviceOTP || null,
+                completionOTP: b.completionOTP || null,
+                patients: b.patients || [],
+                selectedConsumables: b.selectedConsumables || [],
+                deliveryAddress: b.address || null
+            };
         });
+
+        res.status(200).json({
+            success: true,
+            totalBookings,
+            totalPages: Math.ceil(totalBookings / parseInt(limit)),
+            currentPage: parseInt(page),
+            data: formattedBookings
+        });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("getMyNurseBookings Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in nurse history." });
     }
 };
 
@@ -1751,80 +2032,106 @@ const getProvidersForService = async (req, res) => {
     }
 };
 
-// CANCEL NURSE BOOKING (State Protected with Cancellation Policy & Benefit Restore)
-// endpoint: PATCH /user/nurse/cancel/:id
+// @desc    Cancel Nurse Booking with Dynamic Cancellation Policy, Refund & Wallet Compensation
+// @route   PATCH /user/nurse/cancel/:id
+// @access  Private (User)
 const cancelNurseBooking = async (req, res) => {
     try {
         const { id } = req.params;
         const { reason } = req.body;
-        const userId = req.user.id;
+        const userId = req.user?.id || req.user?._id;
 
-        // 1. 🔒 IDOR Protected Lookup
-        const booking = await NurseBooking.findOne({ _id: id, userId });
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            userId,
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(id) : new mongoose.Types.ObjectId() },
+                { bookingId: String(id).trim() }
+            ]
+        };
+
+        const booking = await NurseBooking.findOne(query);
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
+            return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 2. 🔒 Strict State Protection
-        const blockedStatuses = ['Service-Started', 'Completed', 'Cancelled', 'No-Show'];
-        if (blockedStatuses.includes(booking.status)) {
-            return res.status(400).json({
-                success: false,
-                message: `Action Blocked: Cannot cancel booking in '${booking.status}' state.`
+        // 1. Block cancellation if already finished or cancelled
+        const terminalStates = ['Completed', 'Cancelled'];
+        if (terminalStates.includes(booking.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot cancel booking. Current status is already '${booking.status}'.` 
             });
         }
 
-        // 3. Process Cancellation Policy & Surcharges
+        // 2. Evaluate Dynamic Cancellation Refund Policy
         const policyResult = await processCancellationRefund(booking, 'Nurse');
 
-        // 4. Release Assigned Driver/Staff if assigned
-        if (booking.assignedStaffId) {
-            const Driver = require('../../../models/Driver');
-            await Driver.findByIdAndUpdate(booking.assignedStaffId, { $set: { status: 'Available' } });
-        }
-
+        // 3. Update Booking State
         booking.status = 'Cancelled';
-        booking.cancelReason = reason || "Cancelled by patient";
+        booking.cancelReason = reason || "Cancelled by Patient";
         if (!booking.priceBreakdown) booking.priceBreakdown = {};
         booking.priceBreakdown.cancellationFeeApplied = policyResult.cancellationFee;
 
-        // Queue online refund if payment was made
+        // If online paid and refund due
         if (booking.paymentStatus === 'Paid') {
-            booking.paymentStatus = 'Refund-Initiated';
+            booking.paymentStatus = policyResult.refundAmount > 0 ? 'Refund-Initiated' : 'Refunded';
         }
 
         await booking.save();
 
-        // 5. Restore Subscription Benefit count if applicable
-        if (booking.priceBreakdown?.originalBasePrice > 0 && booking.priceBreakdown?.baseServicePrice === 0) {
-            await refundBenefitCount(booking.userId, 'freeNurseVisitsCount');
+        // 4. Release Assigned Staff Nurse back to Available state
+        if (booking.assignedStaffId) {
+            await Driver.findByIdAndUpdate(booking.assignedStaffId, { 
+                $set: { status: 'Available' } 
+            });
         }
 
-        // Notify Nurse Bureau
+        // 5. Credit Cancellation Compensation to Nurse Bureau Wallet (if nurse already departed)
+        if (policyResult.cancellationFee > 0 && booking.nurseId) {
+            await creditVendorCompensation(
+                booking.nurseId,
+                'Nurse',
+                policyResult.cancellationFee,
+                booking.bookingId || booking._id.toString(),
+                'Cancellation Compensation Fee'
+            );
+        }
+
+        // 6. Restore Subscription Benefit Quota if used
+        if (booking.priceBreakdown?.baseServicePrice === 0) {
+            await refundBenefitCount(userId, 'freeNurseVisitsCount');
+            console.log(`🔄 [Subscription Sync]: Refunded 1 free nurse visit benefit to User ${userId}`);
+        }
+
+        // 7. Push Notification to Nurse Bureau
         try {
-            await sendPushNotification(
+            await notifyAdminsAndVendor(
                 booking.nurseId,
                 'nurse',
-                "Booking Cancelled by Patient",
-                `Booking #${booking.bookingId} was cancelled by the patient.`,
+                "⚠️ Nurse Booking Cancelled by Patient",
+                `Booking #${booking.bookingId} was cancelled. ${policyResult.cancellationFee > 0 ? `₹${policyResult.cancellationFee} compensation credited to your wallet.` : ''}`,
                 { bookingId: booking._id.toString(), type: 'nurse_booking_cancelled' }
             );
         } catch (e) {}
 
         res.status(200).json({
             success: true,
-            message: "Nurse booking cancelled successfully. Any eligible refund has been initiated.",
+            message: policyResult.cancellationFee > 0
+                ? `Booking cancelled. A late cancellation charge of ₹${policyResult.cancellationFee} was applied. Refund of ₹${policyResult.refundAmount} has been initiated.`
+                : "Booking cancelled successfully. Full refund initiated.",
             data: {
                 bookingId: booking.bookingId,
                 status: booking.status,
                 cancellationFee: policyResult.cancellationFee,
-                refundAmount: policyResult.refundAmount
+                refundAmount: policyResult.refundAmount,
+                paymentStatus: booking.paymentStatus
             }
         });
 
     } catch (error) {
-        console.error("Cancel Nurse Booking Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("cancelNurseBooking Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in cancelling nurse booking." });
     }
 };
 
@@ -1832,7 +2139,7 @@ const cancelNurseBooking = async (req, res) => {
 
 
 module.exports = {
-    getNurses, getNurseDetails, searchNursesAndServices, searchNurses, checkoutNurseBooking, placeNurseBooking, verifyNursePayment, checkRangeAvailability, getNurseAvailability, getMyNurseBookings, rateNurseService, rateNurseBooking,
+    getNurses, getNurseDetails, searchNursesAndServices, searchNurses, checkoutNurseBooking, placeNurseBooking, verifyNursePayment,retryNursePayment, checkRangeAvailability, getNurseAvailability, getMyNurseBookings, rateNurseService, rateNurseBooking,
     getAppointmentStatus,
     uploadBookingPrescription, getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons,getRegisteredHospitalsDropdown, validateCoupon, getNursePackagesList,
     getNursePackageDetails, getMedicalConditions,
