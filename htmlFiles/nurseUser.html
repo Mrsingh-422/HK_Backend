@@ -1214,13 +1214,13 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
     const grid = document.getElementById('schedulerCalendarGrid');
     const slotGrid = document.getElementById('hourlySlotsGrid');
     
-    grid.innerHTML = `<div class="text-center py-10 col-span-7 text-xs text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading availability...</div>`;
-    if (slotGrid) {
-        slotGrid.innerHTML = `<div class="text-center py-4 col-span-full text-xs text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading slots...</div>`;
-    }
+    if (grid) grid.innerHTML = `<div class="text-center py-10 col-span-7 text-xs text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading availability...</div>`;
+    if (slotGrid) slotGrid.innerHTML = `<div class="text-center py-4 col-span-full text-xs text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>Loading slots...</div>`;
 
     const itemId = appState.isPackage ? appState.selectedPackage?._id : appState.selectedService?._id;
-    const query = `serviceId=${!appState.isPackage ? itemId : ''}&packageId=${appState.isPackage ? itemId : ''}&isPackage=${appState.isPackage}&type=${encodeURIComponent(appState.frequencyMode)}&selectedDate=${encodeURIComponent(appState.startDate || '')}`;
+    // 🚀 Sends selectedDate in query
+    const targetDate = appState.startDate || moment().format('YYYY-MM-DD');
+    const query = `serviceId=${!appState.isPackage ? itemId : ''}&packageId=${appState.isPackage ? itemId : ''}&isPackage=${appState.isPackage}&type=${encodeURIComponent(appState.frequencyMode)}&selectedDate=${encodeURIComponent(targetDate)}`;
 
     try {
         const res = await fetch(`${API_BASE_URL}/user/nurse/availability/${appState.selectedNurseId}?${query}`);
@@ -1230,24 +1230,12 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
         const calendarDays = Array.isArray(payload.calendar) ? payload.calendar : [];
         const timeSlotsList = Array.isArray(payload.timeSlots) ? payload.timeSlots : [];
 
-        // Save delivery config rates
         appState.travelBaseFee = payload.deliveryConfig?.travelBaseFee || 50;
         appState.expressChargeRate = payload.deliveryConfig?.expressChargeRate || 100;
 
-        // Update Top Banner Base Unit Price based on active frequency mode
-        const item = appState.isPackage ? appState.selectedPackage : appState.selectedService;
-        let currentModePrice = item?.pricing?.oneDay?.final || 1800;
-        if (appState.frequencyMode === 'For Multiple Days') {
-            currentModePrice = item?.pricing?.multipleDays?.final || currentModePrice;
-        } else if (appState.frequencyMode === 'Acc. To Per/Hours') {
-            currentModePrice = item?.pricing?.hourly?.final || 200;
-        }
-        document.getElementById('sched-item-price').innerText = `₹${currentModePrice}`;
-
-        grid.innerHTML = "";
-
-        // 1. Render Calendar Days
-        if (calendarDays.length > 0) {
+        // Render Calendar
+        if (grid) {
+            grid.innerHTML = "";
             calendarDays.forEach(day => {
                 const dStr = day.date;
                 const dateNum = moment(dStr).date();
@@ -1255,18 +1243,19 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
                 const isPremium = day.pricing?.isPremium || false;
                 const extraFee = Number(day.pricing?.extraFee || 0);
 
+                const item = appState.isPackage ? appState.selectedPackage : appState.selectedService;
+                let currentModePrice = item?.pricing?.oneDay?.final || 1800;
+                if (appState.frequencyMode === 'For Multiple Days') currentModePrice = item?.pricing?.multipleDays?.final || currentModePrice;
+                else if (appState.frequencyMode === 'Acc. To Per/Hours') currentModePrice = item?.pricing?.hourly?.final || 200;
+
                 const displayPrice = (appState.frequencyMode === 'For Multiple Days')
                     ? (day.pricing?.multipleDayPrice || currentModePrice + extraFee)
-                    : (appState.frequencyMode === 'Acc. To Per/Hours' 
-                        ? (day.pricing?.hourlyPrice || currentModePrice)
-                        : (day.pricing?.oneDayPrice || currentModePrice + extraFee));
+                    : (appState.frequencyMode === 'Acc. To Per/Hours' ? (day.pricing?.hourlyPrice || currentModePrice) : (day.pricing?.oneDayPrice || currentModePrice + extraFee));
 
                 const cell = document.createElement('div');
                 cell.className = `cal-day-cell ${isSelected ? 'selected' : ''} ${day.isDisabled ? 'disabled' : ''} ${isPremium ? 'is-premium-date' : ''}`;
                 cell.id = `cal-day-${dStr}`;
-                cell.onclick = () => { 
-                    if (!day.isDisabled) handleCalendarDateClick(dStr, extraFee); 
-                };
+                cell.onclick = () => { if (!day.isDisabled) handleCalendarDateClick(dStr, extraFee); };
 
                 cell.innerHTML = `
                     <span class="text-xs font-black">${dateNum}</span>
@@ -1277,7 +1266,7 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
             });
         }
 
-        // 2. Render Time Slots Grid with Direct Price & Badges
+        // Render Time Slots Grid
         if (slotGrid) {
             if (timeSlotsList.length > 0) {
                 const isHourly = (appState.frequencyMode === 'Acc. To Per/Hours');
@@ -1289,7 +1278,6 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
                     const isExpressWindow = s.isExpressWindow || false;
                     const isDisabled = s.isDisabled || false;
 
-                    // Display price directly calculated on the slot card
                     const slotCardPrice = isHourly 
                         ? (isExpressWindow ? (s.totalHourlyPrice + appState.expressChargeRate) : s.totalHourlyPrice)
                         : (isExpressWindow ? `+₹${appState.expressChargeRate} Rush` : (isPremiumSlot ? `+₹${extraFee} Peak` : 'Standard'));
@@ -1321,7 +1309,6 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
                     `;
                 }).join('');
 
-                // Auto-select first available active slot if none or disabled
                 const firstAvailable = timeSlotsList.find(s => !s.isDisabled);
                 if (!appState.startTime && firstAvailable) {
                     handleSlotCardClick(firstAvailable.time, firstAvailable.slotPremiumFee || 0, firstAvailable.isExpressWindow || false);
@@ -1340,7 +1327,6 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
 
     } catch (err) {
         console.error("Availability error:", err);
-        grid.innerHTML = `<div class="text-center py-6 col-span-7 text-xs text-red-500">Failed to load calendar data.</div>`;
     }
 }
 
@@ -1386,7 +1372,7 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
         if (endCell) endCell.classList.add('selected');
     }
 
-    // Refresh slots based on newly selected date
+    // 🚀 Refresh time slots for the clicked date (e.g. 2026-10-08)
     loadAvailabilityCalendar();
 }
 
@@ -1570,9 +1556,10 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
             appState.calculatedBill = b;
 
             // Summary Duration & Patients
+            const durationUnits = json.durationUnits || json.data?.durationUnits || (appState.frequencyMode === 'Acc. To Per/Hours' ? b.totalHours : b.totalDays);
             const durationLabel = appState.frequencyMode === 'Acc. To Per/Hours' 
-                ? `${b.totalHours || 1} Hr(s)` 
-                : `${b.totalDays || 1} Day(s)`;
+                ? `${durationUnits || 1} Hr(s)` 
+                : `${durationUnits || 1} Day(s)`;
                 
             document.getElementById('billDurationUnits').innerText = durationLabel;
             document.getElementById('billPatientCount').innerText = `${b.pCount || 1} Patient`;
@@ -1595,27 +1582,32 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
                 slotRow.classList.add('hidden');
             }
 
-            // 2. Consumables Row
+            // 2. Consumables Row (Shows Multiplied with Patients count)
             const conRow = document.getElementById('billConsumablesRow');
             if (Number(b.consumableTotal || 0) > 0) {
                 conRow.classList.remove('hidden');
-                document.getElementById('billConsumables').innerText = `+₹${b.consumableTotal}`;
+                document.getElementById('billConsumables').innerText = `+₹${b.consumableTotal} (x${b.pCount || 1})`;
             } else {
                 conRow.classList.add('hidden');
             }
 
-            // 🚗 3. BASE FIXED TRAVEL FARE (Applies when Express Rush is NOT active)
+            // 🚗 3. BASE FIXED TRAVEL FARE
             const travelRow = document.getElementById('billTravelRow');
             if (Number(b.travelFee || 0) > 0) {
                 travelRow.classList.remove('hidden');
                 document.getElementById('billTravelFee').innerText = `₹${b.travelFee}`;
-            } else {
-                // If express rush is active, travel fee is absorbed/waived
+            } else if (b.fasterServiceCharge > 0) {
                 travelRow.classList.remove('hidden');
                 document.getElementById('billTravelFee').innerText = `FREE (Included in Express)`;
+            } else if (b.freeDeliveryThreshold > 0 && b.baseServicePrice >= b.freeDeliveryThreshold) {
+                travelRow.classList.remove('hidden');
+                document.getElementById('billTravelFee').innerText = `FREE (Above ₹${b.freeDeliveryThreshold})`;
+            } else {
+                travelRow.classList.remove('hidden');
+                document.getElementById('billTravelFee').innerText = `FREE (₹0)`;
             }
 
-            // ⚡ 4. EXPRESS RUSH CHARGE (Applies when 1-4 hrs window active)
+            // ⚡ 4. EXPRESS RUSH CHARGE
             const expRow = document.getElementById('billExpressRow');
             const expCheckbox = document.getElementById('chkExpressNurse');
 
@@ -1627,7 +1619,10 @@ function handleSlotCardClick(time, extraFee = 0, isExpressWindow = false) {
                 expRow.classList.remove('hidden');
                 document.getElementById('billExpressFee').innerText = `+₹${b.fasterServiceCharge} (⚡ 1-4h Rush)`;
             } else if (Number(b.fasterServiceCharge || 0) > 0) {
-                if (expCheckbox) expCheckbox.disabled = false;
+                if (expCheckbox) {
+                    expCheckbox.checked = true;
+                    expCheckbox.disabled = false;
+                }
                 expRow.classList.remove('hidden');
                 document.getElementById('billExpressFee').innerText = `+₹${b.fasterServiceCharge}`;
             } else {
