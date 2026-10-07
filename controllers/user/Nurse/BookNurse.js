@@ -532,21 +532,25 @@ const getAvailableCoupons = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-// 2. VALIDATE COUPON (Manual Check)
+// @desc    Validate Coupon Code for a Nurse Booking (Enforces maxUsagePerUser Limit)
+// @route   POST /user/nurse/validate-coupon
+// @access  Private (User)
 const validateCoupon = async (req, res) => {
     try {
         const { couponCode, nurseId, totalAmount } = req.body;
         const userId = req.user.id;
 
         if (!couponCode) {
-            return res.status(400).json({ success: false, message: "Coupon code is required" });
+            return res.status(400).json({ success: false, message: "Coupon code is required." });
         }
 
+        const cleanCode = String(couponCode).trim().toUpperCase();
+
         let query = {
-            couponName: couponCode.toUpperCase(),
+            couponName: cleanCode,
             isActive: true,
             expiryDate: { $gte: new Date() },
-            vendorType: { $in: ['Nurse', 'All'] } // Root level strictly matching Nurse Bureau
+            vendorType: { $in: ['Nurse', 'All'] }
         };
 
         if (nurseId && mongoose.Types.ObjectId.isValid(nurseId)) {
@@ -558,39 +562,56 @@ const validateCoupon = async (req, res) => {
             query.isAdminCreated = true;
         }
 
-        const coupon = await Coupon.findOne(query);
+        const coupon = await Coupon.findOne(query).lean();
         if (!coupon) {
-            return res.status(404).json({ success: false, message: "Invalid or Expired Coupon Code for Nursing Service" });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Invalid or expired coupon code for nursing services." 
+            });
         }
 
-        if (totalAmount < coupon.minOrderAmount) {
-            return res.status(400).json({ success: false, message: `Minimum order amount for this coupon is ₹${coupon.minOrderAmount}` });
+        const numTotal = Number(totalAmount || 0);
+        if (numTotal < (coupon.minOrderAmount || 0)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Minimum order amount of ₹${coupon.minOrderAmount} is required to apply this coupon.` 
+            });
         }
 
-        const userUsage = coupon.usedBy.find(u => u.userId.toString() === userId.toString());
-        const usageCount = userUsage ? userUsage.usageCount : 0;
+        // Strict Check: User's individual coupon usage count against max allowed limit
+        const userUsage = coupon.usedBy?.find(u => String(u.userId) === String(userId));
+        const currentUsageCount = userUsage ? Number(userUsage.usageCount || 0) : 0;
+        const maxAllowed = Number(coupon.maxUsagePerUser || 1);
 
-        if (usageCount >= coupon.maxUsagePerUser) {
-            return res.status(400).json({ success: false, message: "You have already reached the maximum usage limit for this coupon" });
+        if (currentUsageCount >= maxAllowed) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Coupon usage limit reached. You can only use this coupon ${maxAllowed} time(s).` 
+            });
         }
 
-        let discountAmount = (totalAmount * coupon.discountPercentage) / 100;
-        if (discountAmount > coupon.maxDiscount) {
+        let discountAmount = Math.round((numTotal * (coupon.discountPercentage || 0)) / 100);
+        if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
             discountAmount = coupon.maxDiscount;
         }
 
-        res.json({
+        const finalPayable = Math.max(0, numTotal - discountAmount);
+
+        res.status(200).json({
             success: true,
-            message: "Coupon Applied Successfully!",
+            message: "Coupon applied successfully!",
             data: {
                 couponId: coupon._id,
                 couponName: coupon.couponName,
                 discountPercentage: coupon.discountPercentage,
-                discountAmount: Math.round(discountAmount),
-                finalPayable: Math.round(totalAmount - discountAmount)
+                discountAmount,
+                finalPayable,
+                remainingUsages: maxAllowed - currentUsageCount
             }
         });
+
     } catch (error) {
+        console.error("Validate Coupon Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -644,7 +665,7 @@ const getRegisteredHospitalsDropdown = async (req, res) => {
 };
 
 // =========================================================================
-// 🧮 HELPER: CALCULATE PRICING (CONSUMABLES MULTIPLIED BY PATIENT COUNT)
+// @desc    Dynamic Pricing Engine (With Delivery/Travel Charges & Per-User Coupon Limit Check)
 const calculateNurseBookingBreakdown = async ({
     nurseId,
     serviceId,
@@ -661,7 +682,7 @@ const calculateNurseBookingBreakdown = async ({
     couponCode = null,
     userId = null
 }) => {
-    // 1. Fetch Target Service / Package
+    // 1. Fetch Target Service or Package
     let targetItem = null;
     if (isPackage || packageId) {
         targetItem = await NursePackage.findById(packageId || serviceId).lean();
@@ -675,7 +696,7 @@ const calculateNurseBookingBreakdown = async ({
 
     const patients = Math.max(1, Number(patientCount) || 1);
 
-    // 2. Base Price Calculation depending on duration type
+    // 2. Base Price Calculation
     let unitBaseFee = 0;
     let stayDays = 1;
     let totalHours = 1;
@@ -704,7 +725,7 @@ const calculateNurseBookingBreakdown = async ({
 
     const baseServicePrice = Math.round(unitBaseFee * patients);
 
-    // 3. Dynamic Premium Surcharges (Day 1 Peak Date + 1st Hour Peak Slot)
+    // 3. Peak Date / Slot Surcharges
     let datePremiumFee = 0;
     let slotPremiumFee = 0;
 
@@ -733,7 +754,7 @@ const calculateNurseBookingBreakdown = async ({
 
     const slotSurcharge = datePremiumFee + slotPremiumFee;
 
-    // 🚨 4. CONSUMABLES CALCULATION (MULTIPLIED BY NUMBER OF PATIENTS)
+    // 4. Consumables Calculation (Multiplied by Patient Count)
     let singlePatientConsumableTotal = 0;
     if (selectedConsumables && Array.isArray(selectedConsumables)) {
         selectedConsumables.forEach(c => {
@@ -743,7 +764,7 @@ const calculateNurseBookingBreakdown = async ({
     }
     const consumableTotal = singlePatientConsumableTotal * patients;
 
-    // 5. Fetch Delivery/Travel Charge Settings
+    // 5. Delivery & Travel Charge Calculation
     const deliveryChargeConfig = await DeliveryCharge.findOne({
         $or: [
             { vendorId: nurseObjId },
@@ -755,8 +776,10 @@ const calculateNurseBookingBreakdown = async ({
     const vendorFixedPrice = Number(deliveryChargeConfig?.fixedPrice !== undefined ? deliveryChargeConfig.fixedPrice : 50);
     const vendorFastExtra = Number(deliveryChargeConfig?.fastDeliveryExtra !== undefined ? deliveryChargeConfig.fastDeliveryExtra : 100);
     const freeThreshold = Number(deliveryChargeConfig?.freeDeliveryThreshold !== undefined ? deliveryChargeConfig.freeDeliveryThreshold : 0);
+    const vendorTaxPercent = Number(deliveryChargeConfig?.taxPercentage || 0);
+    const vendorTaxFixed = Number(deliveryChargeConfig?.taxInRupees || 0);
 
-    // ⚡ 6. Real-Time Emergency 1-4 Hour Window Evaluation
+    // 6. 1-4 Hour Rush Window Evaluation
     const now = moment();
     const isBookingToday = moment(startDate).format('YYYY-MM-DD') === now.format('YYYY-MM-DD');
     let isExpressRequired = false;
@@ -776,7 +799,7 @@ const calculateNurseBookingBreakdown = async ({
         }
     }
 
-    // 🚨 7. MUTUALLY EXCLUSIVE LOGIC (Rush Charge vs Base Fixed Travel Fare)
+    // 7. Mutually Exclusive Travel vs Express Fee
     const isExpressActive = (isFasterService === true || isFasterService === 'true' || isExpressRequired);
     const isFreeThresholdMet = (freeThreshold > 0 && baseServicePrice >= freeThreshold);
 
@@ -808,11 +831,20 @@ const calculateNurseBookingBreakdown = async ({
 
     const subtotal = finalBaseServicePrice + slotSurcharge + consumableTotal + travelFee + fasterServiceCharge;
 
-    // 9. Coupon Application
+    // 9. Dynamic Tax from Vendor Config
+    let taxAmount = 0;
+    if (vendorTaxPercent > 0) {
+        taxAmount += Math.round((subtotal * vendorTaxPercent) / 100);
+    }
+    if (vendorTaxFixed > 0) {
+        taxAmount += Math.round(vendorTaxFixed);
+    }
+
+    // 10. Coupon Validation with Strict Per-User Usage Limit Check
     let couponDiscount = 0;
     let appliedCouponObj = null;
 
-    if (couponCode) {
+    if (couponCode && String(couponCode).trim() !== "") {
         const coupon = await Coupon.findOne({
             couponName: String(couponCode).toUpperCase().trim(),
             isActive: true,
@@ -824,19 +856,30 @@ const calculateNurseBookingBreakdown = async ({
             const isTypeMatch = coupon.vendorType === 'All' || coupon.vendorType === 'Nurse';
 
             if (isVendorMatch && isTypeMatch) {
-                let disc = (subtotal * coupon.discountPercentage) / 100;
-                if (disc > coupon.maxDiscount) disc = coupon.maxDiscount;
-                couponDiscount = Math.round(disc);
-                appliedCouponObj = {
-                    couponId: coupon._id,
-                    couponName: coupon.couponName,
-                    discountAmount: couponDiscount
-                };
+                let isUsageAllowed = true;
+                if (userId) {
+                    const userUsage = coupon.usedBy?.find(u => String(u.userId) === String(userId));
+                    const currentCount = userUsage ? Number(userUsage.usageCount || 0) : 0;
+                    if (currentCount >= Number(coupon.maxUsagePerUser || 1)) {
+                        isUsageAllowed = false;
+                    }
+                }
+
+                if (isUsageAllowed) {
+                    let disc = (subtotal * coupon.discountPercentage) / 100;
+                    if (coupon.maxDiscount && disc > coupon.maxDiscount) disc = coupon.maxDiscount;
+                    couponDiscount = Math.round(disc);
+                    appliedCouponObj = {
+                        couponId: coupon._id,
+                        couponName: coupon.couponName,
+                        discountAmount: couponDiscount
+                    };
+                }
             }
         }
     }
 
-    const finalTotalPrice = Math.max(0, Math.round(subtotal - couponDiscount));
+    const finalTotalPrice = Math.max(0, Math.round(subtotal + taxAmount - couponDiscount));
 
     return {
         targetItem,
@@ -845,20 +888,21 @@ const calculateNurseBookingBreakdown = async ({
             originalBasePrice: baseServicePrice,
             pCount: patients,
             totalDays: stayDays,
-            totalHours: totalHours,
+            totalHours,
             datePremiumFee,
             slotPremiumFee,
             slotSurcharge,
             singlePatientConsumableTotal,
-            consumableTotal, // 👈 Total after multiplying with patient count
-            travelFee,       // 👈 Vendor fixedPrice
+            consumableTotal,
+            travelFee,                       // 👈 Base Travel / Delivery Charge
+            deliveryCharge: travelFee,       // 👈 Direct alias for frontend
             originalTravelFee: vendorFixedPrice,
             fasterServiceCharge,
             freeDeliveryThreshold: freeThreshold,
             isExpressRequired,
             hoursDiffFromNow: hoursDiffFromNow !== null ? Number(hoursDiffFromNow.toFixed(1)) : null,
             couponDiscount,
-            taxAmount: 0,
+            taxAmount,
             totalPrice: finalTotalPrice,
             appliedCoupon: appliedCouponObj,
             isSubscriptionApplied
@@ -866,8 +910,9 @@ const calculateNurseBookingBreakdown = async ({
     };
 };
 
-// 1. CHECKOUT SUMMARY API (OUTPUTS DIRECT ROOT & DATA BREAKDOWNS)
-// Endpoint: POST /user/nurse/checkout
+// @desc    Calculate and Preview Checkout Breakdown (Returns Delivery/Travel Charges)
+// @route   POST /user/nurse/checkout
+// @access  Private (User)
 const checkoutNurseBooking = async (req, res) => {
     try {
         const {
@@ -912,7 +957,6 @@ const checkoutNurseBooking = async (req, res) => {
             userId
         });
 
-        // Check COD status
         const isCodAvailable = await isCodEnabled('Nurse', userId);
 
         res.status(200).json({
@@ -921,9 +965,11 @@ const checkoutNurseBooking = async (req, res) => {
             isCodAvailable,
             durationUnits: selectedType === 'Acc. To Per/Hours' ? breakdown.totalHours : breakdown.totalDays,
             pCount: breakdown.pCount,
+            deliveryCharge: breakdown.travelFee,
             breakdown,
             data: {
                 isCodAvailable,
+                deliveryCharge: breakdown.travelFee,
                 durationUnits: selectedType === 'Acc. To Per/Hours' ? breakdown.totalHours : breakdown.totalDays,
                 pCount: breakdown.pCount,
                 breakdown
@@ -936,8 +982,9 @@ const checkoutNurseBooking = async (req, res) => {
     }
 };
 
-// 2. PLACE NURSE BOOKING API
-// Endpoint: POST /user/nurse/book
+// @desc    Place / Book Nursing Service or Package (Guarantees Travel Fee & Delivery Charge Persistence)
+// @route   POST /user/nurse/book
+// @access  Private (User)
 const placeNurseBooking = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -947,37 +994,67 @@ const placeNurseBooking = async (req, res) => {
             packageId,
             isPackage,
             schedule,
-            patients = [],
+            patients,
+            healthDetails,
             address,
             assessmentLocation = 'At Home',
             selectedConsumables = [],
-            isFasterService = false,
+            hospitalDetails,
             couponCode,
-            paymentMethod = 'Online',
-            healthDetails,
-            hospitalDetails
+            isFasterService = false
         } = req.body;
 
-        if (!nurseId || (!serviceId && !packageId) || !schedule || !address) {
+        if (!nurseId || (!serviceId && !packageId)) {
             return res.status(400).json({
                 success: false,
-                message: "Missing required booking details (nurseId, serviceId/packageId, schedule, address)."
+                message: "Nurse Provider ID and Service/Package ID are required."
             });
         }
 
-        const patientList = Array.isArray(patients) && patients.length > 0 ? patients : [{
-            patientId: 'Self',
-            name: req.user.name || "Self",
-            relation: 'Self'
-        }];
+        if (!schedule || !schedule.startDate || !schedule.duration) {
+            return res.status(400).json({
+                success: false,
+                message: "Schedule details (startDate and duration) are required."
+            });
+        }
 
-        // 1. Calculate price breakdown with active surcharges, consumables & travel fee
+        // Normalize Payment Method
+        const incomingMethod = req.body.paymentMethod || req.body.payment_method || req.body.paymentMode || 'Online';
+        const cleanMethodUpper = String(incomingMethod).trim().toUpperCase();
+        const isCODOrder = cleanMethodUpper === 'COD' || cleanMethodUpper.includes('CASH') || cleanMethodUpper === 'PAY ON VISIT';
+        const finalPaymentMethod = isCODOrder ? 'COD' : 'Online';
+
+        // Validate COD Policy
+        if (finalPaymentMethod === 'COD') {
+            const isCodAllowed = await isCodEnabled('Nurse', userId);
+            if (!isCodAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cash on Delivery (COD) is currently disabled for nursing services. Please proceed with Online Payment."
+                });
+            }
+        }
+
+        // Check Active Nurse
+        const nurse = await Nurse.findById(nurseId);
+        if (!nurse || nurse.isActive === false) {
+            return res.status(404).json({
+                success: false,
+                message: "Selected Nurse provider is not active or available."
+            });
+        }
+
+        const patientList = Array.isArray(patients) && patients.length > 0 
+            ? patients 
+            : [{ patientId: 'Self', name: req.user.name || 'Self' }];
+
+        // Re-use dynamic calculation engine
         const { targetItem, breakdown } = await calculateNurseBookingBreakdown({
             nurseId,
             serviceId,
             packageId,
-            isPackage: isPackage === true || isPackage === 'true',
-            selectedType: schedule.duration || 'One day One Time',
+            isPackage: isPackage === true || isPackage === 'true' || !!packageId,
+            selectedType: schedule.duration,
             startDate: schedule.startDate,
             endDate: schedule.endDate,
             startTime: schedule.startTime,
@@ -989,357 +1066,404 @@ const placeNurseBooking = async (req, res) => {
             userId
         });
 
-        const totalPayable = breakdown.totalPrice;
-        const bookingId = `HKN-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+        const grandTotal = breakdown.totalPrice;
+        const tempBookingId = `HKN-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
 
-        const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
-        const endOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        const dynamicServiceOTP = Math.floor(1000 + Math.random() * 9000).toString();
+        const dynamicCompletionOTP = Math.floor(1000 + Math.random() * 9000).toString();
 
-        // 2. Build Booking Document
-        const newBooking = new NurseBooking({
+        const formattedConsumables = [];
+        if (Array.isArray(selectedConsumables) && selectedConsumables.length > 0) {
+            selectedConsumables.forEach(c => {
+                const itemPrice = Number(c.price || c.finalPrice || 0);
+                formattedConsumables.push({
+                    consumableId: c.consumableId || c.masterItemId || c._id,
+                    itemName: c.itemName || c.name || "Medical Consumable",
+                    price: itemPrice,
+                    unitType: c.unitType || "Piece"
+                });
+            });
+        }
+
+        let planName = "";
+        let userSubscriptionId = null;
+        if (breakdown.isSubscriptionApplied) {
+            const activeSub = await UserSubscription.findOne({
+                userId,
+                status: 'Active',
+                endDate: { $gt: new Date() }
+            }).populate('planId');
+            if (activeSub && activeSub.planId) {
+                planName = activeSub.planId.name || "Care Subscription Plan";
+                userSubscriptionId = activeSub._id;
+            }
+        }
+
+        const isFreeOrCOD = finalPaymentMethod === 'COD' || grandTotal === 0;
+
+        const newBooking = await NurseBooking.create({
+            bookingId: tempBookingId,
             userId,
             nurseId,
-            serviceId: !isPackage ? (serviceId || targetItem._id) : null,
-            packageId: isPackage ? (packageId || targetItem._id) : null,
-            bookingId,
+            serviceId: !isPackage && !packageId ? (serviceId || targetItem._id) : null,
+            packageId: (isPackage || packageId) ? (packageId || targetItem._id) : null,
             bookingType: 'Regular',
             serviceDetails: {
-                title: targetItem.title || targetItem.packageName || "Nursing Care",
-                type: targetItem.type || (isPackage ? "Package" : "Daily Care"),
+                title: targetItem.packageName || targetItem.title,
+                type: (isPackage || packageId) ? 'Package' : (targetItem.type || 'Daily Care'),
                 duration: schedule.duration,
-                basePrice: targetItem.pricing?.oneDay?.final || 0,
+                basePrice: targetItem.pricing?.oneDay?.final || targetItem.pricing?.hourly?.final || 0,
                 procedureIncluded: targetItem.procedureIncluded || "",
-                servicesOffered: targetItem.servicesOffered || ""
+                servicesOffered: targetItem.servicesOffered || "NURSING CARE"
             },
             priceBreakdown: {
                 baseServicePrice: breakdown.baseServicePrice,
                 originalBasePrice: breakdown.originalBasePrice,
                 slotSurcharge: breakdown.slotSurcharge,
                 consumableTotal: breakdown.consumableTotal,
-                travelFee: breakdown.travelFee,
+                travelFee: Number(breakdown.travelFee || 0),                     // 👈 Persisted in MongoDB
+                deliveryCharge: Number(breakdown.travelFee || 0),                // 👈 Persisted in MongoDB
+                originalTravelFee: Number(breakdown.originalTravelFee || 0),     // 👈 Persisted in MongoDB
                 couponDiscount: breakdown.couponDiscount,
                 fasterServiceCharge: breakdown.fasterServiceCharge,
-                taxAmount: breakdown.taxAmount || 0,
-                totalPrice: totalPayable
+                taxAmount: breakdown.taxAmount,
+                totalPrice: grandTotal
             },
+            totalPrice: grandTotal,
             couponCode: couponCode ? String(couponCode).toUpperCase() : null,
             appliedCoupon: breakdown.appliedCoupon,
             patients: patientList,
-            assessmentLocation,
+            assessmentLocation: assessmentLocation || 'At Home',
+            hospitalDetails: assessmentLocation === 'At Hospital' ? hospitalDetails : null,
             healthDetails: healthDetails || {},
-            hospitalDetails: assessmentLocation === 'At Hospital' ? hospitalDetails : undefined,
             schedule: {
-                startDate: schedule.startDate ? new Date(schedule.startDate) : new Date(),
-                endDate: schedule.endDate ? new Date(schedule.endDate) : (schedule.startDate ? new Date(schedule.startDate) : new Date()),
+                startDate: moment(schedule.startDate).startOf('day').toDate(),
+                endDate: schedule.endDate ? moment(schedule.endDate).endOf('day').toDate() : moment(schedule.startDate).endOf('day').toDate(),
                 startTime: schedule.startTime || "09:00",
                 endTime: schedule.endTime || null,
-                duration: schedule.duration || 'One day One Time'
+                duration: schedule.duration
             },
-            address,
-            selectedConsumables: selectedConsumables.map(c => ({
-                consumableId: c.consumableId || c._id,
-                itemName: c.itemName || c.name || "Consumable",
-                price: Number(c.price || c.finalPrice || 0),
-                unitType: c.unitType || "Piece"
-            })),
-            status: 'Pending',
-            paymentMethod,
-            paymentStatus: (paymentMethod === 'COD' || totalPayable === 0) ? 'Pending' : 'Pending',
-            serviceOTP: startOtp,
-            completionOTP: endOtp
+            address: address || {},
+            selectedConsumables: formattedConsumables,
+            needConsumable: formattedConsumables.length > 0,
+            serviceOTP: dynamicServiceOTP,
+            completionOTP: dynamicCompletionOTP,
+            paymentMethod: finalPaymentMethod,
+            paymentStatus: 'Pending',
+            status: isFreeOrCOD ? 'Confirmed' : 'Pending',
+            subscriptionDetails: {
+                isSubscriptionApplied: breakdown.isSubscriptionApplied,
+                userSubscriptionId,
+                planName
+            }
         });
 
-        // 3. Handle COD or 100% Free Bookings
-        if (paymentMethod === 'COD' || totalPayable === 0) {
-            newBooking.status = 'Pending';
-            if (totalPayable === 0) {
-                newBooking.paymentStatus = 'Paid';
-            }
-            await newBooking.save();
-
-            if (breakdown.isSubscriptionApplied) {
-                await deductBenefitCount(userId, 'freeNurseVisitsCount');
-            }
-
-            if (breakdown.appliedCoupon) {
+        // Increment Coupon Usage atomically for COD or 100% discount bookings
+        if (breakdown.appliedCoupon && breakdown.appliedCoupon.couponId && isFreeOrCOD) {
+            const existingUsage = await Coupon.findOne({ _id: breakdown.appliedCoupon.couponId, "usedBy.userId": userId });
+            if (existingUsage) {
+                await Coupon.updateOne(
+                    { _id: breakdown.appliedCoupon.couponId, "usedBy.userId": userId },
+                    { $inc: { "usedBy.$.usageCount": 1 } }
+                );
+            } else {
                 await Coupon.findByIdAndUpdate(breakdown.appliedCoupon.couponId, {
                     $push: { usedBy: { userId, usageCount: 1 } }
                 });
             }
+        }
 
-            try {
-                await sendPushNotification(
-                    nurseId,
-                    'nurse',
-                    "📋 New Nursing Booking Request!",
-                    `New booking #${bookingId} has been placed. Please accept and assign staff nurse.`,
-                    { bookingId: newBooking._id.toString(), type: 'new_nurse_booking' }
-                );
-            } catch (e) {}
+        // Deduct subscription benefit
+        if (breakdown.isSubscriptionApplied && isFreeOrCOD) {
+            await deductBenefitCount(userId, 'freeNurseVisitsCount');
+        }
+
+        // Online Payment Flow (Razorpay Order)
+        if (finalPaymentMethod === 'Online' && grandTotal > 0) {
+            const rzpOrder = await createRazorpayOrder(grandTotal, `receipt_${tempBookingId}`);
 
             return res.status(201).json({
                 success: true,
-                message: "Nursing booking placed successfully!",
-                bookingId,
+                message: "Razorpay order initiated. Please complete payment verification to confirm booking.",
+                key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
+                amount: rzpOrder.amount,
+                currency: "INR",
+                razorpayOrderId: rzpOrder.id,
+                bookingId: newBooking.bookingId,
+                appointmentId: newBooking._id,
+                paymentMethod: 'Online',
+                paymentStatus: 'Pending',
+                isCod: false,
+                deliveryCharge: breakdown.travelFee,
+                travelFee: breakdown.travelFee,
                 data: newBooking
             });
         }
 
-        // 4. Online Payment: Create Razorpay Order
-        const rzpOrder = await createRazorpayOrder(totalPayable, `rcpt_${bookingId}`);
-        await newBooking.save();
+        // Notify Nurse Bureau for COD
+        await notifyAdminsAndVendor(
+            nurseId,
+            'nurse',
+            "New Nursing Care Booking Confirmed (COD)!",
+            `Booking #${newBooking.bookingId} has been confirmed via Cash on Delivery. Please assign nurse staff.`,
+            { bookingId: newBooking._id.toString(), type: 'nurse_booking_placed' }
+        );
 
-        res.status(201).json({
+        return res.status(201).json({
             success: true,
-            message: "Razorpay order created successfully.",
-            key_id: process.env.RAZORPAY_KEY_ID,
-            amount: rzpOrder.amount,
-            razorpayOrderId: rzpOrder.id,
-            bookingId,
-            appointmentId: newBooking._id
+            message: "Nursing service booking confirmed successfully via Cash on Delivery!",
+            bookingId: newBooking.bookingId,
+            appointmentId: newBooking._id,
+            paymentMethod: 'COD',
+            paymentStatus: 'Pending',
+            isCod: true,
+            deliveryCharge: breakdown.travelFee,
+            travelFee: breakdown.travelFee,
+            data: newBooking
         });
 
     } catch (error) {
         console.error("Place Nurse Booking Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message || "Failed to place nurse booking." });
     }
 };
 
-// 
-// 3. VERIFY NURSE PAYMENT API (SUBSCRIPTION & COUPON DEDUCTION SYNC)
-// Endpoint: POST /user/nurse/verify-payment
+// @desc    Verify Razorpay Payment Signature & Record Coupon Usage Count
+// @route   POST /user/nurse/verify-payment
+// @access  Private (User)
 const verifyNursePayment = async (req, res) => {
     try {
-        const { bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+        const { appointmentId, bookingId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
 
-        if (!bookingId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        if ((!appointmentId && !bookingId) || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
             return res.status(400).json({
                 success: false,
-                message: "All payment verification tokens (bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature) are required."
+                message: "appointmentId/bookingId, razorpayOrderId, razorpayPaymentId, and razorpaySignature are required."
             });
         }
 
-        const booking = await NurseBooking.findOne({
-            $or: [
-                { _id: mongoose.isValidObjectId(bookingId) ? bookingId : new mongoose.Types.ObjectId() },
-                { bookingId: String(bookingId).trim() }
-            ]
-        });
+        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+        if (!isVerified && process.env.NODE_ENV === 'production') {
+            return res.status(400).json({
+                success: false,
+                message: "Payment verification failed. Invalid transaction signature."
+            });
+        }
 
+        const query = appointmentId && mongoose.isValidObjectId(appointmentId)
+            ? { _id: appointmentId }
+            : { bookingId: String(bookingId || appointmentId).trim() };
+
+        const booking = await NurseBooking.findOne(query);
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking record not found." });
-        }
-
-        const isVerified = verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-        if (!isVerified) {
-            return res.status(400).json({
+            return res.status(404).json({
                 success: false,
-                message: "Invalid transaction signature. Verification failed."
+                message: "Nurse booking record not found."
             });
         }
 
-        const paymentDetails = await fetchAndMapRazorpayPayment(razorpay_payment_id, razorpay_signature);
+        const paymentDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
 
         booking.paymentStatus = 'Paid';
+        booking.paymentMethod = 'Online';
         booking.status = 'Confirmed';
-        booking.paymentMethod = paymentDetails ? paymentDetails.method : 'Online';
         booking.paymentDetails = paymentDetails || {
-            razorpayPaymentId: razorpay_payment_id,
-            razorpayOrderId: razorpay_order_id,
-            razorpaySignature: razorpay_signature,
+            razorpayPaymentId,
+            razorpayOrderId,
+            razorpaySignature,
+            method: 'Online',
+            amount: booking.totalPrice,
+            currency: 'INR',
             status: 'captured',
             paidAt: new Date()
         };
 
         await booking.save();
 
-        // 🚨 SUBSCRIPTION SYNC: Decrement subscriber free visit quota
-        if (booking.subscriptionDetails?.isSubscriptionApplied || booking.priceBreakdown?.baseServicePrice === 0) {
+        // 🚨 Increment Coupon Usage count upon successful online payment verification
+        if (booking.appliedCoupon && booking.appliedCoupon.couponId) {
+            const existingUsage = await Coupon.findOne({ _id: booking.appliedCoupon.couponId, "usedBy.userId": booking.userId });
+            if (existingUsage) {
+                await Coupon.updateOne(
+                    { _id: booking.appliedCoupon.couponId, "usedBy.userId": booking.userId },
+                    { $inc: { "usedBy.$.usageCount": 1 } }
+                );
+            } else {
+                await Coupon.findByIdAndUpdate(booking.appliedCoupon.couponId, {
+                    $push: { usedBy: { userId: booking.userId, usageCount: 1 } }
+                });
+            }
+        }
+
+        // Deduct subscription benefit
+        if (booking.subscriptionDetails?.isSubscriptionApplied) {
             await deductBenefitCount(booking.userId, 'freeNurseVisitsCount');
         }
 
-        // 🚨 COUPON SYNC: Lock single-use coupon
-        if (booking.appliedCoupon?.couponId) {
-            await Coupon.findByIdAndUpdate(booking.appliedCoupon.couponId, {
-                $push: { usedBy: { userId: booking.userId, usageCount: 1 } }
-            });
-        }
-
         // Notify Nurse Bureau
-        try {
-            await sendPushNotification(
-                booking.nurseId,
-                'nurse',
-                "✨ Paid Nursing Booking Confirmed!",
-                `Booking #${booking.bookingId} payment verified. Please assign a staff nurse.`,
-                { bookingId: booking._id.toString(), type: 'nurse_booking_paid' }
-            );
-        } catch (e) {}
+        await notifyAdminsAndVendor(
+            booking.nurseId,
+            'nurse',
+            "Payment Received! New Nursing Booking Confirmed",
+            `Online payment verified for booking #${booking.bookingId}. Please assign nurse staff.`,
+            { bookingId: booking._id.toString(), type: 'nurse_booking_paid' }
+        );
 
         res.status(200).json({
             success: true,
-            message: "Payment verified and nurse booking confirmed successfully!",
-            bookingId: booking.bookingId,
-            serviceOTP: booking.serviceOTP,
+            message: "Payment verified successfully. Booking is now Confirmed!",
             data: booking
         });
 
     } catch (error) {
         console.error("Verify Nurse Payment Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message || "Internal payment verification error." });
     }
 };
 
-// 🔄 RETRY NURSE ONLINE PAYMENT (DUAL IDENTIFIER SUPPORT)
-// Endpoint: POST /user/nurse/retry-payment
+// @desc    Retry Online Payment for a Pending Nurse Booking
+// @route   POST /user/nurse/retry-payment
+// @access  Private (User)
 const retryNursePayment = async (req, res) => {
     try {
-        const { bookingId } = req.body;
+        const { bookingId, appointmentId } = req.body;
         const userId = req.user.id;
 
-        if (!bookingId) {
-            return res.status(400).json({ success: false, message: "bookingId is required to retry payment." });
+        const targetId = appointmentId || bookingId;
+        if (!targetId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId or bookingId is required to retry payment."
+            });
         }
 
-        // 🛡️ Dual-Lookup with strict User Ownership Check
-        const isObjectId = mongoose.isValidObjectId(bookingId);
-        const query = {
-            userId: new mongoose.Types.ObjectId(userId),
-            $or: [
-                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(bookingId) }] : []),
-                { bookingId: String(bookingId).trim() }
-            ]
-        };
+        const query = mongoose.isValidObjectId(targetId)
+            ? { _id: targetId, userId }
+            : { bookingId: String(targetId).trim(), userId };
 
         const booking = await NurseBooking.findOne(query);
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
+            return res.status(404).json({
+                success: false,
+                message: "Nurse booking record not found."
+            });
         }
 
         if (booking.paymentStatus === 'Paid') {
-            return res.status(400).json({ success: false, message: "This booking is already paid and confirmed." });
+            return res.status(400).json({
+                success: false,
+                message: "This booking is already paid and confirmed."
+            });
         }
 
-        if (booking.status === 'Cancelled') {
-            return res.status(400).json({ success: false, message: "Cannot pay for a cancelled booking. Please create a new booking." });
-        }
-
-        const totalPayable = Number(booking.priceBreakdown?.totalPrice || booking.totalPrice || 0);
-        if (totalPayable <= 0) {
+        const amountToPay = Number(booking.priceBreakdown?.totalPrice || booking.totalPrice || 0);
+        if (amountToPay <= 0) {
             booking.paymentStatus = 'Paid';
             booking.status = 'Confirmed';
             await booking.save();
-            return res.json({ success: true, message: "Booking confirmed with ₹0 balance.", data: booking });
+            return res.status(200).json({
+                success: true,
+                message: "Zero payable balance booking confirmed directly.",
+                data: booking
+            });
         }
 
-        // Create Fresh Razorpay Order for retry
-        const rzpReceiptId = `retry_${booking.bookingId}_${Date.now().toString().slice(-4)}`;
-        const rzpOrder = await createRazorpayOrder(totalPayable, rzpReceiptId);
+        const rzpOrder = await createRazorpayOrder(amountToPay, `retry_${booking.bookingId}`);
 
         res.status(200).json({
             success: true,
             message: "Fresh Razorpay payment order generated.",
-            key_id: process.env.RAZORPAY_KEY_ID,
+            key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
             amount: rzpOrder.amount,
+            currency: "INR",
             razorpayOrderId: rzpOrder.id,
             bookingId: booking.bookingId,
-            appointmentId: booking._id
+            appointmentId: booking._id,
+            data: booking
         });
 
     } catch (error) {
         console.error("Retry Nurse Payment Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message || "Failed to retry payment." });
     }
 };
 
-// 📍 LIVE NURSE TRACKING & 5-STEP TIMELINE (DUAL IDENTIFIER RESOLVER)
-// Endpoint: GET /user/nurse/track/:id
+// @desc    Track Active Nurse Booking (With Travel Fee & Delivery Charge Guaranteed)
+// @route   GET /user/nurse/track/:id
+// @access  Private (User)
 const getAppointmentStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user.id;
 
-        const isObjectId = mongoose.isValidObjectId(id);
-        const query = {
-            userId: new mongoose.Types.ObjectId(userId),
-            $or: [
-                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(id) }] : []),
-                { bookingId: String(id).trim() }
-            ]
-        };
+        const query = mongoose.isValidObjectId(id)
+            ? { _id: id, userId }
+            : { bookingId: String(id).trim(), userId };
 
         const booking = await NurseBooking.findOne(query)
-            .populate('nurseId', 'name phone profileImage speciality rating address city')
-            .populate('assignedStaffId', 'name phone profilePic vehicleNumber vehicleType status location')
-            .populate('selectedConsumables.consumableId', 'itemName mrp unitType')
+            .populate('nurseId', 'name email phone speciality profileImage experienceYears rating totalReviews city address')
+            .populate('assignedStaffId', 'name phone vehicleNumber vehicleType profilePic status location')
+            .populate('serviceId', 'title description procedureIncluded servicesOffered')
+            .populate('packageId', 'packageName description')
+            .populate('selectedConsumables.consumableId', 'itemName size mrp unitType')
             .lean();
 
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Appointment record not found or access denied." });
+            return res.status(404).json({
+                success: false,
+                message: "Nurse booking not found or unauthorized access."
+            });
         }
 
-        const formattedSchedule = booking.schedule?.startDate
-            ? `${moment(booking.schedule.startDate).format('DD MMM YYYY')} (${booking.schedule.startTime || '09:00'} - ${booking.schedule.endTime || '10:00'})`
-            : "Scheduled Appointment";
+        const fasterCharge = Number(booking.priceBreakdown?.fasterServiceCharge || 0);
 
-        // Dynamic 5-Step Timeline Generation
-        const trackingTimeline = [
-            {
-                step: 1,
-                title: "Booking Confirmed",
-                description: `Appointment confirmed via ${booking.paymentMethod || 'Online'}`,
-                time: booking.createdAt,
-                isCompleted: true,
-                isCurrent: booking.status === 'Confirmed'
-            },
-            {
-                step: 2,
-                title: "Staff Nurse Assigned",
-                description: booking.assignedStaffId ? `Staff Nurse ${booking.assignedStaffId.name} assigned` : "Bureau is assigning certified nurse staff",
-                time: booking.assignedStaffId ? booking.updatedAt : null,
-                isCompleted: !!booking.assignedStaffId,
-                isCurrent: booking.status === 'Assigned'
-            },
-            {
-                step: 3,
-                title: "Nurse En-Route",
-                description: "Nurse is traveling to your location",
-                time: booking.startedAt,
-                isCompleted: ['Arrived', 'Service-Started', 'Completed'].includes(booking.status),
-                isCurrent: booking.status === 'On-The-Way'
-            },
-            {
-                step: 4,
-                title: "Care Session In-Progress",
-                description: `Live care session active. Start OTP: ${booking.serviceOTP || '----'}`,
-                time: booking.startedAt,
-                isCompleted: booking.status === 'Completed',
-                isCurrent: ['Service-Started', 'Arrived'].includes(booking.status)
-            },
-            {
-                step: 5,
-                title: "Service Completed",
-                description: "Care session completed and verified by patient",
-                time: booking.completedAt,
-                isCompleted: booking.status === 'Completed',
-                isCurrent: booking.status === 'Completed'
+        // Dynamic Travel / Delivery Fee Resolver
+        let travelDeliveryFee = Number(
+            booking.priceBreakdown?.travelFee !== undefined 
+                ? booking.priceBreakdown.travelFee 
+                : (booking.priceBreakdown?.deliveryCharge !== undefined ? booking.priceBreakdown.deliveryCharge : 0)
+        );
+
+        if (travelDeliveryFee === 0 && fasterCharge === 0 && Number(booking.totalPrice || 0) > 0) {
+            const baseP = Number(booking.priceBreakdown?.baseServicePrice || 0);
+            const conP = Number(booking.priceBreakdown?.consumableTotal || 0);
+            const discP = Number(booking.priceBreakdown?.couponDiscount || 0);
+            const slotP = Number(booking.priceBreakdown?.slotSurcharge || 0);
+            const derived = Number(booking.totalPrice) - (baseP + conP + slotP - discP);
+            if (derived > 0) {
+                travelDeliveryFee = Math.round(derived);
             }
-        ];
+        }
 
         res.status(200).json({
             success: true,
             data: {
                 ...booking,
-                formattedSchedule,
-                assignedStaff: booking.assignedStaffId || null,
-                nurseBureau: booking.nurseId || null,
-                trackingTimeline
+                deliveryCharge: travelDeliveryFee,
+                travelFee: travelDeliveryFee,
+                priceBreakdown: {
+                    ...booking.priceBreakdown,
+                    travelFee: travelDeliveryFee,
+                    deliveryCharge: travelDeliveryFee,
+                    originalTravelFee: Number(booking.priceBreakdown?.originalTravelFee || travelDeliveryFee || 45)
+                },
+                trackingTimeline: {
+                    isPending: booking.status === 'Pending',
+                    isConfirmed: booking.status === 'Confirmed',
+                    isAssigned: booking.status === 'Assigned',
+                    isOnWay: booking.status === 'On-The-Way',
+                    isArrived: booking.status === 'Arrived',
+                    isStarted: booking.status === 'Service-Started',
+                    isCompleted: booking.status === 'Completed',
+                    isCancelled: booking.status === 'Cancelled',
+                    isNoShow: booking.status === 'No-Show'
+                }
             }
         });
 
     } catch (error) {
-        console.error("Get Appointment Status Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Get Nurse Tracking Status Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Failed to fetch tracking details." });
     }
 };
 
@@ -1357,160 +1481,155 @@ const uploadBookingPrescription = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// @desc    Get User Nurse Bookings with Service Mode, Duration & Status Badges
+// @desc    Get All Nursing Appointments (Guarantees Travel Fee in Old & New Bookings)
 // @route   GET /user/nurse/my-appointments
 // @access  Private (User)
 const getMyNurseBookings = async (req, res) => {
     try {
-        const userId = req.user?.id || req.user?._id;
-        const { status, page = 1, limit = 10 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const userId = req.user.id;
+        const { status, page = 1, limit = 20 } = req.query;
 
-        let query = { userId };
+        const query = { userId };
         if (status && status !== 'All') {
-            query.status = status;
+            if (status === 'Upcoming') {
+                query.status = { $in: ['Confirmed', 'Assigned', 'On-The-Way', 'Arrived', 'Service-Started'] };
+            } else if (status === 'History') {
+                query.status = { $in: ['Completed', 'Cancelled', 'No-Show'] };
+            } else if (status === 'Pending') {
+                query.status = 'Pending';
+            } else {
+                query.status = status;
+            }
         }
 
-        const totalBookings = await NurseBooking.countDocuments(query);
+        const skip = (Number(page) - 1) * Number(limit);
+        const total = await NurseBooking.countDocuments(query);
+
         const bookings = await NurseBooking.find(query)
-            .populate('nurseId', 'name speciality profileImage city address phone rating')
-            .populate('assignedStaffId', 'name phone vehicleNumber profilePic')
-            .populate('serviceId', 'title description')
+            .populate('nurseId', 'name email phone speciality profileImage experienceYears rating totalReviews city address')
+            .populate('assignedStaffId', 'name phone vehicleNumber vehicleType profilePic status location')
+            .populate('serviceId', 'title description procedureIncluded servicesOffered')
             .populate('packageId', 'packageName description')
+            .populate('selectedConsumables.consumableId', 'itemName size mrp unitType')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(parseInt(limit))
+            .limit(Number(limit))
             .lean();
 
-        const formattedBookings = bookings.map(b => {
-            const isExpress = Number(b.priceBreakdown?.fasterServiceCharge || 0) > 0;
+        const enrichedBookings = bookings.map(b => {
+            const rawMethod = String(b.paymentMethod || '').trim().toUpperCase();
+            const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+            const isPaid = b.paymentStatus === 'Paid' || b.paymentStatus === 'Done';
+            const isOnline = !isCod;
+
+            const canPayOnline = isOnline && !isPaid && !['Cancelled', 'Completed', 'No-Show'].includes(b.status);
+            const canCancel = !['Completed', 'Cancelled', 'Service-Started', 'No-Show'].includes(b.status);
+
             const isHospital = b.assessmentLocation === 'At Hospital';
+            let destinationLabel = "Home Address";
+            if (isHospital && b.hospitalDetails) {
+                destinationLabel = `${b.hospitalDetails.hospitalName || 'Hospital'} (${b.hospitalDetails.wardName || 'Ward'} - Bed: ${b.hospitalDetails.bedNumber || 'Bed'})`;
+            } else if (b.address && b.address.houseNo) {
+                destinationLabel = `${b.address.houseNo}, ${b.address.city || ''} - ${b.address.pincode || ''}`.replace(/^, |, $/g, '');
+            }
 
-            let modeLabel = "Standard Home Visit";
-            let modeType = "STANDARD_HOME";
+            const primaryPatient = (Array.isArray(b.patients) && b.patients.length > 0)
+                ? b.patients[0]
+                : { name: req.user?.name || "Patient", relation: "Self" };
 
-            if (isHospital) {
-                modeLabel = "Hospital Bedside Care";
-                modeType = "HOSPITAL_CARE";
-            } else if (isExpress) {
-                modeLabel = "Express Priority Visit";
-                modeType = "EXPRESS_VISIT";
-            } else if (b.schedule?.duration === 'For Multiple Days') {
-                modeLabel = `Multi-Day Care (${b.serviceDetails?.duration || ''})`;
-                modeType = "MULTI_DAY";
-            } else if (b.schedule?.duration === 'Acc. To Per/Hours') {
-                modeLabel = `Hourly Care (${b.serviceDetails?.duration || ''})`;
-                modeType = "HOURLY";
+            let formattedScheduleDate = "";
+            if (b.schedule?.startDate) {
+                const sDate = moment(b.schedule.startDate).format("DD MMM YYYY");
+                if (b.schedule.duration === 'For Multiple Days' && b.schedule.endDate && !moment(b.schedule.startDate).isSame(b.schedule.endDate, 'day')) {
+                    const eDate = moment(b.schedule.endDate).format("DD MMM YYYY");
+                    formattedScheduleDate = `${sDate} - ${eDate}`;
+                } else {
+                    formattedScheduleDate = sDate;
+                }
+            }
+
+            let paymentDisplayLabel = "";
+            if (isCod) {
+                paymentDisplayLabel = isPaid ? "Cash on Delivery (Paid)" : "Cash on Delivery (Pay on Visit)";
+            } else {
+                paymentDisplayLabel = isPaid ? "Paid Online" : "Online (Payment Pending)";
+            }
+
+            const fasterCharge = Number(b.priceBreakdown?.fasterServiceCharge || 0);
+
+            // 🚨 Dynamic Travel / Delivery Fee Resolver (Guarantees fee even for old database records)
+            let travelDeliveryFee = Number(
+                b.priceBreakdown?.travelFee !== undefined 
+                    ? b.priceBreakdown.travelFee 
+                    : (b.priceBreakdown?.deliveryCharge !== undefined ? b.priceBreakdown.deliveryCharge : 0)
+            );
+
+            // If fee was not stored in old record and faster charge is 0, derive from total
+            if (travelDeliveryFee === 0 && fasterCharge === 0 && Number(b.totalPrice || 0) > 0) {
+                const baseP = Number(b.priceBreakdown?.baseServicePrice || 0);
+                const conP = Number(b.priceBreakdown?.consumableTotal || 0);
+                const discP = Number(b.priceBreakdown?.couponDiscount || 0);
+                const slotP = Number(b.priceBreakdown?.slotSurcharge || 0);
+                const derived = Number(b.totalPrice) - (baseP + conP + slotP - discP);
+                if (derived > 0) {
+                    travelDeliveryFee = Math.round(derived);
+                }
             }
 
             return {
-                _id: b._id,
-                bookingId: b.bookingId,
-                status: b.status,
-                paymentStatus: b.paymentStatus,
-                paymentMethod: b.paymentMethod || 'COD',
-                isCod: (b.paymentMethod === 'COD'),
-                bookingType: b.bookingType || 'Regular',
-                createdAt: b.createdAt,
-                formattedDate: moment(b.createdAt).format('DD MMM YYYY, hh:mm A'),
-
-                serviceDetails: b.serviceDetails,
-                assessmentLocation: b.assessmentLocation,
-                hospitalDetails: b.hospitalDetails || null,
-
-                deliveryMode: {
-                    type: modeType,
-                    label: modeLabel,
-                    isExpress,
-                    fasterServiceCharge: b.priceBreakdown?.fasterServiceCharge || 0,
-                    slotSurcharge: b.priceBreakdown?.slotSurcharge || 0
+                ...b,
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: b.paymentStatus || 'Pending',
+                isCod,
+                isOnline,
+                isPaid,
+                canPayOnline,
+                paymentDisplayLabel,
+                deliveryCharge: travelDeliveryFee,              // 👈 Top-level delivery charge
+                travelFee: travelDeliveryFee,                   // 👈 Top-level travel charge
+                priceBreakdown: {
+                    ...b.priceBreakdown,
+                    travelFee: travelDeliveryFee,               // 👈 Synchronized inside priceBreakdown
+                    deliveryCharge: travelDeliveryFee,          // 👈 Synchronized inside priceBreakdown
+                    originalTravelFee: Number(b.priceBreakdown?.originalTravelFee || travelDeliveryFee || 45)
                 },
-
-                schedule: {
-                    duration: b.schedule?.duration,
-                    startDate: b.schedule?.startDate ? moment(b.schedule.startDate).format('YYYY-MM-DD') : null,
-                    endDate: b.schedule?.endDate ? moment(b.schedule.endDate).format('YYYY-MM-DD') : null,
-                    formattedSchedule: `${moment(b.schedule?.startDate).format('DD MMM YYYY')} (${b.schedule?.startTime || ''} - ${b.schedule?.endTime || ''})`,
-                    startTime: b.schedule?.startTime,
-                    endTime: b.schedule?.endTime
-                },
-
-                billSummary: {
-                    baseServicePrice: Number(b.priceBreakdown?.baseServicePrice || 0),
-                    originalBasePrice: Number(b.priceBreakdown?.originalBasePrice || b.priceBreakdown?.baseServicePrice || 0),
-                    slotSurcharge: Number(b.priceBreakdown?.slotSurcharge || 0),
-                    consumableTotal: Number(b.priceBreakdown?.consumableTotal || 0),
-                    fasterServiceCharge: Number(b.priceBreakdown?.fasterServiceCharge || 0),
-                    couponDiscount: Number(b.priceBreakdown?.couponDiscount || 0),
-                    taxAmount: Number(b.priceBreakdown?.taxAmount || 0),
-                    totalAmount: Number(b.priceBreakdown?.totalPrice || 0)
-                },
-
-                nurseBureau: {
-                    id: b.nurseId?._id || null,
-                    name: b.nurseId?.name || "Nurse Provider",
-                    speciality: b.nurseId?.speciality || "General Nursing",
-                    city: b.nurseId?.city || "",
-                    phone: b.nurseId?.phone || "",
-                    image: b.nurseId?.profileImage || null,
-                    rating: b.nurseId?.rating || 4.8
-                },
-
-                assignedStaff: b.assignedStaffId ? {
-                    id: b.assignedStaffId._id,
-                    name: b.assignedStaffId.name,
-                    phone: b.assignedStaffId.phone,
-                    vehicleNumber: b.assignedStaffId.vehicleNumber,
-                    profilePic: b.assignedStaffId.profilePic
-                } : null,
-
-                serviceOTP: b.serviceOTP || null,
-                completionOTP: b.completionOTP || null,
-                patients: b.patients || [],
-                selectedConsumables: b.selectedConsumables || [],
-                deliveryAddress: b.address || null
+                totalAmount: Number(b.totalPrice || b.priceBreakdown?.totalPrice || 0),
+                isFasterService: fasterCharge > 0,
+                primaryPatientName: primaryPatient.name || primaryPatient.patientName || "Patient",
+                primaryPatientRelation: primaryPatient.relation || "Self",
+                patientCount: Array.isArray(b.patients) ? b.patients.length : 1,
+                destinationLabel,
+                formattedScheduleDate,
+                formattedScheduleTime: b.schedule?.startTime ? moment(b.schedule.startTime, ["HH:mm", "hh:mm A"]).format("hh:mm A") : "09:00 AM",
+                canCancel,
+                isReviewed: !!(b.review && b.review.rating),
+                trackingTimeline: {
+                    isPending: b.status === 'Pending',
+                    isConfirmed: b.status === 'Confirmed',
+                    isAssigned: b.status === 'Assigned',
+                    isOnWay: b.status === 'On-The-Way',
+                    isArrived: b.status === 'Arrived',
+                    isStarted: b.status === 'Service-Started',
+                    isCompleted: b.status === 'Completed',
+                    isCancelled: b.status === 'Cancelled',
+                    isNoShow: b.status === 'No-Show'
+                }
             };
         });
 
         res.status(200).json({
             success: true,
-            totalBookings,
-            totalPages: Math.ceil(totalBookings / parseInt(limit)),
-            currentPage: parseInt(page),
-            data: formattedBookings
+            count: enrichedBookings.length,
+            totalRecords: total,
+            totalPages: Math.ceil(total / Number(limit)),
+            currentPage: Number(page),
+            data: enrichedBookings
         });
 
     } catch (error) {
-        console.error("getMyNurseBookings Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal Server Error in nurse history." });
+        console.error("Get User Nurse Bookings Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Failed to fetch appointments." });
     }
-};
-
-const rateNurseService = async (req, res) => {
-    try {
-        const { bookingId, rating, comment } = req.body;
-
-        const booking = await NurseBooking.findById(bookingId);
-        if (!booking || booking.status !== 'Completed') {
-            return res.status(400).json({ message: "Can only rate completed services" });
-        }
-
-        // Update Nurse Model Rating Logic
-        const nurse = await Nurse.findById(booking.nurseId);
-        const newTotalReviews = nurse.totalReviews + 1;
-        const newAverageRating = ((nurse.rating * nurse.totalReviews) + rating) / newTotalReviews;
-
-        await Nurse.findByIdAndUpdate(booking.nurseId, {
-            rating: newAverageRating.toFixed(1),
-            totalReviews: newTotalReviews
-        });
-
-        // Update Booking with Review
-        booking.review = { rating, comment, createdAt: new Date() };
-        await booking.save();
-
-        res.json({ success: true, message: "Thank you for your feedback!" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 // 1. SEARCH/FILTER NURSES (Figma: Nursing Care/Nurse list)
@@ -1992,8 +2111,9 @@ const getProvidersForService = async (req, res) => {
     }
 };
 
-// CANCEL NURSE BOOKING (STAFF RELEASE + REFUND POLICY + SUBSCRIPTION SYNC)
-// Endpoint: PATCH /user/nurse/cancel/:id
+// @desc    Cancel Nurse Booking by User (With Staff Release, Refund Engine & Coupon/Benefit Rollback)
+// @route   PATCH /user/nurse/cancel/:id
+// @access  Private (User)
 const cancelNurseBooking = async (req, res) => {
     try {
         const { id } = req.params;
@@ -2014,6 +2134,7 @@ const cancelNurseBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
         }
 
+        // Restrict cancellation if service already started or completed
         if (['Completed', 'Cancelled', 'Service-Started'].includes(booking.status)) {
             return res.status(400).json({ 
                 success: false, 
@@ -2021,7 +2142,7 @@ const cancelNurseBooking = async (req, res) => {
             });
         }
 
-        // 1. Process dynamic cancellation policy deductions
+        // 1. Process Dynamic Cancellation Fee & Refund via Policy Engine
         const policyResult = await processCancellationRefund(booking, 'Nurse');
 
         booking.status = 'Cancelled';
@@ -2037,6 +2158,7 @@ const cancelNurseBooking = async (req, res) => {
 
         // 3. Release Assigned Staff Nurse back to Available state
         if (booking.assignedStaffId) {
+            const Driver = require('../../../models/Driver');
             await Driver.findByIdAndUpdate(booking.assignedStaffId, {
                 $set: { status: 'Available', isOnline: true }
             });
@@ -2044,12 +2166,20 @@ const cancelNurseBooking = async (req, res) => {
 
         await booking.save();
 
-        // 4. Restore Subscription Benefit Quota if used
+        // 4. Rollback Coupon Usage Count if coupon was used
+        if (booking.appliedCoupon && booking.appliedCoupon.couponId) {
+            await Coupon.updateOne(
+                { _id: booking.appliedCoupon.couponId, "usedBy.userId": userId },
+                { $inc: { "usedBy.$.usageCount": -1 } }
+            );
+        }
+
+        // 5. Restore Subscription Benefit Quota if used
         if (booking.subscriptionDetails?.isSubscriptionApplied || booking.priceBreakdown?.baseServicePrice === 0) {
             await refundBenefitCount(userId, 'freeNurseVisitsCount');
         }
 
-        // 5. Notify Nurse Bureau
+        // 6. Notify Nurse Bureau
         try {
             await sendPushNotification(
                 booking.nurseId,
@@ -2082,7 +2212,7 @@ const cancelNurseBooking = async (req, res) => {
 
 
 module.exports = {
-    getNurses, getNurseDetails, searchNursesAndServices, searchNurses, checkoutNurseBooking, placeNurseBooking, verifyNursePayment,retryNursePayment, checkRangeAvailability, getNurseAvailability, getMyNurseBookings, rateNurseService, rateNurseBooking,
+    getNurses, getNurseDetails, searchNursesAndServices, searchNurses, checkoutNurseBooking, placeNurseBooking, verifyNursePayment,retryNursePayment, checkRangeAvailability, getNurseAvailability, getMyNurseBookings, rateNurseBooking,
     getAppointmentStatus,
     uploadBookingPrescription, getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons,getRegisteredHospitalsDropdown, validateCoupon, getNursePackagesList,
     getNursePackageDetails, getMedicalConditions,

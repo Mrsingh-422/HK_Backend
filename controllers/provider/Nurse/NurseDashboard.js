@@ -224,51 +224,117 @@ const deleteService = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// ==========================================
-// 3. BOOKING MANAGEMENT (Updated with Priority Filter)
-// ==========================================
+// @desc    Get Booking Requests for Nurse Bureau (Includes Accurate Pricing, Consumables & COD/Online Details)
+// @route   GET /provider/nurse/dash/bookings
+// @access  Private (Nurse Bureau)
 const getBookingRequests = async (req, res) => {
     try {
-        const { status, isPriority } = req.query; // e.g. status=Pending
-        
-        // 🌟 Pagination Parameters (Strictly 20 limit as requested)
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20; 
-        const skip = (page - 1) * limit;
+        const { status, isPriority, page = 1, limit = 20 } = req.query;
+        const nurseId = req.user.id;
 
-        let query = { nurseId: req.user.id };
-        
-        if (status) query.status = status;
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20; 
+        const skip = (pageNum - 1) * limitNum;
 
-        // Priority / Faster Service filter logic
+        let query = { nurseId };
+        
+        if (status && status !== 'All') {
+            query.status = status;
+        }
+
         if (isPriority === 'true') {
             query['priceBreakdown.fasterServiceCharge'] = { $gt: 0 };
         } else if (isPriority === 'false') {
             query['priceBreakdown.fasterServiceCharge'] = { $eq: 0 };
         }
 
-        // Get total count matching query for frontend pagination UI
         const total = await NurseBooking.countDocuments(query);
 
-        // Fetch bookings with fully populated user, staff, and consumable details
         const bookings = await NurseBooking.find(query)
-            .populate('userId', 'name phone email profilePic') // 🌟 order creator/user details populated
-            .populate('assignedStaffId', 'name phone profilePic status location') // staff details populated
-            .populate('selectedConsumables.consumableId', 'itemName price unitType') // 🌟 consumables details populated
+            .populate('userId', 'name phone email profilePic gender dob')
+            .populate('assignedStaffId', 'name phone profilePic status location vehicleNumber vehicleType')
+            .populate('selectedConsumables.consumableId', 'itemName size mrp unitType')
+            .populate('serviceId', 'title description procedureIncluded servicesOffered')
+            .populate('packageId', 'packageName description')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limitNum)
+            .lean();
 
-        res.json({ 
-            success: true, 
-            count: bookings.length, 
-            totalItems: total,
-            totalPages: Math.ceil(total / limit),
-            currentPage: page,
-            data: bookings 
+        const enrichedBookings = bookings.map(b => {
+            const rawMethod = String(b.paymentMethod || '').trim().toUpperCase();
+            const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+            const isPaid = b.paymentStatus === 'Paid' || b.paymentStatus === 'Done';
+
+            const travelDeliveryFee = Number(
+                b.priceBreakdown?.travelFee !== undefined 
+                    ? b.priceBreakdown.travelFee 
+                    : (b.priceBreakdown?.deliveryCharge || 0)
+            );
+
+            const isHospital = b.assessmentLocation === 'At Hospital';
+            let destinationLabel = "Home Address";
+            if (isHospital && b.hospitalDetails) {
+                destinationLabel = `${b.hospitalDetails.hospitalName || 'Hospital'} (${b.hospitalDetails.wardName || 'Ward'} - Bed: ${b.hospitalDetails.bedNumber || 'Bed'})`;
+            } else if (b.address && b.address.houseNo) {
+                destinationLabel = `${b.address.houseNo}, ${b.address.city || ''} - ${b.address.pincode || ''}`.replace(/^, |, $/g, '');
+            }
+
+            const primaryPatient = (Array.isArray(b.patients) && b.patients.length > 0)
+                ? b.patients[0]
+                : { name: b.userId?.name || "Patient", relation: "Self" };
+
+            let formattedScheduleDate = "";
+            if (b.schedule?.startDate) {
+                const sDate = moment(b.schedule.startDate).format("DD MMM YYYY");
+                if (b.schedule.duration === 'For Multiple Days' && b.schedule.endDate && !moment(b.schedule.startDate).isSame(b.schedule.endDate, 'day')) {
+                    const eDate = moment(b.schedule.endDate).format("DD MMM YYYY");
+                    formattedScheduleDate = `${sDate} - ${eDate}`;
+                } else {
+                    formattedScheduleDate = sDate;
+                }
+            }
+
+            return {
+                ...b,
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: b.paymentStatus || 'Pending',
+                isCod,
+                isPaid,
+                paymentDisplayLabel: isCod ? "Cash on Delivery (COD)" : (isPaid ? "Paid Online" : "Online (Pending)"),
+                
+                deliveryCharge: travelDeliveryFee,
+                travelFee: travelDeliveryFee,
+                priceBreakdown: {
+                    ...b.priceBreakdown,
+                    travelFee: travelDeliveryFee,
+                    deliveryCharge: travelDeliveryFee,
+                    originalTravelFee: Number(b.priceBreakdown?.originalTravelFee || travelDeliveryFee || 45)
+                },
+                
+                primaryPatientName: primaryPatient.name || primaryPatient.patientName || "Patient",
+                primaryPatientRelation: primaryPatient.relation || "Self",
+                patientCount: Array.isArray(b.patients) ? b.patients.length : 1,
+                destinationLabel,
+                formattedScheduleDate,
+                formattedScheduleTime: b.schedule?.startTime ? moment(b.schedule.startTime, ["HH:mm", "hh:mm A"]).format("hh:mm A") : "09:00 AM",
+                totalAmount: Number(b.totalPrice || b.priceBreakdown?.totalPrice || 0),
+                isFasterService: Number(b.priceBreakdown?.fasterServiceCharge || 0) > 0
+            };
         });
+
+        res.status(200).json({ 
+            success: true, 
+            count: enrichedBookings.length, 
+            totalItems: total,
+            totalPages: Math.ceil(total / limitNum),
+            currentPage: pageNum,
+            data: enrichedBookings 
+        });
+
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Get Bureau Booking Requests Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -540,24 +606,27 @@ const searchMasterConsumables = async (req, res) => {
 };
 
 
-// ==========================================
-// 5. ORDER HISTORY (Figma: Completed/Cancelled Bookings)
-// ==========================================
+// @desc    Get Completed / Cancelled Order History for Nurse Bureau (With Complete Financial Breakdown)
+// @route   GET /provider/nurse/dash/orders/history
+// @access  Private (Nurse Bureau)
 const getOrderHistory = async (req, res) => {
     try {
         const nurseId = req.user.id;
-        const { status, startDate, endDate } = req.query;
+        const { status, startDate, endDate, page = 1, limit = 20 } = req.query;
 
-        // Sirf wahi orders jo khatam ho chuke hain ya cancel hue hain
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
+
         let query = { 
             nurseId, 
-            status: { $in: ['Completed', 'Cancelled'] } 
+            status: { $in: ['Completed', 'Cancelled', 'No-Show'] } 
         };
 
-        // Optional status filter (e.g. ?status=Completed)
-        if (status) query.status = status;
+        if (status && status !== 'All') {
+            query.status = status;
+        }
 
-        // Optional Date Filter (History for specific range)
         if (startDate && endDate) {
             query.createdAt = { 
                 $gte: moment(startDate).startOf('day').toDate(), 
@@ -565,35 +634,111 @@ const getOrderHistory = async (req, res) => {
             };
         }
 
-        const history = await NurseBooking.find(query)
-            .populate('userId', 'name phone profileImage')
-            .populate('assignedStaffId', 'name phone profilePic')
-            .sort({ updatedAt: -1 });
+        const total = await NurseBooking.countDocuments(query);
 
-        res.json({ success: true, count: history.length, data: history });
+        const history = await NurseBooking.find(query)
+            .populate('userId', 'name phone profilePic email')
+            .populate('assignedStaffId', 'name phone vehicleNumber profilePic')
+            .populate('serviceId', 'title')
+            .populate('packageId', 'packageName')
+            .sort({ updatedAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
+            .lean();
+
+        const formattedHistory = history.map(b => {
+            const rawMethod = String(b.paymentMethod || '').trim().toUpperCase();
+            const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+            const isPaid = b.paymentStatus === 'Paid' || b.paymentStatus === 'Done';
+
+            const travelDeliveryFee = Number(
+                b.priceBreakdown?.travelFee !== undefined 
+                    ? b.priceBreakdown.travelFee 
+                    : (b.priceBreakdown?.deliveryCharge || 0)
+            );
+
+            const isHospital = b.assessmentLocation === 'At Hospital';
+            let locationDisplay = "N/A";
+            if (isHospital && b.hospitalDetails) {
+                locationDisplay = `${b.hospitalDetails.hospitalName || 'Hospital'} (${b.hospitalDetails.wardName || 'Ward'})`;
+            } else if (b.address && b.address.houseNo) {
+                locationDisplay = `${b.address.houseNo}, ${b.address.sector || ''}, ${b.address.city || ''}`.replace(/^, |, $/g, '');
+            }
+
+            return {
+                ...b,
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: b.paymentStatus || 'Pending',
+                isCod,
+                isPaid,
+                paymentDisplayLabel: isCod ? "Cash on Delivery (COD)" : (isPaid ? "Paid Online" : "Online (Pending)"),
+                locationDisplay,
+                deliveryCharge: travelDeliveryFee,
+                travelFee: travelDeliveryFee,
+                totalAmount: Number(b.totalPrice || b.priceBreakdown?.totalPrice || 0)
+            };
+        });
+
+        res.status(200).json({ 
+            success: true, 
+            count: formattedHistory.length,
+            totalItems: total,
+            totalPages: Math.ceil(total / limitNum),
+            currentPage: pageNum,
+            data: formattedHistory 
+        });
+
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Get Bureau Order History Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 6. TRACK NURSE (Bureau Panel: Active Job Progress & Hospital Venue)
-// endpoint: GET /provider/nurse/dash/track/:bookingId
+// @desc    Track Nurse Live Progress & Active Job for Bureau Provider (With Complete Breakdown & Venue)
+// @route   GET /provider/nurse/dash/track/:bookingId
+// @access  Private (Nurse Bureau)
 const trackNurse = async (req, res) => {
     try {
         const { bookingId } = req.params;
         const nurseId = req.user.id;
 
-        const activeBooking = await NurseBooking.findOne({ _id: bookingId, nurseId })
-            .populate('userId', 'name phone profilePic gender dob')
-            .populate({
-                path: 'assignedStaffId',
-                select: 'name phone profilePic status location vehicleNumber vehicleType'
-            })
-            .populate('selectedConsumables.consumableId', 'itemName mrp unitType')
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            nurseId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(bookingId) }] : []),
+                { bookingId: String(bookingId).trim() }
+            ]
+        };
+
+        const activeBooking = await NurseBooking.findOne(query)
+            .populate('userId', 'name phone profilePic gender dob email')
+            .populate('assignedStaffId', 'name phone profilePic status location vehicleNumber vehicleType')
+            .populate('selectedConsumables.consumableId', 'itemName size mrp unitType')
+            .populate('serviceId', 'title description procedureIncluded servicesOffered')
+            .populate('packageId', 'packageName description')
             .lean();
 
         if (!activeBooking) {
-            return res.status(404).json({ success: false, message: "Active booking not found." });
+            return res.status(404).json({ success: false, message: "Active booking record not found." });
+        }
+
+        const rawMethod = String(activeBooking.paymentMethod || '').trim().toUpperCase();
+        const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+        const isPaid = activeBooking.paymentStatus === 'Paid' || activeBooking.paymentStatus === 'Done';
+
+        const travelDeliveryFee = Number(
+            activeBooking.priceBreakdown?.travelFee !== undefined 
+                ? activeBooking.priceBreakdown.travelFee 
+                : (activeBooking.priceBreakdown?.deliveryCharge || 0)
+        );
+
+        const isHospital = activeBooking.assessmentLocation === 'At Hospital';
+        let destinationLabel = "Home Address";
+        if (isHospital && activeBooking.hospitalDetails) {
+            destinationLabel = `${activeBooking.hospitalDetails.hospitalName || 'Hospital'} (${activeBooking.hospitalDetails.wardName || 'Ward'} - Bed: ${activeBooking.hospitalDetails.bedNumber || 'Bed'})`;
+        } else if (activeBooking.address && activeBooking.address.houseNo) {
+            destinationLabel = `${activeBooking.address.houseNo}, ${activeBooking.address.city || ''} - ${activeBooking.address.pincode || ''}`.replace(/^, |, $/g, '');
         }
 
         let staffDetails = null;
@@ -610,15 +755,28 @@ const trackNurse = async (req, res) => {
             };
         }
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             data: {
                 bookingId: activeBooking._id,
                 bookingIdCustom: activeBooking.bookingId,
                 bookingStatus: activeBooking.status,
                 bookingType: activeBooking.bookingType || "Regular",
+                
+                // Payment Status
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: activeBooking.paymentStatus || 'Pending',
+                isCod,
+                isPaid,
+                paymentDisplayLabel: isCod ? "Cash on Delivery (COD)" : (isPaid ? "Paid Online" : "Online (Pending)"),
+
+                // Venue & Locations
                 assessmentLocation: activeBooking.assessmentLocation || "At Home",
                 hospitalDetails: activeBooking.hospitalDetails || null,
+                destinationLabel,
+                address: activeBooking.address,
+
+                // Personnel & Patients
                 assignedStaff: staffDetails, 
                 patientDetails: {
                     userId: activeBooking.userId ? activeBooking.userId._id : null,
@@ -627,11 +785,24 @@ const trackNurse = async (req, res) => {
                     patientProfilePic: activeBooking.userId ? activeBooking.userId.profilePic : null,
                     patientsList: activeBooking.patients || []
                 },
+
+                // Service & Pricing
                 serviceDetails: activeBooking.serviceDetails,
-                priceBreakdown: activeBooking.priceBreakdown,
-                address: activeBooking.address,
+                priceBreakdown: {
+                    ...activeBooking.priceBreakdown,
+                    travelFee: travelDeliveryFee,
+                    deliveryCharge: travelDeliveryFee,
+                    originalTravelFee: Number(activeBooking.priceBreakdown?.originalTravelFee || travelDeliveryFee || 45)
+                },
+                totalPrice: Number(activeBooking.totalPrice || 0),
                 schedule: activeBooking.schedule,
                 selectedConsumables: activeBooking.selectedConsumables || [],
+
+                // OTPs for Verification
+                serviceOTP: activeBooking.serviceOTP,
+                completionOTP: activeBooking.completionOTP,
+
+                // Live Timeline Progress
                 progress: {
                     isAssigned: activeBooking.status === 'Assigned',
                     isOnWay: activeBooking.status === 'On-The-Way',
@@ -639,6 +810,7 @@ const trackNurse = async (req, res) => {
                     isStarted: activeBooking.status === 'Service-Started',
                     isCompleted: activeBooking.status === 'Completed'
                 },
+
                 startedAt: activeBooking.startedAt,
                 completedAt: activeBooking.completedAt,
                 serviceNotes: activeBooking.serviceNotes,

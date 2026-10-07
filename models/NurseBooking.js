@@ -28,6 +28,9 @@ const nurseBookingSchema = new mongoose.Schema({
         originalBasePrice: { type: Number, default: 0 }, // 🚨 NEW: Actual nurse base fee before subscription
         slotSurcharge: Number,       // Premium time/date fee
         consumableTotal: Number,     // Sum of all items selected
+        travelFee: { type: Number, default: 0 }, //Base Travel / Visit Charge
+        deliveryCharge: { type: Number, default: 0 }, //Delivery Charge Alias
+        originalTravelFee: { type: Number, default: 0 }, // Actual nurse travel fee before subscription
         couponDiscount: { type: Number, default: 0 }, // 👈 Added this
         fasterServiceCharge: Number, // Express delivery
         taxAmount: Number,
@@ -140,6 +143,17 @@ const nurseBookingSchema = new mongoose.Schema({
     serviceOTP: { type: String, default: null },
     completionOTP: { type: String, default: null },
     rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
+
+    paymentMethod: { 
+        type: String, 
+        enum: ['Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet'], 
+        default: 'COD' 
+    },
+    paymentStatus: { 
+        type: String, 
+        enum: ['Pending', 'Paid', 'Done', 'Failed', 'Refunded', 'Refund-Initiated'], 
+        default: 'Pending' 
+    },
 
     // Razorpay Payment Details
 paymentDetails: {

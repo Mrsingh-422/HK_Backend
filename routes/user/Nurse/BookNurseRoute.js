@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { prescriptionUploads } = require('../../../middleware/multer');
 const { 
-    getNurses, getNurseDetails,searchNursesAndServices,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon,getRegisteredHospitalsDropdown, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, retryNursePayment, getMyNurseBookings, rateNurseService,
+    getNurses, getNurseDetails,searchNursesAndServices,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon,getRegisteredHospitalsDropdown, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, retryNursePayment, getMyNurseBookings,
     getAppointmentStatus, 
     uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking,getNursePackagesList,
     getNursePackageDetails,getMedicalConditions,
@@ -41,8 +41,6 @@ router.patch('/add-prescription/:id', protect('user'), prescriptionUploads.singl
 router.get('/check-range/:nurseId', checkRangeAvailability);
 router.get('/availability/:nurseId', getNurseAvailability); // Screen 7
 router.get('/my-appointments', protect('user'), getMyNurseBookings); // Screen 11
-router.post('/rate', protect('user'), rateNurseService); // Screen 12
-
 
 
 

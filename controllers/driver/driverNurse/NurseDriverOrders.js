@@ -150,7 +150,9 @@ const getNurseDashboard = async (req, res) => {
     }
 };
 
-// Get Services List with Status Tabs (Figma Screen 5)
+// @desc    Get All Assigned Services for Nurse Field Staff (Enriched with COD/Online, Venue & Timing)
+// @route   GET /driver/nurse/orders/list
+// @access  Private (Driver)
 const getNurseBookings = async (req, res) => {
     try {
         const staffId = req.user.id;
@@ -164,79 +166,186 @@ const getNurseBookings = async (req, res) => {
             } else if (statusFilter === 'Complete') {
                 query.status = 'Completed';
             } else if (statusFilter === 'Cancelled') {
-                query.status = 'Cancelled';
+                query.status = { $in: ['Cancelled', 'No-Show'] };
             }
         }
 
-        // 'userId' और 'patients' को select और populate किया गया है
         const bookings = await NurseBooking.find(query)
-            .select('bookingId status schedule assessmentLocation address totalPrice createdAt cancelReason userId patients')
-            .populate('userId', 'name phone')
-            .sort({ createdAt: -1 });
+            .populate('userId', 'name phone profilePic gender dob')
+            .populate('serviceId', 'title description procedureIncluded servicesOffered')
+            .populate('packageId', 'packageName description')
+            .sort({ createdAt: -1 })
+            .lean();
 
-        // रिस्पॉन्स डेटा को फॉर्मेट करना ताकि स्ट्रक्चर बदले बिना अतिरिक्त जानकारी जोड़ी जा सके
         const formattedBookings = bookings.map(booking => {
-            const bookingObj = booking.toObject();
+            const rawMethod = String(booking.paymentMethod || '').trim().toUpperCase();
+            const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+            const isPaid = booking.paymentStatus === 'Paid' || booking.paymentStatus === 'Done';
 
-            // 1. User का नाम निकालना
-            const userName = bookingObj.userId ? bookingObj.userId.name : null;
-
-            // 2. Patient का नाम निकालना (पहले पेशेंट का नाम)
-            const patientName = bookingObj.patients && bookingObj.patients.length > 0 
-                ? bookingObj.patients[0].name 
-                : null;
-
-            // 3. Address से name हटाना
-            if (bookingObj.address) {
-                delete bookingObj.address.name;
+            const isHospital = booking.assessmentLocation === 'At Hospital';
+            let destinationLabel = "Home Address";
+            if (isHospital && booking.hospitalDetails) {
+                destinationLabel = `${booking.hospitalDetails.hospitalName || 'Hospital'} (${booking.hospitalDetails.wardName || 'Ward'} - Bed: ${booking.hospitalDetails.bedNumber || 'Bed'})`;
+            } else if (booking.address && booking.address.houseNo) {
+                destinationLabel = `${booking.address.houseNo}, ${booking.address.city || ''} - ${booking.address.pincode || ''}`.replace(/^, |, $/g, '');
             }
 
+            const primaryPatient = (Array.isArray(booking.patients) && booking.patients.length > 0)
+                ? booking.patients[0]
+                : { name: booking.userId?.name || "Patient", relation: "Self" };
+
+            let formattedScheduleDate = "";
+            if (booking.schedule?.startDate) {
+                const sDate = moment(booking.schedule.startDate).format("DD MMM YYYY");
+                if (booking.schedule.duration === 'For Multiple Days' && booking.schedule.endDate && !moment(booking.schedule.startDate).isSame(booking.schedule.endDate, 'day')) {
+                    const eDate = moment(booking.schedule.endDate).format("DD MMM YYYY");
+                    formattedScheduleDate = `${sDate} - ${eDate}`;
+                } else {
+                    formattedScheduleDate = sDate;
+                }
+            }
+
+            const travelDeliveryFee = Number(
+                booking.priceBreakdown?.travelFee !== undefined 
+                    ? booking.priceBreakdown.travelFee 
+                    : (booking.priceBreakdown?.deliveryCharge || 0)
+            );
+
             return {
-                ...bookingObj,
-                userName,
-                patientName
+                ...booking,
+                userName: booking.userId?.name || "Patient",
+                patientName: primaryPatient.name || primaryPatient.patientName || "Patient",
+                primaryPatientRelation: primaryPatient.relation || "Self",
+                patientCount: Array.isArray(booking.patients) ? booking.patients.length : 1,
+                
+                // Payment Identifiers for Staff
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: booking.paymentStatus || 'Pending',
+                isCod,
+                isPaid,
+                collectCashAmount: isCod && !isPaid ? Number(booking.totalPrice || 0) : 0,
+                paymentDisplayLabel: isCod ? "Collect Cash on Visit (COD)" : (isPaid ? "Paid Online" : "Online (Pending)"),
+
+                // Venue & Timings
+                destinationLabel,
+                assessmentLocation: booking.assessmentLocation || "At Home",
+                formattedScheduleDate,
+                formattedScheduleTime: booking.schedule?.startTime ? moment(booking.schedule.startTime, ["HH:mm", "hh:mm A"]).format("hh:mm A") : "09:00 AM",
+
+                // Charges breakdown
+                travelFee: travelDeliveryFee,
+                deliveryCharge: travelDeliveryFee,
+                totalAmount: Number(booking.totalPrice || booking.priceBreakdown?.totalPrice || 0)
             };
         });
 
-        res.json({ success: true, data: formattedBookings });
+        res.status(200).json({ 
+            success: true, 
+            count: formattedBookings.length, 
+            data: formattedBookings 
+        });
+
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Get Driver Nurse Bookings Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// GET BOOKING DETAIL (For Field Nurse Driver Mobile App)
-// endpoint: GET /driver/nurse/orders/detail/:bookingId
+// @desc    Get Detailed Nurse Booking for Field Staff (Includes OTPs, Consumables, Hospital Venue & Payment)
+// @route   GET /driver/nurse/orders/detail/:bookingId
+// @access  Private (Driver)
 const getBookingDetail = async (req, res) => {
     try {
         const { bookingId } = req.params;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findById(bookingId)
-            .populate('userId', 'name phone profilePic gender dob')
-            .populate('nurseId', 'name phone address')
-            .populate('selectedConsumables.consumableId', 'itemName mrp unitType')
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = isObjectId 
+            ? { _id: bookingId } 
+            : { bookingId: String(bookingId).trim() };
+
+        const booking = await NurseBooking.findOne(query)
+            .populate('userId', 'name phone email profilePic gender dob')
+            .populate('nurseId', 'name phone email city address rating')
+            .populate('selectedConsumables.consumableId', 'itemName size mrp unitType')
+            .populate('serviceId', 'title description procedureIncluded servicesOffered')
+            .populate('packageId', 'packageName description')
             .lean();
 
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        const userName = booking.userId ? booking.userId.name : "Patient";
-        const primaryPatientName = (booking.patients && booking.patients.length > 0) 
-            ? booking.patients[0].name 
-            : userName;
+        const rawMethod = String(booking.paymentMethod || '').trim().toUpperCase();
+        const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+        const isPaid = booking.paymentStatus === 'Paid' || booking.paymentStatus === 'Done';
+
+        const isHospital = booking.assessmentLocation === 'At Hospital';
+        let destinationLabel = "Home Address";
+        if (isHospital && booking.hospitalDetails) {
+            destinationLabel = `${booking.hospitalDetails.hospitalName || 'Hospital'} (${booking.hospitalDetails.wardName || 'Ward'} - Bed: ${booking.hospitalDetails.bedNumber || 'Bed'})`;
+        } else if (booking.address && booking.address.houseNo) {
+            destinationLabel = `${booking.address.houseNo}, ${booking.address.city || ''} - ${booking.address.pincode || ''}`.replace(/^, |, $/g, '');
+        }
+
+        const primaryPatient = (Array.isArray(booking.patients) && booking.patients.length > 0)
+            ? booking.patients[0]
+            : { name: booking.userId?.name || "Patient", relation: "Self" };
+
+        const travelDeliveryFee = Number(
+            booking.priceBreakdown?.travelFee !== undefined 
+                ? booking.priceBreakdown.travelFee 
+                : (booking.priceBreakdown?.deliveryCharge || 0)
+        );
+
+        let formattedScheduleDate = "";
+        if (booking.schedule?.startDate) {
+            const sDate = moment(booking.schedule.startDate).format("DD MMM YYYY");
+            if (booking.schedule.duration === 'For Multiple Days' && booking.schedule.endDate && !moment(booking.schedule.startDate).isSame(booking.schedule.endDate, 'day')) {
+                const eDate = moment(booking.schedule.endDate).format("DD MMM YYYY");
+                formattedScheduleDate = `${sDate} - ${eDate}`;
+            } else {
+                formattedScheduleDate = sDate;
+            }
+        }
 
         res.status(200).json({
             success: true,
             data: {
                 ...booking,
-                userName,
-                patientName: primaryPatientName,
+                userName: booking.userId?.name || "Patient",
+                patientName: primaryPatient.name || primaryPatient.patientName || "Patient",
+                primaryPatientRelation: primaryPatient.relation || "Self",
+                patientCount: Array.isArray(booking.patients) ? booking.patients.length : 1,
+
+                // Payment Status
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: booking.paymentStatus || 'Pending',
+                isCod,
+                isPaid,
+                collectCashAmount: isCod && !isPaid ? Number(booking.totalPrice || 0) : 0,
+                paymentDisplayLabel: isCod ? "Collect Cash on Visit (COD)" : (isPaid ? "Paid Online" : "Online (Pending)"),
+
+                // Venue & Address
                 assessmentLocation: booking.assessmentLocation || "At Home",
                 hospitalDetails: booking.hospitalDetails || null,
-                destinationLabel: booking.assessmentLocation === 'At Hospital'
-                    ? `${booking.hospitalDetails?.hospitalName || 'Hospital'} (${booking.hospitalDetails?.wardName || 'Ward'} - Bed: ${booking.hospitalDetails?.bedNumber || 'Bed'})`
-                    : (booking.address?.houseNo ? `${booking.address.houseNo}, ${booking.address.city}` : "Home Address")
+                destinationLabel,
+
+                // Timings & OTPs
+                formattedScheduleDate,
+                formattedScheduleTime: booking.schedule?.startTime ? moment(booking.schedule.startTime, ["HH:mm", "hh:mm A"]).format("hh:mm A") : "09:00 AM",
+                serviceOTP: booking.serviceOTP,
+                completionOTP: booking.completionOTP,
+
+                // Financial Breakdown
+                travelFee: travelDeliveryFee,
+                deliveryCharge: travelDeliveryFee,
+                priceBreakdown: {
+                    ...booking.priceBreakdown,
+                    travelFee: travelDeliveryFee,
+                    deliveryCharge: travelDeliveryFee,
+                    originalTravelFee: Number(booking.priceBreakdown?.originalTravelFee || travelDeliveryFee || 45)
+                }
             }
         });
 
@@ -590,55 +699,78 @@ const getAdminContact = async (req, res) => {
     });
 };
 
-// A. Get Driver Completed/Cancelled History (Figma Screen 13)
+// @desc    Get Completed / Cancelled Service History for Nurse Driver (Figma Match)
+// @route   GET /driver/nurse/orders/history
+// @access  Private (Driver)
 const getDriverHistory = async (req, res) => {
     try {
         const staffId = req.user.id;
 
-        // Drawer History tab ke liye completed aur cancelled bookings fetch karna
         const bookings = await NurseBooking.find({
             assignedStaffId: staffId,
-            status: { $in: ['Completed', 'Cancelled'] }
+            status: { $in: ['Completed', 'Cancelled', 'No-Show'] }
         })
         .populate('userId', 'name phone')
-        .sort({ updatedAt: -1 });
+        .populate('serviceId', 'title')
+        .populate('packageId', 'packageName')
+        .sort({ updatedAt: -1 })
+        .lean();
 
-        // Figma Screen 13 ke format me map karna
         const formattedHistory = bookings.map(b => {
-            const bObj = b.toObject();
-            
-            // Format dynamic values
-            const formattedDate = bObj.schedule && bObj.schedule.startDate 
-                ? moment(bObj.schedule.startDate).format('DD-MMMM-YYYY') 
-                : "";
+            const rawMethod = String(b.paymentMethod || '').trim().toUpperCase();
+            const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+            const isPaid = b.paymentStatus === 'Paid' || b.paymentStatus === 'Done';
+
+            const formattedDate = b.schedule?.startDate 
+                ? moment(b.schedule.startDate).format('DD-MMMM-YYYY') 
+                : moment(b.createdAt).format('DD-MMMM-YYYY');
                 
-            const formattedTime = bObj.schedule 
-                ? `${bObj.schedule.startTime} - ${bObj.schedule.endTime}` 
+            const formattedTime = b.schedule?.startTime 
+                ? (b.schedule.endTime ? `${b.schedule.startTime} - ${b.schedule.endTime}` : b.schedule.startTime)
                 : "";
+
+            const primaryPatient = (Array.isArray(b.patients) && b.patients.length > 0)
+                ? b.patients[0]
+                : { name: b.userId?.name || "Patient", relation: "Self" };
+
+            const isHospital = b.assessmentLocation === 'At Hospital';
+            let locationDisplay = "N/A";
+            if (isHospital && b.hospitalDetails) {
+                locationDisplay = `${b.hospitalDetails.hospitalName || 'Hospital'} (${b.hospitalDetails.wardName || 'Ward'})`;
+            } else if (b.address && b.address.houseNo) {
+                locationDisplay = `${b.address.houseNo}, ${b.address.sector || ''}, ${b.address.city || ''}`.replace(/^, |, $/g, '');
+            }
 
             return {
-                bookingId: bObj._id,
-                orderId: bObj.bookingId || "N/A",
-                patientName: bObj.patients && bObj.patients.length > 0 ? bObj.patients[0].name : "Self",
-                mobileNo: bObj.address ? bObj.address.phone : (bObj.userId ? bObj.userId.phone : ""),
-                location: bObj.address 
-                    ? `${bObj.address.houseNo}, ${bObj.address.sector}, ${bObj.address.city}` 
-                    : "N/A",
+                bookingId: b._id,
+                orderId: b.bookingId || "N/A",
+                serviceTitle: b.serviceDetails?.title || b.packageId?.packageName || b.serviceId?.title || "Nursing Care",
+                patientName: primaryPatient.name || "Self",
+                mobileNo: b.address?.phone || b.userId?.phone || "",
+                location: locationDisplay,
+                assessmentLocation: b.assessmentLocation || "At Home",
                 date: formattedDate,
                 time: formattedTime,
-                status: bObj.status,
-                totalPrice: bObj.totalPrice,
-                cancelReason: bObj.cancelReason || null
+                status: b.status,
+                totalPrice: Number(b.totalPrice || b.priceBreakdown?.totalPrice || 0),
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: b.paymentStatus || 'Pending',
+                isCod,
+                isPaid,
+                cancelReason: b.cancelReason || b.additionalComments || null,
+                completedAt: b.completedAt
             };
         });
 
-        res.json({
+        res.status(200).json({
             success: true,
-            totalOrders: formattedHistory.length, // Figma: "2 Orders" count header
+            totalOrders: formattedHistory.length,
             data: formattedHistory
         });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Get Driver History Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
