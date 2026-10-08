@@ -441,7 +441,7 @@ const getNurseAvailability = async (req, res) => {
                     // 1 to 4 hours -> Express Rush Window
                     isExpressWindow = true;
                     expressAddon = expressChargeRate;
-                    statusLabel = "1-4h Express Rush";
+                    statusLabel = "1-3h Express Rush";
                 } else {
                     // >= 4 hours -> Standard Window
                     isExpressWindow = false;
@@ -1394,7 +1394,7 @@ const retryNursePayment = async (req, res) => {
     }
 };
 
-// @desc    Track Active Nurse Booking (Secure Timed OTPs, Daily Sessions & Staff Tracking)
+// @desc    Track Active Nurse Booking (Exposes Live Photos, Hand-made Invoice, Daily Sessions & Staff Tracking)
 // @route   GET /user/nurse/track/:id
 // @access  Private (User)
 const getAppointmentStatus = async (req, res) => {
@@ -1421,13 +1421,17 @@ const getAppointmentStatus = async (req, res) => {
             });
         }
 
+        const rawMethod = String(booking.paymentMethod || '').trim().toUpperCase();
+        const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+        const isPaid = booking.paymentStatus === 'Paid' || booking.paymentStatus === 'Done';
+
         const fasterCharge = Number(booking.priceBreakdown?.fasterServiceCharge || 0);
 
         // Dynamic Travel / Delivery Fee Resolver
         let travelDeliveryFee = Number(
             booking.priceBreakdown?.travelFee !== undefined 
                 ? booking.priceBreakdown.travelFee 
-                : (booking.priceBreakdown?.deliveryCharge || 0)
+                : (booking.priceBreakdown?.deliveryCharge !== undefined ? booking.priceBreakdown.deliveryCharge : 0)
         );
 
         if (travelDeliveryFee === 0 && fasterCharge === 0 && Number(booking.totalPrice || 0) > 0) {
@@ -1441,7 +1445,7 @@ const getAppointmentStatus = async (req, res) => {
             }
         }
 
-        // 🔒 OTP Security Logic: Expose only when appropriate stage is reached
+        // OTP Visibility Security Logic
         const isStaffDispatched = ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started'].includes(booking.status);
         const isSessionRunning = booking.status === 'Service-Started';
 
@@ -1452,6 +1456,10 @@ const getAppointmentStatus = async (req, res) => {
             success: true,
             data: {
                 ...booking,
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: booking.paymentStatus || 'Pending',
+                isCod,
+                isPaid,
                 deliveryCharge: travelDeliveryFee,
                 travelFee: travelDeliveryFee,
                 priceBreakdown: {
@@ -1463,7 +1471,17 @@ const getAppointmentStatus = async (req, res) => {
                 // Secured OTP values based on session stage
                 serviceOTP: secureStartOTP,
                 completionOTP: secureCompletionOTP,
+
+                // 📸 Live Session Photos & Handwritten Receipt Slip for User Screen
+                progressPhotos: booking.progressPhotos || [],
+                hasProgressPhotos: Array.isArray(booking.progressPhotos) && booking.progressPhotos.length > 0,
+                handmadeInvoice: booking.handmadeInvoice || null,
+                hasHandmadeInvoice: !!booking.handmadeInvoice,
+                serviceNotes: booking.serviceNotes || "",
+
+                // 🗓️ Multi-Day Sessions Log
                 dailySessions: booking.dailySessions || [],
+
                 trackingTimeline: {
                     isPending: booking.status === 'Pending',
                     isConfirmed: booking.status === 'Confirmed',
@@ -1498,7 +1516,7 @@ const uploadBookingPrescription = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// @desc    Get All Nursing Appointments (Guarantees Travel Fee in Old & New Bookings)
+// @desc    Get All Nursing Appointments for User (With Driver Uploaded Photos, Invoices & Session History)
 // @route   GET /user/nurse/my-appointments
 // @access  Private (User)
 const getMyNurseBookings = async (req, res) => {
@@ -1574,14 +1592,13 @@ const getMyNurseBookings = async (req, res) => {
 
             const fasterCharge = Number(b.priceBreakdown?.fasterServiceCharge || 0);
 
-            // 🚨 Dynamic Travel / Delivery Fee Resolver (Guarantees fee even for old database records)
+            // Dynamic Travel / Delivery Fee Resolver
             let travelDeliveryFee = Number(
                 b.priceBreakdown?.travelFee !== undefined 
                     ? b.priceBreakdown.travelFee 
                     : (b.priceBreakdown?.deliveryCharge !== undefined ? b.priceBreakdown.deliveryCharge : 0)
             );
 
-            // If fee was not stored in old record and faster charge is 0, derive from total
             if (travelDeliveryFee === 0 && fasterCharge === 0 && Number(b.totalPrice || 0) > 0) {
                 const baseP = Number(b.priceBreakdown?.baseServicePrice || 0);
                 const conP = Number(b.priceBreakdown?.consumableTotal || 0);
@@ -1602,12 +1619,12 @@ const getMyNurseBookings = async (req, res) => {
                 isPaid,
                 canPayOnline,
                 paymentDisplayLabel,
-                deliveryCharge: travelDeliveryFee,              // 👈 Top-level delivery charge
-                travelFee: travelDeliveryFee,                   // 👈 Top-level travel charge
+                deliveryCharge: travelDeliveryFee,
+                travelFee: travelDeliveryFee,
                 priceBreakdown: {
                     ...b.priceBreakdown,
-                    travelFee: travelDeliveryFee,               // 👈 Synchronized inside priceBreakdown
-                    deliveryCharge: travelDeliveryFee,          // 👈 Synchronized inside priceBreakdown
+                    travelFee: travelDeliveryFee,
+                    deliveryCharge: travelDeliveryFee,
                     originalTravelFee: Number(b.priceBreakdown?.originalTravelFee || travelDeliveryFee || 45)
                 },
                 totalAmount: Number(b.totalPrice || b.priceBreakdown?.totalPrice || 0),
@@ -1620,6 +1637,17 @@ const getMyNurseBookings = async (req, res) => {
                 formattedScheduleTime: b.schedule?.startTime ? moment(b.schedule.startTime, ["HH:mm", "hh:mm A"]).format("hh:mm A") : "09:00 AM",
                 canCancel,
                 isReviewed: !!(b.review && b.review.rating),
+
+                // 📸 DRIVER UPLOADED CLINICAL PHOTOS & INVOICE SLIP (Now Visible in User Order History)
+                progressPhotos: b.progressPhotos || [],
+                hasProgressPhotos: Array.isArray(b.progressPhotos) && b.progressPhotos.length > 0,
+                handmadeInvoice: b.handmadeInvoice || null,
+                hasHandmadeInvoice: !!b.handmadeInvoice,
+                serviceNotes: b.serviceNotes || "",
+                
+                // 🗓️ MULTI-DAY SESSIONS LOG WITH DAILY PHOTOS
+                dailySessions: b.dailySessions || [],
+
                 trackingTimeline: {
                     isPending: b.status === 'Pending',
                     isConfirmed: b.status === 'Confirmed',
@@ -1664,80 +1692,106 @@ const searchNurses = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// @desc    Find Nearby Nurse Bureaus Offering Packages (Vendor Marketplace with Distance)
+// @route   GET or POST /user/nurse/packages/nurse
+// @access  Public / User
 const getGlobalPackages = async (req, res) => {
     try {
-        const { lat, lng, search } = req.body;
+        // Support coordinates from both Query Params (GET) and Body (POST)
+        const lat = req.query.lat || req.body.lat;
+        const lng = req.query.lng || req.body.lng;
+        const search = req.query.search || req.body.search;
+        const packageName = req.query.packageName || req.body.packageName;
 
         if (!lat || !lng) {
-            return res.status(400).json({ success: false, message: "Location (lat, lng) is required to find nearby packages" });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Location coordinates (lat, lng) are required to discover nearby nurse vendors." 
+            });
         }
 
-        // AGGREGATION PIPELINE
-        const packages = await Nurse.aggregate([
-            {
-                // STEP 1: Find nearby Nurses first
-                $geoNear: {
-                    near: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
-                    distanceField: "distance", // Distance calculate karke is field mein dalega
-                    spherical: true,
-                    query: { profileStatus: 'Approved', isActive: true } // Sirf approved vendors
-                }
-            },
-            {
-                // STEP 2: Join with NursePackage collection
-                $lookup: {
-                    from: "nursepackages", // MongoDB collection name (usually plural)
-                    localField: "_id",
-                    foreignField: "nurseId",
-                    as: "vendorPackages"
-                }
-            },
-            {
-                // STEP 3: Unwind packages so each package becomes a separate document
-                $unwind: "$vendorPackages"
-            },
-            {
-                // STEP 4: Filter only Approved and Active packages
-                $match: {
-                    "vendorPackages.status": "Approved",
-                    "vendorPackages.isActive": true,
-                    ...(search ? { "vendorPackages.packageName": new RegExp(search, 'i') } : {})
-                }
-            },
-            {
-                // STEP 5: Format the output
-                $project: {
-                    _id: "$vendorPackages._id",
-                    packageName: "$vendorPackages.packageName",
-                    description: "$vendorPackages.description",
-                    pricing: "$vendorPackages.pricing",
-                    photos: "$vendorPackages.photos",
-                    includedServices: "$vendorPackages.includedServices",
-                    vendorDetails: {
-                        _id: "$_id",
-                        name: "$name",
-                        profileImage: "$profileImage",
-                        rating: "$rating",
-                        city: "$city",
-                        distance: { $divide: ["$distance", 1000] } // Meters to KM
-                    }
-                }
-            },
-            {
-                // STEP 6: Sort by distance (Geonear already does this, but keeping it explicit)
-                $sort: { "vendorDetails.distance": 1 }
-            }
-        ]);
+        const userLat = parseFloat(lat);
+        const userLng = parseFloat(lng);
 
-        res.json({
+        // 1. Fetch all approved & active Nurse Providers
+        const allNurses = await Nurse.find({
+            profileStatus: 'Approved',
+            isActive: true
+        }).select('_id name profileImage rating totalReviews city address location').lean();
+
+        if (allNurses.length === 0) {
+            return res.status(200).json({ success: true, count: 0, data: [] });
+        }
+
+        // 2. Build Package Match Filter
+        const packageMatch = {
+            status: 'Approved',
+            isActive: true
+        };
+
+        const targetSearch = packageName || search;
+        if (targetSearch && String(targetSearch).trim() !== '') {
+            packageMatch.packageName = new RegExp(String(targetSearch).trim(), 'i');
+        }
+
+        // 3. Fetch Packages with populated included services & consumables
+        const packages = await NursePackage.find(packageMatch)
+            .populate('includedServices', 'category subCategory description procedureIncluded servicesOffered')
+            .populate('consumablesUsed.masterItemId', 'itemName size mrp unitType')
+            .lean();
+
+        // 4. Combine Vendor Distance with Packages
+        const results = [];
+
+        for (let pkg of packages) {
+            const nurse = allNurses.find(n => String(n._id) === String(pkg.nurseId));
+            if (!nurse) continue;
+
+            let distance = 0;
+            if (nurse.location && nurse.location.lat && nurse.location.lng) {
+                distance = await getDistance(userLat, userLng, Number(nurse.location.lat), Number(nurse.location.lng));
+            }
+
+            results.push({
+                _id: pkg._id,
+                packageName: pkg.packageName,
+                description: pkg.description,
+                pricing: pkg.pricing,
+                photos: pkg.photos || [],
+                includedServices: pkg.includedServices || [],
+                consumablesUsed: pkg.consumablesUsed || [],
+                prescriptionRequired: pkg.prescriptionRequired,
+                // Full Vendor Information for Frontend Card
+                vendorDetails: {
+                    nurseId: nurse._id,
+                    name: nurse.name,
+                    profileImage: nurse.profileImage || null,
+                    rating: nurse.rating || 4.5,
+                    totalReviews: nurse.totalReviews || 0,
+                    city: nurse.city,
+                    address: nurse.address || "",
+                    distance: Number(distance.toFixed(2)) // Distance in KM
+                }
+            });
+        }
+
+        // 5. Sort: Nearest Vendor first, then lowest One-Day Price
+        results.sort((a, b) => {
+            if (a.vendorDetails.distance !== b.vendorDetails.distance) {
+                return a.vendorDetails.distance - b.vendorDetails.distance;
+            }
+            return (a.pricing?.oneDay?.final || 0) - (b.pricing?.oneDay?.final || 0);
+        });
+
+        res.status(200).json({
             success: true,
-            count: packages.length,
-            data: packages
+            count: results.length,
+            data: results
         });
 
     } catch (error) {
-        console.error("Global Package Error:", error);
-        res.status(500).json({ message: error.message });
+        console.error("Global Package Vendors Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1818,7 +1872,7 @@ const rateNurseBooking = async (req, res) => {
 };
 
 // for flutter new api 2
-// @desc    Get Nurse Packages List for Patient App (With Pagination & Search)
+/// @desc    Get Lightweight Unique Packages List for Catalog Screen
 // @route   GET /user/nurse/packages/list
 // @access  Public / User
 const getNursePackagesList = async (req, res) => {
@@ -1842,23 +1896,27 @@ const getNursePackagesList = async (req, res) => {
         const [totalItems, packages] = await Promise.all([
             NursePackage.countDocuments(query),
             NursePackage.find(query)
-                .select('_id packageName description pricing includedServices nurseId')
-                .populate('nurseId', 'name city profileImage rating')
-                .populate({
-                    path: 'includedServices',
-                    select: 'category subCategory description procedureIncluded'
-                })
+                .select('_id packageName description includedServices photos')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum)
                 .lean()
         ]);
 
+        // Minimalistic Card Mapping
+        const lightweightData = packages.map(pkg => ({
+            _id: pkg._id,
+            packageName: pkg.packageName,
+            description: pkg.description || "",
+            thumbnail: pkg.photos && pkg.photos.length > 0 ? pkg.photos[0] : null,
+            totalServicesCount: Array.isArray(pkg.includedServices) ? pkg.includedServices.length : 0
+        }));
+
         const totalPages = Math.ceil(totalItems / limitNum) || 1;
 
         res.status(200).json({
             success: true,
-            count: packages.length,
+            count: lightweightData.length,
             pagination: {
                 totalItems,
                 totalPages,
@@ -1867,32 +1925,158 @@ const getNursePackagesList = async (req, res) => {
                 hasNextPage: pageNum < totalPages,
                 hasPrevPage: pageNum > 1
             },
-            data: packages
+            data: lightweightData
         });
     } catch (error) {
-        console.error("Get Nurse Packages List Error:", error);
+        console.error("Get Lightweight Nurse Packages List Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 2. GET NURSE PACKAGE DETAILS
-// endpoint: GET /user/nurse/packages/details/:packageId
+// @desc    Get Single Package Deep Details (Procedures, Included Services & Consumables)
+// @route   GET /user/nurse/packages/details/:packageId
+// @access  Public / User
 const getNursePackageDetails = async (req, res) => {
     try {
         const { packageId } = req.params;
 
+        if (!mongoose.isValidObjectId(packageId)) {
+            return res.status(400).json({ success: false, message: "Invalid Package ID format." });
+        }
+
         const nursePackage = await NursePackage.findById(packageId)
-            .populate('nurseId', 'name profileImage rating city address location speciality experienceYears')
-            .populate('includedServices')
-            .populate('consumablesUsed.masterItemId')
+            .populate('nurseId', 'name profileImage rating city address speciality experienceYears')
+            .populate({
+                path: 'includedServices',
+                select: 'category subCategory description procedureIncluded servicesOffered'
+            })
+            .populate({
+                path: 'consumablesUsed.masterItemId',
+                select: 'itemName size mrp unitType category'
+            })
             .lean();
 
         if (!nursePackage || nursePackage.status !== 'Approved') {
-            return res.status(404).json({ success: false, message: "Package not found or inactive by admin." });
+            return res.status(404).json({ success: false, message: "Package not found or inactive." });
         }
 
-        res.json({ success: true, data: nursePackage });
+        res.status(200).json({
+            success: true,
+            data: {
+                _id: nursePackage._id,
+                packageName: nursePackage.packageName,
+                description: nursePackage.description,
+                photos: nursePackage.photos || [],
+                prescriptionRequired: nursePackage.prescriptionRequired || false,
+                pricing: nursePackage.pricing || {},
+                includedServices: nursePackage.includedServices || [],
+                consumablesUsed: nursePackage.consumablesUsed || [],
+                creatorBureau: nursePackage.nurseId || null
+            }
+        });
     } catch (error) {
+        console.error("Get Nurse Package Details Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Get Nearby Vendors Offering a Specific Package Sorted by Proximity & Price
+// @route   GET /user/nurse/packages/vendors/:packageId
+// @access  Public / User
+const getVendorsForSelectedPackage = async (req, res) => {
+    try {
+        const { packageId } = req.params;
+        const { lat, lng, radius = 50 } = req.query;
+
+        if (!mongoose.isValidObjectId(packageId)) {
+            return res.status(400).json({ success: false, message: "Invalid Package ID format." });
+        }
+
+        if (!lat || !lng) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Location coordinates (lat, lng) are required to discover nearby vendors." 
+            });
+        }
+
+        const userLat = parseFloat(lat);
+        const userLng = parseFloat(lng);
+        const maxRadiusKm = parseFloat(radius) || 50;
+
+        // 1. Fetch package to get package name
+        const targetPackage = await NursePackage.findById(packageId).lean();
+        if (!targetPackage || targetPackage.status !== 'Approved') {
+            return res.status(404).json({ success: false, message: "Package not found or inactive." });
+        }
+
+        const cleanPkgName = String(targetPackage.packageName).trim();
+
+        // 2. Find all active vendors offering this package name
+        const matchingPackages = await NursePackage.find({
+            packageName: { $regex: new RegExp(`^${cleanPkgName}$`, 'i') },
+            status: 'Approved',
+            isActive: true
+        })
+        .populate('nurseId', 'name profileImage rating totalReviews city address location isActive profileStatus')
+        .lean();
+
+        const vendorsList = [];
+
+        for (let pkg of matchingPackages) {
+            const nurse = pkg.nurseId;
+            if (!nurse || nurse.isActive === false || nurse.profileStatus !== 'Approved') {
+                continue;
+            }
+
+            let distance = 0;
+            if (nurse.location && nurse.location.lat && nurse.location.lng) {
+                distance = await getDistance(
+                    userLat, 
+                    userLng, 
+                    Number(nurse.location.lat), 
+                    Number(nurse.location.lng)
+                );
+            }
+
+            if (distance <= maxRadiusKm) {
+                vendorsList.push({
+                    packageId: pkg._id,
+                    packageName: pkg.packageName,
+                    pricing: pkg.pricing,
+                    oneDayPrice: pkg.pricing?.oneDay?.final || 0,
+                    multipleDaysPrice: pkg.pricing?.multipleDays?.final || 0,
+                    hourlyPrice: pkg.pricing?.hourly?.final || 0,
+                    vendor: {
+                        nurseId: nurse._id,
+                        name: nurse.name,
+                        profileImage: nurse.profileImage || null,
+                        city: nurse.city || "",
+                        address: nurse.address || "",
+                        rating: nurse.rating || 4.5,
+                        totalReviews: nurse.totalReviews || 0,
+                        distance: Number(distance.toFixed(2)) // in KM
+                    }
+                });
+            }
+        }
+
+        // Sort: Nearest Distance first, then lowest One-Day Price
+        vendorsList.sort((a, b) => {
+            if (a.vendor.distance !== b.vendor.distance) {
+                return a.vendor.distance - b.vendor.distance;
+            }
+            return a.oneDayPrice - b.oneDayPrice;
+        });
+
+        res.status(200).json({
+            success: true,
+            selectedPackageName: cleanPkgName,
+            totalNearbyVendors: vendorsList.length,
+            data: vendorsList
+        });
+
+    } catch (error) {
+        console.error("Get Vendors For Selected Package Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2155,7 +2339,7 @@ const getProvidersForService = async (req, res) => {
     }
 };
 
-// @desc    Cancel Nurse Booking by User (With Staff Release, Refund Engine & Coupon/Benefit Rollback)
+// @desc    Cancel Nurse Booking by User (Handles Multi-Day Pro-Rata Refund, Staff Release & Benefit Rollback)
 // @route   PATCH /user/nurse/cancel/:id
 // @access  Private (User)
 const cancelNurseBooking = async (req, res) => {
@@ -2178,25 +2362,51 @@ const cancelNurseBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
         }
 
-        // Restrict cancellation if service already started or completed
-        if (['Completed', 'Cancelled', 'Service-Started'].includes(booking.status)) {
+        // Restrict cancellation only if the whole service is completely finished
+        if (['Completed', 'Cancelled'].includes(booking.status)) {
             return res.status(400).json({ 
                 success: false, 
                 message: `Cannot cancel booking in '${booking.status}' state.` 
             });
         }
 
-        // 1. Process Dynamic Cancellation Fee & Refund via Policy Engine
-        const policyResult = await processCancellationRefund(booking, 'Nurse');
+        // Check if an active live timer session is currently ongoing
+        if (booking.status === 'Service-Started') {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot cancel while a live care session is currently in progress. Complete current session first."
+            });
+        }
+
+        // 1. Multi-Day Pro-Rata Refund Calculation
+        const completedSessionsCount = Array.isArray(booking.dailySessions) ? booking.dailySessions.length : 0;
+        const totalDurationDays = Number(booking.priceBreakdown?.totalDays || 1);
+        const grandTotalPaid = Number(booking.totalPrice || booking.priceBreakdown?.totalPrice || 0);
+
+        let finalRefundAmount = 0;
+        let policyCancellationFee = 0;
+
+        if (completedSessionsCount > 0 && totalDurationDays > 1) {
+            // Partial consumption: User consumed some days
+            const perDayRate = grandTotalPaid / totalDurationDays;
+            const consumedAmount = Math.round(perDayRate * completedSessionsCount);
+            finalRefundAmount = Math.max(0, grandTotalPaid - consumedAmount);
+            policyCancellationFee = consumedAmount;
+        } else {
+            // Standard single day or unstarted cancellation via policy helper
+            const policyResult = await processCancellationRefund(booking, 'Nurse');
+            policyCancellationFee = policyResult.cancellationFee;
+            finalRefundAmount = policyResult.refundAmount;
+        }
 
         booking.status = 'Cancelled';
         booking.cancelReason = reason || "Cancelled by Patient";
 
         if (!booking.priceBreakdown) booking.priceBreakdown = {};
-        booking.priceBreakdown.cancellationFeeApplied = policyResult.cancellationFee;
+        booking.priceBreakdown.cancellationFeeApplied = policyCancellationFee;
 
         // 2. Manage Payment Refund Status
-        if (booking.paymentStatus === 'Paid') {
+        if (booking.paymentStatus === 'Paid' && finalRefundAmount > 0) {
             booking.paymentStatus = 'Refund-Initiated';
         }
 
@@ -2210,16 +2420,16 @@ const cancelNurseBooking = async (req, res) => {
 
         await booking.save();
 
-        // 4. Rollback Coupon Usage Count if coupon was used
-        if (booking.appliedCoupon && booking.appliedCoupon.couponId) {
+        // 4. Rollback Coupon Usage Count if 0 sessions were consumed
+        if (completedSessionsCount === 0 && booking.appliedCoupon && booking.appliedCoupon.couponId) {
             await Coupon.updateOne(
                 { _id: booking.appliedCoupon.couponId, "usedBy.userId": userId },
                 { $inc: { "usedBy.$.usageCount": -1 } }
             );
         }
 
-        // 5. Restore Subscription Benefit Quota if used
-        if (booking.subscriptionDetails?.isSubscriptionApplied || booking.priceBreakdown?.baseServicePrice === 0) {
+        // 5. Restore Subscription Benefit Quota if no sessions consumed
+        if (completedSessionsCount === 0 && (booking.subscriptionDetails?.isSubscriptionApplied || booking.priceBreakdown?.baseServicePrice === 0)) {
             await refundBenefitCount(userId, 'freeNurseVisitsCount');
         }
 
@@ -2236,12 +2446,15 @@ const cancelNurseBooking = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: policyResult.cancellationFee > 0
-                ? `Booking cancelled. A late cancellation charge of ₹${policyResult.cancellationFee} was deducted.`
-                : "Booking cancelled successfully. Full refund initiated.",
+            message: completedSessionsCount > 0
+                ? `Booking cancelled. Refund of ₹${finalRefundAmount} initiated for remaining unserved days.`
+                : (policyCancellationFee > 0
+                    ? `Booking cancelled. A cancellation fee of ₹${policyCancellationFee} was deducted.`
+                    : "Booking cancelled successfully. Full refund initiated."),
             data: {
-                cancellationFee: policyResult.cancellationFee,
-                refundAmount: policyResult.refundAmount,
+                cancellationFee: policyCancellationFee,
+                refundAmount: finalRefundAmount,
+                completedSessionsCount,
                 booking
             }
         });
@@ -2259,6 +2472,6 @@ module.exports = {
     getNurses, getNurseDetails, searchNursesAndServices, searchNurses, checkoutNurseBooking, placeNurseBooking, verifyNursePayment,retryNursePayment, checkRangeAvailability, getNurseAvailability, getMyNurseBookings, rateNurseBooking,
     getAppointmentStatus,
     uploadBookingPrescription, getNurseDeliveryConfig, getGlobalPackages, getAvailableCoupons,getRegisteredHospitalsDropdown, validateCoupon, getNursePackagesList,
-    getNursePackageDetails, getMedicalConditions,
+    getNursePackageDetails,getVendorsForSelectedPackage, getMedicalConditions,
     getGlobalServicesList, getProvidersForService, cancelNurseBooking
 };

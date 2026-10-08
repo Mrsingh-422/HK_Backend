@@ -1,5 +1,6 @@
 const NurseBooking = require('../../../models/NurseBooking');
 const Driver = require('../../../models/Driver');
+const Wallet = require('../../../models/Wallet');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const moment = require('moment');
@@ -845,7 +846,7 @@ const submitServiceCompletion = async (req, res) => {
     }
 };
 
-// @desc    Verify Completion OTP with Multi-Day Session History Archival & Doorstep Addons
+// @desc    Verify Completion OTP with Multi-Day Session History Archival, Doorstep Addons & Wallet Ledger
 // @route   POST /driver/nurse/orders/verify-complete-otp
 // @access  Private (Driver)
 const verifyCompleteOtp = async (req, res) => {

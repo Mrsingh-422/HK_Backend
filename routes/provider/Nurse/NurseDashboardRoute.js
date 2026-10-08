@@ -19,8 +19,8 @@ router.patch('/profile/change-password', protect('nurse'), changeNursePassword);
 router.get('/profile/update-status', protect('nurse'), getLatestNurseProfileRequest);
 
 // SERVICE MANAGEMENT
-router.post('/service/manage', protect('nurse'), nurseDocUploads, manageNurseService);
-router.put('/service/manage/:id', protect('nurse'), nurseDocUploads, manageNurseService);
+router.post('/service/manage', protect('nurse'), nurseServiceUploads, manageNurseService);
+router.put('/service/manage/:id', protect('nurse'), nurseServiceUploads, manageNurseService);
 router.get('/service/list', protect('nurse'), getMyServices); // Filter: ?status=Approved
 router.delete('/service/delete/:id', protect('nurse'), deleteService);
 

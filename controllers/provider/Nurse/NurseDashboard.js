@@ -11,43 +11,80 @@ const bcrypt = require('bcryptjs');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
 const { sendPushNotification } = require('../../../utils/notification');
 
-// ==========================================
-// 1. PROFILE & DASHBOARD (Updated with Priority Count)
-// ==========================================
+// @desc    Get Provider Bureau Dashboard Summary (Fail-Safe Revenue & Active Task Counters)
+// @route   GET /provider/nurse/dash/dashboard-stats
+// @access  Private (Nurse Bureau)
 const getProviderDashboard = async (req, res) => {
     try {
+        const nurseBureauId = req.user._id;
+
         const stats = await NurseBooking.aggregate([
-            { $match: { nurseId: req.user._id } },
-            { $group: {
-                _id: null,
-                pendingRequests: { $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] } },
-                // 🚀 New: Count of pending requests that have faster/express service charge applied
-                priorityRequests: { 
-                    $sum: { 
-                        $cond: [
-                            { 
-                                $and: [
-                                    { $eq: ["$status", "Pending"] }, 
-                                    { $gt: ["$priceBreakdown.fasterServiceCharge", 0] }
-                                ] 
-                            }, 
-                            1, 
-                            0
-                        ] 
-                    } 
-                },
-                activeJobs: { $sum: { $cond: [{ $in: ["$status", ["Confirmed", "Assigned", "On-The-Way", "Arrived", "Service-Started"]] }, 1, 0] } },
-                completedJobs: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } },
-                totalEarnings: { $sum: { $cond: [{ $eq: ["$status", "Completed"] }, "$totalPrice", 0] } }
-            }}
+            { $match: { nurseId: new mongoose.Types.ObjectId(nurseBureauId) } },
+            { 
+                $group: {
+                    _id: null,
+                    pendingRequests: { 
+                        $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] } 
+                    },
+                    priorityRequests: { 
+                        $sum: { 
+                            $cond: [
+                                { 
+                                    $and: [
+                                        { $eq: ["$status", "Pending"] }, 
+                                        { $gt: ["$priceBreakdown.fasterServiceCharge", 0] }
+                                    ] 
+                                }, 
+                                1, 
+                                0
+                            ] 
+                        } 
+                    },
+                    activeJobs: { 
+                        $sum: { 
+                            $cond: [
+                                { $in: ["$status", ["Confirmed", "Assigned", "On-The-Way", "Arrived", "Service-Started"]] }, 
+                                1, 
+                                0
+                            ] 
+                        } 
+                    },
+                    completedJobs: { 
+                        $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] } 
+                    },
+                    // Fail-Safe Sum: Handles both root totalPrice and nested priceBreakdown.totalPrice
+                    totalEarnings: { 
+                        $sum: { 
+                            $cond: [
+                                { $eq: ["$status", "Completed"] }, 
+                                { $ifNull: ["$totalPrice", "$priceBreakdown.totalPrice", 0] }, 
+                                0
+                            ] 
+                        } 
+                    }
+                }
+            }
         ]);
         
-        res.json({ 
+        const summary = stats[0] || { 
+            pendingRequests: 0, 
+            priorityRequests: 0, 
+            activeJobs: 0, 
+            completedJobs: 0, 
+            totalEarnings: 0 
+        };
+
+        res.status(200).json({ 
             success: true, 
-            data: stats[0] || { pendingRequests: 0, priorityRequests: 0, activeJobs: 0, completedJobs: 0, totalEarnings: 0 } 
+            data: {
+                ...summary,
+                totalEarnings: Math.round(summary.totalEarnings)
+            } 
         });
+
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Get Provider Dashboard Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -141,69 +178,147 @@ const getLatestNurseProfileRequest = async (req, res) => {
     }
 };
  
+// @desc    Create or Update Nurse Service from Bureau Dashboard (Crash-Proof Pricing & Clean Photo URLs)
+// @route   POST or PUT /provider/nurse/dash/service/manage
+// @access  Private (Nurse Bureau)
 const manageNurseService = async (req, res) => {
     try {
         const { id } = req.params;
         const data = req.body;
+        const nurseId = req.user.id;
 
-        // Parse JSON inputs
-        const pricingInput = typeof data.pricing === 'string' ? JSON.parse(data.pricing) : data.pricing;
-        const consumablesInput = typeof data.consumablesUsed === 'string' ? JSON.parse(data.consumablesUsed) : data.consumablesUsed;
+        const safeParse = (val) => {
+            if (!val) return null;
+            if (typeof val === 'object') return val;
+            try { return JSON.parse(val); } catch (e) { return null; }
+        };
 
-        const calculate = (base, disc) => Math.round(Number(base) - (Number(base) * (Number(disc) / 100)));
-        
-        // Match Model Keys: base, discount, final
+        const safeArrayParse = (val) => {
+            if (!val) return [];
+            if (Array.isArray(val)) return val;
+            try {
+                const parsed = JSON.parse(val);
+                return Array.isArray(parsed) ? parsed : [parsed];
+            } catch (e) {
+                return typeof val === 'string' ? val.split(',').map(s => s.trim()) : [];
+            }
+        };
+
+        // Parse nested or flat pricing structures safely without crashing
+        const pricingInput = safeParse(data.pricing) || {};
+
+        const resolveBase = (nestedVal, flatKey1, flatKey2) => {
+            const val = Number(nestedVal ?? data[flatKey1] ?? data[flatKey2] ?? 0);
+            return isNaN(val) ? 0 : Math.max(0, val);
+        };
+
+        const resolveDiscount = (nestedVal, flatKey1, flatKey2) => {
+            const val = Number(nestedVal ?? data[flatKey1] ?? data[flatKey2] ?? 0);
+            return isNaN(val) ? 0 : Math.min(100, Math.max(0, val));
+        };
+
+        const oneDayBase = resolveBase(pricingInput.oneDay?.base, 'oneDayBase', 'oneDayPrice');
+        const oneDayDisc = resolveDiscount(pricingInput.oneDay?.discount, 'oneDayDiscount', 'discountOneDay');
+
+        const multiDayBase = resolveBase(pricingInput.multipleDays?.base, 'multipleDaysBase', 'multiDayPrice') || oneDayBase;
+        const multiDayDisc = resolveDiscount(pricingInput.multipleDays?.discount, 'multipleDaysDiscount', 'discountMultipleDays');
+
+        const hourlyBase = resolveBase(pricingInput.hourly?.base, 'hourlyBase', 'hourlyPrice');
+        const hourlyDisc = resolveDiscount(pricingInput.hourly?.discount, 'hourlyDiscount', 'discountHourly');
+
+        const calculate = (base, disc) => Math.max(0, Math.round(base - (base * (disc / 100))));
+
         const pricing = {
             oneDay: { 
-                base: Number(pricingInput.oneDay.base), 
-                discount: Number(pricingInput.oneDay.discount), 
-                final: calculate(pricingInput.oneDay.base, pricingInput.oneDay.discount) 
+                base: oneDayBase, 
+                discount: oneDayDisc, 
+                final: calculate(oneDayBase, oneDayDisc) 
             },
             multipleDays: { 
-                base: Number(pricingInput.multipleDays.base), 
-                discount: Number(pricingInput.multipleDays.discount), 
-                final: calculate(pricingInput.multipleDays.base, pricingInput.multipleDays.discount) 
+                base: multiDayBase, 
+                discount: multiDayDisc, 
+                final: calculate(multiDayBase, multiDayDisc) 
             },
             hourly: { 
-                base: Number(pricingInput.hourly.base), 
-                discount: Number(pricingInput.hourly.discount), 
-                final: calculate(pricingInput.hourly.base, pricingInput.hourly.discount) 
+                base: hourlyBase, 
+                discount: hourlyDisc, 
+                final: calculate(hourlyBase, hourlyDisc) 
             }
         };
 
         // Process Consumables properly
+        const consumablesInput = safeArrayParse(data.consumablesUsed);
         let processedConsumables = [];
-        if (consumablesInput && Array.isArray(consumablesInput)) {
+        if (consumablesInput.length > 0) {
             for (let item of consumablesInput) {
-                const master = await MasterConsumable.findById(item.masterItemId);
-                if (master) {
-                    processedConsumables.push({
-                        masterItemId: item.masterItemId,
-                        discountPercentage: Number(item.discountPercentage),
-                        finalPrice: calculate(master.mrp, item.discountPercentage)
-                    });
+                const targetId = item.masterItemId || item.consumableId || item._id;
+                if (targetId && mongoose.isValidObjectId(targetId)) {
+                    const master = await MasterConsumable.findById(targetId);
+                    if (master) {
+                        const disc = Number(item.discountPercentage || 0);
+                        processedConsumables.push({
+                            masterItemId: master._id,
+                            discountPercentage: disc,
+                            finalPrice: calculate(master.mrp, disc)
+                        });
+                    }
                 }
             }
         }
 
+        // Clean Web URLs for photos
+        let photoUrls = undefined;
+        if (req.files) {
+            const filesArray = Array.isArray(req.files) ? req.files : (req.files.photos || []);
+            if (filesArray.length > 0) {
+                photoUrls = filesArray.map(f => `/uploads/nurse_services/${f.filename}`);
+            }
+        }
+
         const serviceData = {
-            ...data,
-            nurseId: req.user.id,
+            nurseId,
+            careCategoryId: data.careCategoryId || undefined,
+            careSubCategoryId: data.careSubCategoryId || undefined,
+            title: data.title ? String(data.title).trim() : "Nursing Care Service",
+            description: data.description ? String(data.description).trim() : "",
+            type: data.type || 'Daily Care',
+            procedureIncluded: data.procedureIncluded || "",
+            servicesOffered: data.servicesOffered || "NURSING CARE",
             pricing,
             consumablesUsed: processedConsumables,
-            status: 'Approved', // Force Approved
-            photos: req.files ? req.files.map(f => f.path) : undefined
+            prescriptionRequired: data.prescriptionRequired === 'true' || data.prescriptionRequired === true,
+            status: 'Approved'
         };
 
+        if (photoUrls && photoUrls.length > 0) {
+            serviceData.photos = photoUrls;
+        }
+
         let result;
-        if (id) {
-            result = await NurseService.findOneAndUpdate({ _id: id, nurseId: req.user.id }, serviceData, { new: true });
+        if (id && mongoose.isValidObjectId(id)) {
+            result = await NurseService.findOneAndUpdate(
+                { _id: id, nurseId }, 
+                { $set: serviceData }, 
+                { new: true }
+            ).populate('consumablesUsed.masterItemId');
+
+            if (!result) {
+                return res.status(404).json({ success: false, message: "Service not found or unauthorized access." });
+            }
         } else {
             result = await NurseService.create(serviceData);
         }
 
-        res.status(201).json({ success: true, message: "Listed Successfully", data: result });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(id ? 200 : 201).json({ 
+            success: true, 
+            message: id ? "Service updated successfully." : "Service listed successfully.", 
+            data: result 
+        });
+
+    } catch (error) { 
+        console.error("Manage Nurse Service Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 const getMyServices = async (req, res) => {

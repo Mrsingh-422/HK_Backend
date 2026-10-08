@@ -46,7 +46,7 @@ const calculateProviderBalances = async (vendorId, role) => {
         BookingModel.find({
             ...matchQuery,
             status: { $in: completedStatuses }
-        }).select('billSummary totalPrice priceBreakdown paymentMethod paymentStatus updatedAt').lean(),
+        }).select('billSummary totalPrice priceBreakdown paymentMethod paymentStatus totalConsumableCharges extraServicePayment updatedAt').lean(),
 
         BookingModel.find({
             ...matchQuery,
@@ -66,7 +66,7 @@ const calculateProviderBalances = async (vendorId, role) => {
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 2. Process Completed Orders (COD vs Online Split)
+    // 2. Process Completed Orders (With Doorstep Cash Add-ons Split for Nurse)
     for (let order of completedOrders) {
         let grossAmount = 0;
         if (role === 'Lab' || role === 'Pharmacy') {
@@ -82,13 +82,20 @@ const calculateProviderBalances = async (vendorId, role) => {
 
         let effectiveVendorCredit = 0;
 
-        // 🚨 MARKETPLACE ACCOUNTING LOGIC:
         if (order.paymentMethod === 'COD') {
-            // COD: Vendor already received 100% cash; deduct Admin Commission from wallet
+            // Full COD: 100% of cash collected physically by driver; deduct admin commission from wallet
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online: Platform received money; credit Net Amount to vendor wallet
-            effectiveVendorCredit = netVendorAmount;
+            // Online Order: Base amount paid online
+            // Check if doorstep extra cash was collected by nurse on visit
+            const doorstepCashCollected = Number(order.totalConsumableCharges || 0) + Number(order.extraServicePayment || 0);
+            
+            if (doorstepCashCollected > 0) {
+                // Deduct physically collected cash from platform payout to prevent double credit
+                effectiveVendorCredit = netVendorAmount - doorstepCashCollected;
+            } else {
+                effectiveVendorCredit = netVendorAmount;
+            }
         }
 
         totalEarnings += effectiveVendorCredit;
@@ -133,7 +140,7 @@ const calculateProviderBalances = async (vendorId, role) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    // 5. Fetch Active Commission Policy Details
+    // 5. Active Commission Policy Details
     const AdminCommissionConfig = require('../../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: role, isActive: true }).lean();
 

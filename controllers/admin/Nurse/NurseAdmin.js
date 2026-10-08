@@ -33,38 +33,77 @@ const adminGetApprovedNurses = async (req, res) => {
     }
 };
 
-// --- 2. ADMIN: GET NURSE BOOKINGS (Filter by nurseId & Limit: 25) ---
-// Endpoint: GET /admin/nurse/bookings?nurseId=ID&page=1
+// @desc    Admin: Get Nurse Bookings with Complete Logistics, Staff & Venue Audit
+// @route   GET /admin/nurse/bookings
+// @access  Private (Admin)
 const adminGetNurseBookings = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 25; // 👈 25 items limit
+        const limit = 25;
         const skip = (page - 1) * limit;
-        const { status, userId, nurseId } = req.query; // 👈 Added nurseId
+        const { status, userId, nurseId, search } = req.query;
 
         const query = {};
-        if (status) query.status = status;
+        if (status && status !== 'All') query.status = status;
         if (userId) query.userId = userId;
-        if (nurseId) query.nurseId = nurseId; // 👈 Vendor wise filter
+        if (nurseId) query.nurseId = nurseId;
+
+        if (search && search.trim() !== '') {
+            query.$or = [
+                { bookingId: { $regex: search.trim(), $options: 'i' } },
+                { 'address.phone': { $regex: search.trim(), $options: 'i' } },
+                { 'patients.name': { $regex: search.trim(), $options: 'i' } }
+            ];
+        }
 
         const total = await NurseBooking.countDocuments(query);
 
         const bookings = await NurseBooking.find(query)
-            .populate('userId', 'name phone email')
-            .populate('nurseId', 'name profileImage speciality')
+            .populate('userId', 'name phone email profilePic')
+            .populate('nurseId', 'name profileImage speciality phone email city')
+            .populate('assignedStaffId', 'name phone vehicleNumber vehicleType status location profilePic')
+            .populate('serviceId', 'title description procedureIncluded servicesOffered')
+            .populate('packageId', 'packageName description')
+            .populate('selectedConsumables.consumableId', 'itemName size mrp unitType')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
-        res.json({ 
+        // Enriched Admin Response
+        const formattedData = bookings.map(b => {
+            const rawMethod = String(b.paymentMethod || '').trim().toUpperCase();
+            const isCod = rawMethod === 'COD' || rawMethod.includes('CASH') || rawMethod === 'PAY ON VISIT';
+            const isHospital = b.assessmentLocation === 'At Hospital';
+
+            return {
+                ...b,
+                paymentMethod: isCod ? 'COD' : 'Online',
+                paymentStatus: b.paymentStatus || 'Pending',
+                isCod,
+                isPaid: b.paymentStatus === 'Paid' || b.paymentStatus === 'Done',
+                assessmentLocation: b.assessmentLocation || 'At Home',
+                hospitalDetails: isHospital ? b.hospitalDetails : null,
+                completedSessionsCount: Array.isArray(b.dailySessions) ? b.dailySessions.length : 0,
+                assignedStaff: b.assignedStaffId ? {
+                    name: b.assignedStaffId.name,
+                    phone: b.assignedStaffId.phone,
+                    vehicleNumber: b.assignedStaffId.vehicleNumber,
+                    status: b.assignedStaffId.status
+                } : null
+            };
+        });
+
+        res.status(200).json({ 
             success: true, 
-            count: bookings.length, 
+            count: formattedData.length, 
             totalItems: total,
             totalPages: Math.ceil(total / limit),
             currentPage: page,
-            data: bookings 
+            data: formattedData 
         });
     } catch (error) { 
+        console.error("Admin Get Nurse Bookings Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -85,7 +124,7 @@ const toggleActiveInactiveNurse = async (req, res) => {
  
         return res.json({
             success: true,
-            message: `Lab status updated to ${nurse.isActive ? 'Active' : 'Inactive'}.`,
+            message: `Nurse status updated to ${nurse.isActive ? 'Active' : 'Inactive'}.`,
             data: { nurseId: nurse._id,
                    isActive: nurse.isActive
             }

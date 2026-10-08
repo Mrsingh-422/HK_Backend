@@ -6,7 +6,7 @@ const {
     getNurses, getNurseDetails,searchNursesAndServices,  searchNurses,checkRangeAvailability,getNurseAvailability,getAvailableCoupons, validateCoupon,getRegisteredHospitalsDropdown, checkoutNurseBooking, placeNurseBooking,verifyNursePayment, retryNursePayment, getMyNurseBookings,
     getAppointmentStatus, 
     uploadBookingPrescription ,getNurseDeliveryConfig,getGlobalPackages,rateNurseBooking,getNursePackagesList,
-    getNursePackageDetails,getMedicalConditions,
+    getNursePackageDetails,getVendorsForSelectedPackage,getMedicalConditions,
     getGlobalServicesList,getProvidersForService, cancelNurseBooking
 
 } = require('../../../controllers/user/Nurse/BookNurse');
@@ -19,6 +19,7 @@ router.get('/details/:id', getNurseDetails);
 router.get('/search-suggestions', searchNursesAndServices);
 
 router.get('/packages/nurse', getGlobalPackages); // For users to see global packages offered by nurses (Screen 6) - Optional, can be integrated into /list with a filter
+router.post('/packages/nurse', getGlobalPackages);
 
 
 router.get('/delivery-config/:nurseId', getNurseDeliveryConfig); // For calculating delivery charges in checkout flow
@@ -56,6 +57,8 @@ router.get('/packages/list', getNursePackagesList);
 
 // 2. Single Package Detail
 router.get('/packages/details/:packageId', getNursePackageDetails);
+router.get('/packages/vendors/:packageId', getVendorsForSelectedPackage);
+
 router.get('/medical-conditions', getMedicalConditions);
 
 // 1. Get unique services list for home screen (Our Nursing Services)
