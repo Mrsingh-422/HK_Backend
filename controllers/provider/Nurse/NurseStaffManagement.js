@@ -82,11 +82,12 @@ const assignStaffToBooking = async (req, res) => {
 };
 
 
-// 3. UPDATE SERVICE PROGRESS (With Auto-COD Paid & Completion Timestamps)
-// Endpoint: PUT /provider/nurse/management/update-progress
+// @desc    Update Service Progress from Bureau Desk (Handles Staff Release & Refunds on Cancel/Complete)
+// @route   PUT /provider/nurse/management/update-progress
+// @access  Private (Nurse Bureau)
 const updateServiceProgress = async (req, res) => {
     try {
-        const { bookingId, status } = req.body;
+        const { bookingId, status, reason } = req.body;
         const nurseBureauId = req.user.id;
 
         const validStatuses = ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started', 'Completed', 'Cancelled'];
@@ -101,23 +102,55 @@ const updateServiceProgress = async (req, res) => {
 
         booking.status = status;
 
+        // 1. Completion Logic
         if (status === 'Completed') {
             booking.completedAt = new Date();
             
-            // Mark COD as Paid upon completed session
             if (booking.paymentMethod === 'COD' && booking.paymentStatus !== 'Paid') {
                 booking.paymentStatus = 'Paid';
             }
 
-            // Release assigned staff back to Available
             if (booking.assignedStaffId) {
-                await Driver.findByIdAndUpdate(booking.assignedStaffId, { $set: { status: 'Available' } });
+                await Driver.findByIdAndUpdate(booking.assignedStaffId, { $set: { status: 'Available', isOnline: true } });
+            }
+        }
+
+        // 2. Cancellation Logic (Release Staff & Queue Refund)
+        if (status === 'Cancelled') {
+            booking.cancelReason = reason || "Cancelled by Nurse Bureau Management.";
+
+            // Free allocated staff nurse driver
+            if (booking.assignedStaffId) {
+                await Driver.findByIdAndUpdate(booking.assignedStaffId, { $set: { status: 'Available', isOnline: true } });
+            }
+
+            // Queue online payment refund
+            if (booking.paymentStatus === 'Paid') {
+                booking.paymentStatus = 'Refund-Initiated';
+            }
+
+            // Rollback subscription benefits if applied
+            if (booking.subscriptionDetails?.isSubscriptionApplied) {
+                await refundBenefitCount(booking.userId, 'freeNurseVisitsCount');
             }
         }
 
         await booking.save();
 
-        res.json({ 
+        // Notify Patient
+        if (booking.userId) {
+            try {
+                await sendPushNotification(
+                    booking.userId,
+                    'user',
+                    `Nursing Booking Update: ${status}`,
+                    `Your booking #${booking.bookingId} status has been updated to '${status}'.`,
+                    { bookingId: booking._id.toString(), type: 'nurse_status_updated' }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({ 
             success: true, 
             message: `Service progress updated to '${status}'.`, 
             data: booking 

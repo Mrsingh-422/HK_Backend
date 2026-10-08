@@ -274,60 +274,71 @@ const getRequestProposals = async (req, res) => {
     }
 };
 
-// ACCEPT A PROPOSAL AND INITIATE BOOKING (Null-Safe Address & Price Calculation)
-// Endpoint: POST /user/nurse/prescription/accept
+// @desc    Accept a Prescription Proposal and Generate Booking with Razorpay Order
+// @route   POST /user/nurse/prescription/accept
+// @access  Private (User)
 const acceptProposalAndBook = async (req, res) => {
     try {
         const { requestId, proposalId } = req.body;
+        const userId = req.user.id;
 
         // 1. Validation Checks
         const request = await NursingPrescriptionRequest.findById(requestId);
         if (!request) {
-            return res.status(404).json({ success: false, message: "Request not found." });
+            return res.status(404).json({ success: false, message: "Prescription request not found." });
         }
         if (request.status !== 'Broadcasted') {
-            return res.status(400).json({ success: false, message: "This request is no longer active." });
+            return res.status(400).json({ success: false, message: "This inquiry is no longer active." });
         }
 
-        // Expiry validation check
         if (new Date() > request.expiresAt) {
             request.status = 'Expired';
             await request.save();
-            return res.status(400).json({ success: false, message: "This request has expired." });
+            return res.status(400).json({ success: false, message: "This prescription inquiry has expired." });
         }
 
         const selectedProposal = request.proposals.id(proposalId);
         if (!selectedProposal) {
-            return res.status(404).json({ success: false, message: "Proposal not found." });
+            return res.status(404).json({ success: false, message: "Selected proposal not found." });
         }
 
         const bId = `HKN-RX-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const finalPrice = Number(selectedProposal.priceBreakdown.totalPrice || 0);
 
-        // 2. Generate Razorpay Order strictly for selected proposal amount
-        const rzpOrder = await createRazorpayOrder(selectedProposal.priceBreakdown.totalPrice, `rx_receipt_${bId}`);
+        // 2. Generate Razorpay Order
+        const rzpOrder = await createRazorpayOrder(finalPrice, `rx_receipt_${bId}`);
 
-        // 3. Create booking document in 'Pending' status with safe address parsing
+        // 3. Generate Service & Completion OTPs for Prescription Flow
+        const dynamicServiceOTP = Math.floor(1000 + Math.random() * 9000).toString();
+        const dynamicCompletionOTP = Math.floor(1000 + Math.random() * 9000).toString();
+
         const addr = request.location?.address || {};
         const booking = await NurseBooking.create({
-            userId: req.user.id,
+            userId,
             nurseId: selectedProposal.nurseId,
             bookingId: bId,
             bookingType: 'Prescription',
             prescriptionRequestId: requestId,
             serviceDetails: {
-                title: `Prescription Service Booking`,
+                title: `Prescription Care Service`,
                 type: "Prescription Request",
                 duration: "As prescribed",
                 basePrice: selectedProposal.priceBreakdown.baseServicePrice
             },
             priceBreakdown: {
                 baseServicePrice: selectedProposal.priceBreakdown.baseServicePrice,
+                originalBasePrice: selectedProposal.priceBreakdown.baseServicePrice,
                 consumableTotal: selectedProposal.priceBreakdown.consumableTotal,
                 taxAmount: selectedProposal.priceBreakdown.taxAmount,
-                totalPrice: selectedProposal.priceBreakdown.totalPrice,
+                totalPrice: finalPrice,
+                travelFee: 0,
+                deliveryCharge: 0,
+                originalTravelFee: 0,
                 slotSurcharge: 0,
-                fasterServiceCharge: 0
+                fasterServiceCharge: 0,
+                couponDiscount: 0
             },
+            totalPrice: finalPrice, // 👈 Saved at root level
             address: {
                 name: addr.name || req.user.name || "Patient",
                 phone: addr.phone || req.user.phone || "",
@@ -339,18 +350,20 @@ const acceptProposalAndBook = async (req, res) => {
                 addressType: addr.addressType || "Home"
             },
             assessmentLocation: 'At Home',
+            serviceOTP: dynamicServiceOTP,       // 👈 Generated for Start Check-in
+            completionOTP: dynamicCompletionOTP, // 👈 Generated for End Check-in
             paymentMethod: 'Online',
             status: 'Pending',
             paymentStatus: 'Pending',
             prescriptionImage: request.prescriptionImage
         });
 
-        // 4. Return Razorpay initialization payload for client
         return res.status(200).json({
             success: true,
             message: "Razorpay order generated successfully. Complete payment to confirm booking.",
-            key_id: process.env.RAZORPAY_KEY_ID,
+            key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
             amount: rzpOrder.amount,
+            currency: "INR",
             razorpayOrderId: rzpOrder.id,
             appointmentId: booking._id,
             bookingId: bId,

@@ -15,6 +15,7 @@ const {
     changePassword,
     updateProfile,
     rejectBookingWithReason,
+    startServiceJourney,
     arriveAtLocation,
     verifyOtpAndStartService,
     addProgressUpdate,
@@ -52,6 +53,8 @@ router.get('/orders/list', protect('driver'), getNurseBookings);
 router.get('/orders/detail/:bookingId', protect('driver'), getBookingDetail);
 router.patch('/orders/respond/:bookingId', protect('driver'), respondToBooking);
 router.patch('/orders/reject-reason/:bookingId', protect('driver'), rejectBookingWithReason);
+
+router.patch('/orders/start-journey/:bookingId', protect('driver'), startServiceJourney);
 router.patch('/orders/arrive/:bookingId', protect('driver'), arriveAtLocation);
 router.post('/orders/verify-start-otp', protect('driver'), verifyOtpAndStartService);
 

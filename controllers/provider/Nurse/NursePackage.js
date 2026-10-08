@@ -3,13 +3,58 @@ const NurseService = require('../../../models/NurseService');
 const MasterConsumable = require('../../../models/MasterConsumable');
 const CareService = require('../../../models/CareService'); // For service selection in package creation
 
-// GET ALL MASTER SERVICES FOR PACKAGE DROPDOWN
-// Endpoint: GET /provider/nurse/package/nurse-services
+// @desc    Get Master Care Services for Package Dropdown (With Pagination, Search & Category Filter)
+// @route   GET /provider/nurse/package/nurse-services
+// @access  Private (Nurse Bureau)
 const getAllMasterServicesForSelection = async (req, res) => {
     try {
-        const services = await CareService.find({}).sort({ category: 1 }).lean();
-        res.json({ success: true, count: services.length, data: services });
+        const { search, category, page = 1, limit = 20 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        let query = {};
+
+        if (category && category !== 'All' && category.trim() !== '') {
+            query.category = { $regex: new RegExp("^" + category.trim() + "$", "i") };
+        }
+
+        if (search && search.trim() !== '') {
+            const cleanSearch = search.trim();
+            query.$or = [
+                { category: { $regex: cleanSearch, $options: 'i' } },
+                { subCategory: { $regex: cleanSearch, $options: 'i' } },
+                { servicesOffered: { $regex: cleanSearch, $options: 'i' } }
+            ];
+        }
+
+        const [totalItems, services] = await Promise.all([
+            CareService.countDocuments(query),
+            CareService.find(query)
+                .sort({ category: 1, subCategory: 1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        const totalPages = Math.ceil(totalItems / limitNum) || 1;
+
+        res.status(200).json({
+            success: true,
+            count: services.length,
+            pagination: {
+                totalItems,
+                totalPages,
+                currentPage: pageNum,
+                limit: limitNum,
+                hasNextPage: pageNum < totalPages,
+                hasPrevPage: pageNum > 1
+            },
+            data: services
+        });
     } catch (error) { 
+        console.error("Get All Master Services Selection Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -117,17 +162,52 @@ const managePackage = async (req, res) => {
 
 
 
-// GET MY PACKAGES LIST
-// Endpoint: GET /provider/nurse/package/my-packages
+// @desc    Get Nurse Bureau's Own Created Packages (With Pagination & Search)
+// @route   GET /provider/nurse/package/my-packages
+// @access  Private (Nurse Bureau)
 const getMyPackages = async (req, res) => {
     try {
-        const packages = await NursePackage.find({ nurseId: req.user.id })
-            .populate('includedServices', 'category subCategory description procedureIncluded servicesOffered')
-            .populate('consumablesUsed.masterItemId', 'itemName size mrp unitType')
-            .sort({ createdAt: -1 });
-            
-        res.json({ success: true, count: packages.length, data: packages });
+        const nurseId = req.user.id;
+        const { search, page = 1, limit = 10 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
+
+        let query = { nurseId };
+
+        if (search && search.trim() !== '') {
+            query.packageName = { $regex: search.trim(), $options: 'i' };
+        }
+
+        const [totalItems, packages] = await Promise.all([
+            NursePackage.countDocuments(query),
+            NursePackage.find(query)
+                .populate('includedServices', 'category subCategory description procedureIncluded servicesOffered')
+                .populate('consumablesUsed.masterItemId', 'itemName size mrp unitType')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        const totalPages = Math.ceil(totalItems / limitNum) || 1;
+
+        res.status(200).json({ 
+            success: true, 
+            count: packages.length,
+            pagination: {
+                totalItems,
+                totalPages,
+                currentPage: pageNum,
+                limit: limitNum,
+                hasNextPage: pageNum < totalPages,
+                hasPrevPage: pageNum > 1
+            },
+            data: packages 
+        });
     } catch (error) { 
+        console.error("Get My Packages Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

@@ -4,7 +4,7 @@ const { protect } = require('../../../middleware/authMiddleware');
 const {
     getIncomingPrescriptionRequests,
     submitProposal,
-    declinePrescriptionRequest,getVendorPrescriptionBookings
+    declinePrescriptionRequest,getVendorPrescriptionBookings,cancelPrescriptionInquiry
 } = require('../../../controllers/provider/Nurse/NursePrescription');
 
 // Base prefix: /provider/nurse/prescription
@@ -20,5 +20,7 @@ router.post('/decline', protect('nurse'), declinePrescriptionRequest);
 
 // 4. Get all prescription bookings for the nurse
 router.get('/bookings', protect('nurse'), getVendorPrescriptionBookings);
+
+router.patch('/cancel/:requestId', protect('user'), cancelPrescriptionInquiry);
 
 module.exports = router;

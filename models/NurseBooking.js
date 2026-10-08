@@ -195,6 +195,18 @@ subscriptionDetails: {
         bedNumber: { type: String, default: "" },
         floorNumber: { type: String, default: "" }
     },
+    dailySessions: [{
+        sessionNumber: { type: Number, default: 1 },
+        sessionDate: { type: Date, default: Date.now },
+        staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' },
+        staffName: { type: String, default: "" },
+        startedAt: { type: Date },
+        completedAt: { type: Date },
+        serviceNotes: { type: String, default: "" },
+        progressPhotos: [{ type: String }],
+        extraConsumablesCharges: { type: Number, default: 0 },
+        extraServicePayment: { type: Number, default: 0 }
+    }],
 
 
 

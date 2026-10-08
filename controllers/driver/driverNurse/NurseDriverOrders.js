@@ -114,38 +114,69 @@ const toggleDriverStatus = async (req, res) => {
 };
 
 
-// ==========================================
-// 3. BOOKING ACTIONS & STATES
-// ==========================================
-
+// @desc    Get Nurse Field Staff Dashboard Overview (Active Jobs, Cash to Collect & Completed Count)
+// @route   GET /driver/nurse/dashboard
+// @access  Private (Driver)
 const getNurseDashboard = async (req, res) => {
     try {
         const staffId = req.user.id;
 
-        // 1. Fetch Staff Driver Details
-        const driver = await Driver.findById(staffId);
-        if (!driver) return res.status(404).json({ success: false, message: "Staff account not found" });
+        const driver = await Driver.findById(staffId).select('-password -token');
+        if (!driver) {
+            return res.status(404).json({ success: false, message: "Staff driver account not found." });
+        }
 
-        // 2. Count active assigned services
+        const todayStart = moment().startOf('day').toDate();
+
+        // 1. Count Active Assigned Services
         const activeCount = await NurseBooking.countDocuments({
             assignedStaffId: staffId,
             status: { $in: ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started'] }
         });
 
-        res.json({
+        // 2. Count Today's Completed Services
+        const completedCount = await NurseBooking.countDocuments({
+            assignedStaffId: staffId,
+            status: 'Completed',
+            completedAt: { $gte: todayStart }
+        });
+
+        // 3. Calculate Pending Cash on Delivery (COD) to Collect from active trips
+        const activeCodBookings = await NurseBooking.find({
+            assignedStaffId: staffId,
+            paymentMethod: 'COD',
+            paymentStatus: 'Pending',
+            status: { $in: ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started'] }
+        }).select('totalPrice priceBreakdown').lean();
+
+        const pendingCashToCollect = activeCodBookings.reduce((sum, b) => {
+            return sum + Number(b.totalPrice || b.priceBreakdown?.totalPrice || 0);
+        }, 0);
+
+        res.status(200).json({
             success: true,
             data: {
                 driver: {
+                    id: driver._id,
                     name: driver.name,
-                    address: driver.address || "Tdi City Mohali, Punjab",
-                    profilePic: driver.profilePic,
-                    isOnline: driver.status !== 'Offline', // Available aur Busy are considered Online
+                    phone: driver.phone,
+                    address: driver.address || "Field Operations Desk",
+                    profilePic: driver.profilePic || null,
+                    vehicleNumber: driver.vehicleNumber || "",
+                    vehicleType: driver.vehicleType || "Scooter",
+                    isOnline: driver.status !== 'Offline',
                     status: driver.status
                 },
-                activeServicesCount: activeCount // Figma: "My Services" button inside 2
+                metrics: {
+                    activeServicesCount: activeCount,
+                    completedTodayCount: completedCount,
+                    pendingCashToCollect: Math.round(pendingCashToCollect)
+                }
             }
         });
+
     } catch (error) {
+        console.error("Get Nurse Driver Dashboard Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -251,7 +282,7 @@ const getNurseBookings = async (req, res) => {
     }
 };
 
-// @desc    Get Detailed Nurse Booking for Field Staff (Includes OTPs, Consumables, Hospital Venue & Payment)
+// @desc    Get Detailed Nurse Booking for Field Staff (Includes Prescription Image & Daily Sessions)
 // @route   GET /driver/nurse/orders/detail/:bookingId
 // @access  Private (Driver)
 const getBookingDetail = async (req, res) => {
@@ -337,6 +368,10 @@ const getBookingDetail = async (req, res) => {
                 serviceOTP: booking.serviceOTP,
                 completionOTP: booking.completionOTP,
 
+                // Medical / Prescription Reference
+                prescriptionImage: booking.prescriptionImage || null,
+                dailySessions: booking.dailySessions || [],
+
                 // Financial Breakdown
                 travelFee: travelDeliveryFee,
                 deliveryCharge: travelDeliveryFee,
@@ -355,63 +390,225 @@ const getBookingDetail = async (req, res) => {
     }
 };
 
-// Accept Assigned Booking (Figma Screen 5 popup)
+// @desc    Field Staff Accepts or Rejects Assigned Duty (Deadlock Fixed & Real-Time Sync)
+// @route   PATCH /driver/nurse/orders/respond/:bookingId
+// @access  Private (Driver)
 const respondToBooking = async (req, res) => {
     try {
-        const { action } = req.body; // 'Accept' or 'Reject'
+        const { action, reason } = req.body; // 'Accept' or 'Reject'
         const { bookingId } = req.params;
         const staffId = req.user.id;
 
-        const driver = await Driver.findById(staffId);
-        if (action === 'Accept' && driver.status !== 'Available') {
-            return res.status(400).json({ success: false, message: "You are currently Busy with another patient." });
+        if (!action || !['Accept', 'Reject'].includes(action)) {
+            return res.status(400).json({ success: false, message: "Action must be either 'Accept' or 'Reject'." });
         }
 
-        const booking = await NurseBooking.findById(bookingId);
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = isObjectId 
+            ? { _id: bookingId } 
+            : { bookingId: String(bookingId).trim() };
 
+        const booking = await NurseBooking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
+
+        // =========================================================================
+        // 1. ACCEPT DUTY
+        // =========================================================================
         if (action === 'Accept') {
+            // Check if staff is actively in-transit or on-site with ANOTHER patient
+            const activeOtherJob = await NurseBooking.findOne({
+                assignedStaffId: staffId,
+                _id: { $ne: booking._id },
+                status: { $in: ['On-The-Way', 'Arrived', 'Service-Started'] }
+            });
+
+            if (activeOtherJob) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "You are currently busy executing another service. Finish current task first." 
+                });
+            }
+
             booking.status = 'Assigned';
-            await Driver.findByIdAndUpdate(staffId, { status: 'Busy' });
+            booking.assignedStaffId = staffId;
             await booking.save();
-        } else {
-            // Reject Action without comments goes here
-            await NurseBooking.findByIdAndUpdate(bookingId, {
-                $addToSet: { rejectedBy: staffId },
-                assignedStaffId: null,
-                status: 'Confirmed'
+
+            // Lock staff status to Busy
+            await Driver.findByIdAndUpdate(staffId, { $set: { status: 'Busy', isOnline: true } });
+
+            // Notify Patient that staff has accepted duty
+            if (booking.userId) {
+                try {
+                    await sendPushNotification(
+                        booking.userId,
+                        'user',
+                        "Nurse Confirmed Your Duty! 👩‍⚕️",
+                        `Nurse ${req.user.name || ''} has accepted your service booking #${booking.bookingId}.`,
+                        { bookingId: booking._id.toString(), type: 'nurse_accepted_duty' }
+                    );
+                } catch (e) {}
+            }
+
+            return res.status(200).json({ 
+                success: true, 
+                message: "Service duty accepted successfully.", 
+                data: booking 
             });
         }
-        res.json({ success: true, message: `Booking ${action}ed successfully` });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        // =========================================================================
+        // 2. REJECT DUTY
+        // =========================================================================
+        if (action === 'Reject') {
+            const dropReason = reason || "Staff declined assignment.";
+
+            booking.rejectedBy.push(staffId);
+            booking.assignedStaffId = null;
+            booking.status = 'Confirmed'; // Pool back for bureau reassignment
+            booking.cancelReason = dropReason;
+            await booking.save();
+
+            // Release staff driver back to Available
+            await Driver.findByIdAndUpdate(staffId, { $set: { status: 'Available', isOnline: true } });
+
+            // Alert Nurse Bureau to reassign immediately
+            if (booking.nurseId) {
+                try {
+                    await sendPushNotification(
+                        booking.nurseId,
+                        'nurse',
+                        "⚠️ Staff Nurse Declined Duty!",
+                        `Nurse staff ${req.user.name || ''} declined booking #${booking.bookingId}. Please assign another staff.`,
+                        { bookingId: booking._id.toString(), type: 'staff_declined_duty' }
+                    );
+                } catch (e) {}
+            }
+
+            return res.status(200).json({ 
+                success: true, 
+                message: "Duty declined. Booking pooled back for reassignment.", 
+                data: booking 
+            });
+        }
+
+    } catch (error) { 
+        console.error("Respond To Booking Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// Reject Booking with Reasons Form (Figma Screen 15, 19)
+// @desc    Field Staff Rejects or Drops Assigned Booking (Pools Back & Alerts Nurse Bureau Instantly)
+// @route   PATCH /driver/nurse/orders/reject-reason/:bookingId
+// @access  Private (Driver)
 const rejectBookingWithReason = async (req, res) => {
     try {
         const { bookingId } = req.params;
         const { cancelReason, additionalComments } = req.body;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findByIdAndUpdate(bookingId, {
-            $addToSet: { rejectedBy: staffId },
-            assignedStaffId: null,
-            status: 'Confirmed', // Pool back
-            cancelReason,
-            additionalComments
-        }, { new: true });
+        const booking = await NurseBooking.findById(bookingId);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
 
-        // Driver Free again
-        await Driver.findByIdAndUpdate(staffId, { status: 'Available' });
+        const dropReason = cancelReason || "Staff unavailable due to emergency";
 
-        res.json({ success: true, message: "Booking rejected and logged successfully", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // Pool booking back to Confirmed with no assigned staff
+        booking.rejectedBy.push(staffId);
+        booking.assignedStaffId = null;
+        booking.status = 'Confirmed';
+        booking.cancelReason = dropReason;
+        booking.additionalComments = additionalComments || "";
+        await booking.save();
+
+        // Free driver back to Available
+        await Driver.findByIdAndUpdate(staffId, { $set: { status: 'Available', isOnline: true } });
+
+        // 🚨 Alert Nurse Bureau that assigned staff rejected the duty
+        if (booking.nurseId) {
+            try {
+                await sendPushNotification(
+                    booking.nurseId,
+                    'nurse',
+                    "⚠️ Staff Nurse Dropped Booking!",
+                    `Nurse staff ${req.user.name || ''} dropped duty for booking #${booking.bookingId} (${dropReason}). Please reassign immediately.`,
+                    { bookingId: booking._id.toString(), type: 'staff_dropped_duty' }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Booking duty released and Nurse Bureau notified for reassignment.",
+            data: booking
+        });
+
+    } catch (error) { 
+        console.error("Reject Booking With Reason Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// ==========================================
-// 1. ARRIVED AT LOCATION (Returns Patient Phone for Firebase SMS)
-// Endpoint: PATCH /driver/nurse/orders/arrive/:bookingId
-// ==========================================
+
+// @desc    Field Staff starts transit to Patient Location (Status: 'On-The-Way')
+// @route   PATCH /driver/nurse/orders/start-journey/:bookingId
+// @access  Private (Driver)
+const startServiceJourney = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+        const staffId = req.user.id;
+
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = isObjectId 
+            ? { _id: bookingId } 
+            : { bookingId: String(bookingId).trim() };
+
+        const booking = await NurseBooking.findOne(query).populate('userId', 'fcmToken name phone');
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
+
+        if (booking.assignedStaffId && String(booking.assignedStaffId) !== String(staffId)) {
+            return res.status(403).json({ success: false, message: "Unauthorized: You are not assigned to this booking." });
+        }
+
+        booking.status = 'On-The-Way';
+        booking.startedAt = new Date();
+        await booking.save();
+
+        // Ensure driver status is Busy
+        await Driver.findByIdAndUpdate(staffId, { $set: { status: 'Busy', isOnline: true } });
+
+        // Alert Patient that nurse is on the way
+        if (booking.userId) {
+            try {
+                await sendPushNotification(
+                    booking.userId._id,
+                    'user',
+                    "Nurse is On The Way! 🛵",
+                    `Nurse ${req.user.name || ''} has started transit to your location.`,
+                    { bookingId: booking._id.toString(), type: 'nurse_on_the_way' }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Journey started. Status updated to 'On-The-Way'.",
+            data: booking
+        });
+
+    } catch (error) {
+        console.error("Start Journey Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Field Staff Arrives at Location (Venue-Aware Notification & SMS Phone Return)
+// @route   PATCH /driver/nurse/orders/arrive/:bookingId
+// @access  Private (Driver)
 const arriveAtLocation = async (req, res) => {
     try {
         const { bookingId } = req.params;
@@ -419,10 +616,10 @@ const arriveAtLocation = async (req, res) => {
 
         const staff = await Driver.findById(staffId);
         const booking = await NurseBooking.findById(bookingId).populate('userId', 'fcmToken name phone');
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
-            return res.status(403).json({ success: false, message: "Unauthorized operation" });
+        if (booking.assignedStaffId && String(booking.assignedStaffId) !== String(staffId)) {
+            return res.status(403).json({ success: false, message: "Unauthorized operation." });
         }
 
         booking.status = 'Arrived';
@@ -433,47 +630,63 @@ const arriveAtLocation = async (req, res) => {
         const cleanPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
         const formattedPatientPhone = `+91${cleanPhone}`;
 
+        // Dynamic Venue-Aware Notification (Hospital vs Home)
+        const isHospital = booking.assessmentLocation === 'At Hospital';
+        const notifTitle = isHospital ? "Nurse Arrived at Hospital Ward! 🏥" : "Nurse Arrived at Your Doorstep! 👩‍⚕️";
+        const notifBody = isHospital 
+            ? `Nurse ${staff?.name || ''} has arrived at ${booking.hospitalDetails?.hospitalName || 'the hospital'}. Share Start OTP (${booking.serviceOTP || ''}) to begin.`
+            : `Nurse ${staff?.name || ''} has arrived. Please share the Start OTP (${booking.serviceOTP || ''}) to begin care session.`;
+
         if (booking.userId) {
-            await sendPushNotification(
-                booking.userId._id,
-                'user',
-                "Nurse Arrived at Your Home! 👩‍⚕️",
-                `Nurse ${staff?.name || ''} has arrived. Please share the SMS verification OTP to begin care session.`,
-                { bookingId: booking._id.toString(), type: 'nurse_arrived' }
-            );
+            try {
+                await sendPushNotification(
+                    booking.userId._id,
+                    'user',
+                    notifTitle,
+                    notifBody,
+                    { bookingId: booking._id.toString(), type: 'nurse_arrived', serviceOTP: booking.serviceOTP }
+                );
+            } catch (e) {}
         }
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: "Nurse arrived at location. Trigger Firebase SMS OTP to start service.",
+            message: "Nurse arrived at location. Patient alerted to share Start OTP.",
             patientPhone: formattedPatientPhone,
             bookingId: booking.bookingId 
         });
     } catch (error) { 
+        console.error("Arrive At Location Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// ==========================================
-// 2. VERIFY FIREBASE OTP & START CARE TIMER
-// Endpoint: POST /driver/nurse/orders/verify-start-otp
-// ==========================================
+// @desc    Verify Start OTP (Firebase ID Token or Dynamic 4-Digit serviceOTP) & Begin Care Session
+// @route   POST /driver/nurse/orders/verify-start-otp
+// @access  Private (Driver)
 const verifyOtpAndStartService = async (req, res) => {
     try {
         const { bookingId, idToken, otp } = req.body;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findById(bookingId).populate('userId', 'phone');
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = isObjectId 
+            ? { _id: bookingId } 
+            : { bookingId: String(bookingId).trim() };
 
-        if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
-            return res.status(403).json({ success: false, message: "Unauthorized operation" });
+        const booking = await NurseBooking.findOne(query).populate('userId', 'phone name fcmToken');
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
+
+        if (booking.assignedStaffId && String(booking.assignedStaffId) !== String(staffId)) {
+            return res.status(403).json({ success: false, message: "Unauthorized operation." });
         }
 
         const patientPhone = booking.address?.phone || booking.userId?.phone;
         const cleanPatientPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
 
-        // 🚨 Verify Firebase Phone Token
+        // 1. Production Mode: Real Firebase Phone ID Token Verification
         if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
             if (!idToken) {
                 return res.status(400).json({ success: false, message: "Firebase idToken is required to start service." });
@@ -482,45 +695,98 @@ const verifyOtpAndStartService = async (req, res) => {
             if (!verification.success) {
                 return res.status(400).json({ success: false, message: verification.message });
             }
-        } else if (otp) {
-            if (otp !== '123456') return res.status(400).json({ success: false, message: "Invalid Dev OTP." });
+        } 
+        // 2. OTP Code Verification (Accepts actual booking.serviceOTP or dev fallback '123456')
+        else if (otp) {
+            const cleanIncomingOtp = String(otp).trim();
+            const savedOtp = String(booking.serviceOTP || '').trim();
+
+            if (cleanIncomingOtp !== '123456' && cleanIncomingOtp !== savedOtp) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Invalid Start OTP code. Please enter the code displayed on patient's screen." 
+                });
+            }
         } else {
-            return res.status(400).json({ success: false, message: "Verification idToken is required." });
+            return res.status(400).json({ success: false, message: "Verification OTP or idToken is required." });
         }
 
         booking.status = 'Service-Started';
         booking.startedAt = new Date();
         await booking.save();
 
-        res.json({ success: true, message: "Care session verified via Firebase & timer started!", data: booking });
+        // Notify Patient that care session has officially started
+        if (booking.userId) {
+            try {
+                await sendPushNotification(
+                    booking.userId._id,
+                    'user',
+                    "Nursing Session Started! ⏱️",
+                    `Nurse ${req.user.name || ''} has verified OTP and started the care session.`,
+                    { bookingId: booking._id.toString(), type: 'nurse_service_started' }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Start OTP verified successfully. Care timer started!", 
+            data: booking 
+        });
+
     } catch (error) { 
+        console.error("Verify Start OTP Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// Live Service Progress Operations (Figma Screen 23 - Notes / Photos)
+// @desc    Add Live Notes & Progress Photos During Session Timer (Clean Web URLs)
+// @route   PATCH /driver/nurse/orders/progress-update/:bookingId
+// @access  Private (Driver)
 const addProgressUpdate = async (req, res) => {
     try {
         const { bookingId } = req.params;
         const { progressNotes } = req.body;
         const staffId = req.user.id;
 
-        const booking = await NurseBooking.findById(bookingId);
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = isObjectId 
+            ? { _id: bookingId } 
+            : { bookingId: String(bookingId).trim() };
 
-        if (booking.assignedStaffId.toString() !== staffId) {
-            return res.status(403).json({ message: "Unauthorized" });
+        const booking = await NurseBooking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        if (progressNotes) booking.serviceNotes = progressNotes;
-        if (req.files && req.files.progressPhotos) {
-            const paths = req.files.progressPhotos.map(file => file.path);
-            booking.progressPhotos.push(...paths);
+        if (booking.assignedStaffId && String(booking.assignedStaffId) !== String(staffId)) {
+            return res.status(403).json({ success: false, message: "Unauthorized: You are not assigned to this booking." });
+        }
+
+        if (progressNotes) {
+            booking.serviceNotes = progressNotes.trim();
+        }
+
+        // Clean & Normalize Progress Photos to standard web-accessible URLs
+        if (req.files && req.files.progressPhotos && req.files.progressPhotos.length > 0) {
+            const cleanPhotoUrls = req.files.progressPhotos.map(file => {
+                return `/uploads/nurse_progress/${file.filename}`;
+            });
+            if (!booking.progressPhotos) booking.progressPhotos = [];
+            booking.progressPhotos.push(...cleanPhotoUrls);
         }
 
         await booking.save();
-        res.json({ success: true, message: "Progress data updated", data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Progress update and photos recorded successfully.", 
+            data: booking 
+        });
+    } catch (error) { 
+        console.error("Add Progress Update Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // ==========================================
@@ -579,7 +845,7 @@ const submitServiceCompletion = async (req, res) => {
     }
 };
 
-// @desc    Verify Completion OTP with Multi-Day Daily OTP Regeneration & Extra Consumables Sync
+// @desc    Verify Completion OTP with Multi-Day Session History Archival & Doorstep Addons
 // @route   POST /driver/nurse/orders/verify-complete-otp
 // @access  Private (Driver)
 const verifyCompleteOtp = async (req, res) => {
@@ -592,14 +858,14 @@ const verifyCompleteOtp = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        if (booking.assignedStaffId && booking.assignedStaffId.toString() !== staffId) {
+        if (booking.assignedStaffId && String(booking.assignedStaffId) !== String(staffId)) {
             return res.status(403).json({ success: false, message: "Unauthorized operation." });
         }
 
         const patientPhone = booking.address?.phone || booking.userId?.phone;
         const cleanPatientPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
 
-        // 1. Verify Firebase Phone Token or Dev OTP
+        // 1. Verify OTP or Firebase Token
         if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
             if (!idToken) {
                 return res.status(400).json({ success: false, message: "Firebase idToken is required." });
@@ -609,7 +875,9 @@ const verifyCompleteOtp = async (req, res) => {
                 return res.status(400).json({ success: false, message: verification.message });
             }
         } else if (otp) {
-            if (otp !== '123456' && booking.completionOTP !== otp) {
+            const cleanIncomingOtp = String(otp).trim();
+            const savedOtp = String(booking.completionOTP || '').trim();
+            if (cleanIncomingOtp !== '123456' && cleanIncomingOtp !== savedOtp) {
                 return res.status(400).json({ success: false, message: "Invalid Completion OTP code." });
             }
         }
@@ -624,7 +892,6 @@ const verifyCompleteOtp = async (req, res) => {
             booking.priceBreakdown.consumableTotal = Number(booking.priceBreakdown.consumableTotal || 0) + extraConsumables;
             booking.priceBreakdown.totalPrice = Number(booking.priceBreakdown.totalPrice || booking.totalPrice || 0) + onSpotAddons;
             booking.totalPrice = booking.priceBreakdown.totalPrice;
-            console.log(`📦 [DEBUG: verifyCompleteOtp] Synced on-spot charges: +₹${onSpotAddons} (New Grand Total: ₹${booking.totalPrice})`);
         }
 
         // 3. Multi-Day vs Single Day Lifecycle Evaluation
@@ -632,12 +899,30 @@ const verifyCompleteOtp = async (req, res) => {
         const hasMultipleDays = (booking.schedule?.duration === 'For Multiple Days' && booking.schedule?.endDate);
         const isMultiDayActive = hasMultipleDays && new Date(today.setHours(0,0,0,0)) < new Date(new Date(booking.schedule.endDate).setHours(0,0,0,0));
 
+        // Archive today's session into dailySessions log
+        const currentSessionNumber = (booking.dailySessions?.length || 0) + 1;
+        if (!booking.dailySessions) booking.dailySessions = [];
+
+        booking.dailySessions.push({
+            sessionNumber: currentSessionNumber,
+            sessionDate: new Date(),
+            staffId: staffId,
+            staffName: req.user.name || "Nurse Staff",
+            startedAt: booking.startedAt || new Date(),
+            completedAt: new Date(),
+            serviceNotes: booking.serviceNotes || "",
+            progressPhotos: booking.progressPhotos || [],
+            extraConsumablesCharges: extraConsumables,
+            extraServicePayment: extraService
+        });
+
         if (isMultiDayActive) {
-            // 🚨 MULTI-DAY ACTIVE: Session completed for today, regenerate fresh OTPs for tomorrow's visit!
+            // MULTI-DAY ACTIVE: Session completed for today, regenerate fresh OTPs for tomorrow's visit!
             booking.status = 'Assigned';
             booking.serviceOTP = Math.floor(1000 + Math.random() * 9000).toString();
             booking.completionOTP = Math.floor(1000 + Math.random() * 9000).toString();
-            console.log(`🔄 [DEBUG: verifyCompleteOtp] Multi-day session active. Regenerated Tomorrow's Start OTP: ${booking.serviceOTP}, End OTP: ${booking.completionOTP}`);
+            booking.serviceNotes = ""; // Reset note for next day
+            booking.progressPhotos = []; // Reset photos for next day
         } else {
             // SINGLE DAY OR FINAL DAY: Complete the entire booking
             booking.status = 'Completed';
@@ -656,34 +941,35 @@ const verifyCompleteOtp = async (req, res) => {
         await booking.save();
 
         // 4. Release Staff Nurse back to Available state
-        await Driver.findByIdAndUpdate(staffId, { status: 'Available' });
+        await Driver.findByIdAndUpdate(staffId, { $set: { status: 'Available', isOnline: true } });
 
         // 5. Notify Patient
         try {
             await sendPushNotification(
                 booking.userId,
                 'user',
-                isMultiDayActive ? "Today's Nursing Session Completed! 👩‍⚕️" : "Nursing Care Service Completed! ✨",
+                isMultiDayActive ? `Day ${currentSessionNumber} Nursing Session Completed! 👩‍⚕️` : "Nursing Care Service Completed! ✨",
                 isMultiDayActive 
                     ? `Today's session finished. Tomorrow's Start OTP is: ${booking.serviceOTP}.`
-                    : `Your nursing service session #${booking.bookingId} has been successfully completed.`,
+                    : `Your nursing care service #${booking.bookingId} has been successfully completed.`,
                 { bookingId: booking._id.toString(), type: 'nurse_session_completed' }
             );
         } catch (e) {}
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: isMultiDayActive 
-                ? "Today's session completed! Tomorrow's fresh OTPs generated and staff released." 
+                ? `Day ${currentSessionNumber} session completed! Tomorrow's fresh OTPs generated and staff released.` 
                 : "Service completed successfully and marked as Paid!", 
             isMultiDayActive,
+            sessionNumber: currentSessionNumber,
             nextSessionStartOtp: isMultiDayActive ? booking.serviceOTP : null,
             data: booking 
         });
 
     } catch (error) { 
         console.error("Verify Complete OTP Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal Server Error in complete OTP verification." }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -822,6 +1108,9 @@ const getAboutContent = async (req, res) => {
 
 // REPORT NURSE NO-SHOW (With Bureau Wallet Compensation Credit)
 // Endpoint: POST /driver/nurse/orders/no-show
+// @desc    Report Patient No-Show by Staff Nurse (Accurate COD vs Online Financial Separation)
+// @route   POST /driver/nurse/orders/no-show
+// @access  Private (Driver)
 const reportNurseNoShow = async (req, res) => {
     try {
         const { bookingId, comments } = req.body;
@@ -830,18 +1119,18 @@ const reportNurseNoShow = async (req, res) => {
         const isObjectId = mongoose.isValidObjectId(bookingId);
         const query = {
             $or: [
-                { _id: isObjectId ? new mongoose.Types.ObjectId(bookingId) : new mongoose.Types.ObjectId() },
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(bookingId) }] : []),
                 { bookingId: String(bookingId).trim() }
             ],
             assignedStaffId: new mongoose.Types.ObjectId(staffId),
-            status: 'Arrived'
+            status: { $in: ['Arrived', 'On-The-Way'] }
         };
 
         const booking = await NurseBooking.findOne(query);
         if (!booking) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Active booking in 'Arrived' state not found for this nurse staff." 
+                message: "Active booking in 'Arrived' or 'On-The-Way' state not found for this nurse staff." 
             });
         }
 
@@ -859,13 +1148,19 @@ const reportNurseNoShow = async (req, res) => {
         booking.status = 'No-Show';
         if (!booking.priceBreakdown) booking.priceBreakdown = {};
         booking.priceBreakdown.noShowFeeApplied = noShowFee;
-        booking.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
-        booking.cancelReason = comments || "Nurse arrived on location but patient was unreachable.";
 
+        // Financial Fix: Only initiate refund if payment was actually completed online
+        if (booking.paymentMethod === 'COD' || booking.paymentStatus !== 'Paid') {
+            booking.paymentStatus = 'Failed'; // No money collected, no refund queued
+        } else {
+            booking.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        }
+
+        booking.cancelReason = comments || "Nurse arrived on location but patient was unreachable.";
         await booking.save();
 
-        // 🚨 CRITICAL FIX: Credit 100% No-Show Compensation to Nurse Bureau Wallet
-        if (noShowFee > 0 && booking.nurseId) {
+        // Credit 100% No-Show Compensation to Nurse Bureau Wallet (if policy applies and booking was online paid)
+        if (noShowFee > 0 && booking.nurseId && booking.paymentMethod !== 'COD') {
             const { creditVendorCompensation } = require('../../../utils/policyHelper');
             await creditVendorCompensation(
                 booking.nurseId, 
@@ -882,19 +1177,23 @@ const reportNurseNoShow = async (req, res) => {
         });
 
         // Send alert to patient
-        try {
-            await sendPushNotification(
-                booking.userId,
-                'user',
-                "Home Visit No-Show Recorded",
-                `Nurse arrived at your address but could not reach you. No-Show fee of ₹${noShowFee} was applied.`,
-                { bookingId: booking._id.toString(), type: 'nurse_no_show' }
-            );
-        } catch (e) {}
+        if (booking.userId) {
+            try {
+                await sendPushNotification(
+                    booking.userId,
+                    'user',
+                    "Home Visit No-Show Recorded",
+                    booking.paymentMethod === 'COD'
+                        ? "Nurse arrived at your address but could not reach you. Booking marked as No-Show."
+                        : `Nurse arrived at your address but could not reach you. No-Show fee of ₹${noShowFee} was applied.`,
+                    { bookingId: booking._id.toString(), type: 'nurse_no_show' }
+                );
+            } catch (e) {}
+        }
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: `Home Nursing No-Show logged. ₹${noShowFee} compensation credited to Nurse Bureau wallet.`, 
+            message: `Nursing No-Show logged successfully. Staff driver released to Available.`, 
             noShowFeeApplied: noShowFee,
             data: booking 
         });
@@ -918,6 +1217,7 @@ module.exports = {
     getBookingDetail,
     respondToBooking,
     rejectBookingWithReason,
+    startServiceJourney,
     arriveAtLocation,
     verifyOtpAndStartService,
     addProgressUpdate,

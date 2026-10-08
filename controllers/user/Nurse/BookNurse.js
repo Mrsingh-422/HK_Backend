@@ -1321,7 +1321,7 @@ const verifyNursePayment = async (req, res) => {
     }
 };
 
-// @desc    Retry Online Payment for a Pending Nurse Booking
+// @desc    Retry Online Payment for a Pending Nurse Booking (Saves New Razorpay Order to DB)
 // @route   POST /user/nurse/retry-payment
 // @access  Private (User)
 const retryNursePayment = async (req, res) => {
@@ -1370,6 +1370,12 @@ const retryNursePayment = async (req, res) => {
 
         const rzpOrder = await createRazorpayOrder(amountToPay, `retry_${booking.bookingId}`);
 
+        // Persist new Razorpay Order ID on booking document
+        if (!booking.paymentDetails) booking.paymentDetails = {};
+        booking.paymentDetails.razorpayOrderId = rzpOrder.id;
+        booking.paymentMethod = 'Online';
+        await booking.save();
+
         res.status(200).json({
             success: true,
             message: "Fresh Razorpay payment order generated.",
@@ -1388,7 +1394,7 @@ const retryNursePayment = async (req, res) => {
     }
 };
 
-// @desc    Track Active Nurse Booking (With Travel Fee & Delivery Charge Guaranteed)
+// @desc    Track Active Nurse Booking (Secure Timed OTPs, Daily Sessions & Staff Tracking)
 // @route   GET /user/nurse/track/:id
 // @access  Private (User)
 const getAppointmentStatus = async (req, res) => {
@@ -1421,7 +1427,7 @@ const getAppointmentStatus = async (req, res) => {
         let travelDeliveryFee = Number(
             booking.priceBreakdown?.travelFee !== undefined 
                 ? booking.priceBreakdown.travelFee 
-                : (booking.priceBreakdown?.deliveryCharge !== undefined ? booking.priceBreakdown.deliveryCharge : 0)
+                : (booking.priceBreakdown?.deliveryCharge || 0)
         );
 
         if (travelDeliveryFee === 0 && fasterCharge === 0 && Number(booking.totalPrice || 0) > 0) {
@@ -1435,6 +1441,13 @@ const getAppointmentStatus = async (req, res) => {
             }
         }
 
+        // 🔒 OTP Security Logic: Expose only when appropriate stage is reached
+        const isStaffDispatched = ['Assigned', 'On-The-Way', 'Arrived', 'Service-Started'].includes(booking.status);
+        const isSessionRunning = booking.status === 'Service-Started';
+
+        const secureStartOTP = isStaffDispatched ? booking.serviceOTP : null;
+        const secureCompletionOTP = isSessionRunning ? booking.completionOTP : null;
+
         res.status(200).json({
             success: true,
             data: {
@@ -1447,6 +1460,10 @@ const getAppointmentStatus = async (req, res) => {
                     deliveryCharge: travelDeliveryFee,
                     originalTravelFee: Number(booking.priceBreakdown?.originalTravelFee || travelDeliveryFee || 45)
                 },
+                // Secured OTP values based on session stage
+                serviceOTP: secureStartOTP,
+                completionOTP: secureCompletionOTP,
+                dailySessions: booking.dailySessions || [],
                 trackingTimeline: {
                     isPending: booking.status === 'Pending',
                     isConfirmed: booking.status === 'Confirmed',
@@ -1801,32 +1818,59 @@ const rateNurseBooking = async (req, res) => {
 };
 
 // for flutter new api 2
-// 1. GET NURSE PACKAGES LIST
-// endpoint: GET /user/nurse/packages/list
+// @desc    Get Nurse Packages List for Patient App (With Pagination & Search)
+// @route   GET /user/nurse/packages/list
+// @access  Public / User
 const getNursePackagesList = async (req, res) => {
     try {
-        const { nurseId } = req.query; // Optional filter by specific Nurse bureau
+        const { nurseId, search, page = 1, limit = 20 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
         let query = { status: 'Approved', isActive: true };
 
-        if (nurseId) {
+        if (nurseId && mongoose.isValidObjectId(nurseId)) {
             query.nurseId = nurseId;
         }
 
-        // 🌟 optimization: Select only required fields to match Figma card
-        const packages = await NursePackage.find(query)
-            .select('_id packageName includedServices') // pricing aur bakis keys remove kar di hain
-            .populate({
-                path: 'includedServices',
-                select: 'description' // Figma bullet points ke liye sirf description select kiya hai
-            })
-            .lean();
+        if (search && search.trim() !== '') {
+            query.packageName = { $regex: search.trim(), $options: 'i' };
+        }
 
-        res.json({
+        const [totalItems, packages] = await Promise.all([
+            NursePackage.countDocuments(query),
+            NursePackage.find(query)
+                .select('_id packageName description pricing includedServices nurseId')
+                .populate('nurseId', 'name city profileImage rating')
+                .populate({
+                    path: 'includedServices',
+                    select: 'category subCategory description procedureIncluded'
+                })
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        const totalPages = Math.ceil(totalItems / limitNum) || 1;
+
+        res.status(200).json({
             success: true,
             count: packages.length,
+            pagination: {
+                totalItems,
+                totalPages,
+                currentPage: pageNum,
+                limit: limitNum,
+                hasNextPage: pageNum < totalPages,
+                hasPrevPage: pageNum > 1
+            },
             data: packages
         });
     } catch (error) {
+        console.error("Get Nurse Packages List Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

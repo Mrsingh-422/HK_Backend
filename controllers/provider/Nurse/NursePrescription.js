@@ -1,15 +1,22 @@
 const NursingPrescriptionRequest = require('../../../models/NursingPrescriptionRequest');
 const NurseBooking = require('../../../models/NurseBooking');
 const moment = require('moment');
+const { sendPushNotification } = require('../../../utils/notification'); 
 
-// 1. GET ALL ACTIVE BROADCASTED REQUESTS FOR THE LOGGED-IN NURSE
+// @desc    Get Active Broadcasted Prescription Requests for Nurse Bureau (With Pagination)
+// @route   GET /provider/nurse/prescription/requests
+// @access  Private (Nurse Bureau)
 const getIncomingPrescriptionRequests = async (req, res) => {
     try {
         const nurseId = req.user.id;
+        const { page = 1, limit = 10 } = req.query;
         const now = new Date();
 
-        // Find requests where this nurse is a candidate, and status is Broadcasted and not expired
-        const requests = await NursingPrescriptionRequest.find({
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
+
+        const query = {
             status: 'Broadcasted',
             expiresAt: { $gt: now },
             "candidateNurses": {
@@ -18,21 +25,43 @@ const getIncomingPrescriptionRequests = async (req, res) => {
                     status: 'Pending'
                 }
             }
-        }).populate('userId', 'name gender age');
+        };
 
-        res.json({
+        const [totalItems, requests] = await Promise.all([
+            NursingPrescriptionRequest.countDocuments(query),
+            NursingPrescriptionRequest.find(query)
+                .populate('userId', 'name gender age profilePic')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        const totalPages = Math.ceil(totalItems / limitNum) || 1;
+
+        res.status(200).json({
             success: true,
             count: requests.length,
+            pagination: {
+                totalItems,
+                totalPages,
+                currentPage: pageNum,
+                limit: limitNum,
+                hasNextPage: pageNum < totalPages,
+                hasPrevPage: pageNum > 1
+            },
             data: requests
         });
 
     } catch (error) {
+        console.error("Get Incoming Prescription Requests Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 3. SUBMIT PROPOSAL / GENERATE PRESCRIPTION BILL
-// Endpoint: POST /provider/nurse/prescription/respond
+// @desc    Submit Proposal / Generate Prescription Bill for Patient (With Instant Patient Alert)
+// @route   POST /provider/nurse/prescription/respond
+// @access  Private (Nurse Bureau)
 const submitProposal = async (req, res) => {
     try {
         const nurseId = req.user.id;
@@ -94,7 +123,19 @@ const submitProposal = async (req, res) => {
 
         await request.save();
 
-        // 🚨 FIXED: Standard 200 OK Response
+        // 🔔 Patient Push Notification: Alert user that a proposal bill has arrived
+        if (request.userId) {
+            try {
+                await sendPushNotification(
+                    request.userId,
+                    'user',
+                    "📋 New Nursing Proposal Bill Received!",
+                    `A nearby nurse bureau submitted a proposal of ₹${totalPrice} for your prescription inquiry. Tap to review.`,
+                    { requestId: request._id.toString(), type: 'new_prescription_proposal' }
+                );
+            } catch (e) {}
+        }
+
         res.status(200).json({
             success: true,
             message: "Proposal bill submitted successfully to patient.",
@@ -131,31 +172,104 @@ const declinePrescriptionRequest = async (req, res) => {
     }
 };
 
+// @desc    Get All Confirmed Prescription Bookings for Nurse Bureau (With Pagination)
+// @route   GET /provider/nurse/prescription/bookings
+// @access  Private (Nurse Bureau)
 const getVendorPrescriptionBookings = async (req, res) => {
     try {
         const nurseId = req.user.id;
-        const { status } = req.query; // e.g., Confirmed, Completed, Cancelled
+        const { status, page = 1, limit = 10 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip = (pageNum - 1) * limitNum;
 
         let query = { 
             nurseId: nurseId, 
-            bookingType: 'Prescription' // 👈 Strictly filters only prescription bookings
+            bookingType: 'Prescription' 
         };
         
-        if (status) {
+        if (status && status !== 'All') {
             query.status = status;
         }
 
-        const bookings = await NurseBooking.find(query)
-            .populate('userId', 'name phone profilePic gender dob')
-            .sort({ createdAt: -1 });
+        const [totalItems, bookings] = await Promise.all([
+            NurseBooking.countDocuments(query),
+            NurseBooking.find(query)
+                .populate('userId', 'name phone profilePic gender dob')
+                .populate('assignedStaffId', 'name phone vehicleNumber status location')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
 
-        res.json({
+        const totalPages = Math.ceil(totalItems / limitNum) || 1;
+
+        res.status(200).json({
             success: true,
             count: bookings.length,
+            pagination: {
+                totalItems,
+                totalPages,
+                currentPage: pageNum,
+                limit: limitNum,
+                hasNextPage: pageNum < totalPages,
+                hasPrevPage: pageNum > 1
+            },
             data: bookings
         });
 
     } catch (error) {
+        console.error("Get Vendor Prescription Bookings Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Cancel Active Prescription Broadcast Request by Patient
+// @route   PATCH /user/nurse/prescription/cancel/:requestId
+// @access  Private (User)
+const cancelPrescriptionInquiry = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const userId = req.user.id;
+
+        const isObjectId = mongoose.isValidObjectId(requestId);
+        const query = {
+            userId,
+            ...(isObjectId ? { _id: requestId } : { _id: new mongoose.Types.ObjectId() })
+        };
+
+        const request = await NursingPrescriptionRequest.findOne(query);
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Prescription inquiry not found or unauthorized." });
+        }
+
+        if (request.status === 'Completed') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cannot cancel. This inquiry has already been converted into a paid booking." 
+            });
+        }
+
+        if (request.status === 'Expired' || request.status === 'Cancelled') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Inquiry is already in '${request.status}' state.` 
+            });
+        }
+
+        request.status = 'Cancelled';
+        await request.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Prescription inquiry cancelled successfully.",
+            data: request
+        });
+
+    } catch (error) {
+        console.error("Cancel Prescription Inquiry Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -164,5 +278,6 @@ module.exports = {
     getIncomingPrescriptionRequests,
     submitProposal,
     declinePrescriptionRequest,
-    getVendorPrescriptionBookings
+    getVendorPrescriptionBookings,
+    cancelPrescriptionInquiry
 };
