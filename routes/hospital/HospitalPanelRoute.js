@@ -18,7 +18,10 @@ const {
     dispatchDischargeAmbulance, cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals,
     getInsurancePatientsList,uploadInsuranceApprovalLetter,
     getInsuranceMasterDropdowns,
-    savePatientInsuranceDetails
+    savePatientInsuranceDetails,
+    manageDoctorLeaveByHospital,
+    getHospitalDoctorPendingLeaves,
+    hospitalAdminRescheduleAppointment
     
 
 } = require('../../controllers/hospital/HospitalPanel');
@@ -124,5 +127,10 @@ router.put(
 );
 router.get('/insurance/master-data', protect('hospital'), getInsuranceMasterDropdowns); // Populate dropdown lists
 router.put('/insurance/save/:patientUserId', protect('hospital'), insuranceCardUploads, savePatientInsuranceDetails); 
+
+// Hospital Admin Controls
+router.get('/doctors/leaves', protect('hospital'), getHospitalDoctorPendingLeaves);
+router.patch('/doctors/leave-approval', protect('hospital'), manageDoctorLeaveByHospital);
+router.post('/appointments/reschedule', protect('hospital'), hospitalAdminRescheduleAppointment);
 
 module.exports = router;

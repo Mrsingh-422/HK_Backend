@@ -54,6 +54,14 @@ const availabilitySchema = new mongoose.Schema({
     rescheduleCount: { type: Number, default: 0 },
     originalBookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
 
+    // for hospital only: Blocked slots with reason (Figma Screen 24)
+    blockedSlotsWithReason: [{
+        date: { type: String, required: true }, // 'YYYY-MM-DD'
+        time: { type: String, required: true }, // e.g. "11:00 AM" or "11:00"
+        reason: { type: String, required: true }, // e.g. "Emergency OT Call"
+        blockedAt: { type: Date, default: Date.now }
+    }],
+
     
 
 }, { timestamps: true });

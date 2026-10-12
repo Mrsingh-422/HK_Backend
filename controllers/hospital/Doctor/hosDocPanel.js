@@ -2287,6 +2287,22 @@ const getDoctorOpdSettings = async (req, res) => {
             return res.status(404).json({ success: false, message: "Doctor profile not found." });
         }
 
+        const safeObjectParse = (val, defaultVal = {}) => {
+            if (!val) return defaultVal;
+            if (typeof val === 'object' && val !== null) return val;
+            if (typeof val === 'string') {
+                try {
+                    const parsed = JSON.parse(val);
+                    if (typeof parsed === 'object' && parsed !== null) return parsed;
+                } catch (e) {}
+            }
+            return defaultVal;
+        };
+
+        const consultation = safeObjectParse(doctor.consultationStatus, { online: true, clinic: true, home: true });
+        const fees = safeObjectParse(doctor.fees, { online: 0, clinic: 500, home: 0 });
+        const department = safeObjectParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: "Cabin 1" });
+
         // Fetch any blocked/unavailable slots for this doctor
         const availabilityConfig = await Availability.findOne({ 
             vendorId: doctorId, 
@@ -2300,10 +2316,10 @@ const getDoctorOpdSettings = async (req, res) => {
                 name: doctor.name,
                 speciality: doctor.speciality,
                 hospital: doctor.hospitalId,
-                opdRoomNumber: doctor.department?.roomNumber || "OPD Cabin 1",
-                opdFee: Number(doctor.fees?.clinic || 500),
+                opdRoomNumber: department.roomNumber || "Cabin 1",
+                opdFee: Number(fees.clinic || 500),
                 slotDurationMinutes: doctor.slotDuration || 15,
-                isOpdEnabled: doctor.consultationStatus?.clinic ?? true,
+                isOpdEnabled: Boolean(consultation.clinic ?? true),
                 weeklySchedule: doctor.availability || [
                     { day: "Mon", startTime: "09:00", endTime: "17:00" },
                     { day: "Tue", startTime: "09:00", endTime: "17:00" },
@@ -2321,7 +2337,7 @@ const getDoctorOpdSettings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// @desc    Hospital Doctor Updates OPD Cabin Room, Consultation Fee, Slot Duration & Schedule
+// @desc    Hospital Doctor Updates OPD Cabin Room, Fee, Duration & Timings (Self-Healing DB Fix)
 // @route   PUT /hospital-doctor/panel/opd-settings
 // @access  Private (Hospital Doctor)
 const updateDoctorOpdSettings = async (req, res) => {
@@ -2329,33 +2345,70 @@ const updateDoctorOpdSettings = async (req, res) => {
         const doctorId = req.user.id;
         const { roomNumber, slotDuration, clinicFee, availability, isOpdEnabled } = req.body;
 
-        const updateData = {};
-
-        if (roomNumber !== undefined) {
-            updateData['department.roomNumber'] = roomNumber.trim();
-        }
-        if (slotDuration !== undefined) {
-            updateData.slotDuration = Math.max(5, parseInt(slotDuration) || 15);
-        }
-        if (clinicFee !== undefined) {
-            updateData['fees.clinic'] = Math.max(0, parseInt(clinicFee));
-        }
-        if (isOpdEnabled !== undefined) {
-            updateData['consultationStatus.clinic'] = Boolean(isOpdEnabled);
-        }
-        if (Array.isArray(availability)) {
-            updateData.availability = availability;
-        }
-
-        const updatedDoctor = await Doctor.findByIdAndUpdate(
-            doctorId,
-            { $set: updateData },
-            { new: true }
-        ).select('name speciality fees department slotDuration availability consultationStatus');
-
-        if (!updatedDoctor) {
+        // Fetch as plain JS object using .lean() to prevent Mongoose Document setter TypeError
+        const doctor = await Doctor.findById(doctorId).select('+password').lean();
+        if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor profile not found." });
         }
+
+        // 1. Safe JSON Object Parser Helper
+        const safeObjectParse = (val, defaultVal = {}) => {
+            if (!val) return defaultVal;
+            if (typeof val === 'object' && val !== null) return val;
+            if (typeof val === 'string') {
+                try {
+                    const parsed = JSON.parse(val);
+                    if (typeof parsed === 'object' && parsed !== null) return parsed;
+                } catch (e) {}
+            }
+            return defaultVal;
+        };
+
+        // 2. Resolve consultationStatus as a clean object (overwrites corrupted string in DB)
+        let currentConsultation = safeObjectParse(doctor.consultationStatus, { online: true, clinic: true, home: true });
+        if (isOpdEnabled !== undefined) {
+            currentConsultation.clinic = (isOpdEnabled === true || isOpdEnabled === 'true');
+        }
+
+        // 3. Resolve fees as a clean object
+        let currentFees = safeObjectParse(doctor.fees, { online: 0, clinic: 500, home: 0 });
+        if (clinicFee !== undefined) {
+            currentFees.clinic = Math.max(0, parseInt(clinicFee) || 0);
+        }
+
+        // 4. Resolve department object
+        let currentDepartment = safeObjectParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: "Cabin 1" });
+        if (roomNumber !== undefined) {
+            currentDepartment.roomNumber = String(roomNumber).trim();
+        }
+
+        // 5. Prepare clean update payload
+        const updatePayload = {
+            consultationStatus: currentConsultation,
+            fees: currentFees,
+            department: currentDepartment
+        };
+
+        if (slotDuration !== undefined) {
+            updatePayload.slotDuration = Math.max(5, parseInt(slotDuration) || 15);
+        }
+
+        if (availability !== undefined) {
+            updatePayload.availability = Array.isArray(availability)
+                ? availability
+                : (typeof availability === 'string' ? safeObjectParse(availability, []) : []);
+        }
+
+        // 6. Direct Native MongoDB Update to overwrite corrupted DB types cleanly
+        await Doctor.collection.updateOne(
+            { _id: new mongoose.Types.ObjectId(doctorId) },
+            { $set: updatePayload }
+        );
+
+        // 7. Fetch refreshed clean document
+        const updatedDoctor = await Doctor.findById(doctorId)
+            .select('name speciality fees department slotDuration availability consultationStatus')
+            .lean();
 
         res.status(200).json({
             success: true,
@@ -2365,6 +2418,90 @@ const updateDoctorOpdSettings = async (req, res) => {
 
     } catch (error) {
         console.error("Update Doctor OPD Settings Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Hospital Doctor Starts OPD Consultation for a Token (Updates status to 'In-Progress')
+// @route   PATCH /hospital-doctor/panel/opd/start-consultation/:appointmentId
+// @access  Private (Hospital Doctor)
+const startOpdConsultation = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { appointmentId } = req.params;
+
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            doctorId,
+            bookingType: 'OPD',
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "OPD Appointment not found." });
+        }
+
+        appointment.status = 'In-Progress';
+        await appointment.save();
+
+        // Alert patient that doctor is ready in the cabin
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    `Your Turn! Token #${appointment.tokenNumber}`,
+                    `Dr. ${req.user.name || 'Doctor'} is ready for you in ${appointment.opdRoomNumber || 'OPD Cabin'}. Please proceed inside.`,
+                    { appointmentId: appointment._id.toString(), type: 'opd_call_turn', tokenNumber: appointment.tokenNumber }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Consultation started for Token #${appointment.tokenNumber}. Status is now 'In-Progress'.`,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Start OPD Consultation Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Hospital Doctor Marks an OPD Patient as No-Show / Absent
+// @route   PATCH /hospital-doctor/panel/opd/no-show/:appointmentId
+// @access  Private (Hospital Doctor)
+const markOpdNoShow = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { appointmentId } = req.params;
+        const { reason } = req.body;
+
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            doctorId,
+            bookingType: 'OPD',
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "OPD Appointment not found." });
+        }
+
+        appointment.status = 'No-Show';
+        appointment.cancelReason = reason || "Patient did not report to the OPD cabin when token was called.";
+        await appointment.save();
+
+        res.status(200).json({
+            success: true,
+            message: `Token #${appointment.tokenNumber} marked as No-Show / Absent.`,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Mark OPD No-Show Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2406,6 +2543,274 @@ const toggleDoctorOpdSlotBlock = async (req, res) => {
 };
 
 
+// @desc    Hospital Doctor Applies for Leave (Only for Future Dates, Today Blocked with Reason)
+// @route   POST /hospital-doctor/panel/leaves/apply
+// @access  Private (Hospital Doctor)
+const applyDoctorLeave = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { startDate, endDate, reason } = req.body;
+
+        if (!startDate || !endDate || !reason || String(reason).trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "startDate, endDate, and explanation reason are mandatory." 
+            });
+        }
+
+        const todayStart = moment().startOf('day');
+        const reqStart = moment(startDate).startOf('day');
+        const reqEnd = moment(endDate).endOf('day');
+
+        // 🚨 Strict Rule: Today's and Past dates leave cannot be applied! Must be tomorrow onwards.
+        if (reqStart.isSameOrBefore(todayStart)) {
+            return res.status(400).json({
+                success: false,
+                message: "Restricted: You cannot apply leave for today or past dates. Leaves are allowed only for tomorrow onwards. For today's emergency absence, please block your specific OPD slots with reason."
+            });
+        }
+
+        if (reqEnd.isBefore(reqStart)) {
+            return res.status(400).json({
+                success: false,
+                message: "End date must be on or after start date."
+            });
+        }
+
+        const doctor = await Doctor.findById(doctorId);
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor profile not found." });
+        }
+
+        // Check overlapping leave requests
+        const isOverlapping = (doctor.leaves || []).some(l => {
+            if (l.status === 'Rejected') return false;
+            const lStart = moment(l.startDate).startOf('day');
+            const lEnd = moment(l.endDate).endOf('day');
+            return reqStart.isSameOrBefore(lEnd) && reqEnd.isSameOrAfter(lStart);
+        });
+
+        if (isOverlapping) {
+            return res.status(400).json({
+                success: false,
+                message: "You already have a Pending or Approved leave overlapping with these dates."
+            });
+        }
+
+        const newLeave = {
+            startDate: reqStart.toDate(),
+            endDate: reqEnd.toDate(),
+            reason: String(reason).trim(),
+            status: 'Pending',
+            appliedAt: new Date()
+        };
+
+        if (!doctor.leaves) doctor.leaves = [];
+        doctor.leaves.push(newLeave);
+        await doctor.save();
+
+        // Real-Time Notification to Hospital Admin Desk
+        if (doctor.hospitalId) {
+            try {
+                await notifyAdminsAndVendor(
+                    doctor.hospitalId,
+                    'hospital',
+                    "New Doctor Leave Request Pending Review",
+                    `Dr. ${doctor.name} applied for leave from ${reqStart.format('DD MMM')} to ${reqEnd.format('DD MMM')}. Reason: "${reason.trim()}".`,
+                    { doctorId: doctor._id.toString(), type: 'doctor_leave_request' }
+                );
+            } catch (e) {}
+        }
+
+        res.status(201).json({
+            success: true,
+            message: "Leave application submitted to Hospital Admin successfully for approval.",
+            data: doctor.leaves[doctor.leaves.length - 1]
+        });
+
+    } catch (error) {
+        console.error("Apply Doctor Leave Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Hospital Doctor Views Leave Applications History & Approval Status
+// @route   GET /hospital-doctor/panel/leaves
+// @access  Private (Hospital Doctor)
+const getDoctorLeavesHistory = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const doctor = await Doctor.findById(doctorId).select('name leaves').lean();
+
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor not found." });
+        }
+
+        const leaves = (doctor.leaves || []).sort((a, b) => new Date(b.appliedAt) - new Date(a.appliedAt));
+
+        res.status(200).json({
+            success: true,
+            count: leaves.length,
+            data: leaves
+        });
+    } catch (error) {
+        console.error("Get Doctor Leaves History Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Hospital Doctor Blocks / Unblocks Specific OPD Time Slot for a Date with Reason
+// @route   POST /hospital-doctor/panel/opd-slots/block-slot
+// @access  Private (Hospital Doctor)
+const blockOpdSlotWithReason = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { date, timeSlot, action = 'block', reason = 'Doctor Emergency / Rounds' } = req.body;
+
+        if (!date || !timeSlot) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "date ('YYYY-MM-DD') and timeSlot (e.g. '11:00 AM') are required." 
+            });
+        }
+
+        const cleanDate = moment(date).format('YYYY-MM-DD');
+        const cleanSlot = String(timeSlot).trim();
+
+        let availability = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
+        if (!availability) {
+            availability = await Availability.create({
+                vendorId: doctorId,
+                vendorType: 'Doctor',
+                blockedSlotsWithReason: [],
+                unavailableSlots: []
+            });
+        }
+
+        if (action === 'block') {
+            // Remove previous duplicate if present for this exact date & slot
+            availability.blockedSlotsWithReason = (availability.blockedSlotsWithReason || []).filter(
+                b => !(b.date === cleanDate && b.time === cleanSlot)
+            );
+
+            availability.blockedSlotsWithReason.push({
+                date: cleanDate,
+                time: cleanSlot,
+                reason: String(reason).trim(),
+                blockedAt: new Date()
+            });
+
+            // Also keep legacy unavailableSlots synced
+            if (!availability.unavailableSlots.includes(cleanSlot)) {
+                availability.unavailableSlots.push(cleanSlot);
+            }
+        } else {
+            // Unblock
+            availability.blockedSlotsWithReason = (availability.blockedSlotsWithReason || []).filter(
+                b => !(b.date === cleanDate && b.time === cleanSlot)
+            );
+            availability.unavailableSlots = (availability.unavailableSlots || []).filter(s => s !== cleanSlot);
+        }
+
+        await availability.save();
+
+        res.status(200).json({
+            success: true,
+            message: `OPD Slot '${cleanSlot}' for date ${cleanDate} has been ${action === 'block' ? 'Blocked' : 'Unblocked'}.`,
+            data: availability.blockedSlotsWithReason
+        });
+
+    } catch (error) {
+        console.error("Block OPD Slot Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Hospital Doctor Reschedules OPD Appointment to Another Date/Slot with Clinical Reason
+// @route   POST /hospital-doctor/panel/opd/reschedule
+// @access  Private (Hospital Doctor)
+const doctorRescheduleOpdAppointment = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { appointmentId, newDate, newTimeSlot, reason } = req.body;
+
+        if (!appointmentId || !newDate || !newTimeSlot || !reason) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId, newDate, newTimeSlot, and explanation reason are mandatory."
+            });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            doctorId,
+            bookingType: 'OPD',
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "OPD Appointment not found." });
+        }
+
+        if (['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'].includes(appointment.status)) {
+            return res.status(400).json({ success: false, message: `Cannot reschedule appointment in '${appointment.status}' state.` });
+        }
+
+        const targetDate = moment(newDate).startOf('day').toDate();
+        const endOfDay = moment(newDate).endOf('day').toDate();
+
+        // Recalculate sequential OPD token number for the new date
+        const newDayTokensCount = await Appointment.countDocuments({
+            hospitalId: appointment.hospitalId,
+            doctorId,
+            bookingType: 'OPD',
+            appointmentDate: { $gte: targetDate, $lte: endOfDay },
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
+        });
+        const newTokenNumber = newDayTokensCount + 1;
+
+        appointment.appointmentDate = targetDate;
+        appointment.appointmentTime = newTimeSlot;
+        appointment.tokenNumber = newTokenNumber;
+        appointment.rescheduleReason = String(reason).trim();
+        appointment.rescheduleCount = (appointment.rescheduleCount || 0) + 1;
+        appointment.status = 'Rescheduled';
+
+        appointment.treatmentHistory.push({
+            action: 'Transfer-Initiated',
+            notes: `Doctor Rescheduled to ${moment(newDate).format('YYYY-MM-DD')} at ${newTimeSlot}. Reason: "${reason.trim()}". New Token #${newTokenNumber}`,
+            timestamp: new Date()
+        });
+
+        await appointment.save();
+
+        // Real-Time Notification to Patient
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    "OPD Appointment Rescheduled by Doctor",
+                    `Dr. ${req.user.name || 'Doctor'} rescheduled your appointment to ${moment(newDate).format('DD MMM')} at ${newTimeSlot}. Your new Token is #${newTokenNumber}. Reason: "${reason.trim()}"`,
+                    { appointmentId: appointment._id.toString(), type: 'opd_doctor_rescheduled', tokenNumber: newTokenNumber }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `OPD Appointment successfully rescheduled. New Token is #${newTokenNumber}. Patient notified.`,
+            tokenNumber: newTokenNumber,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Doctor Reschedule OPD Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     getMyDoctorProfile,changeHospitalDoctorPassword,
     updateDoctorProfile,getLatestDoctorProfileRequest,
@@ -2429,5 +2834,10 @@ module.exports = {
     getPrintableDischargeSummary,
     doctorSelfAssignCase,addPrimaryClinicalLog,addActiveMedication,stopActiveMedication,
     // opd settings
-    getDoctorOpdSettings,updateDoctorOpdSettings,toggleDoctorOpdSlotBlock
+    getDoctorOpdSettings,updateDoctorOpdSettings,startOpdConsultation,
+    markOpdNoShow,toggleDoctorOpdSlotBlock,
+    applyDoctorLeave,
+    getDoctorLeavesHistory,
+    blockOpdSlotWithReason,
+    doctorRescheduleOpdAppointment
 };

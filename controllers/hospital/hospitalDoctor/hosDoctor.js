@@ -196,7 +196,7 @@ const loginHospitalDoctor = async (req, res) => {
 
 };
 
-// @desc    Hospital Admin Sets Doctor's OPD Cabin Room, Slot Duration & Weekly Schedule
+// @desc    Hospital Admin Sets Doctor's OPD Cabin Room, Slot Duration & Schedule (Safe Self-Healing)
 // @route   PUT /api/hospital/doctors/configure-opd/:doctorId
 // @access  Private (Hospital Admin)
 const configureDoctorOpdScheduleByHospital = async (req, res) => {
@@ -205,38 +205,68 @@ const configureDoctorOpdScheduleByHospital = async (req, res) => {
         const { doctorId } = req.params;
         const { roomNumber, slotDuration, opdFee, availability, isOpdEnabled } = req.body;
 
-        const updateData = {};
-
-        if (roomNumber !== undefined) {
-            updateData['department.roomNumber'] = roomNumber.trim();
-        }
-        if (slotDuration !== undefined) {
-            updateData.slotDuration = Math.max(5, parseInt(slotDuration) || 15);
-        }
-        if (opdFee !== undefined) {
-            updateData['fees.clinic'] = Math.max(0, parseInt(opdFee));
-        }
-        if (isOpdEnabled !== undefined) {
-            updateData['consultationStatus.clinic'] = Boolean(isOpdEnabled);
-        }
-        if (Array.isArray(availability)) {
-            updateData.availability = availability;
-        }
-
-        const doctor = await Doctor.findOneAndUpdate(
-            { _id: doctorId, hospitalId },
-            { $set: updateData },
-            { new: true }
-        ).select('name speciality fees department slotDuration availability consultationStatus');
-
+        const doctor = await Doctor.findOne({ _id: doctorId, hospitalId }).lean();
         if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor not found in this hospital." });
         }
 
+        const safeObjectParse = (val, defaultVal = {}) => {
+            if (!val) return defaultVal;
+            if (typeof val === 'object' && val !== null) return val;
+            if (typeof val === 'string') {
+                try {
+                    const parsed = JSON.parse(val);
+                    if (typeof parsed === 'object' && parsed !== null) return parsed;
+                } catch (e) {}
+            }
+            return defaultVal;
+        };
+
+        let currentConsultation = safeObjectParse(doctor.consultationStatus, { online: true, clinic: true, home: true });
+        if (isOpdEnabled !== undefined) {
+            currentConsultation.clinic = (isOpdEnabled === true || isOpdEnabled === 'true');
+        }
+
+        let currentFees = safeObjectParse(doctor.fees, { online: 0, clinic: 500, home: 0 });
+        if (opdFee !== undefined) {
+            currentFees.clinic = Math.max(0, parseInt(opdFee) || 0);
+        }
+
+        let currentDepartment = safeObjectParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: "Cabin 1" });
+        if (roomNumber !== undefined) {
+            currentDepartment.roomNumber = String(roomNumber).trim();
+        }
+
+        const updatePayload = {
+            consultationStatus: currentConsultation,
+            fees: currentFees,
+            department: currentDepartment
+        };
+
+        if (slotDuration !== undefined) {
+            updatePayload.slotDuration = Math.max(5, parseInt(slotDuration) || 15);
+        }
+
+        if (availability !== undefined) {
+            updatePayload.availability = Array.isArray(availability)
+                ? availability
+                : (typeof availability === 'string' ? safeObjectParse(availability, []) : []);
+        }
+
+        // Direct Native MongoDB Update to overwrite any corrupted string in database
+        await Doctor.collection.updateOne(
+            { _id: new mongoose.Types.ObjectId(doctorId) },
+            { $set: updatePayload }
+        );
+
+        const updatedDoctor = await Doctor.findById(doctorId)
+            .select('name speciality fees department slotDuration availability consultationStatus')
+            .lean();
+
         res.status(200).json({
             success: true,
-            message: `OPD Configuration saved for Dr. ${doctor.name}.`,
-            data: doctor
+            message: `OPD Configuration saved for Dr. ${updatedDoctor.name}.`,
+            data: updatedDoctor
         });
 
     } catch (error) {

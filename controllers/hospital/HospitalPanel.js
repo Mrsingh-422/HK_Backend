@@ -1006,112 +1006,73 @@ const deleteWard = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- GET ALL ADMISSIONS/PATIENTS (Direct Hospital Admissions) ---
-// Endpoint: GET /hospital/panel/admissions/all?page=1&limit=10
+// @desc    Get All Hospital Bookings with Dynamic bookingType filter ('OPD' vs 'Admission')
+// @route   GET /hospital/panel/admissions/all
+// @access  Private (Hospital Admin)
 const getAllHospitalAdmissions = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { status, bedBookingType, page = 1, limit = 10 } = req.query;
+        const { bookingType, status, search, page = 1, limit = 20 } = req.query;
 
-        const pageNum = Math.max(1, parseInt(page) || 1);
-        const limitNum = Math.max(1, parseInt(limit) || 10);
+        let query = { hospitalId };
+
+        // Support filtering by 'OPD', 'Admission', or 'All'
+        if (bookingType && bookingType !== 'All') {
+            query.bookingType = bookingType;
+        }
+
+        if (status && status !== 'All') {
+            query.status = status;
+        }
+
+        if (search && search.trim() !== '') {
+            query.$or = [
+                { bookingId: { $regex: search.trim(), $options: 'i' } },
+                { 'patients.patientName': { $regex: search.trim(), $options: 'i' } },
+                { 'address.phone': { $regex: search.trim(), $options: 'i' } }
+            ];
+        }
+
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
         const skip = (pageNum - 1) * limitNum;
 
-        // 🚨 Strict Filter: Direct Admissions without Ambulance
-        let query = { 
-            hospitalId, 
-            bookingType: 'Admission',
-            $or: [
-                { ambulanceId: null },
-                { ambulanceId: { $exists: false } }
-            ]
-        };
+        const total = await Appointment.countDocuments(query);
 
-        if (status) query.status = status;
-        if (bedBookingType) query.bedBookingType = bedBookingType; 
-
-        const totalRecords = await Appointment.countDocuments(query);
-
-        const admissions = await Appointment.find(query)
-            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
-            .populate('doctorId', 'name speciality qualification profileImage')
-            .populate('pendingDoctorId', 'name speciality') 
+        const list = await Appointment.find(query)
+            .populate('userId', 'name phone email profilePic age gender')
+            .populate('doctorId', 'name speciality department fees')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber pricePerDay status',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .sort({ createdAt: -1 })
+            .sort({ tokenNumber: 1, createdAt: -1 })
             .skip(skip)
-            .limit(limitNum);
+            .limit(limitNum)
+            .lean();
 
-        const cleanedAdmissions = admissions.map(appt => ({
-            _id: appt._id,
-            bookingId: appt.bookingId,
-            bookingType: appt.bookingType || 'Admission',
-            bedBookingType: appt.bedBookingType || 'General-Bed',
-            caseCategory: "Admission",
-            triageLevel: appt.clinicalSummary?.triagePriority || appt.triageLevel || "Routine", // Visual priority badge
-            status: appt.status,
-            startDate: appt.startDate,
-            endDate: appt.endDate,
-            stayDuration: appt.stayDuration || 1,
-
-            patientDetails: resolvePatientDTO(appt),
-
-            bedDetails: appt.bedId ? {
-                _id: appt.bedId._id,
-                bedNumber: appt.bedId.bedNumber || appt.bedNumber || "N/A",
-                pricePerDay: appt.bedId.pricePerDay || 0,
-                status: appt.bedId.status,
-                wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
-                wardType: appt.bedId.wardId?.type || "Ward"
-            } : null,
-
-            assignedDoctor: appt.doctorId ? {
-                _id: appt.doctorId._id,
-                name: appt.doctorId.name,
-                speciality: appt.doctorId.speciality,
-                qualification: appt.doctorId.qualification || "MBBS",
-                profileImage: appt.doctorId.profileImage || null
-            } : null,
-
-            billing: {
-                totalAmount: appt.totalAmount || 0,
-                paymentMethod: appt.paymentMethod || 'Online',
-                paymentStatus: appt.paymentStatus || 'Pending',
-                baseFee: appt.pricingBreakdown?.baseFee || 0,
-                transactionId: appt.transactionId || null
-            },
-
-            insurance: {
-                hasInsurance: Boolean(appt.insuranceDetails?.hasInsurance),
-                companyName: appt.insuranceDetails?.companyName || "",
-                approvalStatus: appt.insuranceDetails?.approvalStatus || "Pending"
-            },
-
-            bookedBy: appt.userId ? {
-                userId: appt.userId._id,
-                name: appt.userId.name,
-                phone: appt.userId.phone,
-                email: appt.userId.email
-            } : null,
-
-            createdAt: appt.createdAt,
-            updatedAt: appt.updatedAt
+        const enrichedList = list.map(item => ({
+            ...item,
+            isOpd: item.bookingType === 'OPD',
+            isIpd: item.bookingType === 'Admission',
+            displaySubtitle: item.bookingType === 'OPD' 
+                ? `OPD Token #${item.tokenNumber || 'N/A'} - Dr. ${item.doctorId?.name || 'Doctor'}`
+                : `Bed: ${item.bedNumber || 'Unassigned'} (${item.wardName || 'Ward'})`
         }));
 
-        res.json({ 
-            success: true, 
-            totalRecords,
-            totalPages: Math.ceil(totalRecords / limitNum),
+        res.status(200).json({
+            success: true,
+            total,
+            count: enrichedList.length,
+            totalPages: Math.ceil(total / limitNum),
             currentPage: pageNum,
-            count: cleanedAdmissions.length,
-            data: cleanedAdmissions 
+            data: enrichedList
         });
-    } catch (error) { 
-        console.error("getAllHospitalAdmissions Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+
+    } catch (error) {
+        console.error("Get All Hospital Bookings Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -4008,6 +3969,207 @@ const savePatientInsuranceDetails = async (req, res) => {
 
 
 
+// @desc    Hospital Admin Approves or Rejects Doctor Leave Request
+// @route   PATCH /hospital/panel/doctors/leave-approval
+// @access  Private (Hospital Admin)
+const manageDoctorLeaveByHospital = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { doctorId, leaveId, action, rejectionReason } = req.body; // action: 'Approved' | 'Rejected'
+
+        if (!doctorId || !leaveId || !action || !['Approved', 'Rejected'].includes(action)) {
+            return res.status(400).json({
+                success: false,
+                message: "doctorId, leaveId, and action ('Approved' or 'Rejected') are required."
+            });
+        }
+
+        const doctor = await Doctor.findOne({ _id: doctorId, hospitalId });
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor not found in this hospital." });
+        }
+
+        const targetLeave = (doctor.leaves || []).id(leaveId);
+        if (!targetLeave) {
+            return res.status(404).json({ success: false, message: "Leave record not found." });
+        }
+
+        if (targetLeave.status !== 'Pending') {
+            return res.status(400).json({ success: false, message: `Leave is already ${targetLeave.status}.` });
+        }
+
+        targetLeave.status = action;
+        targetLeave.reviewedAt = new Date();
+        if (action === 'Rejected') {
+            targetLeave.rejectionReason = rejectionReason || "Hospital operational requirements / patient commitments.";
+        }
+
+        await doctor.save();
+
+        // Notify Doctor on Mobile
+        try {
+            await sendPushNotification(
+                doctor._id,
+                'doctor',
+                `Leave Request ${action}!`,
+                action === 'Approved'
+                    ? `Your leave from ${moment(targetLeave.startDate).format('DD MMM')} to ${moment(targetLeave.endDate).format('DD MMM')} has been Approved.`
+                    : `Your leave was Rejected. Reason: "${targetLeave.rejectionReason}".`,
+                { leaveId: targetLeave._id.toString(), type: 'doctor_leave_status_updated' }
+            );
+        } catch (e) {}
+
+        res.status(200).json({
+            success: true,
+            message: `Doctor leave request marked as ${action} successfully.`,
+            data: targetLeave
+        });
+
+    } catch (error) {
+        console.error("Manage Doctor Leave Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Hospital Admin Views All Doctor Leave Requests
+// @route   GET /hospital/panel/doctors/leaves
+// @access  Private (Hospital Admin)
+const getHospitalDoctorPendingLeaves = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { status = 'Pending' } = req.query;
+
+        const doctors = await Doctor.find({ hospitalId, 'leaves.0': { $exists: true } })
+            .select('name speciality profileImage leaves')
+            .lean();
+
+        const leavesList = [];
+        doctors.forEach(doc => {
+            (doc.leaves || []).forEach(l => {
+                if (status === 'All' || l.status === status) {
+                    leavesList.push({
+                        leaveId: l._id,
+                        doctorId: doc._id,
+                        doctorName: doc.name,
+                        speciality: doc.speciality,
+                        doctorProfileImage: doc.profileImage,
+                        startDate: l.startDate,
+                        endDate: l.endDate,
+                        formattedStartDate: moment(l.startDate).format('YYYY-MM-DD'),
+                        formattedEndDate: moment(l.endDate).format('YYYY-MM-DD'),
+                        reason: l.reason,
+                        status: l.status,
+                        rejectionReason: l.rejectionReason,
+                        appliedAt: l.appliedAt
+                    });
+                }
+            });
+        });
+
+        leavesList.sort((a, b) => new Date(b.appliedAt) - new Date(a.appliedAt));
+
+        res.status(200).json({
+            success: true,
+            count: leavesList.length,
+            data: leavesList
+        });
+
+    } catch (error) {
+        console.error("Get Hospital Doctor Leaves Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Hospital Admin Reschedules Any Appointment (OPD or IPD Admission)
+// @route   POST /hospital/panel/appointments/reschedule
+// @access  Private (Hospital Admin)
+const hospitalAdminRescheduleAppointment = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { appointmentId, newDate, newTimeSlot, newDoctorId, reason } = req.body;
+
+        if (!appointmentId || !newDate || !reason) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId, newDate, and explanation reason are mandatory."
+            });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            hospitalId,
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment record not found in this hospital." });
+        }
+
+        const targetDate = moment(newDate).startOf('day').toDate();
+        const endOfDay = moment(newDate).endOf('day').toDate();
+        const targetDoctorId = (newDoctorId && mongoose.isValidObjectId(newDoctorId)) ? newDoctorId : appointment.doctorId;
+
+        // OPD Reschedule Logic
+        if (appointment.bookingType === 'OPD') {
+            const todayBookingsCount = await Appointment.countDocuments({
+                hospitalId,
+                doctorId: targetDoctorId,
+                bookingType: 'OPD',
+                appointmentDate: { $gte: targetDate, $lte: endOfDay },
+                status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
+            });
+            const newTokenNumber = todayBookingsCount + 1;
+
+            appointment.appointmentDate = targetDate;
+            appointment.appointmentTime = newTimeSlot || appointment.appointmentTime;
+            appointment.doctorId = targetDoctorId;
+            appointment.tokenNumber = newTokenNumber;
+            appointment.rescheduleReason = `Hospital Admin Rescheduled: ${reason.trim()}`;
+            appointment.rescheduleCount = (appointment.rescheduleCount || 0) + 1;
+            appointment.status = 'Rescheduled';
+
+            await appointment.save();
+
+            // Notify Patient
+            if (appointment.userId) {
+                try {
+                    await sendPushNotification(
+                        appointment.userId._id,
+                        'user',
+                        "Hospital Rescheduled Your OPD Consultation",
+                        `Your OPD visit has been moved to ${moment(newDate).format('DD MMM')} (${appointment.appointmentTime}). New Token is #${newTokenNumber}. Reason: "${reason.trim()}"`,
+                        { appointmentId: appointment._id.toString(), type: 'hospital_rescheduled_opd', tokenNumber: newTokenNumber }
+                    );
+                } catch (e) {}
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: `OPD Appointment rescheduled by Hospital Admin. New Token #${newTokenNumber}. Patient notified.`,
+                tokenNumber: newTokenNumber,
+                data: appointment
+            });
+        }
+
+        // IPD Admission Reschedule
+        appointment.startDate = targetDate;
+        appointment.rescheduleReason = `Hospital Admin Rescheduled: ${reason.trim()}`;
+        appointment.rescheduleCount = (appointment.rescheduleCount || 0) + 1;
+        appointment.status = 'Hospital-Pending';
+        await appointment.save();
+
+        res.status(200).json({
+            success: true,
+            message: "IPD Admission rescheduled by Hospital Admin.",
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Hospital Admin Reschedule Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
@@ -4032,5 +4194,8 @@ module.exports = {
     dispatchDischargeAmbulance,cancelDischargeAmbulance,bookHospitalToHospitalReferral,getReferralHospitals,
     getInsurancePatientsList,uploadInsuranceApprovalLetter,
     getInsuranceMasterDropdowns,
-    savePatientInsuranceDetails
+    savePatientInsuranceDetails,
+    manageDoctorLeaveByHospital,
+    getHospitalDoctorPendingLeaves,
+    hospitalAdminRescheduleAppointment
 };

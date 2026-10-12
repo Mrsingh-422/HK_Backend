@@ -67,6 +67,26 @@ const doctorSchema = new mongoose.Schema({
     }],
     treatedConditions: [{ type: String }], // Figma: "I can help you with"
     competencies: [{ type: String }],      // Figma: "Competencies"
+    // hospital doctor departement info
+    department: {
+        isNormal: { type: Boolean, default: false },
+        isEmergency: { type: Boolean, default: false },
+        roomNumber: { type: String, default: "Cabin 1" } // 👈 Ward / Cabin Room No
+    },
+    // 👈 Added: Doctor OPD Leaves Ledger
+    leaves: [{
+        startDate: { type: Date, required: true },
+        endDate: { type: Date, required: true },
+        reason: { type: String, required: true },
+        status: { 
+            type: String, 
+            enum: ['Pending', 'Approved', 'Rejected'], 
+            default: 'Pending' 
+        },
+        rejectionReason: { type: String, default: "" },
+        appliedAt: { type: Date, default: Date.now },
+        reviewedAt: { type: Date, default: null }
+    }],
 
     // System Stats
     averageRating: { type: Number, default: 0 },

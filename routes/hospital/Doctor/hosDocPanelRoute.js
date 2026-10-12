@@ -23,7 +23,12 @@ const {
     getPrintableDischargeSummary,
     doctorSelfAssignCase,addPrimaryClinicalLog,addActiveMedication,stopActiveMedication,
     // opd settings
-    getDoctorOpdSettings,updateDoctorOpdSettings,toggleDoctorOpdSlotBlock
+    getDoctorOpdSettings,updateDoctorOpdSettings,startOpdConsultation,
+    markOpdNoShow,toggleDoctorOpdSlotBlock,
+    applyDoctorLeave,
+    getDoctorLeavesHistory,
+    blockOpdSlotWithReason,
+    doctorRescheduleOpdAppointment
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 
@@ -113,6 +118,17 @@ router.patch('/case/active-medication/stop', protect('hospital-doctor'), stopAct
 // Hospital-Doctor OPD Slots Management
 router.get('/opd-settings', protect('hospital-doctor'), getDoctorOpdSettings);
 router.put('/opd-settings', protect('hospital-doctor'), updateDoctorOpdSettings);
+// OPD Patient Queue Actions for Doctor
+router.patch('/opd/start-consultation/:appointmentId', protect('hospital-doctor'), startOpdConsultation);
+router.patch('/opd/no-show/:appointmentId', protect('hospital-doctor'), markOpdNoShow);
 router.post('/opd-slots/toggle-block', protect('hospital-doctor'), toggleDoctorOpdSlotBlock);
+
+// Doctor Leave Management
+router.post('/leaves/apply', protect('hospital-doctor'), applyDoctorLeave);
+router.get('/leaves', protect('hospital-doctor'), getDoctorLeavesHistory);
+
+// Doctor Slot Block & Reschedule with Reason
+router.post('/opd-slots/block-slot', protect('hospital-doctor'), blockOpdSlotWithReason);
+router.post('/opd/reschedule', protect('hospital-doctor'), doctorRescheduleOpdAppointment);
 
 module.exports = router;
