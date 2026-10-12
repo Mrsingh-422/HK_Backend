@@ -13,7 +13,11 @@ const {
     getMyHospitalBookings ,
     getBookingProfiles,
     getHospitalDetails,addReview, updateReview,
-    rateHospitalAdmission
+    rateHospitalAdmission,
+
+    getHospitalDoctorOpdSlots,
+    getHospitalOpdCheckoutSummary,
+    bookHospitalOpdAppointment,getHospitalOpdLiveQueue
 } = require('../../../controllers/user/Hospital/BookHospital');
 
 // URL: /user/hospital
@@ -53,4 +57,15 @@ router.get('/booking-profiles', protect('user'), getBookingProfiles);
 router.post('/add-review/:hospitalId', protect('user'), addReview);
 router.put('/update-review/:reviewId', protect('user'), updateReview);
 router.post('/rate', protect('user'), rateHospitalAdmission);
+
+// 1. Get Doctor OPD Slots for selected date
+router.get('/doctors/:doctorId/opd-slots', getHospitalDoctorOpdSlots);
+
+// 2. OPD Checkout Summary
+router.post('/opd/checkout-summary', protect('user'), getHospitalOpdCheckoutSummary);
+
+// 3. Book OPD Appointment (Token Generation)
+router.post('/opd/book', protect('user'), bookHospitalOpdAppointment);
+router.get('/opd/live-queue/:appointmentId', protect('user'), getHospitalOpdLiveQueue);
+
 module.exports = router;

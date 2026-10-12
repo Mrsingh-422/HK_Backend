@@ -144,11 +144,11 @@ const nurseBookingSchema = new mongoose.Schema({
     completionOTP: { type: String, default: null },
     rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
 
-    paymentMethod: { 
-        type: String, 
-        enum: ['Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet'], 
-        default: 'COD' 
-    },
+    paymentMethod: { type: String, enum: [
+        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
+        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater',
+        'ONLINE', 'COD'
+    ], default: 'COD' },
     paymentStatus: { 
         type: String, 
         enum: ['Pending', 'Paid', 'Done', 'Failed', 'Refunded', 'Refund-Initiated'], 

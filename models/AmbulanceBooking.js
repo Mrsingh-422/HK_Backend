@@ -119,7 +119,8 @@ const ambulanceBookingSchema = new mongoose.Schema({
 },
     paymentMethod: { type: String, enum: [
         'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
-        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater'
+        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater',
+        'ONLINE', 'COD'
     ], default: 'Online' },
 
     // 👇 NEW: Better Cancellation Tracking

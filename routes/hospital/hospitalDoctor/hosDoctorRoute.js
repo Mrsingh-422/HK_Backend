@@ -7,7 +7,8 @@ const {
     addHospitalDoctor, 
     getMyHospitalDoctors, 
     updateHospitalDoctor, 
-    deleteHospitalDoctor 
+    deleteHospitalDoctor ,
+    configureDoctorOpdScheduleByHospital
 } = require('../../../controllers/hospital/hospitalDoctor/hosDoctor');
 
 // Base route: /api/hospital/doctors
@@ -20,5 +21,7 @@ router.post('/add', protect('hospital'), doctorDocUploads, addHospitalDoctor);
 router.get('/my-doctors', protect('hospital'), getMyHospitalDoctors);
 router.put('/update/:id', protect('hospital'), doctorDocUploads, updateHospitalDoctor);
 router.delete('/delete/:id', protect('hospital'), deleteHospitalDoctor);
+
+router.put('/configure-opd/:doctorId', protect('hospital'), configureDoctorOpdScheduleByHospital);
 
 module.exports = router;

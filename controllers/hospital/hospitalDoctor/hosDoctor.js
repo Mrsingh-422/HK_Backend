@@ -196,5 +196,56 @@ const loginHospitalDoctor = async (req, res) => {
 
 };
 
+// @desc    Hospital Admin Sets Doctor's OPD Cabin Room, Slot Duration & Weekly Schedule
+// @route   PUT /api/hospital/doctors/configure-opd/:doctorId
+// @access  Private (Hospital Admin)
+const configureDoctorOpdScheduleByHospital = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const { doctorId } = req.params;
+        const { roomNumber, slotDuration, opdFee, availability, isOpdEnabled } = req.body;
 
-module.exports = { addHospitalDoctor, getMyHospitalDoctors, updateHospitalDoctor, deleteHospitalDoctor, loginHospitalDoctor };
+        const updateData = {};
+
+        if (roomNumber !== undefined) {
+            updateData['department.roomNumber'] = roomNumber.trim();
+        }
+        if (slotDuration !== undefined) {
+            updateData.slotDuration = Math.max(5, parseInt(slotDuration) || 15);
+        }
+        if (opdFee !== undefined) {
+            updateData['fees.clinic'] = Math.max(0, parseInt(opdFee));
+        }
+        if (isOpdEnabled !== undefined) {
+            updateData['consultationStatus.clinic'] = Boolean(isOpdEnabled);
+        }
+        if (Array.isArray(availability)) {
+            updateData.availability = availability;
+        }
+
+        const doctor = await Doctor.findOneAndUpdate(
+            { _id: doctorId, hospitalId },
+            { $set: updateData },
+            { new: true }
+        ).select('name speciality fees department slotDuration availability consultationStatus');
+
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor not found in this hospital." });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `OPD Configuration saved for Dr. ${doctor.name}.`,
+            data: doctor
+        });
+
+    } catch (error) {
+        console.error("Configure Doctor OPD Schedule Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+module.exports = { addHospitalDoctor, getMyHospitalDoctors, updateHospitalDoctor, deleteHospitalDoctor, loginHospitalDoctor,
+    configureDoctorOpdScheduleByHospital
+ };

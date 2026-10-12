@@ -123,99 +123,63 @@ const getHospitalMasterData = async (req, res) => {
     }
 };
 
-// --- GET HOSPITAL DASHBOARD STATS (Strict: Only Ambulance = Emergency) ---
-// Endpoint: GET /hospital/panel/dashboard-stats
+// @desc    Get Hospital Panel Real-Time Metrics (Emergency, IPD Bed Occupancy & Live OPD Today Counter)
+// @route   GET /hospital/panel/dashboard-stats
+// @access  Private (Hospital)
 const getHospitalDashboardStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
+        const todayStart = moment().startOf('day').toDate();
+        const todayEnd = moment().endOf('day').toDate();
 
-        const activeEmergencyStates = [
-            'Confirmed', 
-            'Arrived', 
-            'Picked-Up', 
-            'En-Route', 
-            'In-Progress', 
-            'Hospital-Pending'
-        ];
+        // 1. Bed and Ward Metrics
+        const wards = await Ward.find({ hospitalId, isActive: true });
+        const totalBeds = wards.reduce((sum, w) => sum + (w.totalBeds || 0), 0);
+        const availableBeds = wards.reduce((sum, w) => sum + (w.availableBeds || 0), 0);
+        const occupiedBeds = totalBeds - availableBeds;
 
-        const [
-            emergencyActive,       
-            directAdmissions,      
-            emergencyDischarges,   
-            hospitalDischarges,    
-            referralAmbulances,    
-            historyRecords         
-        ] = await Promise.all([
-            
-            // Tab 1: Emergency Cases (Strictly Cases with Ambulance)
+        // 2. Active Patient Cases Metrics
+        const [emergencyCount, ipdCount, opdCount, activeAmbulanceCount] = await Promise.all([
             Appointment.countDocuments({
                 hospitalId,
-                ambulanceId: { $ne: null, $exists: true },
-                status: { $in: activeEmergencyStates }
+                triageLevel: 'Emergency',
+                status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress'] }
             }),
-
-            // Tab 2: Regular Hospital Admissions (Direct Bed Bookings without Ambulance)
             Appointment.countDocuments({
                 hospitalId,
                 bookingType: 'Admission',
-                $or: [
-                    { ambulanceId: null },
-                    { ambulanceId: { $exists: false } }
-                ],
-                status: 'Hospital-Pending'
+                status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress'] }
             }),
-
-            // Tab 3: Emergency Discharges (Brought by Ambulance & Ready for Discharge)
+            // Live Today's OPD Consultations
             Appointment.countDocuments({
                 hospitalId,
-                ambulanceId: { $ne: null, $exists: true },
-                status: 'Discharge-Pending'
+                bookingType: 'OPD',
+                appointmentDate: { $gte: todayStart, $lte: todayEnd },
+                status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
             }),
-
-            // Tab 4: Hospital Discharges (Direct Admissions Ready for Discharge)
             Appointment.countDocuments({
                 hospitalId,
-                bookingType: 'Admission',
-                $or: [
-                    { ambulanceId: null },
-                    { ambulanceId: { $exists: false } }
-                ],
-                status: 'Discharge-Pending'
-            }),
-
-            // Tab 5: Referral Ambulances
-            AmbulanceBooking.countDocuments({
-                hospitalId,
-                serviceType: 'Referral Ambulance',
-                status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
-            }),
-
-            // Tab 6: History Completed Cases
-            Appointment.countDocuments({
-                hospitalId,
-                status: 'Completed'
+                ambulanceId: { $ne: null },
+                status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress'] }
             })
         ]);
 
-        res.json({
+        res.status(200).json({
             success: true,
             data: {
-                emergency: emergencyActive,
-                admission: directAdmissions,
-                discharge: emergencyDischarges + hospitalDischarges,
-
-                servicesTabs: {
-                    emergencyCase: emergencyActive,            
-                    hospitalAdmission: directAdmissions,       
-                    emergencyDischarge: emergencyDischarges,   
-                    hospitalDischarge: hospitalDischarges,     
-                    referralAmbulance: referralAmbulances,     
-                    history: historyRecords                    
-                }
+                totalBeds,
+                availableBeds,
+                occupiedBeds,
+                activePatients: ipdCount + opdCount,
+                emergencyCases: emergencyCount,
+                ipdAdmissions: ipdCount,
+                opdConsultationsToday: opdCount, // 👈 Real-time OPD counter
+                activeAmbulanceDispatches: activeAmbulanceCount
             }
         });
 
     } catch (error) {
+        console.error("Get Hospital Dashboard Stats Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

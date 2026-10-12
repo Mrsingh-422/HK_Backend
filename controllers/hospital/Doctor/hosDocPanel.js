@@ -1452,220 +1452,62 @@ const completeSpecialistCare = async (req, res) => {
     }
 };
 
-// --- GET DOCTOR'S ASSIGNED CASES (Strict Emergency vs Admission Query) ---
-// Endpoint: GET /hospital-doctor/panel/cases?type=Emergency&tab=active&page=1&limit=10
+// @desc    Get Cases Assigned to Hospital Doctor (Supports Tab: 'opd', 'ipd', 'emergency', 'all')
+// @route   GET /hospital-doctor/panel/cases
+// @access  Private (Hospital Doctor)
 const getAssignedCases = async (req, res) => {
     try {
-        const { type, status, tab = 'active', page = 1, limit = 10 } = req.query; 
+        const doctorId = req.user.id;
+        const { tab = 'all', date, search } = req.query;
 
-        const pageNum = Math.max(1, parseInt(page) || 1);
-        const limitNum = Math.max(1, parseInt(limit) || 10);
-        const skip = (pageNum - 1) * limitNum;
+        let query = { 
+            doctorId,
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
+        };
 
-        const doctorObjId = new mongoose.Types.ObjectId(req.user.id);
-        const doctorIdStr = req.user.id.toString();
-
-        let query = {};
-
-        // Case A: Active patients assigned to this doctor
-        if (tab === 'active') {
-            query = { 
-                doctorId: doctorObjId, 
-                pendingDoctorId: null,
-                status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } 
-            };
-        } 
-        // Case B: Ready for Discharge patients
-        else if (tab === 'discharge') {
-            query = {
-                doctorId: doctorObjId,
-                pendingDoctorId: null,
-                status: 'Discharge-Pending' 
-            };
-        }
-        // Case C: Incoming pending handover transfers
-        else if (tab === 'pending') {
-            query = { pendingDoctorId: doctorObjId };
-        } 
-        // Case D: Comprehensive History Tray
-        else if (tab === 'history') {
-            query = {
-                $or: [
-                    {
-                        $and: [
-                            { 
-                                $or: [
-                                    { "treatmentHistory.fromDoctorId": doctorObjId },
-                                    { "treatmentHistory.toDoctorId": doctorObjId }
-                                ] 
-                            },
-                            {
-                                $or: [
-                                    { doctorId: { $ne: doctorObjId } }, 
-                                    { status: 'Completed' }          
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        "bedsideCareTeam": {
-                            $elemMatch: {
-                                doctorId: doctorObjId,
-                                status: 'Completed'
-                            }
-                        }
-                    }
-                ]
-            };
-        }
-        // Case E: Active Bedside Specialist Care
-        else if (tab === 'bedside') {
-            query = {
-                "bedsideCareTeam": {
-                    $elemMatch: {
-                        doctorId: doctorObjId,
-                        status: { $in: ['Accepted', 'In-Progress'] }
-                    }
-                }
-            };
-        }
-        // Case F: Pending Bedside Specialists Requests
-        else if (tab === 'pending-bedside') {
-            query = {
-                "bedsideCareTeam": {
-                    $elemMatch: {
-                        doctorId: doctorObjId,
-                        status: 'Pending'
-                    }
-                }
-            };
-        }
-        // Case G: Pending Admissions waiting for Doctor assignment
-        else if (tab === 'pending-admissions') {
-            query = {
-                hospitalId: req.user.hospitalId,
-                bookingType: 'Admission',
-                doctorId: null,
-                status: 'In-Progress'
-            };
-        }
-        // Case H: Transferred Out / Outgoing Handovers
-        else if (tab === 'transferred-out') {
-            query = {
-                $or: [
-                    { 
-                        doctorId: doctorObjId, 
-                        pendingDoctorId: { $ne: null } 
-                    },
-                    {
-                        doctorId: { $ne: doctorObjId },
-                        "treatmentHistory": {
-                            $elemMatch: {
-                                fromDoctorId: doctorObjId,
-                                action: { $in: ['Transfer-Initiated', 'Discharged'] }
-                            }
-                        }
-                    }
-                ]
-            };
-        }
-
-        // =========================================================================
-        // 🚨 STRICT FILTER: Ambulance = Emergency | Without Ambulance = Admission
-        // =========================================================================
-        if (type === 'Emergency') {
-            query.ambulanceId = { $ne: null, $exists: true };
-        } else if (type === 'Admission') {
+        // Filter by tab
+        if (tab === 'opd') {
+            query.bookingType = 'OPD';
+        } else if (tab === 'ipd') {
             query.bookingType = 'Admission';
+        } else if (tab === 'emergency') {
+            query.triageLevel = 'Emergency';
+        }
+
+        if (date) {
+            query.appointmentDate = {
+                $gte: moment(date).startOf('day').toDate(),
+                $lte: moment(date).endOf('day').toDate()
+            };
+        }
+
+        if (search && search.trim() !== '') {
             query.$or = [
-                { ambulanceId: null },
-                { ambulanceId: { $exists: false } }
+                { bookingId: { $regex: search.trim(), $options: 'i' } },
+                { 'patients.patientName': { $regex: search.trim(), $options: 'i' } }
             ];
         }
 
-        if (status) query.status = status;
-
-        const totalRecords = await Appointment.countDocuments(query);
-
         const cases = await Appointment.find(query)
-            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
-            .populate('doctorId', 'name speciality qualification profileImage')
+            .populate('userId', 'name phone email profilePic age gender')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay status',
+                select: 'bedNumber status pricePerDay',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .sort({ updatedAt: -1 })
-            .skip(skip)
-            .limit(limitNum);
+            .sort({ tokenNumber: 1, createdAt: -1 }) // Sort OPD by Token Number
+            .lean();
 
-        const cleanedCases = cases.map(appt => {
-            const myBedsideEntry = (appt.bedsideCareTeam || []).find(member => 
-                member.doctorId && (member.doctorId._id?.toString() === doctorIdStr || member.doctorId.toString() === doctorIdStr)
-            );
-
-            // 🎯 Pure Rule: Ambulance means Emergency, otherwise Admission
-            const isEmergencyCase = Boolean(appt.ambulanceId);
-
-            return {
-                _id: appt._id,
-                bookingId: appt.bookingId,
-                status: appt.status,
-                caseCategory: isEmergencyCase ? "Emergency" : "Admission",
-                triageLevel: appt.clinicalSummary?.triagePriority || appt.triageLevel || "Routine", // Visual Priority Badge
-                startDate: appt.startDate,
-                endDate: appt.endDate,
-                stayDuration: appt.stayDuration || 1,
-
-                // Patient Profile Details
-                patientDetails: resolvePatientDTO(appt),
-
-                // Bed & Ward Details
-                bedDetails: appt.bedId ? {
-                    _id: appt.bedId._id,
-                    bedNumber: appt.bedId.bedNumber || appt.bedNumber || "N/A",
-                    wardName: appt.bedId.wardId?.name || appt.wardName || "N/A",
-                    wardType: appt.bedId.wardId?.type || "Ward",
-                    pricePerDay: appt.bedId.pricePerDay || 0
-                } : null,
-
-                // Primary Doctor
-                primaryDoctor: appt.doctorId ? {
-                    _id: appt.doctorId._id,
-                    name: appt.doctorId.name,
-                    speciality: appt.doctorId.speciality,
-                    qualification: appt.doctorId.qualification || "MBBS, MD",
-                    profileImage: appt.doctorId.profileImage || null
-                } : null,
-
-                // Bedside Request Payload
-                bedsideRequest: myBedsideEntry ? {
-                    status: myBedsideEntry.status,
-                    requestReason: myBedsideEntry.requestReason || "Bedside specialist consultation requested.",
-                    patientConditionAtRequest: myBedsideEntry.patientConditionAtRequest || "Stable",
-                    priority: myBedsideEntry.priority || "Routine",
-                    requestedAt: myBedsideEntry.requestedAt || appt.createdAt,
-                    respondedAt: myBedsideEntry.respondedAt || null,
-                    rejectionReason: myBedsideEntry.rejectionReason || null
-                } : null,
-
-                pendingDoctorId: appt.pendingDoctorId || null,
-                createdAt: appt.createdAt,
-                updatedAt: appt.updatedAt
-            };
+        res.status(200).json({
+            success: true,
+            tab,
+            count: cases.length,
+            data: cases
         });
 
-        res.json({ 
-            success: true, 
-            totalRecords,
-            totalPages: Math.ceil(totalRecords / limitNum),
-            currentPage: pageNum,
-            count: cleanedCases.length, 
-            data: cleanedCases 
-        });
-    } catch (error) { 
-        console.error("getAssignedCases Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Get Assigned Cases Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -2425,6 +2267,145 @@ const stopActiveMedication = async (req, res) => {
 };
 
 
+
+
+
+
+// @desc    Hospital Doctor Views His OPD Settings, Room Number & Weekly Timings
+// @route   GET /hospital-doctor/panel/opd-settings
+// @access  Private (Hospital Doctor)
+const getDoctorOpdSettings = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+
+        const doctor = await Doctor.findById(doctorId)
+            .select('name speciality fees department slotDuration availability consultationStatus hospitalId')
+            .populate('hospitalId', 'name city address')
+            .lean();
+
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor profile not found." });
+        }
+
+        // Fetch any blocked/unavailable slots for this doctor
+        const availabilityConfig = await Availability.findOne({ 
+            vendorId: doctorId, 
+            vendorType: 'Doctor' 
+        }).lean();
+
+        res.status(200).json({
+            success: true,
+            data: {
+                doctorId: doctor._id,
+                name: doctor.name,
+                speciality: doctor.speciality,
+                hospital: doctor.hospitalId,
+                opdRoomNumber: doctor.department?.roomNumber || "OPD Cabin 1",
+                opdFee: Number(doctor.fees?.clinic || 500),
+                slotDurationMinutes: doctor.slotDuration || 15,
+                isOpdEnabled: doctor.consultationStatus?.clinic ?? true,
+                weeklySchedule: doctor.availability || [
+                    { day: "Mon", startTime: "09:00", endTime: "17:00" },
+                    { day: "Tue", startTime: "09:00", endTime: "17:00" },
+                    { day: "Wed", startTime: "09:00", endTime: "17:00" },
+                    { day: "Thu", startTime: "09:00", endTime: "17:00" },
+                    { day: "Fri", startTime: "09:00", endTime: "17:00" },
+                    { day: "Sat", startTime: "09:00", endTime: "13:00" }
+                ],
+                blockedSlots: availabilityConfig?.unavailableSlots || []
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Doctor OPD Settings Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Hospital Doctor Updates OPD Cabin Room, Consultation Fee, Slot Duration & Schedule
+// @route   PUT /hospital-doctor/panel/opd-settings
+// @access  Private (Hospital Doctor)
+const updateDoctorOpdSettings = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { roomNumber, slotDuration, clinicFee, availability, isOpdEnabled } = req.body;
+
+        const updateData = {};
+
+        if (roomNumber !== undefined) {
+            updateData['department.roomNumber'] = roomNumber.trim();
+        }
+        if (slotDuration !== undefined) {
+            updateData.slotDuration = Math.max(5, parseInt(slotDuration) || 15);
+        }
+        if (clinicFee !== undefined) {
+            updateData['fees.clinic'] = Math.max(0, parseInt(clinicFee));
+        }
+        if (isOpdEnabled !== undefined) {
+            updateData['consultationStatus.clinic'] = Boolean(isOpdEnabled);
+        }
+        if (Array.isArray(availability)) {
+            updateData.availability = availability;
+        }
+
+        const updatedDoctor = await Doctor.findByIdAndUpdate(
+            doctorId,
+            { $set: updateData },
+            { new: true }
+        ).select('name speciality fees department slotDuration availability consultationStatus');
+
+        if (!updatedDoctor) {
+            return res.status(404).json({ success: false, message: "Doctor profile not found." });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Doctor OPD Cabin, Fee and Weekly Schedule updated successfully.",
+            data: updatedDoctor
+        });
+
+    } catch (error) {
+        console.error("Update Doctor OPD Settings Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Hospital Doctor Blocks or Unblocks a Specific Time Slot (e.g. for Emergency/Rounds)
+// @route   POST /hospital-doctor/panel/opd-slots/toggle-block
+// @access  Private (Hospital Doctor)
+const toggleDoctorOpdSlotBlock = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { timeSlot, action } = req.body; // action: 'block' or 'unblock', timeSlot: "11:00 AM"
+
+        if (!timeSlot || !action || !['block', 'unblock'].includes(action)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "timeSlot (e.g. '11:00 AM') and action ('block' or 'unblock') are required." 
+            });
+        }
+
+        const updateOperation = action === 'block'
+            ? { $addToSet: { unavailableSlots: timeSlot.trim() } }
+            : { $pull: { unavailableSlots: timeSlot.trim() } };
+
+        const config = await Availability.findOneAndUpdate(
+            { vendorId: doctorId, vendorType: 'Doctor' },
+            updateOperation,
+            { upsert: true, new: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `OPD Time Slot '${timeSlot}' successfully marked as ${action === 'block' ? 'Blocked / Unavailable' : 'Available'}.`,
+            blockedSlots: config.unavailableSlots
+        });
+
+    } catch (error) {
+        console.error("Toggle Doctor OPD Slot Block Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     getMyDoctorProfile,changeHospitalDoctorPassword,
     updateDoctorProfile,getLatestDoctorProfileRequest,
@@ -2446,5 +2427,7 @@ module.exports = {
 
     requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,getCollaborativeMedications,completeSpecialistCare,
     getPrintableDischargeSummary,
-    doctorSelfAssignCase,addPrimaryClinicalLog,addActiveMedication,stopActiveMedication
+    doctorSelfAssignCase,addPrimaryClinicalLog,addActiveMedication,stopActiveMedication,
+    // opd settings
+    getDoctorOpdSettings,updateDoctorOpdSettings,toggleDoctorOpdSlotBlock
 };

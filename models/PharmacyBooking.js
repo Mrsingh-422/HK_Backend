@@ -91,7 +91,8 @@ const pharmacyBookingSchema = new mongoose.Schema({
     // --- PAYMENT & STATUS ---
     paymentMethod: { type: String, enum: [
         'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
-        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater'
+        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater',
+        'ONLINE', 'COD'
     ], default: 'COD' },
     paymentStatus: {
         type: String,

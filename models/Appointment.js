@@ -8,7 +8,13 @@ const appointmentSchema = new mongoose.Schema({
     bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null }, // For hospital admissions
 
     ambulanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance', default: null }, // Link to Ambulance if brought by driver
-    bookingType: { type: String, enum: ['Appointment', 'Admission'], default: 'Appointment' },
+    bookingType: { 
+        type: String, 
+        enum: ['Appointment', 'Admission', 'OPD'], // 👈 Added 'OPD'
+        default: 'Appointment' 
+    },
+    tokenNumber: { type: Number, default: null }, // 👈 OPD Daily Queue Token Number (e.g. Token #12)
+    opdRoomNumber: { type: String, default: "" }, // 👈 OPD Cabin / Room Number (e.g. Room 204)
     bedBookingType: {
         type: String,
         enum: ['General-Bed', 'Emergency-Bed'], // general bed for hospital booking direct and emergency bed for ambulance brought patients
@@ -73,11 +79,11 @@ const appointmentSchema = new mongoose.Schema({
         }
     },
 
-    paymentMethod: {
-        type: String,
-        enum: ['Online', 'UPI', 'COD', 'Card', 'Netbanking', 'Wallet'],
-        default: 'Online'
-    },
+    paymentMethod: { type: String, enum: [
+        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
+        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater',
+        'ONLINE', 'COD'
+    ], default: 'COD' },
 
     totalAmount: { type: Number }, // Final Payable
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },

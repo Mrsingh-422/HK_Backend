@@ -21,7 +21,9 @@ const {
 
     requestBedsideSpecialist,respondToBedsideRequest,startSpecialistCare,submitSpecialistFeedback,getCollaborativeMedications,completeSpecialistCare,
     getPrintableDischargeSummary,
-    doctorSelfAssignCase,addPrimaryClinicalLog,addActiveMedication,stopActiveMedication
+    doctorSelfAssignCase,addPrimaryClinicalLog,addActiveMedication,stopActiveMedication,
+    // opd settings
+    getDoctorOpdSettings,updateDoctorOpdSettings,toggleDoctorOpdSlotBlock
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 
@@ -107,5 +109,10 @@ router.post('/case/clinical-log/add', protect('hospital-doctor'), addPrimaryClin
 // --- IN-PATIENT ACTIVE MEDICATION PATHS ---
 router.post('/case/active-medication/add', protect('hospital-doctor'), addActiveMedication);
 router.patch('/case/active-medication/stop', protect('hospital-doctor'), stopActiveMedication);
+
+// Hospital-Doctor OPD Slots Management
+router.get('/opd-settings', protect('hospital-doctor'), getDoctorOpdSettings);
+router.put('/opd-settings', protect('hospital-doctor'), updateDoctorOpdSettings);
+router.post('/opd-slots/toggle-block', protect('hospital-doctor'), toggleDoctorOpdSlotBlock);
 
 module.exports = router;

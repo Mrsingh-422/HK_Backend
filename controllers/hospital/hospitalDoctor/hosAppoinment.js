@@ -5,88 +5,158 @@ const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed');
 const mongoose = require('mongoose');
 
-// 1. GET ALL BOOKINGS
+// @desc    Get All Hospital Bookings with OPD / IPD / Triage Filters & Search
+// @route   GET /hospital/doctor/appointments/all-bookings
+// @access  Private (Hospital)
 const getHospitalAllBookings = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { status, bookingType, triageLevel, page = 1, limit = 10 } = req.query; 
+        const { status, bookingType, triageLevel, date, search, page = 1, limit = 20 } = req.query; 
 
-        let query = { hospitalId: hospitalId };
+        let query = { hospitalId };
 
-        if (status) query.status = status;
-        if (bookingType) query.bookingType = bookingType;
-        if (triageLevel) query.triageLevel = triageLevel;
+        if (status && status !== 'All') query.status = status;
+        if (bookingType && bookingType !== 'All') query.bookingType = bookingType; // 👈 'OPD' vs 'Admission'
+        if (triageLevel && triageLevel !== 'All') query.triageLevel = triageLevel;
+
+        if (date) {
+            query.appointmentDate = {
+                $gte: moment(date).startOf('day').toDate(),
+                $lte: moment(date).endOf('day').toDate()
+            };
+        }
+
+        if (search && search.trim() !== '') {
+            query.$or = [
+                { bookingId: { $regex: search.trim(), $options: 'i' } },
+                { 'patients.patientName': { $regex: search.trim(), $options: 'i' } }
+            ];
+        }
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const total = await Appointment.countDocuments(query);
 
         const appointments = await Appointment.find(query)
-            .populate('doctorId', 'name speciality profileImage')
+            .populate('doctorId', 'name speciality profileImage fees department')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber pricePerDay',
                 populate: { path: 'wardId', select: 'name type' } 
             })
             .populate('userId', 'name phone email profilePic age gender')
-            // 🚀 FIX: Populating bedsideCareTeam doctor profile info for counters desk
             .populate({
                 path: 'bedsideCareTeam.doctorId',
                 select: 'name speciality profileImage dutyStatus'
             })
-            .sort({ createdAt: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
+            .sort({ tokenNumber: 1, createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
 
-        const total = await Appointment.countDocuments(query);
+        // Enriched mapping with clear OPD Token badges
+        const formatted = appointments.map(a => ({
+            ...a,
+            isOpd: a.bookingType === 'OPD',
+            isIpd: a.bookingType === 'Admission',
+            displaySubtitle: a.bookingType === 'OPD' 
+                ? `OPD Token #${a.tokenNumber || 'N/A'} - Dr. ${a.doctorId?.name || 'Doctor'}`
+                : `Bed: ${a.bedNumber || 'Unassigned'} (${a.wardName || 'Ward'})`
+        }));
 
-        res.json({ success: true, total, count: appointments.length, data: appointments });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(200).json({ 
+            success: true, 
+            total, 
+            count: formatted.length, 
+            pagination: {
+                totalCount: total,
+                totalPages: Math.ceil(total / parseInt(limit)),
+                currentPage: parseInt(page),
+                limit: parseInt(limit)
+            },
+            data: formatted 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// 2. APPROVE & ASSIGN (Fixed: Bed status marked as 'Reserved' instead of premature 'Occupied')
-// Endpoint: PATCH /hospital/doctor/appointments/approve/:id
+// @desc    Hospital Admin Approves Booking (Reserves Bed for IPD / Assigns Token for OPD)
+// @route   PATCH /hospital/doctor/appointments/approve/:id
+// @access  Private (Hospital Admin)
 const approveHospitalBooking = async (req, res) => {
     try {
         const { doctorId } = req.body; 
         const hospitalId = req.user.id;
 
         const appointment = await Appointment.findOne({ _id: req.params.id, hospitalId });
-        if (!appointment) return res.status(404).json({ success: false, message: "Booking not found" });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
 
         appointment.status = 'Confirmed';
         const now = new Date();
 
-        // 🛡️ SYNC FIX: If doctor is assigned during approval, start their treatment shift
-        if (doctorId) {
-            appointment.doctorId = doctorId;
-            appointment.treatmentHistory.push({
-                toDoctorId: doctorId,
-                action: 'Initial-Assignment',
-                notes: "Assigned on hospital admission approval.",
-                timestamp: now,
-                startTime: now
+        // 1. IPD ADMISSION LOGIC
+        if (appointment.bookingType === 'Admission') {
+            if (doctorId) {
+                appointment.doctorId = doctorId;
+                appointment.treatmentHistory.push({
+                    toDoctorId: doctorId,
+                    action: 'Initial-Assignment',
+                    notes: "Attending doctor assigned on hospital admission approval.",
+                    timestamp: now,
+                    startTime: now
+                });
+            }
+            if (appointment.bedId) {
+                await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Reserved' } });
+            }
+
+            // Alert Patient
+            await sendPushNotification(
+                appointment.userId,
+                'user',
+                "🏥 Admission Confirmed!",
+                `Your IPD admission booking #${appointment.bookingId} has been confirmed. Bed is reserved for your arrival.`,
+                { appointmentId: appointment._id.toString(), type: 'admission_confirmed' }
+            );
+
+            await appointment.save();
+
+            return res.status(200).json({ 
+                success: true, 
+                message: "IPD Admission Confirmed, Bed Reserved, and Patient Notified.", 
+                data: appointment 
             });
         }
-        
-        // Reserve Bed if admission booking
-        if (appointment.bookingType === 'Admission' && appointment.bedId) {
-            await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Reserved' } });
+
+        // 2. OPD CONSULTATION LOGIC
+        if (appointment.bookingType === 'OPD') {
+            if (doctorId) {
+                appointment.doctorId = doctorId;
+            }
+
+            await appointment.save();
+
+            // Alert Patient with Token Number & Room
+            await sendPushNotification(
+                appointment.userId,
+                'user',
+                `OPD Appointment Confirmed! (Token #${appointment.tokenNumber || '1'})`,
+                `Your OPD consultation #${appointment.bookingId} is confirmed for ${appointment.appointmentTime}. Please proceed to ${appointment.opdRoomNumber || 'OPD Cabin'}.`,
+                { appointmentId: appointment._id.toString(), type: 'opd_confirmed', tokenNumber: appointment.tokenNumber }
+            );
+
+            return res.status(200).json({ 
+                success: true, 
+                message: `OPD Appointment Confirmed! Token #${appointment.tokenNumber || '1'} generated and patient notified.`, 
+                data: appointment 
+            });
         }
 
         await appointment.save();
+        res.status(200).json({ success: true, message: "Booking confirmed successfully.", data: appointment });
 
-        // 🛡️ NOTIFICATION FIX: Alert Patient regarding confirmation
-        const { sendPushNotification } = require('../../../utils/notification');
-        await sendPushNotification(
-            appointment.userId,
-            'user',
-            "🏥 Admission Confirmed!",
-            `Your hospital admission booking #${appointment.bookingId} has been confirmed. Bed is reserved for your arrival.`,
-            { appointmentId: appointment._id.toString(), type: 'admission_confirmed' }
-        );
-
-        res.json({ 
-            success: true, 
-            message: "Admission Confirmed, Bed Reserved, and Patient Notified.", 
-            data: appointment 
-        });
     } catch (error) { 
         console.error("Approve Booking Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
@@ -158,7 +228,9 @@ const rejectHospitalBooking = async (req, res) => {
     }
 };
 
-// 4. STATS (Fixed: Discharge counts track strictly clinically released 'Discharge-Pending' status)
+// @desc    Get Hospital Dashboard Counters (Counts Emergency, IPD Admission & OPD Consultations)
+// @route   GET /hospital/doctor/appointments/stats
+// @access  Private (Hospital)
 const getHospitalStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
@@ -169,12 +241,18 @@ const getHospitalStats = async (req, res) => {
                 _id: null,
                 emergency: { $sum: { $cond: [{ $eq: ["$triageLevel", "Emergency"] }, 1, 0] } },
                 admission: { $sum: { $cond: [{ $eq: ["$bookingType", "Admission"] }, 1, 0] } },
-                discharge: { $sum: { $cond: [{ $eq: ["$status", "Discharge-Pending"] }, 1, 0] } } // 👈 FIXED
+                opd: { $sum: { $cond: [{ $eq: ["$bookingType", "OPD"] }, 1, 0] } }, // 👈 Added OPD counter
+                discharge: { $sum: { $cond: [{ $eq: ["$status", "Discharge-Pending"] }, 1, 0] } }
             }}
         ]);
 
-        res.json({ success: true, data: stats[0] || { emergency: 0, admission: 0, discharge: 0 } });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(200).json({ 
+            success: true, 
+            data: stats[0] || { emergency: 0, admission: 0, opd: 0, discharge: 0 } 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 module.exports = { 
