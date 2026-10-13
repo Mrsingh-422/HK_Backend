@@ -362,6 +362,57 @@ const collectHospitalOpdCounterPayment = async (req, res) => {
     }
 };
 
+// @desc    OPD Triage Nurse / Reception Records Pre-Consultation Vitals (BP, Pulse, Temp, SpO2, Weight)
+// @route   PATCH /hospital/doctor/appointments/opd-vitals/:id
+// @access  Private (Hospital Admin or Hospital Doctor)
+const recordOpdPatientVitals = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const hospitalId = req.user.id;
+        const { bp, pulse, temp, spo2, weight, notes } = req.body;
+
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            ...(req.user.role === 'hospital' ? { hospitalId } : { doctorId: req.user.id }),
+            bookingType: 'OPD',
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query).populate('doctorId', 'name speciality');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "OPD Appointment record not found." });
+        }
+
+        const recordedVitals = {
+            bp: bp ? String(bp).trim() : (appointment.clinicalSummary?.vitals?.bp || ""),
+            pulse: pulse ? String(pulse).trim() : (appointment.clinicalSummary?.vitals?.pulse || ""),
+            temp: temp ? String(temp).trim() : (appointment.clinicalSummary?.vitals?.temp || ""),
+            spo2: spo2 ? String(spo2).trim() : (appointment.clinicalSummary?.vitals?.spo2 || ""),
+            weight: weight ? String(weight).trim() : (appointment.clinicalSummary?.vitals?.weight || "")
+        };
+
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+        appointment.clinicalSummary.vitals = recordedVitals;
+        if (notes) {
+            appointment.clinicalSummary.admissionNote = `[Triage Vitals Log]: ${notes.trim()}`;
+        }
+
+        await appointment.save();
+
+        res.status(200).json({
+            success: true,
+            message: `Vitals recorded successfully for Token #${appointment.tokenNumber || '1'}. Available live in doctor's cabin.`,
+            tokenNumber: appointment.tokenNumber,
+            vitals: recordedVitals,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Record OPD Patient Vitals Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
-    getHospitalAllBookings, approveHospitalBooking, rejectHospitalBooking, getHospitalStats, collectHospitalOpdCounterPayment
+    getHospitalAllBookings, approveHospitalBooking, rejectHospitalBooking, getHospitalStats, collectHospitalOpdCounterPayment, recordOpdPatientVitals
 };

@@ -8,22 +8,23 @@ const generateToken = (id, role) => {
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
-// --- 1. ADD DOCTOR (By Hospital) ---
-// Endpoint: POST /api/hospital/doctors/add
+// @desc    Hospital Admin Adds New Doctor (With OPD Room Number, Fee & Slot Duration in Single Step)
+// @route   POST /api/hospital/doctors/add
+// @access  Private (Hospital Admin)
 const addHospitalDoctor = async (req, res) => {
     try {
         const { 
             name, email, phone, password, speciality, qualification, 
             licenseNumber, councilNumber, councilName, about,
-            country, state, city, address, isNormal, isEmergency 
+            country, state, city, address, isNormal, isEmergency,
+            roomNumber, opdFee, clinicFee, slotDuration // 👈 OPD specific parameters integrated
         } = req.body;
 
         const exists = await Doctor.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }] });
-        if (exists) return res.status(400).json({ message: "Doctor already exists" });
+        if (exists) return res.status(400).json({ message: "Doctor already exists with this email or phone number." });
 
         const hashedPassword = await bcrypt.hash(String(password || '123456'), 10);
 
-        // 🚀 SYNC FIX: Standard web-accessible URL paths instead of OS raw file.path
         const profileImagePath = req.files?.profileImage 
             ? `/uploads/doctors/${req.files.profileImage[0].filename}` 
             : null;
@@ -31,6 +32,9 @@ const addHospitalDoctor = async (req, res) => {
         const certificatePaths = req.files?.certificates 
             ? req.files.certificates.map(f => `/uploads/doctors/${f.filename}`) 
             : [];
+
+        const finalOpdFee = Math.max(0, parseInt(opdFee || clinicFee || 500));
+        const finalSlotDuration = Math.max(5, parseInt(slotDuration || 15));
 
         const doctor = await Doctor.create({
             hospitalId: req.user.id,
@@ -42,16 +46,41 @@ const addHospitalDoctor = async (req, res) => {
             speciality, qualification, licenseNumber, councilNumber, councilName, about,
             role: 'hospital-doctor',
             profileStatus: 'Approved',
+            fees: {
+                clinic: finalOpdFee,
+                online: 0,
+                home: 0
+            },
+            consultationStatus: {
+                clinic: true,
+                online: false,
+                home: false
+            },
+            slotDuration: finalSlotDuration,
             department: {
                 isNormal: isNormal === 'true' || isNormal === true,
-                isEmergency: isEmergency === 'true' || isEmergency === true
+                isEmergency: isEmergency === 'true' || isEmergency === true,
+                roomNumber: roomNumber ? String(roomNumber).trim() : "Cabin 1"
             },
+            availability: [
+                { day: "Mon", startTime: "09:00", endTime: "17:00" },
+                { day: "Tue", startTime: "09:00", endTime: "17:00" },
+                { day: "Wed", startTime: "09:00", endTime: "17:00" },
+                { day: "Thu", startTime: "09:00", endTime: "17:00" },
+                { day: "Fri", startTime: "09:00", endTime: "17:00" },
+                { day: "Sat", startTime: "09:00", endTime: "13:00" }
+            ],
             profileImage: profileImagePath,
             documents: certificatePaths
         });
 
-        res.status(201).json({ success: true, message: "Hospital Doctor Added Successfully", data: doctor });
+        res.status(201).json({ 
+            success: true, 
+            message: `Hospital Doctor added successfully with OPD Room (${doctor.department.roomNumber}) and Fee (₹${finalOpdFee}).`, 
+            data: doctor 
+        });
     } catch (error) {
+        console.error("Add Hospital Doctor Error:", error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -67,30 +96,45 @@ const getMyHospitalDoctors = async (req, res) => {
     }
 };
 
-// --- 3. UPDATE DOCTOR DETAILS (Screenshot 3 Flow) ---
-// Endpoint: PUT /api/hospital/doctors/update/:id
+// @desc    Hospital Admin Updates Doctor Info (Includes OPD Room, Slot Duration & Fees)
+// @route   PUT /api/hospital/doctors/update/:id
+// @access  Private (Hospital Admin)
 const updateHospitalDoctor = async (req, res) => {
     try {
         const { id } = req.params;
+        const hospitalId = req.user.id;
         const files = req.files;
         let updateData = { ...req.body };
 
-        if (files?.profileImage) updateData.profileImage = files.profileImage[0].path;
-        if (files?.certificates) updateData.documents = files.certificates.map(f => f.path);
+        if (files?.profileImage) updateData.profileImage = `/uploads/doctors/${files.profileImage[0].filename}`;
+        if (files?.certificates) updateData.documents = files.certificates.map(f => `/uploads/doctors/${f.filename}`);
 
-        if (req.body.password) updateData.password = await bcrypt.hash(String(req.body.password), 10);
+        if (req.body.password && req.body.password.trim() !== '') {
+            updateData.password = await bcrypt.hash(String(req.body.password), 10);
+        }
 
-        // Security: hospitalId check taaki koi dusra hospital edit na kar sake
+        // Support OPD Room, Fee & Duration directly
+        if (req.body.roomNumber) {
+            updateData['department.roomNumber'] = req.body.roomNumber.trim();
+        }
+        if (req.body.opdFee !== undefined || req.body.clinicFee !== undefined) {
+            updateData['fees.clinic'] = Math.max(0, parseInt(req.body.opdFee || req.body.clinicFee));
+        }
+        if (req.body.slotDuration) {
+            updateData.slotDuration = Math.max(5, parseInt(req.body.slotDuration));
+        }
+
         const doctor = await Doctor.findOneAndUpdate(
-            { _id: id, hospitalId: req.user.id },
+            { _id: id, hospitalId },
             { $set: updateData },
             { new: true }
         );
 
-        if (!doctor) return res.status(404).json({ message: "Doctor not found or unauthorized" });
+        if (!doctor) return res.status(404).json({ message: "Doctor not found or unauthorized access." });
 
-        res.json({ success: true, message: "Updated successfully", data: doctor });
+        res.status(200).json({ success: true, message: "Doctor updated successfully with OPD details.", data: doctor });
     } catch (error) {
+        console.error("Update Hospital Doctor Error:", error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -196,14 +240,14 @@ const loginHospitalDoctor = async (req, res) => {
 
 };
 
-// @desc    Hospital Admin Sets Doctor's OPD Cabin Room, Slot Duration & Schedule (Safe Self-Healing)
+// @desc    Hospital Admin Sets Doctor's OPD Cabin Room, Fee, Schedule & Premium Slots
 // @route   PUT /api/hospital/doctors/configure-opd/:doctorId
 // @access  Private (Hospital Admin)
 const configureDoctorOpdScheduleByHospital = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const { doctorId } = req.params;
-        const { roomNumber, slotDuration, opdFee, availability, isOpdEnabled } = req.body;
+        const { roomNumber, slotDuration, opdFee, availability, isOpdEnabled, premiumSlots } = req.body;
 
         const doctor = await Doctor.findOne({ _id: doctorId, hospitalId }).lean();
         if (!doctor) {
@@ -253,11 +297,21 @@ const configureDoctorOpdScheduleByHospital = async (req, res) => {
                 : (typeof availability === 'string' ? safeObjectParse(availability, []) : []);
         }
 
-        // Direct Native MongoDB Update to overwrite any corrupted string in database
+        // Update Doctor Document
         await Doctor.collection.updateOne(
             { _id: new mongoose.Types.ObjectId(doctorId) },
             { $set: updatePayload }
         );
+
+        // Update Premium Slots in Availability Collection
+        if (premiumSlots !== undefined) {
+            const formattedPremiumSlots = Array.isArray(premiumSlots) ? premiumSlots : safeObjectParse(premiumSlots, []);
+            await Availability.findOneAndUpdate(
+                { vendorId: doctorId, vendorType: 'Doctor' },
+                { $set: { premiumSlots: formattedPremiumSlots } },
+                { upsert: true, new: true }
+            );
+        }
 
         const updatedDoctor = await Doctor.findById(doctorId)
             .select('name speciality fees department slotDuration availability consultationStatus')
@@ -265,7 +319,7 @@ const configureDoctorOpdScheduleByHospital = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: `OPD Configuration saved for Dr. ${updatedDoctor.name}.`,
+            message: `OPD Configuration and Premium Slots saved for Dr. ${updatedDoctor.name}.`,
             data: updatedDoctor
         });
 

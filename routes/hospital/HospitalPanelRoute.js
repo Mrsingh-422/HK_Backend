@@ -21,7 +21,8 @@ const {
     savePatientInsuranceDetails,
     manageDoctorLeaveByHospital,
     getHospitalDoctorPendingLeaves,
-    hospitalAdminRescheduleAppointment
+    hospitalAdminRescheduleAppointment,
+    getHospitalLiveCabinsOverview
     
 
 } = require('../../controllers/hospital/HospitalPanel');
@@ -132,5 +133,8 @@ router.put('/insurance/save/:patientUserId', protect('hospital'), insuranceCardU
 router.get('/doctors/leaves', protect('hospital'), getHospitalDoctorPendingLeaves);
 router.patch('/doctors/leave-approval', protect('hospital'), manageDoctorLeaveByHospital);
 router.post('/appointments/reschedule', protect('hospital'), hospitalAdminRescheduleAppointment);
+
+router.get('/opd/live-cabins', protect('hospital'), getHospitalLiveCabinsOverview);
+
 
 module.exports = router;

@@ -494,13 +494,22 @@ const getDocDashboard = async (req, res) => {
 
 
 
-// @desc    Doctor Adds Prescription & Submits Digital Rx (Auto-Completes OPD Consultations)
+// @desc    Doctor Adds Prescription & Submits Digital Rx (Persists Follow-Up Date & Completes OPD Visit)
 // @route   POST /hospital-doctor/panel/prescription/add
 // @access  Private (Hospital Doctor)
 const processPrescription = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        const { appointmentId, diagnosis, medicines, advice, vitals, advisedInvestigations } = req.body;
+        const { 
+            appointmentId, 
+            diagnosis, 
+            medicines, 
+            advice, 
+            vitals, 
+            advisedInvestigations, 
+            nextAppointment,        // 👈 Captured follow-up visit date/string
+            specialInstructions 
+        } = req.body;
 
         if (!appointmentId) {
             return res.status(400).json({ success: false, message: "appointmentId is required." });
@@ -530,7 +539,6 @@ const processPrescription = async (req, res) => {
             dietPlanPdfUrl = `/uploads/diet_plans/${req.files['dietPlanPdf'][0].filename}`;
         }
 
-        const Prescription = require('../../../models/Prescription');
         const newPrescription = await Prescription.create({
             appointmentId: appointment._id,
             doctorId,
@@ -540,11 +548,13 @@ const processPrescription = async (req, res) => {
             adviceGiven: advice || "",
             vitals: vitals || {},
             advisedInvestigations: advisedInvestigations || "None",
+            nextAppointment: nextAppointment ? String(nextAppointment).trim() : "", // 👈 Persisted follow-up date
+            specialInstructions: specialInstructions || "",
             pdfUrl: prescriptionPdfUrl,
             dietPlanPdf: dietPlanPdfUrl
         });
 
-        // 🚨 CRITICAL RULE: If this is an OPD Visit, writing prescription FINISHES the consultation!
+        // If OPD, writing prescription completes the consultation visit
         if (appointment.bookingType === 'OPD') {
             appointment.status = 'Completed';
             if (appointment.paymentMethod === 'COD') {
@@ -2185,7 +2195,7 @@ const stopActiveMedication = async (req, res) => {
 
 
 
-// @desc    Hospital Doctor Views His OPD Settings, Room Number & Weekly Timings
+// @desc    Hospital Doctor Views His OPD Settings, Room Number, Timings & Premium Slots
 // @route   GET /hospital-doctor/panel/opd-settings
 // @access  Private (Hospital Doctor)
 const getDoctorOpdSettings = async (req, res) => {
@@ -2217,7 +2227,7 @@ const getDoctorOpdSettings = async (req, res) => {
         const fees = safeObjectParse(doctor.fees, { online: 0, clinic: 500, home: 0 });
         const department = safeObjectParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: "Cabin 1" });
 
-        // Fetch any blocked/unavailable slots for this doctor
+        // Fetch Availability Config to get Premium Slots & Blocked Slots
         const availabilityConfig = await Availability.findOne({ 
             vendorId: doctorId, 
             vendorType: 'Doctor' 
@@ -2230,8 +2240,8 @@ const getDoctorOpdSettings = async (req, res) => {
                 name: doctor.name,
                 speciality: doctor.speciality,
                 hospital: doctor.hospitalId,
-                opdRoomNumber: department.roomNumber || "Cabin 1",
-                opdFee: Number(fees.clinic || 500),
+                opdRoomNumber: department.roomNumber || null,
+                opdFee: Number(fees.clinic !== undefined ? fees.clinic : 0),
                 slotDurationMinutes: doctor.slotDuration || 15,
                 isOpdEnabled: Boolean(consultation.clinic ?? true),
                 weeklySchedule: doctor.availability || [
@@ -2242,6 +2252,7 @@ const getDoctorOpdSettings = async (req, res) => {
                     { day: "Fri", startTime: "09:00", endTime: "17:00" },
                     { day: "Sat", startTime: "09:00", endTime: "13:00" }
                 ],
+                premiumSlots: availabilityConfig?.premiumSlots || [], // 👈 Configured Premium Slots
                 blockedSlots: availabilityConfig?.unavailableSlots || []
             }
         });
@@ -2251,21 +2262,19 @@ const getDoctorOpdSettings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// @desc    Hospital Doctor Updates OPD Cabin Room, Fee, Duration & Timings (Self-Healing DB Fix)
+// @desc    Hospital Doctor Updates OPD Cabin Room, Fee, Timings & Premium Slots
 // @route   PUT /hospital-doctor/panel/opd-settings
 // @access  Private (Hospital Doctor)
 const updateDoctorOpdSettings = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        const { roomNumber, slotDuration, clinicFee, availability, isOpdEnabled } = req.body;
+        const { roomNumber, slotDuration, clinicFee, availability, isOpdEnabled, premiumSlots } = req.body;
 
-        // Fetch as plain JS object using .lean() to prevent Mongoose Document setter TypeError
         const doctor = await Doctor.findById(doctorId).select('+password').lean();
         if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor profile not found." });
         }
 
-        // 1. Safe JSON Object Parser Helper
         const safeObjectParse = (val, defaultVal = {}) => {
             if (!val) return defaultVal;
             if (typeof val === 'object' && val !== null) return val;
@@ -2278,25 +2287,21 @@ const updateDoctorOpdSettings = async (req, res) => {
             return defaultVal;
         };
 
-        // 2. Resolve consultationStatus as a clean object (overwrites corrupted string in DB)
         let currentConsultation = safeObjectParse(doctor.consultationStatus, { online: true, clinic: true, home: true });
         if (isOpdEnabled !== undefined) {
             currentConsultation.clinic = (isOpdEnabled === true || isOpdEnabled === 'true');
         }
 
-        // 3. Resolve fees as a clean object
         let currentFees = safeObjectParse(doctor.fees, { online: 0, clinic: 500, home: 0 });
         if (clinicFee !== undefined) {
             currentFees.clinic = Math.max(0, parseInt(clinicFee) || 0);
         }
 
-        // 4. Resolve department object
         let currentDepartment = safeObjectParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: "Cabin 1" });
         if (roomNumber !== undefined) {
             currentDepartment.roomNumber = String(roomNumber).trim();
         }
 
-        // 5. Prepare clean update payload
         const updatePayload = {
             consultationStatus: currentConsultation,
             fees: currentFees,
@@ -2313,20 +2318,29 @@ const updateDoctorOpdSettings = async (req, res) => {
                 : (typeof availability === 'string' ? safeObjectParse(availability, []) : []);
         }
 
-        // 6. Direct Native MongoDB Update to overwrite corrupted DB types cleanly
+        // 1. Update Doctor Document
         await Doctor.collection.updateOne(
             { _id: new mongoose.Types.ObjectId(doctorId) },
             { $set: updatePayload }
         );
 
-        // 7. Fetch refreshed clean document
+        // 2. Update Premium Slots in Availability Collection
+        if (premiumSlots !== undefined) {
+            const formattedPremiumSlots = Array.isArray(premiumSlots) ? premiumSlots : safeObjectParse(premiumSlots, []);
+            await Availability.findOneAndUpdate(
+                { vendorId: doctorId, vendorType: 'Doctor' },
+                { $set: { premiumSlots: formattedPremiumSlots } },
+                { upsert: true, new: true }
+            );
+        }
+
         const updatedDoctor = await Doctor.findById(doctorId)
             .select('name speciality fees department slotDuration availability consultationStatus')
             .lean();
 
         res.status(200).json({
             success: true,
-            message: "Doctor OPD Cabin, Fee and Weekly Schedule updated successfully.",
+            message: "Doctor OPD Cabin, Fee, Schedule and Premium Slots updated successfully.",
             data: updatedDoctor
         });
 
@@ -2335,7 +2349,7 @@ const updateDoctorOpdSettings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// @desc    Hospital Doctor Starts OPD Consultation for a Token (Updates status to 'In-Progress')
+// @desc    Hospital Doctor Starts OPD Consultation for a Token (Enforces Single Active Token Per Cabin)
 // @route   PATCH /hospital-doctor/panel/opd/start-consultation/:appointmentId
 // @access  Private (Hospital Doctor)
 const startOpdConsultation = async (req, res) => {
@@ -2355,10 +2369,30 @@ const startOpdConsultation = async (req, res) => {
             return res.status(404).json({ success: false, message: "OPD Appointment not found." });
         }
 
+        // 🚨 QUEUE GUARD: Auto-close any previous unclosed in-progress token for this doctor today
+        const todayStart = moment(appointment.appointmentDate).startOf('day').toDate();
+        const todayEnd = moment(appointment.appointmentDate).endOf('day').toDate();
+
+        await Appointment.updateMany(
+            {
+                doctorId,
+                bookingType: 'OPD',
+                status: 'In-Progress',
+                appointmentDate: { $gte: todayStart, $lte: todayEnd },
+                _id: { $ne: appointment._id }
+            },
+            { 
+                $set: { 
+                    status: 'Completed',
+                    'clinicalSummary.dischargeNote': 'Auto-closed on next token call'
+                } 
+            }
+        );
+
         appointment.status = 'In-Progress';
         await appointment.save();
 
-        // Alert patient that doctor is ready in the cabin
+        // Push alert to patient that doctor is ready in the cabin
         if (appointment.userId) {
             try {
                 await sendPushNotification(
@@ -2374,6 +2408,7 @@ const startOpdConsultation = async (req, res) => {
         res.status(200).json({
             success: true,
             message: `Consultation started for Token #${appointment.tokenNumber}. Status is now 'In-Progress'.`,
+            tokenNumber: appointment.tokenNumber,
             data: appointment
         });
 

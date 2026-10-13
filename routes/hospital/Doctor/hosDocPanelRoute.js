@@ -31,6 +31,7 @@ const {
     doctorRescheduleOpdAppointment
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
+const { recordOpdPatientVitals } = require('../../../controllers/hospital/hospitalDoctor/hosAppoinment');
 
 // Base: /hospital-doctor/panel
 
@@ -130,5 +131,7 @@ router.get('/leaves', protect('hospital-doctor'), getDoctorLeavesHistory);
 // Doctor Slot Block & Reschedule with Reason
 router.post('/opd-slots/block-slot', protect('hospital-doctor'), blockOpdSlotWithReason);
 router.post('/opd/reschedule', protect('hospital-doctor'), doctorRescheduleOpdAppointment);
+
+router.patch('/opd/vitals/:id', protect('hospital-doctor'), recordOpdPatientVitals);
 
 module.exports = router;

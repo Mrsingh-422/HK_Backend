@@ -7,6 +7,7 @@ const Appointment = require('../../models/Appointment');
 const Coupon = require('../../models/Coupon');
 const Specialization = require('../../models/Specialization');
 const Ambulance = require('../../models/Ambulance');
+const Doctor = require('../../models/Doctor');
 const Wallet = require('../../models/Wallet');
 const Review = require('../../models/Review');
 const Availability = require('../../models/Availability');
@@ -4026,6 +4027,72 @@ const hospitalAdminRescheduleAppointment = async (req, res) => {
     }
 };
 
+// @desc    Get Hospital Live OPD Cabins & Token Queue Display (For Hospital Lobby TV / Reception LED)
+// @route   GET /hospital/panel/opd/live-cabins
+// @access  Private (Hospital Admin)
+const getHospitalLiveCabinsOverview = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const todayStart = moment().startOf('day').toDate();
+        const todayEnd = moment().endOf('day').toDate();
+
+        // 1. Fetch all doctors in this hospital having OPD active
+        const doctors = await Doctor.find({
+            hospitalId,
+            profileStatus: 'Approved',
+            isActive: true
+        }).select('name speciality profileImage department fees slotDuration consultationStatus').lean();
+
+        // 2. Fetch all of today's OPD appointments for this hospital
+        const todayAppointments = await Appointment.find({
+            hospitalId,
+            bookingType: 'OPD',
+            appointmentDate: { $gte: todayStart, $lte: todayEnd },
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
+        }).sort({ tokenNumber: 1 }).select('doctorId tokenNumber status appointmentTime patients').lean();
+
+        // 3. Aggregate live queue metrics per cabin/doctor
+        const cabinsData = doctors.map(doc => {
+            const docAppts = todayAppointments.filter(a => String(a.doctorId) === String(doc._id));
+            const activeConsulting = docAppts.find(a => a.status === 'In-Progress');
+            const completedCount = docAppts.filter(a => a.status === 'Completed').length;
+            const waitingCount = docAppts.filter(a => ['Confirmed', 'Hospital-Pending'].includes(a.status)).length;
+
+            const currentToken = activeConsulting 
+                ? activeConsulting.tokenNumber 
+                : (docAppts.length > 0 ? (completedCount + 1) : null);
+
+            return {
+                doctorId: doc._id,
+                doctorName: doc.name,
+                speciality: doc.speciality,
+                doctorProfileImage: doc.profileImage || null,
+                opdRoomNumber: doc.department?.roomNumber || "Cabin 1",
+                isOpdEnabled: doc.consultationStatus?.clinic ?? true,
+                liveQueue: {
+                    totalScheduledToday: docAppts.length,
+                    currentServingToken: currentToken,
+                    activePatientName: activeConsulting?.patients?.[0]?.patientName || null,
+                    patientsWaiting: waitingCount,
+                    consultationsCompleted: completedCount,
+                    status: activeConsulting ? "Consulting" : (waitingCount > 0 ? "Next Patient Ready" : "Available / Waiting")
+                }
+            };
+        });
+
+        res.status(200).json({
+            success: true,
+            date: moment().format('YYYY-MM-DD'),
+            totalCabins: cabinsData.length,
+            data: cabinsData
+        });
+
+    } catch (error) {
+        console.error("Get Hospital Live Cabins Overview Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 module.exports = { 
@@ -4054,5 +4121,6 @@ module.exports = {
     savePatientInsuranceDetails,
     manageDoctorLeaveByHospital,
     getHospitalDoctorPendingLeaves,
-    hospitalAdminRescheduleAppointment
+    hospitalAdminRescheduleAppointment,
+    getHospitalLiveCabinsOverview
 };
