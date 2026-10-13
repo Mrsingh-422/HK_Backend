@@ -199,8 +199,10 @@ const getPendingBankVerifications = async (req, res) => {
     }
 };
 
-// 5. GET ADMIN GLOBAL WALLET & COMMISSION STATS (Real Platform Revenue)
-// Endpoint: GET /api/admin/wallet/dashboard-stats
+
+// @desc    Get Admin Global Wallet & Commission Stats (Correctly Classifies Hospital OPD under Hospital Category)
+// @route   GET /api/admin/wallet/dashboard-stats
+// @access  Private (Admin)
 const getAdminWalletDashboardStats = async (req, res) => {
     try {
         // A. Total Platform Liability (Vendors' unpaid digital balances)
@@ -256,7 +258,7 @@ const getAdminWalletDashboardStats = async (req, res) => {
 
         // D. Calculate Total Gross Order Volume & Real Admin Commission Revenue
         const [completedAppts, completedLabs, completedPharmas, completedNurses, completedAmbulances] = await Promise.all([
-            Appointment.find({ status: 'Completed' }).select('bookingType totalAmount pricingBreakdown subscriptionDetails').lean(),
+            Appointment.find({ status: 'Completed' }).select('bookingType hospitalId totalAmount pricingBreakdown subscriptionDetails').lean(),
             LabBooking.find({ status: { $in: ['Report Uploaded', 'Completed'] } }).select('billSummary totalPrice').lean(),
             PharmacyBooking.find({ status: { $in: ['Delivered', 'Completed'] } }).select('billSummary').lean(),
             NurseBooking.find({ status: 'Completed' }).select('priceBreakdown totalPrice').lean(),
@@ -266,9 +268,10 @@ const getAdminWalletDashboardStats = async (req, res) => {
         let totalAdminCommissionRevenue = 0;
         let totalGrossOrderVolume = 0;
 
-        // 1. Doctor & Hospital Commission
+        // 1. Doctor & Hospital Commission (Fix: Hospital OPD classified under Hospital)
         for (let appt of completedAppts) {
-            const role = appt.bookingType === 'Admission' ? 'Hospital' : 'Doctor';
+            // 🚨 Revenue Classification: Any booking tied to a hospital (IPD or OPD) is Hospital revenue
+            const role = appt.hospitalId ? 'Hospital' : (appt.bookingType === 'Admission' ? 'Hospital' : 'Doctor');
             const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
             const gross = isSub ? Number(appt.pricingBreakdown?.originalBaseFee || 0) : Number(appt.totalAmount || 0);
             
@@ -301,7 +304,7 @@ const getAdminWalletDashboardStats = async (req, res) => {
             totalAdminCommissionRevenue += adminCutoff;
         }
 
-        // 5. Ambulance Commission (Excludes Subsidized Free Accidental SOS)
+        // 5. Ambulance Commission
         for (let amb of completedAmbulances) {
             const isAccident = (amb.serviceType === 'Accident emergency' || amb.isFreeCase);
             const gross = Number(amb.pricing?.total > 0 ? amb.pricing.total : (amb.pricing?.originalAmbulanceCharge || 2000));
@@ -314,7 +317,7 @@ const getAdminWalletDashboardStats = async (req, res) => {
             }
         }
 
-        res.json({
+        res.status(200).json({
             success: true,
             data: {
                 totalGrossOrderVolume,

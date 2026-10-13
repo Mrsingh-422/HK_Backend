@@ -1143,15 +1143,61 @@ const trackAppointment = async (req, res) => {
     }
 };
 
-// GET PRESCRIPTIONS
+// @desc    Get All Prescriptions for Patient (Deeply Populates Hospital & Doctor for OPD & Clinic visits)
+// @route   GET /user/doctors/prescriptions
+// @access  Private (User)
 const getMyPrescriptions = async (req, res) => {
     try {
-        const data = await Prescription.find({ userId: req.user.id })
-            .populate('doctorId', 'name speciality profileImage')
-            .sort({ createdAt: -1 });
-        res.json({ success: true, data });
+        const userId = req.user.id;
+        const { search, page = 1, limit = 20 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        const total = await Prescription.countDocuments({ userId });
+
+        const prescriptions = await Prescription.find({ userId })
+            .populate('doctorId', 'name speciality profileImage qualification')
+            .populate({
+                path: 'appointmentId',
+                select: 'bookingId bookingType appointmentDate appointmentTime tokenNumber hospitalId',
+                populate: {
+                    path: 'hospitalId',
+                    select: 'name city address hospitalImage'
+                }
+            })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
+            .lean();
+
+        const formatted = prescriptions.map(rx => {
+            const appt = rx.appointmentId;
+            const isHospitalOpd = appt?.bookingType === 'OPD' && appt?.hospitalId;
+
+            return {
+                ...rx,
+                isHospitalOpd: !!isHospitalOpd,
+                hospitalName: isHospitalOpd ? appt.hospitalId.name : null,
+                hospitalCity: isHospitalOpd ? appt.hospitalId.city : null,
+                tokenNumber: appt?.tokenNumber || null,
+                formattedDate: moment(rx.createdAt).format('DD MMM YYYY')
+            };
+        });
+
+        res.status(200).json({
+            success: true,
+            count: formatted.length,
+            totalRecords: total,
+            totalPages: Math.ceil(total / limitNum),
+            currentPage: pageNum,
+            data: formatted
+        });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Get My Prescriptions Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

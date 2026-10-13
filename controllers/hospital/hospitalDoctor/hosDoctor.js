@@ -1,7 +1,7 @@
 const Doctor = require('../../../models/Doctor'); // Unified Model
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
+const mongoose = require('mongoose');
 // Helper: Generate Token (Non-expiring for Dev)
 const generateToken = (id, role) => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';

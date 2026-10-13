@@ -17,7 +17,7 @@ const {
 
     getHospitalDoctorOpdSlots,
     getHospitalOpdCheckoutSummary,
-    bookHospitalOpdAppointment,getHospitalOpdLiveQueue
+    bookHospitalOpdAppointment,getHospitalOpdLiveQueue,getHospitalBookingDetails
 } = require('../../../controllers/user/Hospital/BookHospital');
 
 // URL: /user/hospital
@@ -67,5 +67,6 @@ router.post('/opd/checkout-summary', protect('user'), getHospitalOpdCheckoutSumm
 // 3. Book OPD Appointment (Token Generation)
 router.post('/opd/book', protect('user'), bookHospitalOpdAppointment);
 router.get('/opd/live-queue/:appointmentId', protect('user'), getHospitalOpdLiveQueue);
+router.get('/booking-details/:id', protect('user'), getHospitalBookingDetails);
 
 module.exports = router;

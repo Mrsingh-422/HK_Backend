@@ -84,34 +84,50 @@ const adminGetApprovedHospitals = async (req, res) => {
     }
 };
 
-// --- 2. ADMIN: GET HOSPITAL ADMISSION BOOKINGS (Filter by hospitalId & Limit: 25) ---
-// Endpoint: GET /admin/hospital/appointments?hospitalId=ID&page=1
+// @desc    Admin: Get Hospital Bookings (Supports filtering by bookingType 'OPD', 'Admission', or 'All')
+// @route   GET /admin/hospital/appointments
+// @access  Private (Admin)
 const adminGetHospitalBookings = async (req, res) => {
     try {
-        const { tab, page = 1, status, userId, hospitalId } = req.query; // 👈 Added hospitalId
-        const limit = 25; // 👈 25 items limit
+        const { tab, page = 1, status, userId, hospitalId, bookingType, search } = req.query;
+        const limit = 25;
         const skip = (parseInt(page) - 1) * limit;
         
-        let query = { bookingType: 'Admission' };
-        if (userId) query.userId = userId;
-        if (hospitalId) query.hospitalId = hospitalId; // 👈 Vendor wise filter
+        let query = {};
 
-        if (status) {
+        // 🚨 Supports filtering by 'OPD', 'Admission', or both by default
+        if (bookingType && bookingType !== 'All') {
+            query.bookingType = bookingType;
+        } else {
+            query.bookingType = { $in: ['Admission', 'OPD'] };
+        }
+
+        if (userId) query.userId = userId;
+        if (hospitalId) query.hospitalId = hospitalId;
+
+        if (status && status !== 'All') {
             query.status = status;
         } else if (tab === 'Upcoming') {
-            query.status = 'Confirmed';
+            query.status = { $in: ['Confirmed', 'In-Progress'] };
         } else if (tab === 'Pending') {
             query.status = { $in: ['Pending', 'Hospital-Pending'] };
         } else if (tab === 'History') {
-            query.status = { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Hospital'] };
+            query.status = { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'] };
+        }
+
+        if (search && search.trim() !== '') {
+            query.$or = [
+                { bookingId: { $regex: search.trim(), $options: 'i' } },
+                { 'patients.patientName': { $regex: search.trim(), $options: 'i' } }
+            ];
         }
 
         const totalCount = await Appointment.countDocuments(query);
 
         const data = await Appointment.find(query)
             .populate('userId', 'name phone email')
-            .populate('hospitalId', 'name address hospitalImage')
-            .populate('doctorId', 'name speciality profileImage')
+            .populate('hospitalId', 'name address hospitalImage city')
+            .populate('doctorId', 'name speciality profileImage department fees')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
@@ -120,22 +136,33 @@ const adminGetHospitalBookings = async (req, res) => {
                     select: 'name type'
                 }
             })
-            .sort({ appointmentDate: 1 })
+            .sort({ tokenNumber: 1, createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
-        res.json({ 
+        const formatted = data.map(item => ({
+            ...item,
+            isOpd: item.bookingType === 'OPD',
+            isIpd: item.bookingType === 'Admission',
+            displaySubtitle: item.bookingType === 'OPD' 
+                ? `OPD Token #${item.tokenNumber || '1'} - Dr. ${item.doctorId?.name || 'Doctor'}`
+                : `Bed: ${item.bedNumber || 'Unassigned'} (${item.wardName || 'Ward'})`
+        }));
+
+        res.status(200).json({ 
             success: true, 
-            count: data.length,
+            count: formatted.length, 
             pagination: {
                 totalCount,
                 totalPages: Math.ceil(totalCount / limit),
                 currentPage: parseInt(page),
                 limit
             },
-            data 
+            data: formatted 
         });
     } catch (error) { 
+        console.error("Admin Get Hospital Bookings Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

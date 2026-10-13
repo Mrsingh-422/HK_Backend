@@ -1823,268 +1823,79 @@ const emergencyDischarge = async (req, res) => {
     }
 };
 
-// --- NEW API: GET DETAILED HOSPITAL CASE/ADMISSION FILE FOR DESK ---
+// @desc    Get Detailed Case Info for Hospital Admin (Handles OPD Tokens and IPD Admissions)
+// @route   GET /hospital/panel/admissions/details/:id
+// @access  Private (Hospital Admin)
 const getHospitalCaseDetails = async (req, res) => {
     try {
+        const { id } = req.params;
         const hospitalId = req.user.id;
-        const { id } = req.params; // Appointment ID
 
-        // 1. Deep Populate all relational models
-        const appointment = await Appointment.findOne({ _id: id, hospitalId })
-            .populate('hospitalId', 'name address city state country zipCode phone email hospitalImage type')
-            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember address')
-            .populate('doctorId', 'name speciality qualification profileImage')
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            hospitalId,
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query)
+            .populate('userId', 'name phone email profilePic age gender bloodGroup')
+            .populate('doctorId', 'name speciality qualification profileImage fees department')
+            .populate('ambulanceId', 'name vehicleNumber phone vehicleType')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay status isVentilatorAvailable',
-                populate: { path: 'wardId', select: 'name type totalBeds availableBeds' }
+                select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
+                populate: { path: 'wardId', select: 'name type' }
             })
-            .populate('treatmentHistory.fromDoctorId', 'name speciality qualification profileImage')
-            .populate('treatmentHistory.toDoctorId', 'name speciality qualification profileImage')
-            .populate('bedsideCareTeam.doctorId', 'name speciality qualification profileImage dutyStatus')
-            .populate('clinicalLogs.doctorId', 'name speciality qualification profileImage')
-            .populate('activeMedications.addedBy', 'name speciality qualification profileImage');
+            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage')
+            .lean();
 
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
+            return res.status(404).json({ success: false, message: "Hospital booking record not found." });
         }
 
-        // 2. Fetch latest Prescription
-        const Prescription = require('../../models/Prescription'); 
-        const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
+        const isOpd = appointment.bookingType === 'OPD';
 
-        // 3. Resolve Patient DTO
-        const resolvedPatient = resolvePatientDTO(appointment);
+        // Fetch Digital Prescription if issued
+        const prescriptions = await Prescription.find({ appointmentId: appointment._id }).lean();
 
-        // 4. Calculate 24-Hour Stay & Financial Ledger
-        const targetDischargeTime = appointment.clinicalSummary?.dischargedAt || appointment.endDate || new Date();
-        const ledger = calcStayAndLedger(appointment, targetDischargeTime);
+        const primaryPatient = (Array.isArray(appointment.patients) && appointment.patients.length > 0)
+            ? appointment.patients[0]
+            : { patientName: appointment.userId?.name || "Patient", patientAge: 30, gender: "Male" };
 
-        // 5. Build Bedside Care Team with Real Observations (No Fake Vitals)
-        const bedsideCareTeam = (appointment.bedsideCareTeam || []).map(member => ({
-            doctor: {
-                id: member.doctorId?._id || member.doctorId,
-                name: member.doctorId?.name || "Specialist",
-                speciality: member.doctorId?.speciality || "Specialist",
-                qualification: member.doctorId?.qualification || "MBBS, MD",
-                profileImage: member.doctorId?.profileImage || null
-            },
-            status: member.status,
-            requestReason: member.requestReason || "",
-            observations: (member.specialistFeedback || []).map(obs => ({
-                vitals: {
-                    bp: obs.vitals?.bp || "",
-                    pulse: obs.vitals?.pulse || "",
-                    temp: obs.vitals?.temp || "",
-                    spo2: obs.vitals?.spo2 || ""
-                },
-                observation: obs.observation || "",
-                patientCondition: obs.patientCondition || "",
-                priorityRating: obs.priorityRating || "",
-                submittedAt: obs.submittedAt,
-                _id: obs._id
-            })),
-            recommendedMedicines: (member.recommendedMedicines || []).map(med => ({
-                name: med.name,
-                dosage: med.dosage || "",
-                frequency: med.frequency || "",
-                duration: med.duration || "",
-                instructions: med.instructions || "",
-                type: med.type || "Active-Stay",
-                addedAt: med.addedAt,
-                _id: med._id
-            }))
-        }));
-
-        // 6. Build Treatment Team Timeline
-        const treatmentTeamTimeline = [];
-        if (appointment.doctorId) {
-            const primaryShift = appointment.treatmentHistory?.find(h => 
-                h.toDoctorId && h.toDoctorId._id?.toString() === appointment.doctorId._id?.toString() && h.startTime
-            );
-
-            treatmentTeamTimeline.push({
-                doctorId: appointment.doctorId._id,
-                name: appointment.doctorId.name,
-                speciality: appointment.doctorId.speciality,
-                qualification: appointment.doctorId.qualification || "MBBS, MD",
-                profileImage: appointment.doctorId.profileImage,
-                role: "Primary Physician",
-                joinedAt: primaryShift ? primaryShift.startTime : appointment.startDate,
-                dischargedAt: primaryShift?.endTime || appointment.clinicalSummary?.dischargedAt || appointment.endDate || null,
-                duration: primaryShift?.durationDisplay || ""
-            });
-        }
-
-        (appointment.bedsideCareTeam || []).forEach(member => {
-            if (member.doctorId) {
-                treatmentTeamTimeline.push({
-                    doctorId: member.doctorId._id || member.doctorId,
-                    name: member.doctorId.name || "Specialist",
-                    speciality: member.doctorId.speciality || "Specialist",
-                    qualification: member.doctorId.qualification || "MD",
-                    profileImage: member.doctorId.profileImage || null,
-                    role: "Bedside Specialist",
-                    joinedAt: member.startTime || member.requestedAt,
-                    dischargedAt: member.endTime || member.respondedAt || appointment.clinicalSummary?.dischargedAt || null,
-                    duration: member.durationDisplay || ""
-                });
-            }
-        });
-
-        // 7. Clinical Files
-        const clinicalFiles = {
-            dietPlanPdf: prescription?.dietPlanPdf || null,
-            dischargeSummaryPdf: appointment.clinicalSummary?.dischargeSummaryPdf || null,
-            clinicalReports: appointment.clinicalSummary?.uploadedReports || [],
-            dischargeCardUrl: prescription?.pdfUrl || null
-        };
-
-        // 8. Hospital Header Info
-        const hospitalDetails = appointment.hospitalId ? {
-            _id: appointment.hospitalId._id,
-            name: appointment.hospitalId.name,
-            address: appointment.hospitalId.address || "",
-            city: appointment.hospitalId.city || "",
-            state: appointment.hospitalId.state || "",
-            country: appointment.hospitalId.country || "India",
-            zipCode: appointment.hospitalId.zipCode || "",
-            fullAddress: `${appointment.hospitalId.address ? appointment.hospitalId.address + ', ' : ''}${appointment.hospitalId.city || ''}, ${appointment.hospitalId.state || ''} - ${appointment.hospitalId.zipCode || ''}`.replace(/^, |, $/g, ''),
-            phone: appointment.hospitalId.phone || "",
-            email: appointment.hospitalId.email || "",
-            logo: appointment.hospitalId.hospitalImage?.[0] || null,
-            hospitalType: appointment.hospitalId.type || "Private"
-        } : null;
-
-        // 🚨 CLEAN DYNAMIC VITALS (Purely actual DB values, zero static strings)
-        const actualVitals = {
-            bp: appointment.clinicalSummary?.vitals?.bp || "",
-            pulse: appointment.clinicalSummary?.vitals?.pulse || "",
-            temp: appointment.clinicalSummary?.vitals?.temp || "",
-            spo2: appointment.clinicalSummary?.vitals?.spo2 || ""
-        };
-
-        // =========================================================================
-        // 📊 COMPLETE CONSOLIDATED CASE DOSSIER RESPONSE (ZERO STATIC DATA)
-        // =========================================================================
-        res.json({
+        res.status(200).json({
             success: true,
             data: {
-                _id: appointment._id,
-                bookingId: appointment.bookingId,
-                status: appointment.status,
-                bookingType: appointment.bookingType || 'Admission',
-                bedBookingType: appointment.bedBookingType || 'General-Bed',
-                triageLevel: appointment.clinicalSummary?.triagePriority || appointment.triageLevel || "Routine",
-                startDate: appointment.startDate,
-                endDate: appointment.endDate,
-                dischargedAt: appointment.clinicalSummary?.dischargedAt || appointment.updatedAt,
-                stayDuration: appointment.stayDuration || 1,
-
-                // 👤 Accurate Patient Details
-                patientDetails: resolvedPatient,
-
-                // 🛏️ Assigned Bed Details
-                bedDetails: appointment.bedId ? {
-                    _id: appointment.bedId._id,
-                    bedNumber: appointment.bedId.bedNumber || appointment.bedNumber || "",
-                    wardName: appointment.bedId.wardId?.name || appointment.wardName || "",
-                    wardType: appointment.bedId.wardId?.type || "ICU",
-                    pricePerDay: Number(appointment.bedId.pricePerDay || 0)
-                } : null,
-
-                // 👨‍⚕️ Assigned Primary Doctor
-                assignedDoctor: appointment.doctorId ? {
-                    _id: appointment.doctorId._id,
-                    name: appointment.doctorId.name,
-                    speciality: appointment.doctorId.speciality,
-                    qualification: appointment.doctorId.qualification || "MBBS, MD",
-                    profileImage: appointment.doctorId.profileImage || null
-                } : null,
-
-                // 👥 Bedside Care Team
-                bedsideCareTeam,
-
-                // 📋 Dynamic Case & Diagnostics Summary (100% Real DB Data)
-                clinicalSummary: {
-                    reasonForVisit: appointment.patients?.[0]?.reasonForVisit || appointment.bookingReason || "",
-                    admissionNote: appointment.clinicalSummary?.admissionNote || appointment.clinicalSummary?.chiefComplaint || appointment.bookingReason || "",
-                    triagePriority: appointment.clinicalSummary?.triagePriority || appointment.triageLevel || "",
-                    clinicalDiagnosis: appointment.clinicalSummary?.diagnosis || "",
-                    investigationNotes: appointment.clinicalSummary?.investigation || "",
-                    outcomeResult: appointment.clinicalSummary?.treatmentResult || (appointment.status === 'Completed' ? "Discharged" : ""),
-                    conditionDuringAdmission: appointment.clinicalSummary?.conditionDuringAdmission || "",
-                    conditionDuringDischarge: appointment.clinicalSummary?.conditionDuringDischarge || "",
-                    bloodGroup: resolvedPatient.bloodGroup,
-                    dateOfSurgery: appointment.clinicalSummary?.dateOfSurgery || null,
-                    vitals: actualVitals, // 👈 Pure DB Vitals (Empty if not set)
-                    uploadedReports: appointment.clinicalSummary?.uploadedReports || [],
-                    dischargeSummaryPdf: appointment.clinicalSummary?.dischargeSummaryPdf || null
+                ...appointment,
+                isOpd,
+                isIpd: !isOpd,
+                patientSummary: {
+                    name: primaryPatient.patientName,
+                    age: primaryPatient.patientAge,
+                    gender: primaryPatient.gender,
+                    bloodGroup: primaryPatient.bloodGroup || appointment.userId?.bloodGroup || "N/A",
+                    phone: appointment.userId?.phone || "N/A"
                 },
-
-                // 💳 24-Hour Financial Ledger
-                billingBreakdown: {
-                    stayUnitCharge: ledger.stayUnitCharge,
-                    baseStayDuration: ledger.durationDisplay,
-                    baseStayDays: ledger.actualStayDays,
-                    actualStayDays: ledger.actualStayDays,
-                    exactStayHours: ledger.exactStayHours,
-                    bookedDays: ledger.bookedDays,
-                    accumulatedBaseFee: ledger.accumulatedBaseFee,
-                    baseBedAllocationCharge: ledger.accumulatedBaseFee,
-                    baseStayCharge: ledger.accumulatedBaseFee,
-                    paidOnBooking: ledger.paidOnBooking,
-                    depositPaidOnBooking: ledger.depositPaidOnBooking,
-                    unusedDays: ledger.unusedDays,
-                    unusedDaysRefund: ledger.unusedDaysRefund,
-                    overstayDays: ledger.overstayDays,
-                    overstayCharge: ledger.overstayCharge,
-                    extraFacilitiesFee: ledger.extraServicesTotal,
-                    doctorVisitFee: 0,
-                    discountDeductions: ledger.discountAmount,
-                    totalInvoiceValue: ledger.totalActualBill,
-                    estimatedTotal: ledger.totalActualBill,
-                    currentBillTotal: ledger.totalActualBill,
-                    refundDueToUser: ledger.refundDueToUser,
-                    pendingDepartureBalance: ledger.pendingDepartureBalance,
-                    remainingBalance: ledger.remainingBalance,
-                    settlementStatus: ledger.settlementStatus
-                },
-
-                // 📑 Clinical Documents & PDFs
-                clinicalFiles,
-
-                // ⏱️ Treatment Shifts Timeline
-                treatmentTeamTimeline,
-
-                // 🏥 Hospital Header Details
-                hospitalDetails,
-
-                // 🛡️ Insurance Details
-                insurance: {
-                    hasInsurance: Boolean(appointment.insuranceDetails?.hasInsurance || appointment.hasInsurance),
-                    companyName: appointment.insuranceDetails?.companyName || "",
-                    insuranceNumber: appointment.insuranceDetails?.insuranceNumber || "",
-                    insuranceType: appointment.insuranceDetails?.insuranceType || "Cashless",
-                    approvalStatus: appointment.insuranceDetails?.approvalStatus || "Pending",
-                    approvalLetterPdf: appointment.insuranceDetails?.approvalLetterPdf || null
-                },
-
-                // 👤 Booking Account Holder Info
-                bookedBy: appointment.userId ? {
-                    userId: appointment.userId._id,
-                    name: appointment.userId.name,
-                    phone: appointment.userId.phone,
-                    email: appointment.userId.email
+                opdInfo: isOpd ? {
+                    tokenNumber: appointment.tokenNumber,
+                    opdRoomNumber: appointment.opdRoomNumber || appointment.doctorId?.department?.roomNumber || "Cabin 1",
+                    appointmentTime: appointment.appointmentTime,
+                    appointmentDate: moment(appointment.appointmentDate).format('YYYY-MM-DD'),
+                    consultationFee: appointment.pricingBreakdown?.baseFee || 500
                 } : null,
-
-                updatedAt: appointment.updatedAt
+                ipdInfo: !isOpd ? {
+                    wardName: appointment.wardName,
+                    bedNumber: appointment.bedNumber,
+                    startDate: appointment.startDate,
+                    endDate: appointment.endDate,
+                    stayDuration: appointment.stayDuration
+                } : null,
+                prescriptions: prescriptions || []
             }
         });
 
     } catch (error) {
-        console.error("getHospitalCaseDetails Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        console.error("Get Hospital Case Details Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -4030,46 +3841,92 @@ const manageDoctorLeaveByHospital = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// @desc    Hospital Admin Views All Doctor Leave Requests
+// @desc    Get All Hospital Doctors Leaves in Single Consolidated API (With Summary Counters & Search)
 // @route   GET /hospital/panel/doctors/leaves
 // @access  Private (Hospital Admin)
 const getHospitalDoctorPendingLeaves = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { status = 'Pending' } = req.query;
+        const { status = 'Pending', search, doctorId } = req.query;
 
-        const doctors = await Doctor.find({ hospitalId, 'leaves.0': { $exists: true } })
-            .select('name speciality profileImage leaves')
+        // Base query: All active/approved doctors under this hospital having at least 1 leave record
+        let docQuery = { 
+            hospitalId, 
+            'leaves.0': { $exists: true } 
+        };
+
+        if (doctorId && mongoose.isValidObjectId(doctorId)) {
+            docQuery._id = doctorId;
+        }
+
+        if (search && search.trim() !== '') {
+            docQuery.$or = [
+                { name: { $regex: search.trim(), $options: 'i' } },
+                { speciality: { $regex: search.trim(), $options: 'i' } }
+            ];
+        }
+
+        const doctors = await Doctor.find(docQuery)
+            .select('name speciality profileImage department fees leaves')
             .lean();
 
+        let pendingCount = 0;
+        let approvedCount = 0;
+        let rejectedCount = 0;
         const leavesList = [];
+
         doctors.forEach(doc => {
             (doc.leaves || []).forEach(l => {
-                if (status === 'All' || l.status === status) {
+                // Calculate Status Summary Counters
+                if (l.status === 'Pending') pendingCount++;
+                else if (l.status === 'Approved') approvedCount++;
+                else if (l.status === 'Rejected') rejectedCount++;
+
+                // Apply Status Filter
+                const isStatusMatch = (status === 'All' || l.status === status);
+
+                if (isStatusMatch) {
+                    const sMoment = moment(l.startDate);
+                    const eMoment = moment(l.endDate);
+                    const totalDays = Math.max(1, eMoment.diff(sMoment, 'days') + 1);
+
                     leavesList.push({
                         leaveId: l._id,
                         doctorId: doc._id,
                         doctorName: doc.name,
                         speciality: doc.speciality,
-                        doctorProfileImage: doc.profileImage,
+                        doctorProfileImage: doc.profileImage || null,
+                        opdRoomNumber: doc.department?.roomNumber || "Cabin 1",
                         startDate: l.startDate,
                         endDate: l.endDate,
-                        formattedStartDate: moment(l.startDate).format('YYYY-MM-DD'),
-                        formattedEndDate: moment(l.endDate).format('YYYY-MM-DD'),
+                        formattedStartDate: sMoment.format('YYYY-MM-DD'),
+                        formattedEndDate: eMoment.format('YYYY-MM-DD'),
+                        formattedDateRange: `${sMoment.format('DD MMM YYYY')} - ${eMoment.format('DD MMM YYYY')}`,
+                        totalDays: `${totalDays} Day(s)`,
                         reason: l.reason,
                         status: l.status,
-                        rejectionReason: l.rejectionReason,
-                        appliedAt: l.appliedAt
+                        rejectionReason: l.rejectionReason || "",
+                        appliedAt: l.appliedAt,
+                        formattedAppliedAt: moment(l.appliedAt).format('DD MMM YYYY, hh:mm A')
                     });
                 }
             });
         });
 
+        // Sort: Latest applied leaves first
         leavesList.sort((a, b) => new Date(b.appliedAt) - new Date(a.appliedAt));
 
         res.status(200).json({
             success: true,
+            filterApplied: status,
             count: leavesList.length,
+            // 📊 Summary Counters for Frontend Tabs Badges
+            overview: {
+                totalLeaves: pendingCount + approvedCount + rejectedCount,
+                pendingCount,
+                approvedCount,
+                rejectedCount
+            },
             data: leavesList
         });
 

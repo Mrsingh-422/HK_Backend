@@ -1422,58 +1422,94 @@ const getBookingProfiles = async (req, res) => {
 };
 
 
-// --- POST: RATE COMPLETED HOSPITAL BED ADMISSION ---
-// POST /user/hospital/rate
+// @desc    Rate Completed Hospital Visit (Supports both OPD Consultation & IPD Bed Admission)
+// @route   POST /user/hospital/rate
+// @access  Private (User)
 const rateHospitalAdmission = async (req, res) => {
     try {
         const { bookingId, rating, comment } = req.body;
+        const userId = req.user.id;
 
-        // 1. Pehle confirm karein ki user ki admission booking completed hai ya nahi
-        const booking = await Appointment.findOne({ 
-            _id: bookingId, 
-            userId: req.user.id, 
-            bookingType: 'Admission' 
-        });
-
-        if (!booking || booking.status !== 'Completed') {
-            return res.status(400).json({ success: false, message: "You can only rate completed hospital bed bookings/admissions." });
-        }
-
-        // 2. Check karein ki user pehle se is booking ko rate toh nahi kar chuka (duplicate review protection)
-        const existingReview = await Review.findOne({ userId: req.user.id, orderId: bookingId });
-        if (existingReview) {
-            return res.status(400).json({ success: false, message: "You have already submitted a review for this hospital admission." });
-        }
-
-        // 3. Create Polymorphic Review for Hospital
-        await Review.create({
-            userId: req.user.id,
-            userName: req.user.name || "Verified User",
-            targetId: booking.hospitalId, // Hospital ID
-            targetType: 'Hospital',       // Polymorphic tag pointing to Hospital model
-            orderId: bookingId,
-            rating,
-            comment: comment || ""
-        });
-
-        // 4. Dynamic Aggregation: Live average recalculate karein
-        const stats = await Review.aggregate([
-            { $match: { targetId: booking.hospitalId, targetType: 'Hospital' } },
-            { $group: { _id: null, averageRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } }
-        ]);
-
-        if (stats.length > 0) {
-            const newRating = Number(stats[0].averageRating.toFixed(1));
-            const totalReviews = stats[0].totalReviews;
-
-            // Cache updated metrics inside Hospital document for fast reads
-            await Hospital.findByIdAndUpdate(booking.hospitalId, {
-                rating: newRating,
-                totalReviews: totalReviews
+        if (!bookingId || !rating || Number(rating) < 1 || Number(rating) > 5) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "bookingId and a valid rating score between 1 and 5 are required." 
             });
         }
 
-        res.json({ success: true, message: "Thank you for rating your hospital stay experience!" });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            userId,
+            bookingType: { $in: ['Admission', 'OPD'] }, // 👈 Allows both OPD and IPD
+            ...(isObjectId ? { _id: bookingId } : { bookingId: String(bookingId).trim() })
+        };
+
+        const booking = await Appointment.findOne(query);
+
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Completed hospital appointment/admission record not found." 
+            });
+        }
+
+        if (booking.status !== 'Completed') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "You can only rate completed consultations or discharged admissions." 
+            });
+        }
+
+        // Check if already reviewed
+        const existingReview = await Review.findOne({ userId, orderId: booking._id });
+        if (existingReview) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "You have already submitted a review for this hospital appointment." 
+            });
+        }
+
+        // 1. Create Polymorphic Review for Hospital
+        const review = await Review.create({
+            userId,
+            userName: req.user.name || "Verified Patient",
+            targetId: booking.hospitalId,
+            targetType: 'Hospital',
+            orderId: booking._id,
+            rating: Number(rating),
+            comment: comment ? String(comment).trim() : "Visit completed successfully."
+        });
+
+        // 2. Recalculate Hospital Live Average Rating
+        const hospitalReviews = await Review.find({ targetId: booking.hospitalId, targetType: 'Hospital' });
+        const hospAvg = hospitalReviews.reduce((sum, r) => sum + r.rating, 0) / hospitalReviews.length;
+
+        await Hospital.findByIdAndUpdate(booking.hospitalId, {
+            $set: {
+                averageRating: Number(hospAvg.toFixed(1)),
+                totalReviews: hospitalReviews.length
+            }
+        });
+
+        // 3. If OPD had an assigned doctor, update Doctor Rating as well
+        if (booking.doctorId) {
+            const doctorReviews = await Review.find({ targetId: booking.doctorId, targetType: 'Doctor' });
+            if (doctorReviews.length > 0) {
+                const docAvg = doctorReviews.reduce((sum, r) => sum + r.rating, 0) / doctorReviews.length;
+                await Doctor.findByIdAndUpdate(booking.doctorId, {
+                    $set: {
+                        averageRating: Number(docAvg.toFixed(1)),
+                        totalReviews: doctorReviews.length
+                    }
+                });
+            }
+        }
+
+        res.status(201).json({ 
+            success: true, 
+            message: "Thank you for rating your hospital visit experience!", 
+            data: review 
+        });
 
     } catch (error) {
         console.error("Rate Hospital Error:", error);
@@ -1956,11 +1992,105 @@ const getHospitalOpdLiveQueue = async (req, res) => {
 };
 
 
+// @desc    Get Single Hospital Booking Full Details (OPD Token Slip or IPD Admission Sheet)
+// @route   GET /user/hospital/booking-details/:id
+// @access  Private (User)
+const getHospitalBookingDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            userId,
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
+
+        const booking = await Appointment.findOne(query)
+            .populate('hospitalId', 'name address city state hospitalImage phone type location')
+            .populate('doctorId', 'name speciality qualification profileImage fees department')
+            .populate('ambulanceId', 'name vehicleNumber phone vehicleType')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .lean();
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
+        }
+
+        const isOPD = booking.bookingType === 'OPD';
+        const isCOD = booking.paymentMethod === 'COD';
+        const isPaid = booking.paymentStatus === 'Paid';
+
+        // Destination display label
+        let destinationLabel = "";
+        if (isOPD) {
+            destinationLabel = `${booking.hospitalId?.name || 'Hospital'} (${booking.opdRoomNumber || booking.doctorId?.department?.roomNumber || 'OPD Cabin'})`;
+        } else {
+            destinationLabel = `${booking.hospitalId?.name || 'Hospital'} (Bed: ${booking.bedNumber || 'Unassigned'}, ${booking.wardName || 'Ward'})`;
+        }
+
+        // Live Queue Estimate for OPD
+        let currentServingToken = null;
+        let patientsAhead = 0;
+        let estimatedWaitTime = "";
+
+        if (isOPD && booking.status === 'Confirmed') {
+            const todayStart = moment(booking.appointmentDate).startOf('day').toDate();
+            const todayEnd = moment(booking.appointmentDate).endOf('day').toDate();
+
+            const todayTokens = await Appointment.find({
+                hospitalId: booking.hospitalId?._id,
+                doctorId: booking.doctorId?._id,
+                bookingType: 'OPD',
+                appointmentDate: { $gte: todayStart, $lte: todayEnd },
+                status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
+            }).sort({ tokenNumber: 1 }).select('tokenNumber status').lean();
+
+            const activeAppt = todayTokens.find(t => t.status === 'In-Progress');
+            currentServingToken = activeAppt ? activeAppt.tokenNumber : (todayTokens.filter(t => t.status === 'Completed').length + 1);
+            patientsAhead = Math.max(0, (booking.tokenNumber || 1) - currentServingToken);
+            estimatedWaitTime = `${patientsAhead * (booking.doctorId?.slotDuration || 15)} mins`;
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                ...booking,
+                isOpd: isOPD,
+                isIpd: !isOPD,
+                isCod,
+                isPaid,
+                paymentDisplayLabel: isCOD ? "Cash on Delivery" : (isPaid ? "Paid Online" : "Payment Pending"),
+                destinationLabel,
+                tokenDetails: isOPD ? {
+                    tokenNumber: booking.tokenNumber,
+                    opdRoomNumber: booking.opdRoomNumber || booking.doctorId?.department?.roomNumber || "Cabin 1",
+                    currentServingToken,
+                    patientsAhead,
+                    estimatedWaitTime
+                } : null,
+                formattedDate: isOPD 
+                    ? moment(booking.appointmentDate).format('DD MMM YYYY')
+                    : `${moment(booking.startDate).format('DD MMM YYYY')} - ${moment(booking.endDate).format('DD MMM YYYY')}`,
+                canCancel: !['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'].includes(booking.status)
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Hospital Booking Details Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getHospitals, getWards, getBedGrid, getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
     getAvailableBedsForRange,cancelBedBooking, rescheduleBedBooking, getBedMonthlySchedule, rateHospitalAdmission,
     getHospitalCheckoutSummary, finalHospitalBooking,verifyHospitalPayment, getMyHospitalBookings, getBookingProfiles,
     getHospitalDetails, addReview, updateReview,
     // OPD Related Controllers
-    getHospitalDoctorOpdSlots, getHospitalOpdCheckoutSummary, bookHospitalOpdAppointment,getHospitalOpdLiveQueue
+    getHospitalDoctorOpdSlots, getHospitalOpdCheckoutSummary, bookHospitalOpdAppointment,getHospitalOpdLiveQueue,getHospitalBookingDetails
 };
