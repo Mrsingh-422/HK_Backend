@@ -28,7 +28,8 @@ const {
     applyDoctorLeave,
     getDoctorLeavesHistory,
     blockOpdSlotWithReason,
-    doctorRescheduleOpdAppointment
+    doctorRescheduleOpdAppointment,
+    completeOpdConsultation
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 const { recordOpdPatientVitals } = require('../../../controllers/hospital/hospitalDoctor/hosAppoinment');
@@ -122,6 +123,7 @@ router.put('/opd-settings', protect('hospital-doctor'), updateDoctorOpdSettings)
 // OPD Patient Queue Actions for Doctor
 router.patch('/opd/start-consultation/:appointmentId', protect('hospital-doctor'), startOpdConsultation);
 router.patch('/opd/no-show/:appointmentId', protect('hospital-doctor'), markOpdNoShow);
+router.patch('/opd/complete-consultation/:appointmentId', protect('hospital-doctor'), completeOpdConsultation); 
 router.post('/opd-slots/toggle-block', protect('hospital-doctor'), toggleDoctorOpdSlotBlock);
 
 // Doctor Leave Management

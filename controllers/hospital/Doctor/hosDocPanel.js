@@ -2759,6 +2759,83 @@ const doctorRescheduleOpdAppointment = async (req, res) => {
     }
 };
 
+// @desc    Hospital Doctor Finishes OPD Consultation (Marks Completed, Advances Token Queue & Unlocks Wallet Revenue)
+// @route   PATCH /hospital-doctor/panel/opd/complete-consultation/:appointmentId
+// @access  Private (Hospital Doctor)
+const completeOpdConsultation = async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        const doctorId = req.user.id;
+        const { consultationNotes, advice } = req.body;
+
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            doctorId,
+            bookingType: 'OPD',
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Active OPD consultation record not found for this doctor." });
+        }
+
+        if (appointment.status === 'Completed') {
+            return res.status(400).json({ success: false, message: "This consultation is already marked as Completed." });
+        }
+
+        const now = new Date();
+        appointment.status = 'Completed';
+        
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+        appointment.clinicalSummary.dischargedAt = now;
+        
+        if (consultationNotes && consultationNotes.trim() !== '') {
+            appointment.clinicalSummary.treatmentResult = consultationNotes.trim();
+        }
+        if (advice && advice.trim() !== '') {
+            appointment.clinicalSummary.dischargeNote = advice.trim();
+        }
+
+        // Close treatment history duration tracking
+        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
+            const currentShift = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
+            if (currentShift && !currentShift.endTime) {
+                currentShift.endTime = now;
+                const diffMinutes = Math.round((now - new Date(currentShift.startTime || currentShift.timestamp)) / 60000);
+                currentShift.durationDisplay = `${diffMinutes} mins`;
+            }
+        }
+
+        await appointment.save();
+
+        // Push alert to Patient that OPD consultation is done
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    `Consultation Completed (Token #${appointment.tokenNumber || '1'})`,
+                    `Your consultation with Dr. ${req.user.name} is completed. Thank you for visiting!`,
+                    { appointmentId: appointment._id.toString(), type: 'opd_consultation_completed' }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Consultation completed for Token #${appointment.tokenNumber || '1'}. Next token is ready.`,
+            tokenNumber: appointment.tokenNumber,
+            status: appointment.status,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Complete OPD Consultation Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = { 
     getMyDoctorProfile,changeHospitalDoctorPassword,
@@ -2788,5 +2865,6 @@ module.exports = {
     applyDoctorLeave,
     getDoctorLeavesHistory,
     blockOpdSlotWithReason,
-    doctorRescheduleOpdAppointment
+    doctorRescheduleOpdAppointment,
+    completeOpdConsultation
 };

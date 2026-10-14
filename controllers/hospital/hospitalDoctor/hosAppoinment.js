@@ -3,9 +3,15 @@
 const Appointment = require('../../../models/Appointment');
 const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed');
+const Doctor = require('../../../models/Doctor');
+const User = require('../../../models/User'); 
+const Coupon = require('../../../models/Coupon'); // Top-level import added
 const mongoose = require('mongoose');
+const moment = require('moment'); // Top-level import added for date filtering
+const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper'); // Top-level import added
+const { sendPushNotification } = require('../../../utils/notification'); // Top-level import added
 
-// @desc    Get All Hospital Bookings with OPD / IPD / Triage Filters & Search
+// @desc    Get All Hospital Bookings with OPD / IPD / Triage Filters & Smart Sorting
 // @route   GET /hospital/doctor/appointments/all-bookings
 // @access  Private (Hospital)
 const getHospitalAllBookings = async (req, res) => {
@@ -16,10 +22,11 @@ const getHospitalAllBookings = async (req, res) => {
         let query = { hospitalId };
 
         if (status && status !== 'All') query.status = status;
-        if (bookingType && bookingType !== 'All') query.bookingType = bookingType; // 👈 'OPD' vs 'Admission'
+        if (bookingType && bookingType !== 'All') query.bookingType = bookingType;
         if (triageLevel && triageLevel !== 'All') query.triageLevel = triageLevel;
 
-        if (date) {
+        // Safely parse date boundaries
+        if (date && date.trim() !== '') {
             query.appointmentDate = {
                 $gte: moment(date).startOf('day').toDate(),
                 $lte: moment(date).endOf('day').toDate()
@@ -36,6 +43,9 @@ const getHospitalAllBookings = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const total = await Appointment.countDocuments(query);
 
+        // Smart sorting: OPD queues sort strictly ascending by tokenNumber, while general lists sort by newest
+        const sortCriteria = (bookingType === 'OPD') ? { tokenNumber: 1, createdAt: -1 } : { createdAt: -1 };
+
         const appointments = await Appointment.find(query)
             .populate('doctorId', 'name speciality profileImage fees department')
             .populate({
@@ -48,12 +58,11 @@ const getHospitalAllBookings = async (req, res) => {
                 path: 'bedsideCareTeam.doctorId',
                 select: 'name speciality profileImage dutyStatus'
             })
-            .sort({ tokenNumber: 1, createdAt: -1 })
+            .sort(sortCriteria)
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
-        // Enriched mapping with clear OPD Token badges
         const formatted = appointments.map(a => ({
             ...a,
             isOpd: a.bookingType === 'OPD',
@@ -80,7 +89,7 @@ const getHospitalAllBookings = async (req, res) => {
     }
 };
 
-// @desc    Hospital Admin Approves Booking (Reserves Bed for IPD / Assigns Token for OPD)
+// @desc    Hospital Admin Approves Booking (Reserves Bed for IPD / Assigns Cabin & Token for OPD)
 // @route   PATCH /hospital/doctor/appointments/approve/:id
 // @access  Private (Hospital Admin)
 const approveHospitalBooking = async (req, res) => {
@@ -112,14 +121,17 @@ const approveHospitalBooking = async (req, res) => {
                 await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Reserved' } });
             }
 
-            // Alert Patient
-            await sendPushNotification(
-                appointment.userId,
-                'user',
-                "🏥 Admission Confirmed!",
-                `Your IPD admission booking #${appointment.bookingId} has been confirmed. Bed is reserved for your arrival.`,
-                { appointmentId: appointment._id.toString(), type: 'admission_confirmed' }
-            );
+            if (appointment.userId) {
+                try {
+                    await sendPushNotification(
+                        appointment.userId,
+                        'user',
+                        "Admission Confirmed!",
+                        `Your IPD admission booking #${appointment.bookingId} has been confirmed. Bed is reserved for your arrival.`,
+                        { appointmentId: appointment._id.toString(), type: 'admission_confirmed' }
+                    );
+                } catch (e) {}
+            }
 
             await appointment.save();
 
@@ -132,24 +144,52 @@ const approveHospitalBooking = async (req, res) => {
 
         // 2. OPD CONSULTATION LOGIC
         if (appointment.bookingType === 'OPD') {
-            if (doctorId) {
-                appointment.doctorId = doctorId;
+            const assignedDoctorId = doctorId || appointment.doctorId;
+
+            if (assignedDoctorId) {
+                appointment.doctorId = assignedDoctorId;
+                // Fetch Doctor to auto-map Cabin Room Number
+                const docData = await Doctor.findById(assignedDoctorId).select('department');
+                if (docData && docData.department?.roomNumber) {
+                    appointment.opdRoomNumber = docData.department.roomNumber;
+                }
+            }
+
+            // Ensure Token Number exists for this day if not yet assigned
+            if (!appointment.tokenNumber) {
+                const targetDate = appointment.appointmentDate || now;
+                const startOfDay = moment(targetDate).startOf('day').toDate();
+                const endOfDay = moment(targetDate).endOf('day').toDate();
+
+                const dailyCount = await Appointment.countDocuments({
+                    hospitalId,
+                    doctorId: appointment.doctorId,
+                    appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+                    bookingType: 'OPD',
+                    tokenNumber: { $ne: null }
+                });
+                appointment.tokenNumber = dailyCount + 1;
             }
 
             await appointment.save();
 
-            // Alert Patient with Token Number & Room
-            await sendPushNotification(
-                appointment.userId,
-                'user',
-                `OPD Appointment Confirmed! (Token #${appointment.tokenNumber || '1'})`,
-                `Your OPD consultation #${appointment.bookingId} is confirmed for ${appointment.appointmentTime}. Please proceed to ${appointment.opdRoomNumber || 'OPD Cabin'}.`,
-                { appointmentId: appointment._id.toString(), type: 'opd_confirmed', tokenNumber: appointment.tokenNumber }
-            );
+            // Alert Patient with accurate Cabin Room Number and Token
+            if (appointment.userId) {
+                try {
+                    const cabinInfo = appointment.opdRoomNumber ? `Cabin: ${appointment.opdRoomNumber}` : "OPD Waiting Lounge";
+                    await sendPushNotification(
+                        appointment.userId,
+                        'user',
+                        `OPD Confirmed! (Token #${appointment.tokenNumber})`,
+                        `Your OPD consultation #${appointment.bookingId} is confirmed for ${appointment.appointmentTime}. Please proceed to ${cabinInfo}.`,
+                        { appointmentId: appointment._id.toString(), type: 'opd_confirmed', tokenNumber: String(appointment.tokenNumber) }
+                    );
+                } catch (e) {}
+            }
 
             return res.status(200).json({ 
                 success: true, 
-                message: `OPD Appointment Confirmed! Token #${appointment.tokenNumber || '1'} generated and patient notified.`, 
+                message: `OPD Appointment Confirmed! Token #${appointment.tokenNumber} assigned at ${appointment.opdRoomNumber || 'Cabin'}.`, 
                 data: appointment 
             });
         }
@@ -163,7 +203,7 @@ const approveHospitalBooking = async (req, res) => {
     }
 };
 
-// @desc    Hospital Rejects / Cancels Booking (Handles OPD vs IPD, Restores Benefits & Alerts Patient)
+// @desc    Hospital Rejects / Cancels Booking (Distinguishes Online Gateway vs Counter Cash Refunds)
 // @route   PATCH /hospital/doctor/appointments/reject/:id
 // @access  Private (Hospital Admin)
 const rejectHospitalBooking = async (req, res) => {
@@ -186,20 +226,30 @@ const rejectHospitalBooking = async (req, res) => {
         const rejectReason = reason || (isOPD ? "Doctor unavailable / OPD clinic closed" : "Hospital capacity full or medical mismatch");
 
         appointment.status = 'Cancelled-By-Hospital';
+
+        // Check if payment was cash at counter vs online gateway
+        const isCounterCash = appointment.paymentMethod === 'Cash' || (appointment.paymentDetails?.razorpayPaymentId || '').startsWith('COUNTER-REC-');
+        
+        let refundInstruction = "Full online refund initiated.";
+        if (appointment.paymentStatus === 'Paid') {
+            if (isCounterCash) {
+                appointment.paymentStatus = 'Refunded'; // Cash returned at physical desk
+                refundInstruction = "Please collect your refund from the Hospital Cash Counter.";
+            } else if (appointment.paymentMethod !== 'COD') {
+                appointment.paymentStatus = 'Refund-Initiated'; // Online gateway queue
+            }
+        } else {
+            appointment.paymentStatus = 'Failed';
+            refundInstruction = "No payment had been collected.";
+        }
+
         appointment.cancellationDetails = {
             cancelledBy: hospitalId,
-            reason: rejectReason,
+            reason: `${rejectReason} (${refundInstruction})`,
             cancelledAt: new Date()
         };
 
-        // 1. Payment Refund Queueing (Only if online paid)
-        if (appointment.paymentStatus === 'Paid' && appointment.paymentMethod !== 'COD') {
-            appointment.paymentStatus = 'Refund-Initiated';
-        } else {
-            appointment.paymentStatus = 'Failed';
-        }
-
-        // 2. IPD Bed Release (If IPD admission had a bed reserved)
+        // IPD Bed Release
         if (!isOPD && appointment.bedId) {
             const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             if (bed && bed.wardId) {
@@ -207,44 +257,29 @@ const rejectHospitalBooking = async (req, res) => {
             }
         }
 
-        // 3. Rollback Subscription Benefit if applied
-        if (appointment.subscriptionDetails?.isSubscriptionApplied) {
+        // Rollback Subscription Benefit if applied
+        if (appointment.subscriptionDetails?.isSubscriptionApplied && appointment.userId) {
             const benefitField = isOPD ? 'freeDoctorAppointmentsCount' : 'freeHospitalStaysCount';
             await refundBenefitCount(appointment.userId._id, benefitField);
         }
 
-        // 4. Rollback Coupon Usage Count if applied
-        if (appointment.couponDetails?.couponId) {
+        // Rollback Coupon Usage Count if applied
+        if (appointment.couponDetails?.couponId && appointment.userId) {
             await Coupon.updateOne(
                 { _id: appointment.couponDetails.couponId, "usedBy.userId": appointment.userId._id },
                 { $inc: { "usedBy.$.usageCount": -1 } }
             );
         }
 
-        // 5. Release Ambulance if attached
-        if (appointment.ambulanceId) {
-            const AmbulanceBooking = require('../../../models/AmbulanceBooking');
-            const Ambulance = require('../../../models/Ambulance');
-
-            await AmbulanceBooking.findOneAndUpdate(
-                { ambulanceId: appointment.ambulanceId, status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] } },
-                { $set: { status: 'Cancelled', cancellationReason: `Admission rejected by hospital: ${rejectReason}` } }
-            );
-
-            await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
-                $set: { availableForEmergency: true, isOnline: true } 
-            });
-        }
-
         await appointment.save();
 
-        // 6. Push Notification to Patient (Mandatory)
+        // Push Notification to Patient
         if (appointment.userId) {
             try {
                 const notifTitle = isOPD ? "OPD Appointment Cancelled by Hospital" : "Hospital Admission Declined";
                 const notifBody = isOPD
-                    ? `Your OPD consultation #${appointment.bookingId} (Token #${appointment.tokenNumber || 'N/A'}) was cancelled by hospital. Reason: "${rejectReason}". Any online payment has been initiated for refund.`
-                    : `Your hospital bed admission #${appointment.bookingId} was declined. Reason: "${rejectReason}". Full refund initiated.`;
+                    ? `Your OPD consultation #${appointment.bookingId} (Token #${appointment.tokenNumber || 'N/A'}) was cancelled. Reason: "${rejectReason}". ${refundInstruction}`
+                    : `Your hospital bed admission #${appointment.bookingId} was declined. Reason: "${rejectReason}".`;
 
                 await sendPushNotification(
                     appointment.userId._id,
@@ -258,7 +293,8 @@ const rejectHospitalBooking = async (req, res) => {
 
         res.status(200).json({ 
             success: true, 
-            message: `${appointment.bookingType} booking rejected successfully. Patient notified and benefits restored.`,
+            message: `${appointment.bookingType} booking rejected successfully. ${refundInstruction}`,
+            refundInstruction,
             data: appointment 
         });
 
@@ -295,14 +331,16 @@ const getHospitalStats = async (req, res) => {
     }
 };
 
-// @desc    Hospital Reception Desk Marks OPD Fees as Paid (Collects Cash, Card, or POS at Counter)
+// @desc    Hospital Reception Desk Marks OPD Fees as Paid (Safe normalization of payment keys)
 // @route   PATCH /hospital/doctor/appointments/collect-payment/:id
 // @access  Private (Hospital Admin)
 const collectHospitalOpdCounterPayment = async (req, res) => {
     try {
         const { id } = req.params;
         const hospitalId = req.user.id;
-        const { paymentMode = 'Cash', remarks, transactionReference } = req.body; // paymentMode: 'Cash' | 'Card' | 'UPI'
+        // Accept either paymentMode or paymentMethod from frontend safely
+        const rawPaymentMode = req.body.paymentMode || req.body.paymentMethod || 'Cash';
+        const { remarks, transactionReference } = req.body;
 
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
@@ -320,12 +358,14 @@ const collectHospitalOpdCounterPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Payment for this appointment is already marked as Paid." });
         }
 
-        // Mark payment captured at hospital counter
+        // Standardize payment method capitalization
+        const cleanPaymentMode = String(rawPaymentMode).charAt(0).toUpperCase() + String(rawPaymentMode).slice(1).toLowerCase();
+
         appointment.paymentStatus = 'Paid';
-        appointment.paymentMethod = paymentMode;
-        appointment.status = 'Confirmed'; // Automatically confirmed upon counter payment
+        appointment.paymentMethod = cleanPaymentMode;
+        appointment.status = 'Confirmed';
         appointment.paymentDetails = {
-            method: paymentMode,
+            method: cleanPaymentMode,
             amount: appointment.totalAmount,
             currency: 'INR',
             status: 'captured',
@@ -336,7 +376,7 @@ const collectHospitalOpdCounterPayment = async (req, res) => {
 
         await appointment.save();
 
-        // Notify Doctor in cabin that patient has paid at counter and is entering waiting lounge
+        // Notify Doctor in cabin that patient has paid at counter and is in the waiting queue
         if (appointment.doctorId) {
             try {
                 await sendPushNotification(
@@ -344,14 +384,14 @@ const collectHospitalOpdCounterPayment = async (req, res) => {
                     'doctor',
                     `Patient Paid at Counter! (Token #${appointment.tokenNumber || '1'})`,
                     `Patient ${appointment.patients[0]?.patientName} paid OPD fee at reception. Waiting outside cabin.`,
-                    { appointmentId: appointment._id.toString(), type: 'opd_patient_paid_counter', tokenNumber: appointment.tokenNumber }
+                    { appointmentId: appointment._id.toString(), type: 'opd_patient_paid_counter', tokenNumber: String(appointment.tokenNumber || '1') }
                 );
             } catch (e) {}
         }
 
         res.status(200).json({
             success: true,
-            message: `Payment of ₹${appointment.totalAmount} recorded successfully via ${paymentMode}. Token #${appointment.tokenNumber} is ready for consultation.`,
+            message: `Payment of ₹${appointment.totalAmount} recorded successfully via ${cleanPaymentMode}. Token #${appointment.tokenNumber} is ready for consultation.`,
             tokenNumber: appointment.tokenNumber,
             data: appointment
         });
@@ -362,14 +402,14 @@ const collectHospitalOpdCounterPayment = async (req, res) => {
     }
 };
 
-// @desc    OPD Triage Nurse / Reception Records Pre-Consultation Vitals (BP, Pulse, Temp, SpO2, Weight)
+// @desc    OPD Triage Nurse / Reception Records Pre-Consultation Vitals (BP, Pulse, Temp, SpO2 strictly matching schema)
 // @route   PATCH /hospital/doctor/appointments/opd-vitals/:id
 // @access  Private (Hospital Admin or Hospital Doctor)
 const recordOpdPatientVitals = async (req, res) => {
     try {
         const { id } = req.params;
         const hospitalId = req.user.id;
-        const { bp, pulse, temp, spo2, weight, notes } = req.body;
+        const { bp, pulse, temp, spo2, notes } = req.body;
 
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
@@ -383,17 +423,18 @@ const recordOpdPatientVitals = async (req, res) => {
             return res.status(404).json({ success: false, message: "OPD Appointment record not found." });
         }
 
+        // Strictly capture only the 4 fields configured in Appointment schema vitals
         const recordedVitals = {
             bp: bp ? String(bp).trim() : (appointment.clinicalSummary?.vitals?.bp || ""),
             pulse: pulse ? String(pulse).trim() : (appointment.clinicalSummary?.vitals?.pulse || ""),
             temp: temp ? String(temp).trim() : (appointment.clinicalSummary?.vitals?.temp || ""),
-            spo2: spo2 ? String(spo2).trim() : (appointment.clinicalSummary?.vitals?.spo2 || ""),
-            weight: weight ? String(weight).trim() : (appointment.clinicalSummary?.vitals?.weight || "")
+            spo2: spo2 ? String(spo2).trim() : (appointment.clinicalSummary?.vitals?.spo2 || "")
         };
 
         if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
         appointment.clinicalSummary.vitals = recordedVitals;
-        if (notes) {
+        
+        if (notes && notes.trim() !== "") {
             appointment.clinicalSummary.admissionNote = `[Triage Vitals Log]: ${notes.trim()}`;
         }
 

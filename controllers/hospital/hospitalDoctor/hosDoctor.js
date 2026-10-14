@@ -1,4 +1,5 @@
 const Doctor = require('../../../models/Doctor'); // Unified Model
+const Availability = require('../../../models/Availability');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
