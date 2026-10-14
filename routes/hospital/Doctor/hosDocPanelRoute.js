@@ -29,7 +29,9 @@ const {
     getDoctorLeavesHistory,
     blockOpdSlotWithReason,
     doctorRescheduleOpdAppointment,
-    completeOpdConsultation
+    completeOpdConsultation,
+    getDoctorAvailableWardsAndBeds,
+    initiateOpdToIpdAdmission
     
 } = require('../../../controllers/hospital/Doctor/hosDocPanel');
 const { recordOpdPatientVitals } = require('../../../controllers/hospital/hospitalDoctor/hosAppoinment');
@@ -135,5 +137,10 @@ router.post('/opd-slots/block-slot', protect('hospital-doctor'), blockOpdSlotWit
 router.post('/opd/reschedule', protect('hospital-doctor'), doctorRescheduleOpdAppointment);
 
 router.patch('/opd/vitals/:id', protect('hospital-doctor'), recordOpdPatientVitals);
+
+// OPD to IPD Wards and Hold
+router.get('/opd/available-beds', protect('hospital-doctor'), getDoctorAvailableWardsAndBeds);
+router.post('/opd/initiate-admission', protect('hospital-doctor'), initiateOpdToIpdAdmission);
+
 
 module.exports = router;

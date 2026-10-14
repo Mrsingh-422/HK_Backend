@@ -132,6 +132,8 @@ const appointmentSchema = new mongoose.Schema({
     endDate: { type: Date },   // Admission end
     cancellationCount: { type: Number, default: 0 },
     rescheduleCount: { type: Number, default: 0 },
+    admissionHoldExpiresAt: { type: Date, default: null }, // 30-Minute Bed Hold Countdown
+    opdAppointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment', default: null }, // Link to parent OPD Consultation if converted to IPD Admission
 
     // for hospital transfer
     pendingDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null }, // 👈 Handover target doctor

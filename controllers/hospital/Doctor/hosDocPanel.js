@@ -11,7 +11,8 @@ const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
 const moment = require('moment');
 const crypto = require('crypto');
-const Bed = require('../../../models/Bed'); 
+const Bed = require('../../../models/Bed');
+const Ward = require('../../../models/Ward'); 
 const Medicine = require('../../../models/Medicine'); // 👈 ADD THIS AT THE TOP OF IMPORTS
 const { sendPushNotification } = require('../../../utils/notification');
 const { deleteFile } = require('../../../utils/fileHandler'); // Import the deleteFile utility
@@ -2837,6 +2838,237 @@ const completeOpdConsultation = async (req, res) => {
 };
 
 
+// @desc    Get All Wards and Available Beds in Hospital for Doctor to Select
+// @route   GET /hospital-doctor/panel/opd/available-beds
+// @access  Private (Hospital Doctor)
+const getDoctorAvailableWardsAndBeds = async (req, res) => {
+    try {
+        const doctor = await Doctor.findById(req.user.id).select('hospitalId');
+        if (!doctor || !doctor.hospitalId) {
+            return res.status(400).json({ success: false, message: "Doctor is not associated with any hospital." });
+        }
+
+        const now = new Date();
+
+        // Lazy-Release: Auto-release any expired 30-min holds before returning bed list
+        const expiredAppointments = await Appointment.find({
+            hospitalId: doctor.hospitalId,
+            admissionHoldExpiresAt: { $lt: now, $ne: null },
+            paymentStatus: 'Pending',
+            bedId: { $ne: null }
+        });
+
+        for (let appt of expiredAppointments) {
+            await Bed.findByIdAndUpdate(appt.bedId, { $set: { status: 'Available' } });
+            appt.admissionHoldExpiresAt = null;
+            appt.status = 'Cancelled-By-Hospital';
+            appt.cancellationDetails = {
+                reason: "30-Minute admission payment window expired. Bed released automatically.",
+                cancelledAt: now
+            };
+            await appt.save();
+        }
+
+        // Fetch Wards and their currently Available beds
+        const wards = await Ward.find({ hospitalId: doctor.hospitalId, isActive: true }).lean();
+        const availableBeds = await Bed.find({
+            hospitalId: doctor.hospitalId,
+            status: 'Available'
+        }).populate('wardId', 'name type').sort({ bedNumber: 1 }).lean();
+
+        // Group beds under respective wards
+        const formattedWards = wards.map(ward => {
+            const wardBeds = availableBeds.filter(b => b.wardId?._id?.toString() === ward._id.toString());
+            return {
+                wardId: ward._id,
+                wardName: ward.name,
+                wardType: ward.type,
+                totalBeds: ward.totalBeds,
+                availableBedsCount: wardBeds.length,
+                beds: wardBeds.map(b => ({
+                    bedId: b._id,
+                    bedNumber: b.bedNumber,
+                    pricePerDay: b.pricePerDay,
+                    isVentilatorAvailable: b.isVentilatorAvailable,
+                    status: b.status
+                }))
+            };
+        });
+
+        res.status(200).json({
+            success: true,
+            totalAvailableBeds: availableBeds.length,
+            data: formattedWards
+        });
+
+    } catch (error) {
+        console.error("Get Available Beds Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Doctor Creates Separate IPD Bed Booking with 30-Min Hold (With duplicate hold & bed switch protection)
+// @route   POST /hospital-doctor/panel/opd/initiate-admission
+// @access  Private (Hospital Doctor)
+const initiateOpdToIpdAdmission = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { opdAppointmentId, bedId, admissionReason, triageLevel = 'Emergency', initialStayDays = 1 } = req.body;
+
+        if (!opdAppointmentId || !bedId) {
+            return res.status(400).json({ success: false, message: "opdAppointmentId and bedId are required." });
+        }
+
+        // 1. Fetch and verify original OPD appointment
+        const opdAppointment = await Appointment.findOne({ _id: opdAppointmentId, doctorId })
+            .populate('userId', 'name phone fcmToken');
+
+        if (!opdAppointment) {
+            return res.status(404).json({ success: false, message: "Original OPD appointment not found or unauthorized." });
+        }
+
+        const now = new Date();
+
+        // 2. DUPLICATE HOLD PROTECTION: If a bed is already held for this OPD appointment, release previous bed first
+        const existingActiveHold = await Appointment.findOne({
+            opdAppointmentId: opdAppointment._id,
+            bookingType: 'Admission',
+            status: 'Hospital-Pending',
+            admissionHoldExpiresAt: { $gt: now },
+            paymentStatus: 'Pending'
+        });
+
+        if (existingActiveHold) {
+            // Release previous reserved bed immediately
+            if (existingActiveHold.bedId) {
+                await Bed.findByIdAndUpdate(existingActiveHold.bedId, { $set: { status: 'Available' } });
+            }
+            // Cancel previous pending admission ticket
+            existingActiveHold.status = 'Cancelled-By-Hospital';
+            existingActiveHold.admissionHoldExpiresAt = null;
+            existingActiveHold.cancellationDetails = {
+                reason: "Doctor re-assigned another bed. Previous reservation cancelled.",
+                cancelledAt: now
+            };
+            await existingActiveHold.save();
+        }
+
+        // 3. Verify new target bed is available
+        const targetBed = await Bed.findById(bedId).populate('wardId');
+        if (!targetBed || targetBed.status !== 'Available') {
+            return res.status(400).json({ success: false, message: "Selected bed is no longer available. Please select another bed." });
+        }
+
+        const holdDeadline = new Date(now.getTime() + 30 * 60 * 1000); // 30 Minutes countdown
+        const days = Math.max(1, parseInt(initialStayDays) || 1);
+        const bedDeposit = Number(targetBed.pricePerDay || 1000) * days;
+        const wardTitle = targetBed.wardId?.name || "General Ward";
+
+        // 4. Lock Bed status to 'Reserved'
+        targetBed.status = 'Reserved';
+        await targetBed.save();
+
+        // 5. Mark OPD Consultation as Completed
+        opdAppointment.status = 'Completed';
+        if (!opdAppointment.clinicalSummary) opdAppointment.clinicalSummary = {};
+        opdAppointment.clinicalSummary.treatmentResult = `Patient examined in OPD. Recommended for inpatient admission in ${wardTitle} (${targetBed.bedNumber}).`;
+        opdAppointment.clinicalSummary.dischargedAt = now;
+        await opdAppointment.save();
+
+        // 6. CREATE BRAND NEW SEPARATE IPD BED ADMISSION
+        const newAdmissionBookingId = `HKH-ADM-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+        const newAdmissionBooking = await Appointment.create({
+            userId: opdAppointment.userId._id,
+            hospitalId: opdAppointment.hospitalId,
+            doctorId: doctorId,
+            opdAppointmentId: opdAppointment._id, // Cross-link to original OPD
+            bookingId: newAdmissionBookingId,
+            bookingType: 'Admission',
+            bedBookingType: triageLevel === 'Emergency' ? 'Emergency-Bed' : 'General-Bed',
+            bedId: targetBed._id,
+            bedNumber: targetBed.bedNumber,
+            wardName: wardTitle,
+            triageLevel: triageLevel,
+            startDate: now,
+            endDate: moment(now).add(days, 'days').toDate(),
+            stayDuration: days,
+            bookingReason: admissionReason || "Admitted following OPD consultation",
+            admissionHoldExpiresAt: holdDeadline,
+            status: 'Hospital-Pending',
+            paymentStatus: 'Pending',
+            paymentMethod: 'COD',
+            totalAmount: bedDeposit,
+            pricingBreakdown: {
+                baseFee: bedDeposit,
+                subtotal: bedDeposit,
+                bookedDurationDays: days,
+                depositPaidOnBooking: bedDeposit
+            },
+            patients: opdAppointment.patients || [{
+                patientName: opdAppointment.userId.name,
+                patientAge: 30,
+                gender: "Male",
+                relation: "Self"
+            }],
+            clinicalSummary: {
+                vitals: opdAppointment.clinicalSummary?.vitals || {}, // Retain triage vitals
+                admissionNote: `Admitted from OPD Consultation #${opdAppointment.bookingId}. Reason: ${admissionReason || 'Emergency inpatient care'}`
+            },
+            treatmentHistory: [{
+                fromDoctorId: doctorId,
+                toDoctorId: doctorId,
+                action: 'Initial-Assignment',
+                notes: `Bed admission initiated from OPD #${opdAppointment.bookingId}. 30-min deposit hold active.`,
+                timestamp: now,
+                startTime: now
+            }]
+        });
+
+        // 7. Push alert to Patient App
+        if (opdAppointment.userId) {
+            try {
+                await sendPushNotification(
+                    opdAppointment.userId._id,
+                    'user',
+                    "Hospital Admission Ready",
+                    `Dr. ${req.user.name} booked ${wardTitle} (${targetBed.bedNumber}) for you. Please pay deposit ₹${bedDeposit} within 30 minutes to confirm.`,
+                    { 
+                        appointmentId: newAdmissionBooking._id.toString(), 
+                        bookingId: newAdmissionBookingId,
+                        type: 'admission_payment_required',
+                        expiresAt: holdDeadline.toISOString(),
+                        depositAmount: String(bedDeposit)
+                    }
+                );
+            } catch (e) {}
+        }
+
+        res.status(201).json({
+            success: true,
+            message: `Bed ${targetBed.bedNumber} held for 30 minutes. Separate Admission #${newAdmissionBookingId} created!`,
+            opdStatus: "Completed",
+            admissionBookingId: newAdmissionBookingId,
+            admissionAppointmentId: newAdmissionBooking._id,
+            bedDetails: {
+                bedId: targetBed._id,
+                bedNumber: targetBed.bedNumber,
+                wardName: wardTitle,
+                pricePerDay: targetBed.pricePerDay
+            },
+            depositPayable: bedDeposit,
+            holdExpiresAt: holdDeadline,
+            remainingSeconds: 1800,
+            admissionData: newAdmissionBooking
+        });
+
+    } catch (error) {
+        console.error("Initiate OPD to IPD Admission Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = { 
     getMyDoctorProfile,changeHospitalDoctorPassword,
     updateDoctorProfile,getLatestDoctorProfileRequest,
@@ -2866,5 +3098,7 @@ module.exports = {
     getDoctorLeavesHistory,
     blockOpdSlotWithReason,
     doctorRescheduleOpdAppointment,
-    completeOpdConsultation
+    completeOpdConsultation,
+    getDoctorAvailableWardsAndBeds,
+    initiateOpdToIpdAdmission
 };

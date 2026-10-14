@@ -2212,11 +2212,315 @@ const getHospitalBookingDetails = async (req, res) => {
     }
 };
 
+
+
+
+
+// @desc    Get Details of Pending Admission Bed Hold with 30-Minute Live Countdown
+// @route   GET /user/hospital/admission/pending-payment/:appointmentId
+// @access  Private (User)
+const getPendingAdmissionDetails = async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        const userId = req.user.id;
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, userId })
+            .populate('hospitalId', 'name address phone hospitalImage city')
+            .populate('doctorId', 'name speciality department profileImage')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay isVentilatorAvailable wardId',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .lean();
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
+        }
+
+        const now = new Date();
+        const holdDeadline = appointment.admissionHoldExpiresAt ? new Date(appointment.admissionHoldExpiresAt) : null;
+
+        // Check if hold already expired
+        if (holdDeadline && now > holdDeadline) {
+            if (appointment.bedId) {
+                await Bed.findByIdAndUpdate(appointment.bedId._id, { $set: { status: 'Available' } });
+            }
+            await Appointment.findByIdAndUpdate(appointmentId, {
+                $set: { 
+                    bedId: null, 
+                    bedNumber: null, 
+                    wardName: null, 
+                    admissionHoldExpiresAt: null 
+                }
+            });
+
+            return res.status(400).json({
+                success: false,
+                isExpired: true,
+                message: "30-minute bed hold has expired. The bed has been released."
+            });
+        }
+
+        const remainingMs = holdDeadline ? Math.max(0, holdDeadline.getTime() - now.getTime()) : 0;
+        const remainingSeconds = Math.floor(remainingMs / 1000);
+
+        res.status(200).json({
+            success: true,
+            isExpired: false,
+            data: {
+                appointmentId: appointment._id,
+                bookingId: appointment.bookingId,
+                hospital: appointment.hospitalId,
+                doctor: appointment.doctorId,
+                wardName: appointment.wardName || appointment.bedId?.wardId?.name,
+                bedNumber: appointment.bedNumber || appointment.bedId?.bedNumber,
+                pricePerDay: appointment.bedId?.pricePerDay || 1000,
+                depositPayable: appointment.pricingBreakdown?.depositPaidOnBooking || appointment.bedId?.pricePerDay || 1000,
+                holdExpiresAt: appointment.admissionHoldExpiresAt,
+                remainingSeconds: remainingSeconds,
+                formattedRemainingTime: `${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`,
+                vitals: appointment.clinicalSummary?.vitals || null
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Pending Admission Details Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Generate Razorpay Order for Admission Deposit (Validates 30-min window)
+// @route   POST /user/hospital/admission/create-payment-order
+// @access  Private (User)
+const createAdmissionPaymentOrder = async (req, res) => {
+    try {
+        const { appointmentId } = req.body;
+        const userId = req.user.id;
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, userId });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission booking record not found." });
+        }
+
+        const now = new Date();
+
+        // Check if 30-Minute Hold has expired
+        if (appointment.admissionHoldExpiresAt && now > new Date(appointment.admissionHoldExpiresAt)) {
+            if (appointment.bedId) {
+                await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
+            }
+            appointment.status = 'Cancelled-By-Hospital';
+            await appointment.save();
+
+            return res.status(400).json({
+                success: false,
+                isExpired: true,
+                message: "Your 30-minute reservation window for this bed has expired. Please contact the hospital doctor to re-assign a bed."
+            });
+        }
+
+        const totalPayable = Number(appointment.totalAmount || 1000);
+        const receiptId = `ipd_rcpt_${appointment.bookingId || Date.now().toString().slice(-6)}`;
+
+        // Generate Razorpay Order
+        const rzpOrder = await createRazorpayOrder(totalPayable, receiptId);
+
+        res.status(200).json({
+            success: true,
+            key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
+            amount: rzpOrder.amount,
+            currency: "INR",
+            razorpayOrderId: rzpOrder.id,
+            appointmentId: appointment._id,
+            bookingId: appointment.bookingId,
+            depositAmount: totalPayable,
+            holdExpiresAt: appointment.admissionHoldExpiresAt
+        });
+
+    } catch (error) {
+        console.error("Create Admission Order Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Verify Razorpay Payment Signature and Lock Bed (Guards against counter payment race condition)
+// @route   POST /user/hospital/admission/verify-payment
+// @access  Private (User)
+const verifyAdmissionOnlinePayment = async (req, res) => {
+    try {
+        const { appointmentId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+        const userId = req.user.id;
+
+        if (!appointmentId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({ success: false, message: "Missing Razorpay payment verification parameters." });
+        }
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, userId });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission record not found." });
+        }
+
+        // RACE CONDITION GUARD: Check if already paid at counter
+        if (appointment.paymentStatus === 'Paid') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Payment for this admission has already been completed (via counter or app). Bed is confirmed." 
+            });
+        }
+
+        // Verify Signature
+        const isSignatureValid = verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+        if (!isSignatureValid) {
+            return res.status(400).json({ success: false, message: "Payment verification failed. Invalid signature." });
+        }
+
+        const now = new Date();
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpay_payment_id, razorpay_signature);
+
+        // Lock Bed to Occupied
+        const bed = await Bed.findById(appointment.bedId);
+        if (bed) {
+            bed.status = 'Occupied';
+            await bed.save();
+            if (bed.wardId) {
+                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
+            }
+        }
+
+        appointment.paymentStatus = 'Paid';
+        appointment.paymentMethod = 'Online';
+        appointment.status = 'In-Progress';
+        appointment.admissionHoldExpiresAt = null; // Clear hold timer
+        appointment.paymentDetails = rzpDetails || {
+            razorpayPaymentId: razorpay_payment_id,
+            razorpayOrderId: razorpay_order_id,
+            razorpaySignature: razorpay_signature,
+            method: 'Online',
+            status: 'captured',
+            paidAt: now
+        };
+
+        await appointment.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Online payment verified! Hospital admission confirmed and bed locked.",
+            bookingId: appointment.bookingId,
+            bedNumber: appointment.bedNumber,
+            wardName: appointment.wardName,
+            status: appointment.status,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Verify Admission Payment Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Patient or Reception Declines Admission -> Bed Released Immediately Without Waiting 30 Mins
+// @route   POST /user/hospital/admission/cancel-hold
+// @access  Private (User or Hospital Admin)
+const cancelAdmissionBedHold = async (req, res) => {
+    try {
+        const { appointmentId, reason } = req.body;
+
+        const appointment = await Appointment.findById(appointmentId);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
+        }
+
+        // Release the reserved bed immediately
+        if (appointment.bedId) {
+            await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
+        }
+
+        // Clear bed hold without cancelling the OPD consultation
+        appointment.bedId = null;
+        appointment.bedNumber = null;
+        appointment.wardName = null;
+        appointment.admissionHoldExpiresAt = null;
+        
+        // Log patient decline in treatment notes
+        appointment.treatmentHistory.push({
+            action: 'Initial-Assignment',
+            notes: `Admission declined by patient: "${reason || 'Patient opted out of hospital admission'}". Bed released immediately.`,
+            timestamp: new Date()
+        });
+
+        await appointment.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Admission hold cancelled. Bed released back to available pool immediately.",
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Cancel Admission Hold Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Get Active Admission Hold for Patient (Powers Sticky Banner on Mobile Home Screen)
+// @route   GET /user/hospital/admission/active-hold
+// @access  Private (User)
+const getActiveAdmissionHold = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const now = new Date();
+
+        const activeAdmission = await Appointment.findOne({
+            userId,
+            bookingType: 'Admission',
+            status: 'Hospital-Pending',
+            paymentStatus: 'Pending',
+            admissionHoldExpiresAt: { $gt: now }
+        })
+        .populate('hospitalId', 'name city hospitalImage phone')
+        .populate('doctorId', 'name speciality department')
+        .lean();
+
+        if (!activeAdmission) {
+            return res.status(200).json({
+                success: true,
+                hasActiveHold: false,
+                data: null
+            });
+        }
+
+        const remainingMs = Math.max(0, new Date(activeAdmission.admissionHoldExpiresAt).getTime() - now.getTime());
+        const remainingSeconds = Math.floor(remainingMs / 1000);
+
+        res.status(200).json({
+            success: true,
+            hasActiveHold: true,
+            data: {
+                appointmentId: activeAdmission._id,
+                bookingId: activeAdmission.bookingId,
+                hospitalName: activeAdmission.hospitalId?.name || "Hospital",
+                doctorName: activeAdmission.doctorId?.name || "Doctor",
+                wardName: activeAdmission.wardName,
+                bedNumber: activeAdmission.bedNumber,
+                depositPayable: activeAdmission.totalAmount,
+                holdExpiresAt: activeAdmission.admissionHoldExpiresAt,
+                remainingSeconds: remainingSeconds,
+                formattedRemainingTime: `${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Active Admission Hold Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getHospitals, getWards, getBedGrid, getDoctorsByHospitalId, getServicesByHospitalId, getHospitalCoupons, validateHospitalCoupon,
     getAvailableBedsForRange,cancelBedBooking, rescheduleBedBooking, getBedMonthlySchedule, rateHospitalAdmission,
     getHospitalCheckoutSummary, finalHospitalBooking,verifyHospitalPayment, getMyHospitalBookings, getBookingProfiles,
     getHospitalDetails, addReview, updateReview,
     // OPD Related Controllers
-    getHospitalDoctorOpdSlots, getHospitalOpdCheckoutSummary, bookHospitalOpdAppointment,getHospitalOpdLiveQueue,getHospitalBookingDetails
+    getHospitalDoctorOpdSlots, getHospitalOpdCheckoutSummary, bookHospitalOpdAppointment,getHospitalOpdLiveQueue,getHospitalBookingDetails,
+    // Admission Related Controllers
+    createAdmissionPaymentOrder, verifyAdmissionOnlinePayment,getPendingAdmissionDetails,cancelAdmissionBedHold,getActiveAdmissionHold
 };

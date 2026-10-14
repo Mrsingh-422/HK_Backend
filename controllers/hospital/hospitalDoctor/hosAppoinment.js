@@ -454,6 +454,119 @@ const recordOpdPatientVitals = async (req, res) => {
     }
 };
 
+// @desc    Hospital Reception Desk Collects Admission Deposit (Cash/Card/UPI) & Locks Bed Permanently
+// @route   PATCH /hospital/doctor/appointments/admission/collect-payment/:id
+// @access  Private (Hospital Admin / Reception)
+const collectAdmissionCounterPayment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const hospitalId = req.user.id;
+        const rawPaymentMode = req.body.paymentMode || req.body.paymentMethod || 'Cash';
+        const { transactionReference, remarks } = req.body;
+
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            hospitalId,
+            bookingType: 'Admission', // Strictly operates on Bed Admission bookings
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query)
+            .populate('userId', 'name phone fcmToken')
+            .populate('doctorId', 'name speciality department');
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Bed admission record not found." });
+        }
+
+        if (appointment.paymentStatus === 'Paid') {
+            return res.status(400).json({ success: false, message: "Deposit for this bed is already paid." });
+        }
+
+        const now = new Date();
+
+        // 1. Verify 30-Minute Hold Window
+        if (appointment.admissionHoldExpiresAt && now > new Date(appointment.admissionHoldExpiresAt)) {
+            if (appointment.bedId) {
+                await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
+            }
+            appointment.status = 'Cancelled-By-Hospital';
+            appointment.cancellationDetails = {
+                reason: "30-Minute admission deposit window expired. Bed was released.",
+                cancelledAt: now
+            };
+            await appointment.save();
+
+            return res.status(400).json({
+                success: false,
+                isExpired: true,
+                message: "The 30-minute hold window for this bed has expired. Bed was released. Please ask doctor to re-assign a bed."
+            });
+        }
+
+        // 2. Lock Bed to Occupied
+        const bed = await Bed.findById(appointment.bedId);
+        if (!bed) {
+            return res.status(404).json({ success: false, message: "Assigned bed record not found." });
+        }
+
+        bed.status = 'Occupied';
+        await bed.save();
+
+        if (bed.wardId) {
+            await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
+        }
+
+        // 3. Mark Payment Captured
+        const cleanPaymentMode = String(rawPaymentMode).charAt(0).toUpperCase() + String(rawPaymentMode).slice(1).toLowerCase();
+
+        appointment.paymentStatus = 'Paid';
+        appointment.paymentMethod = cleanPaymentMode;
+        appointment.status = 'In-Progress'; // Patient is now actively admitted
+        appointment.admissionHoldExpiresAt = null; // Clear hold timer
+
+        appointment.paymentDetails = {
+            method: cleanPaymentMode,
+            amount: appointment.totalAmount,
+            currency: 'INR',
+            status: 'captured',
+            paidAt: now,
+            bank: remarks || "Hospital In-Patient Cash/POS Counter",
+            razorpayPaymentId: transactionReference || `COUNTER-ADM-${Date.now().toString().slice(-6)}`
+        };
+
+        await appointment.save();
+
+        // 4. Alert Patient
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    "Admission Confirmed! 🏥",
+                    `Payment of ₹${appointment.totalAmount} received via ${cleanPaymentMode}. Bed ${appointment.bedNumber} (${appointment.wardName}) is now occupied.`,
+                    { appointmentId: appointment._id.toString(), type: 'admission_confirmed' }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Bed Admission confirmed! Deposit of ₹${appointment.totalAmount} collected via ${cleanPaymentMode}. Bed ${appointment.bedNumber} is Occupied.`,
+            bookingId: appointment.bookingId,
+            bedNumber: appointment.bedNumber,
+            wardName: appointment.wardName,
+            paymentMode: cleanPaymentMode,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Collect Admission Counter Payment Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
-    getHospitalAllBookings, approveHospitalBooking, rejectHospitalBooking, getHospitalStats, collectHospitalOpdCounterPayment, recordOpdPatientVitals
+    getHospitalAllBookings, approveHospitalBooking, rejectHospitalBooking, getHospitalStats, collectHospitalOpdCounterPayment, recordOpdPatientVitals,
+    collectAdmissionCounterPayment
 };

@@ -17,7 +17,12 @@ const {
 
     getHospitalDoctorOpdSlots,
     getHospitalOpdCheckoutSummary,
-    bookHospitalOpdAppointment,getHospitalOpdLiveQueue,getHospitalBookingDetails
+    bookHospitalOpdAppointment,getHospitalOpdLiveQueue,getHospitalBookingDetails,
+
+    getActiveAdmissionHold,
+    createAdmissionPaymentOrder,
+    verifyAdmissionOnlinePayment,getPendingAdmissionDetails,
+    cancelAdmissionBedHold
 } = require('../../../controllers/user/Hospital/BookHospital');
 
 // URL: /user/hospital
@@ -69,4 +74,10 @@ router.post('/opd/book', protect('user'), bookHospitalOpdAppointment);
 router.get('/opd/live-queue/:appointmentId', protect('user'), getHospitalOpdLiveQueue);
 router.get('/booking-details/:id', protect('user'), getHospitalBookingDetails);
 
+// Patient App: View Admission Bill, Pay Online, or Decline
+router.get('/admission/active-hold', protect('user'), getActiveAdmissionHold); // Mobile Sticky Banner Route    
+router.get('/admission/pending-payment/:appointmentId', protect('user'), getPendingAdmissionDetails);
+router.post('/admission/cancel-hold', protect('user'), cancelAdmissionBedHold);
+router.post('/admission/create-payment-order', protect('user'), createAdmissionPaymentOrder);
+router.post('/admission/verify-payment', protect('user'), verifyAdmissionOnlinePayment);
 module.exports = router;

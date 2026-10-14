@@ -8,7 +8,7 @@ const {
     rejectHospitalBooking,
     getHospitalStats  ,
     collectHospitalOpdCounterPayment,
-    recordOpdPatientVitals
+    recordOpdPatientVitals,collectAdmissionCounterPayment
 } = require('../../../controllers/hospital/hospitalDoctor/hosAppoinment');
 
 // Base URL: /hospital/doctor/appointments
@@ -21,5 +21,7 @@ router.patch('/reject/:id', protect('hospital'), rejectHospitalBooking);
 router.patch('/collect-payment/:id', protect('hospital'), collectHospitalOpdCounterPayment);
 
 router.patch('/opd-vitals/:id', protect('hospital'), recordOpdPatientVitals);
+router.patch('/admission/collect-payment/:id', protect('hospital'), collectAdmissionCounterPayment);
+
 
 module.exports = router;
