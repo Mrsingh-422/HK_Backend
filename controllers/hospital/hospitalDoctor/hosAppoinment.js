@@ -566,7 +566,107 @@ const collectAdmissionCounterPayment = async (req, res) => {
     }
 };
 
+// @desc    Get All Doctor-Initiated Bed Admissions Pending Deposit Payment (Shows 30-min live hold timer)
+// @route   GET /hospital/doctor/appointments/admissions/pending-holds
+// @access  Private (Hospital Admin / Reception)
+const getHospitalPendingAdmissionHolds = async (req, res) => {
+    try {
+        const hospitalId = req.user.id;
+        const now = new Date();
+
+        // 1. Lazy Release: Auto-release any bed holds where 30 minutes expired before querying
+        const expiredHolds = await Appointment.find({
+            hospitalId,
+            bookingType: 'Admission',
+            status: 'Hospital-Pending',
+            paymentStatus: 'Pending',
+            admissionHoldExpiresAt: { $lt: now, $ne: null },
+            bedId: { $ne: null }
+        });
+
+        for (let exp of expiredHolds) {
+            await Bed.findByIdAndUpdate(exp.bedId, { $set: { status: 'Available' } });
+            exp.admissionHoldExpiresAt = null;
+            exp.status = 'Cancelled-By-Hospital';
+            exp.cancellationDetails = {
+                reason: "30-Minute admission deposit window expired. Bed released automatically.",
+                cancelledAt: now
+            };
+            await exp.save();
+        }
+
+        // 2. Fetch all active holds within the 30-minute window
+        const pendingHolds = await Appointment.find({
+            hospitalId,
+            bookingType: 'Admission',
+            status: 'Hospital-Pending',
+            paymentStatus: 'Pending',
+            admissionHoldExpiresAt: { $gt: now }
+        })
+        .populate('userId', 'name phone email profilePic age gender')
+        .populate('doctorId', 'name speciality department profileImage')
+        .populate({
+            path: 'bedId',
+            select: 'bedNumber pricePerDay isVentilatorAvailable wardId',
+            populate: { path: 'wardId', select: 'name type' }
+        })
+        .populate('opdAppointmentId', 'bookingId tokenNumber appointmentDate') // Cross-link to parent OPD
+        .sort({ admissionHoldExpiresAt: 1 }) // Urgency first (lowest time remaining at top)
+        .lean();
+
+        const formattedData = pendingHolds.map(item => {
+            const holdDeadline = new Date(item.admissionHoldExpiresAt);
+            const remainingMs = Math.max(0, holdDeadline.getTime() - now.getTime());
+            const remainingSeconds = Math.floor(remainingMs / 1000);
+
+            return {
+                admissionAppointmentId: item._id,
+                admissionBookingId: item.bookingId,
+                parentOpdBooking: item.opdAppointmentId ? {
+                    opdBookingId: item.opdAppointmentId.bookingId,
+                    tokenNumber: item.opdAppointmentId.tokenNumber
+                } : null,
+                patient: {
+                    name: item.patients?.[0]?.patientName || item.userId?.name || "Patient",
+                    phone: item.userId?.phone || "N/A",
+                    age: item.patients?.[0]?.patientAge || item.userId?.age || 30,
+                    gender: item.patients?.[0]?.gender || item.userId?.gender || "Male"
+                },
+                doctor: {
+                    doctorId: item.doctorId?._id,
+                    name: item.doctorId?.name || "Doctor",
+                    speciality: item.doctorId?.speciality || "Specialist",
+                    cabinRoom: item.doctorId?.department?.roomNumber || "Cabin"
+                },
+                wardName: item.wardName || item.bedId?.wardId?.name,
+                bedNumber: item.bedNumber || item.bedId?.bedNumber,
+                bedId: item.bedId?._id,
+                isVentilatorAvailable: item.bedId?.isVentilatorAvailable || false,
+                depositPayable: item.totalAmount || item.pricingBreakdown?.depositPaidOnBooking || 1000,
+                stayDays: item.stayDuration || 1,
+                triageLevel: item.triageLevel || "Emergency",
+                bookingReason: item.bookingReason || "Admitted from OPD consultation",
+                holdExpiresAt: item.admissionHoldExpiresAt,
+                remainingSeconds: remainingSeconds,
+                formattedRemainingTime: `${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`,
+                vitalsAtAdmission: item.clinicalSummary?.vitals || null
+            };
+        });
+
+        res.status(200).json({
+            success: true,
+            count: formattedData.length,
+            message: "Pending admission holds fetched successfully.",
+            data: formattedData
+        });
+
+    } catch (error) {
+        console.error("Get Pending Admission Holds Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     getHospitalAllBookings, approveHospitalBooking, rejectHospitalBooking, getHospitalStats, collectHospitalOpdCounterPayment, recordOpdPatientVitals,
-    collectAdmissionCounterPayment
+    collectAdmissionCounterPayment,getHospitalPendingAdmissionHolds
 };
