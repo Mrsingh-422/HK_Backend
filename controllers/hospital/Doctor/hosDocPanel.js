@@ -495,102 +495,177 @@ const getDocDashboard = async (req, res) => {
 
 
 
-// @desc    Doctor Adds Prescription & Submits Digital Rx (Persists Follow-Up Date & Completes OPD Visit)
+// @desc    Doctor Adds Prescription (Handles FormData, Safe Vitals Parsing & Auto-Completes OPD)
 // @route   POST /hospital-doctor/panel/prescription/add
 // @access  Private (Hospital Doctor)
 const processPrescription = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        const { 
-            appointmentId, 
-            diagnosis, 
-            medicines, 
-            advice, 
-            vitals, 
-            advisedInvestigations, 
-            nextAppointment,        // 👈 Captured follow-up visit date/string
-            specialInstructions 
-        } = req.body;
+        // Accept appointmentId from Body, Query, or Params
+        const appointmentId = req.body.appointmentId || req.query.appointmentId || req.params.appointmentId;
 
         if (!appointmentId) {
             return res.status(400).json({ success: false, message: "appointmentId is required." });
         }
 
-        const appointment = await Appointment.findById(appointmentId).populate('userId', 'name phone fcmToken');
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Appointment record not found." });
-        }
-
-        const safeArrayParse = (val) => {
-            if (!val) return [];
-            if (Array.isArray(val)) return val;
-            try { return JSON.parse(val); } catch (e) { return []; }
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            doctorId,
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
         };
 
-        const parsedMedicines = safeArrayParse(medicines);
-        const parsedDiagnosis = Array.isArray(diagnosis) ? diagnosis : (typeof diagnosis === 'string' ? diagnosis.split(',').map(d => d.trim()) : []);
-
-        let prescriptionPdfUrl = null;
-        if (req.files && req.files['prescriptionPdf'] && req.files['prescriptionPdf'][0]) {
-            prescriptionPdfUrl = `/uploads/doctor_prescriptions/${req.files['prescriptionPdf'][0].filename}`;
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment record not found or access denied." });
         }
 
-        let dietPlanPdfUrl = null;
-        if (req.files && req.files['dietPlanPdf'] && req.files['dietPlanPdf'][0]) {
-            dietPlanPdfUrl = `/uploads/diet_plans/${req.files['dietPlanPdf'][0].filename}`;
+        const {
+            diagnosis,
+            medicines,
+            advice,
+            chiefComplaints,
+            advisedInvestigations,
+            specialInstructions,
+            nextAppointment,
+            vitals
+        } = req.body;
+
+        // 1. SAFE PARSING: Medicines Array
+        let parsedMedicines = [];
+        if (typeof medicines === 'string') {
+            try {
+                parsedMedicines = JSON.parse(medicines);
+            } catch (e) {
+                parsedMedicines = [];
+            }
+        } else if (Array.isArray(medicines)) {
+            parsedMedicines = medicines;
         }
 
+        // 2. SAFE PARSING: Diagnosis Array
+        let parsedDiagnosis = [];
+        if (typeof diagnosis === 'string') {
+            try {
+                const parsed = JSON.parse(diagnosis);
+                parsedDiagnosis = Array.isArray(parsed) ? parsed : [parsed];
+            } catch (e) {
+                parsedDiagnosis = diagnosis.split(',').map(d => d.trim()).filter(Boolean);
+            }
+        } else if (Array.isArray(diagnosis)) {
+            parsedDiagnosis = diagnosis;
+        }
+
+        // 3. 🛡️ CRASH-PROOF VITALS PARSER (Fixes CastError on "undefined" or null strings)
+        const parseVitalsSafely = (rawVitals, existing = {}) => {
+            if (!rawVitals || rawVitals === 'undefined' || rawVitals === 'null' || rawVitals === '') {
+                return existing && typeof existing === 'object' ? existing : {};
+            }
+            if (typeof rawVitals === 'object' && rawVitals !== null) {
+                return {
+                    bp: rawVitals.bp ? String(rawVitals.bp).trim() : (existing?.bp || ""),
+                    pulse: rawVitals.pulse ? String(rawVitals.pulse).trim() : (existing?.pulse || ""),
+                    temp: rawVitals.temp ? String(rawVitals.temp).trim() : (existing?.temp || ""),
+                    spo2: rawVitals.spo2 ? String(rawVitals.spo2).trim() : (existing?.spo2 || "")
+                };
+            }
+            if (typeof rawVitals === 'string') {
+                try {
+                    const parsed = JSON.parse(rawVitals);
+                    if (parsed && typeof parsed === 'object') {
+                        return {
+                            bp: parsed.bp ? String(parsed.bp).trim() : (existing?.bp || ""),
+                            pulse: parsed.pulse ? String(parsed.pulse).trim() : (existing?.pulse || ""),
+                            temp: parsed.temp ? String(parsed.temp).trim() : (existing?.temp || ""),
+                            spo2: parsed.spo2 ? String(parsed.spo2).trim() : (existing?.spo2 || "")
+                        };
+                    }
+                } catch (e) {
+                    return existing && typeof existing === 'object' ? existing : {};
+                }
+            }
+            return existing && typeof existing === 'object' ? existing : {};
+        };
+
+        const safeVitals = parseVitalsSafely(vitals, appointment.clinicalSummary?.vitals);
+
+        // 4. File Upload Paths
+        let prescriptionPdfPath = null;
+        let dietPlanPdfPath = null;
+
+        if (req.files) {
+            if (req.files.prescriptionPdf && req.files.prescriptionPdf[0]) {
+                prescriptionPdfPath = `/uploads/doctor_prescriptions/${req.files.prescriptionPdf[0].filename}`;
+            }
+            if (req.files.dietPlanPdf && req.files.dietPlanPdf[0]) {
+                dietPlanPdfPath = `/uploads/diet_plans/${req.files.dietPlanPdf[0].filename}`;
+            }
+        }
+
+        // 5. Create or Update Digital Prescription Document
         const newPrescription = await Prescription.create({
             appointmentId: appointment._id,
-            doctorId,
+            doctorId: doctorId,
             userId: appointment.userId._id,
+            chiefComplaints: chiefComplaints || appointment.clinicalSummary?.chiefComplaint || "",
             diagnosis: parsedDiagnosis,
-            medicines: parsedMedicines,
-            adviceGiven: advice || "",
-            vitals: vitals || {},
+            medicines: parsedMedicines.map(m => ({
+                name: m.name || m.medicineName || "Prescribed Medicine",
+                dose: m.dose || m.dosage || "",
+                time: m.time || m.frequency || "",
+                duration: m.duration || "",
+                instructions: m.instructions || "",
+                frequency: m.frequency || "",
+                dosage: m.dosage || m.dose || ""
+            })),
+            vitals: safeVitals,
             advisedInvestigations: advisedInvestigations || "None",
-            nextAppointment: nextAppointment ? String(nextAppointment).trim() : "", // 👈 Persisted follow-up date
+            adviceGiven: advice || "",
             specialInstructions: specialInstructions || "",
-            pdfUrl: prescriptionPdfUrl,
-            dietPlanPdf: dietPlanPdfUrl
+            nextAppointment: nextAppointment || "",
+            pdfUrl: prescriptionPdfPath,
+            dietPlanPdf: dietPlanPdfPath
         });
 
-        // If OPD, writing prescription completes the consultation visit
+        // 6. Update Appointment Clinical Summary & Auto-Complete OPD
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+
+        appointment.clinicalSummary.diagnosis = parsedDiagnosis.join(', ');
+        appointment.clinicalSummary.treatmentResult = advice || "Prescription issued by doctor.";
+        appointment.clinicalSummary.vitals = safeVitals;
+
+        if (prescriptionPdfPath) {
+            appointment.clinicalSummary.dischargeSummaryPdf = prescriptionPdfPath;
+        }
+
+        // For OPD consultations, adding prescription completes the visit
         if (appointment.bookingType === 'OPD') {
             appointment.status = 'Completed';
-            if (appointment.paymentMethod === 'COD') {
-                appointment.paymentStatus = 'Paid';
-            }
-            appointment.clinicalSummary = {
-                ...appointment.clinicalSummary,
-                diagnosis: parsedDiagnosis.join(', '),
-                dischargeNote: advice || "OPD consultation completed.",
-                dischargedAt: new Date()
-            };
+            appointment.clinicalSummary.dischargedAt = new Date();
         }
 
         await appointment.save();
 
-        // Push Alert to Patient that Digital Rx is Ready
+        // 7. Push Notification to Patient
         if (appointment.userId) {
             try {
                 await sendPushNotification(
                     appointment.userId._id,
                     'user',
                     "Digital Prescription Ready! 📄",
-                    `Dr. ${req.user.name || 'Doctor'} has issued your digital prescription for consultation #${appointment.bookingId}.`,
-                    { appointmentId: appointment._id.toString(), prescriptionId: newPrescription._id.toString(), type: 'prescription_issued' }
+                    `Dr. ${req.user.name} has added your prescription. Tap to view and download.`,
+                    { appointmentId: appointment._id.toString(), type: 'prescription_added' }
                 );
             } catch (e) {}
         }
 
         res.status(200).json({
             success: true,
-            message: appointment.bookingType === 'OPD' 
-                ? "Prescription saved and OPD consultation marked as Completed!"
-                : "Prescription added successfully to in-patient records.",
-            bookingStatus: appointment.status,
-            data: newPrescription
+            message: "Prescription processed successfully.",
+            data: {
+                prescription: newPrescription,
+                appointmentStatus: appointment.status,
+                isOpdCompleted: appointment.bookingType === 'OPD'
+            }
         });
 
     } catch (error) {
