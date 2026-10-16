@@ -495,13 +495,13 @@ const getDocDashboard = async (req, res) => {
 
 
 
-// @desc    Doctor Adds Prescription (Handles FormData, Safe Vitals Parsing & Auto-Completes OPD)
+// @desc    Hospital Doctor Generates NMC-Formatted OPD Prescription (Hospital Tenancy & OPD Locked)
 // @route   POST /hospital-doctor/panel/prescription/add
-// @access  Private (Hospital Doctor)
+// @access  Private (Hospital Doctor Only)
 const processPrescription = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        // Accept appointmentId from Body, Query, or Params
+        const hospitalId = req.user.hospitalId; // Strict hospital tenancy resolution
         const appointmentId = req.body.appointmentId || req.query.appointmentId || req.params.appointmentId;
 
         if (!appointmentId) {
@@ -511,12 +511,17 @@ const processPrescription = async (req, res) => {
         const isObjectId = mongoose.isValidObjectId(appointmentId);
         const query = {
             doctorId,
+            hospitalId, // Ensures doctor can only prescribe within their own hospital
+            bookingType: 'OPD', // Strictly locked to OPD Consultations only
             ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
         };
 
         const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Appointment record not found or access denied." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Active OPD appointment record not found or access denied for this hospital doctor." 
+            });
         }
 
         const {
@@ -530,19 +535,50 @@ const processPrescription = async (req, res) => {
             vitals
         } = req.body;
 
-        // 1. SAFE PARSING: Medicines Array
-        let parsedMedicines = [];
+        // 1. SAFE PARSER: NMC Medicines Queue Array
+        let rawMedicinesList = [];
         if (typeof medicines === 'string') {
             try {
-                parsedMedicines = JSON.parse(medicines);
+                rawMedicinesList = JSON.parse(medicines);
             } catch (e) {
-                parsedMedicines = [];
+                rawMedicinesList = [];
             }
         } else if (Array.isArray(medicines)) {
-            parsedMedicines = medicines;
+            rawMedicinesList = medicines;
         }
 
-        // 2. SAFE PARSING: Diagnosis Array
+        if (!rawMedicinesList || rawMedicinesList.length === 0) {
+            return res.status(400).json({ success: false, message: "At least one medicine item is required in the prescription formulation queue." });
+        }
+
+        // Map NMC formulation fields exactly matching frontend UI design
+        const parsedMedicines = rawMedicinesList.map(item => {
+            const medName = String(item.name || item.medicineName || "Prescribed Medicine").trim();
+            const strengthVal = String(item.strength || "").trim();
+            const freqVal = String(item.frequency || "q.d.").trim();
+            const intervalVal = String(item.doseInterval || item.dose || "1-0-0").trim();
+            const durationVal = String(item.duration || "5 days").trim();
+            const qtyVal = String(item.dispenseQuantity || "10 Tablets").trim();
+            const timingVal = String(item.administrationTiming || item.instructions || "p.c. (After meals)").trim();
+
+            return {
+                name: medName,
+                isCustomGeneric: Boolean(item.isCustomGeneric === true || item.isCustomGeneric === 'true'),
+                genericComposition: String(item.genericComposition || "").trim(),
+                strength: strengthVal,
+                frequency: freqVal,
+                doseInterval: intervalVal,
+                duration: durationVal,
+                dispenseQuantity: qtyVal,
+                administrationTiming: timingVal,
+                instructions: timingVal,
+                dose: intervalVal, // Backward compatibility
+                time: intervalVal, // Backward compatibility
+                dosage: strengthVal // Backward compatibility
+            };
+        });
+
+        // 2. SAFE PARSER: Diagnosis Array
         let parsedDiagnosis = [];
         if (typeof diagnosis === 'string') {
             try {
@@ -555,7 +591,7 @@ const processPrescription = async (req, res) => {
             parsedDiagnosis = diagnosis;
         }
 
-        // 3. 🛡️ CRASH-PROOF VITALS PARSER (Fixes CastError on "undefined" or null strings)
+        // 3. SAFE PARSER: Vitals (Without schema crash)
         const parseVitalsSafely = (rawVitals, existing = {}) => {
             if (!rawVitals || rawVitals === 'undefined' || rawVitals === 'null' || rawVitals === '') {
                 return existing && typeof existing === 'object' ? existing : {};
@@ -588,7 +624,7 @@ const processPrescription = async (req, res) => {
 
         const safeVitals = parseVitalsSafely(vitals, appointment.clinicalSummary?.vitals);
 
-        // 4. File Upload Paths
+        // 4. File uploads
         let prescriptionPdfPath = null;
         let dietPlanPdfPath = null;
 
@@ -608,15 +644,7 @@ const processPrescription = async (req, res) => {
             userId: appointment.userId._id,
             chiefComplaints: chiefComplaints || appointment.clinicalSummary?.chiefComplaint || "",
             diagnosis: parsedDiagnosis,
-            medicines: parsedMedicines.map(m => ({
-                name: m.name || m.medicineName || "Prescribed Medicine",
-                dose: m.dose || m.dosage || "",
-                time: m.time || m.frequency || "",
-                duration: m.duration || "",
-                instructions: m.instructions || "",
-                frequency: m.frequency || "",
-                dosage: m.dosage || m.dose || ""
-            })),
+            medicines: parsedMedicines,
             vitals: safeVitals,
             advisedInvestigations: advisedInvestigations || "None",
             adviceGiven: advice || "",
@@ -626,33 +654,30 @@ const processPrescription = async (req, res) => {
             dietPlanPdf: dietPlanPdfPath
         });
 
-        // 6. Update Appointment Clinical Summary & Auto-Complete OPD
-        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+        // 6. Complete the OPD Encounter & Update Clinical Summary
+        const now = new Date();
+        appointment.status = 'Completed'; // Completing OPD consultation advances queue & syncs wallet
 
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
         appointment.clinicalSummary.diagnosis = parsedDiagnosis.join(', ');
-        appointment.clinicalSummary.treatmentResult = advice || "Prescription issued by doctor.";
+        appointment.clinicalSummary.treatmentResult = advice || "NMC Formulation prescription generated.";
         appointment.clinicalSummary.vitals = safeVitals;
+        appointment.clinicalSummary.dischargedAt = now;
 
         if (prescriptionPdfPath) {
             appointment.clinicalSummary.dischargeSummaryPdf = prescriptionPdfPath;
         }
 
-        // For OPD consultations, adding prescription completes the visit
-        if (appointment.bookingType === 'OPD') {
-            appointment.status = 'Completed';
-            appointment.clinicalSummary.dischargedAt = new Date();
-        }
-
         await appointment.save();
 
-        // 7. Push Notification to Patient
+        // 7. Send Push Notification to Patient
         if (appointment.userId) {
             try {
                 await sendPushNotification(
                     appointment.userId._id,
                     'user',
-                    "Digital Prescription Ready! 📄",
-                    `Dr. ${req.user.name} has added your prescription. Tap to view and download.`,
+                    "Prescription Generated 📄",
+                    `Dr. ${req.user.name} has added your prescription (${parsedMedicines.length} medicine(s)). Tap to view.`,
                     { appointmentId: appointment._id.toString(), type: 'prescription_added' }
                 );
             } catch (e) {}
@@ -660,11 +685,19 @@ const processPrescription = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: "Prescription processed successfully.",
+            message: `NMC Prescription generated successfully for Token #${appointment.tokenNumber || '1'}. Consultation marked Completed.`,
+            tokenNumber: appointment.tokenNumber,
+            appointmentStatus: appointment.status,
+            prescriptionId: newPrescription._id,
             data: {
                 prescription: newPrescription,
-                appointmentStatus: appointment.status,
-                isOpdCompleted: appointment.bookingType === 'OPD'
+                appointment: {
+                    id: appointment._id,
+                    bookingId: appointment.bookingId,
+                    tokenNumber: appointment.tokenNumber,
+                    status: appointment.status,
+                    completedAt: now
+                }
             }
         });
 
@@ -1118,34 +1151,48 @@ const updateDutyStatus = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 9. GET MEDICINE TEMPLATES
-// 9. GET MEDICINE TEMPLATES (Updated: Fetching dynamically from real Medicine Database collection)
+// @desc    Get Master Medicines Catalog for Doctor to Search & Auto-Fill Strength/Packaging
+// @route   GET /hospital-doctor/panel/medicines
+// @access  Private (Hospital Doctor)
 const getMedicineList = async (req, res) => {
     try {
-        const { search, page = 1, limit = 20 } = req.query; // Paginated and searchable
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const { search, page = 1, limit = 20 } = req.query;
 
         let query = {};
-
-        // Case-insensitive regex matching for medicine names in the database
-        if (search) {
-            query.name = { $regex: search, $options: 'i' };
+        if (search && search.trim() !== "") {
+            query.$or = [
+                { name: { $regex: search.trim(), $options: 'i' } },
+                { salt_composition: { $regex: search.trim(), $options: 'i' } }
+            ];
         }
 
-        // Fetching lightweight fields first to keep API response speed extremely fast
-        const medicines = await Medicine.find(query)
-            .select('name manufacturers salt_composition mrp best_price prescription_required')
-            .sort({ name: 1 }) // Alphabetic sorting
-            .skip(skip)
-            .limit(parseInt(limit));
+        const skip = (Math.max(1, parseInt(page)) - 1) * Math.max(1, parseInt(limit));
 
-        res.json({ 
-            success: true, 
-            count: medicines.length, 
-            data: medicines 
+        const medicines = await Medicine.find(query)
+            .select('name salt_composition packaging mrp image_url')
+            .limit(Math.max(1, parseInt(limit)))
+            .skip(skip)
+            .sort({ name: 1 })
+            .lean();
+
+        const formattedList = medicines.map(med => ({
+            id: med._id,
+            name: med.name,
+            genericComposition: med.salt_composition || "",
+            packaging: med.packaging || "10 Tablets",
+            estimatedMrp: med.mrp || "0",
+            imageUrl: Array.isArray(med.image_url) && med.image_url.length > 0 ? med.image_url[0] : null
+        }));
+
+        res.status(200).json({
+            success: true,
+            count: formattedList.length,
+            data: formattedList
         });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+
+    } catch (error) {
+        console.error("Get Doctor Medicine List Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1632,15 +1679,46 @@ const getAssignedCases = async (req, res) => {
 };
 
 
-// Fetch existing prescriptions for a patient/appointment
+// @desc    Get Prescription by Appointment ID (Enriched with Doctor & Hospital Header for Printing)
+// @route   GET /hospital-doctor/panel/prescriptions/:appointmentId
+// @access  Private (Hospital Doctor or Hospital Admin)
 const getPrescriptionsByAppointment = async (req, res) => {
     try {
         const { appointmentId } = req.params;
-        const prescriptions = await Prescription.find({ appointmentId })
-            .populate('doctorId', 'name speciality qualification')
-            .sort({ createdAt: -1 });
-        res.json({ success: true, data: prescriptions });
+
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = isObjectId ? { appointmentId } : { 'appointmentId.bookingId': appointmentId };
+
+        const prescription = await Prescription.findOne(isObjectId ? { appointmentId } : {})
+            .populate({
+                path: 'appointmentId',
+                select: 'bookingId tokenNumber appointmentDate appointmentTime status bookingType hospitalId',
+                populate: {
+                    path: 'hospitalId',
+                    select: 'name address phone city hospitalImage'
+                }
+            })
+            .populate('doctorId', 'name speciality qualification councilNumber department profileImage')
+            .populate('userId', 'name phone gender dob age')
+            .lean();
+
+        if (!prescription) {
+            return res.status(404).json({ success: false, message: "No prescription record found for this appointment." });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                ...prescription,
+                hospitalHeader: prescription.appointmentId?.hospitalId || null,
+                patientDetails: prescription.userId || null,
+                doctorDetails: prescription.doctorId || null,
+                medicinesCount: prescription.medicines ? prescription.medicines.length : 0
+            }
+        });
+
     } catch (error) {
+        console.error("Get Prescription By Appointment Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -22,7 +22,7 @@ const {
     manageDoctorLeaveByHospital,
     getHospitalDoctorPendingLeaves,
     hospitalAdminRescheduleAppointment,
-    getHospitalLiveCabinsOverview
+    getHospitalLiveCabinsOverview,getHospitalPrescriptionByAppointment
     
 
 } = require('../../controllers/hospital/HospitalPanel');
@@ -135,6 +135,11 @@ router.patch('/doctors/leave-approval', protect('hospital'), manageDoctorLeaveBy
 router.post('/appointments/reschedule', protect('hospital'), hospitalAdminRescheduleAppointment);
 
 router.get('/opd/live-cabins', protect('hospital'), getHospitalLiveCabinsOverview);
+router.get(
+    '/prescriptions/:appointmentId', 
+    protect('hospital'), 
+    getHospitalPrescriptionByAppointment
+);
 
 
 module.exports = router;

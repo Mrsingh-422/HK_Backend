@@ -4094,6 +4094,115 @@ const getHospitalLiveCabinsOverview = async (req, res) => {
 };
 
 
+// @desc    Hospital Admin / In-House Pharmacy Desk Fetches OPD Prescription (Enforced Hospital Tenancy)
+// @route   GET /hospital/panel/prescriptions/:appointmentId
+// @access  Private (Hospital Admin / Reception Desk)
+const getHospitalPrescriptionByAppointment = async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        const hospitalId = req.user.id; // Hospital token id
+
+        // 1. Verify Appointment belongs to this specific hospital
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const apptQuery = {
+            hospitalId,
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(apptQuery)
+            .populate('doctorId', 'name speciality qualification councilNumber department profileImage')
+            .populate('userId', 'name phone gender dob age')
+            .lean();
+
+        if (!appointment) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Appointment record not found in this hospital or unauthorized." 
+            });
+        }
+
+        // 2. Fetch the digital prescription linked with this appointment
+        const prescription = await Prescription.findOne({ appointmentId: appointment._id }).lean();
+
+        if (!prescription) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "No prescription record found for this appointment." 
+            });
+        }
+
+        // 3. Return enriched NMC formulation data with hospital header for in-house dispensing & billing
+        res.status(200).json({
+            success: true,
+            message: "Prescription details fetched successfully for hospital panel.",
+            data: {
+                prescriptionId: prescription._id,
+                appointment: {
+                    id: appointment._id,
+                    bookingId: appointment.bookingId,
+                    tokenNumber: appointment.tokenNumber,
+                    bookingType: appointment.bookingType,
+                    appointmentDate: appointment.appointmentDate,
+                    appointmentTime: appointment.appointmentTime,
+                    status: appointment.status
+                },
+                hospitalHeader: {
+                    id: req.user._id,
+                    name: req.user.name,
+                    address: req.user.address || "",
+                    city: req.user.city || "",
+                    phone: req.user.phone || "",
+                    image: req.user.hospitalImage?.[0] || null
+                },
+                doctorDetails: {
+                    id: appointment.doctorId?._id,
+                    name: appointment.doctorId?.name || "Doctor",
+                    speciality: appointment.doctorId?.speciality || "Specialist",
+                    qualification: appointment.doctorId?.qualification || "MBBS",
+                    registrationNumber: appointment.doctorId?.councilNumber || "N/A",
+                    cabinRoom: appointment.doctorId?.department?.roomNumber || "Cabin",
+                    image: appointment.doctorId?.profileImage || null
+                },
+                patientDetails: {
+                    id: appointment.userId?._id,
+                    name: appointment.patients?.[0]?.patientName || appointment.userId?.name || "Patient",
+                    phone: appointment.userId?.phone || "N/A",
+                    age: appointment.patients?.[0]?.patientAge || appointment.userId?.age || 30,
+                    gender: appointment.patients?.[0]?.gender || appointment.userId?.gender || "Male"
+                },
+                clinicalNotes: {
+                    chiefComplaints: prescription.chiefComplaints || "",
+                    diagnosis: prescription.diagnosis || [],
+                    vitals: prescription.vitals || appointment.clinicalSummary?.vitals || {},
+                    advisedInvestigations: prescription.advisedInvestigations || "None",
+                    adviceGiven: prescription.adviceGiven || "",
+                    specialInstructions: prescription.specialInstructions || "",
+                    nextAppointment: prescription.nextAppointment || ""
+                },
+                medicines: (prescription.medicines || []).map(m => ({
+                    name: m.name,
+                    strength: m.strength || "",
+                    doseInterval: m.doseInterval || m.dose || "1-0-0",
+                    frequency: m.frequency || "q.d.",
+                    duration: m.duration || "5 days",
+                    dispenseQuantity: m.dispenseQuantity || "10 Tablets",
+                    administrationTiming: m.administrationTiming || m.instructions || "p.c. (After meals)",
+                    isCustomGeneric: m.isCustomGeneric || false,
+                    genericComposition: m.genericComposition || ""
+                })),
+                medicinesCount: prescription.medicines ? prescription.medicines.length : 0,
+                pdfUrl: prescription.pdfUrl || appointment.clinicalSummary?.dischargeSummaryPdf || null,
+                dietPlanPdf: prescription.dietPlanPdf || null,
+                generatedAt: prescription.createdAt
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Hospital Prescription Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = { 
     getHospitalMasterData,getHospitalDashboardStats,
@@ -4122,5 +4231,5 @@ module.exports = {
     manageDoctorLeaveByHospital,
     getHospitalDoctorPendingLeaves,
     hospitalAdminRescheduleAppointment,
-    getHospitalLiveCabinsOverview
+    getHospitalLiveCabinsOverview,getHospitalPrescriptionByAppointment
 };

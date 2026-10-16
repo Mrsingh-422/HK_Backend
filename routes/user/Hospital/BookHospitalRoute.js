@@ -17,7 +17,8 @@ const {
 
     getHospitalDoctorOpdSlots,
     getHospitalOpdCheckoutSummary,
-    bookHospitalOpdAppointment,getHospitalOpdLiveQueue,getHospitalBookingDetails,
+    bookHospitalOpdAppointment,getHospitalOpdLiveQueue,
+    getUserOpdPrescription,getHospitalBookingDetails,
 
     getActiveAdmissionHold,
     createAdmissionPaymentOrder,
@@ -72,6 +73,8 @@ router.post('/opd/checkout-summary', protect('user'), getHospitalOpdCheckoutSumm
 // 3. Book OPD Appointment (Token Generation)
 router.post('/opd/book', protect('user'), bookHospitalOpdAppointment);
 router.get('/opd/live-queue/:appointmentId', protect('user'), getHospitalOpdLiveQueue);
+router.get('/opd/prescription/:appointmentId', protect('user'), getUserOpdPrescription);
+
 router.get('/booking-details/:id', protect('user'), getHospitalBookingDetails);
 
 // Patient App: View Admission Bill, Pay Online, or Decline
