@@ -1550,160 +1550,246 @@ const rateHospitalAdmission = async (req, res) => {
     }
 };
 
-// @desc    Get Hospital Doctor's OPD Available Slots (Synced with Leaves, Blocked Slots & Premium Slot Fees)
+// @desc    Get Available OPD Slots for Hospital Doctor (Timezone Aware, Dynamic Vendor Sync, Multiple Shifts & Blocked Reasons)
 // @route   GET /user/hospital/doctors/:doctorId/opd-slots
-// @access  Public / User
+// @access  Public
 const getHospitalDoctorOpdSlots = async (req, res) => {
     try {
         const { doctorId } = req.params;
-        const { hospitalId, date } = req.query;
+        const { date, hospitalId } = req.query; // date=YYYY-MM-DD
 
-        if (!doctorId || !hospitalId) {
-            return res.status(400).json({ success: false, message: "doctorId and hospitalId are required." });
+        if (!date || date.trim() === '') {
+            return res.status(400).json({ success: false, message: "date query parameter is required (format: YYYY-MM-DD)." });
         }
 
-        const targetDate = date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
-        const dayOfWeek = moment(targetDate).format('ddd'); // 'Mon', 'Tue' etc.
-        const targetMoment = moment(targetDate, 'YYYY-MM-DD').startOf('day');
+        // Standardize Target Date in Indian Standard Time (IST)
+        const targetDateStr = date.trim();
+        const targetDate = moment(targetDateStr, "YYYY-MM-DD");
+        if (!targetDate.isValid()) {
+            return res.status(400).json({ success: false, message: "Invalid date format. Use YYYY-MM-DD." });
+        }
 
-        const doctor = await Doctor.findOne({ _id: doctorId, hospitalId, profileStatus: 'Approved', isActive: true });
+        const doctorQuery = { _id: doctorId };
+        if (hospitalId && mongoose.isValidObjectId(hospitalId)) {
+            doctorQuery.hospitalId = hospitalId;
+        }
+
+        // 1. Fetch Doctor Profile & Base Config
+        const doctor = await Doctor.findOne(doctorQuery)
+            .select('name speciality fees slotDuration availability department leaves hospitalId')
+            .lean();
+
         if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor not found or not associated with this hospital." });
         }
 
-        // 1. Is Doctor OPD enabled?
-        const isOpdEnabled = doctor.consultationStatus?.clinic ?? true;
-        if (!isOpdEnabled) {
-            return res.status(200).json({
-                success: true,
-                date: targetDate,
-                isOpdDisabled: true,
-                message: `Dr. ${doctor.name} is currently not accepting OPD consultations.`,
-                slots: []
-            });
-        }
-
-        // 2. Is Doctor on Approved Leave on this Date?
-        const isApprovedLeave = (doctor.leaves || []).some(l => {
-            if (l.status !== 'Approved') return false;
-            const lStart = moment(l.startDate).startOf('day');
-            const lEnd = moment(l.endDate).endOf('day');
-            return targetMoment.isSameOrAfter(lStart) && targetMoment.isSameOrBefore(lEnd);
+        // 2. APPROVED LEAVES CHECK: Block entire day if doctor is on approved leave
+        const isOnApprovedLeave = Array.isArray(doctor.leaves) && doctor.leaves.some(leave => {
+            if (leave.status !== 'Approved') return false;
+            const lStart = moment(leave.startDate).format("YYYY-MM-DD");
+            const lEnd = moment(leave.endDate).format("YYYY-MM-DD");
+            return targetDateStr >= lStart && targetDateStr <= lEnd;
         });
 
-        if (isApprovedLeave) {
+        if (isOnApprovedLeave) {
             return res.status(200).json({
                 success: true,
-                date: targetDate,
-                isDoctorOnLeave: true,
-                message: `Dr. ${doctor.name} is on approved leave on ${targetDate}. No OPD slots available.`,
+                isClosed: true,
+                reason: `Dr. ${doctor.name} is on approved leave on ${targetDateStr}. Please select another date.`,
                 slots: []
             });
         }
 
-        // 3. Resolve Working Hours from Database
-        let startHour = null;
-        let endHour = null;
-        let slotDuration = Number(doctor.slotDuration || 15);
-        let isDayActive = false;
+        // 3. FETCH VENDOR AVAILABILITY (Without hardcoded vendorType constraint for maximum compatibility)
+        const availabilityConfig = await Availability.findOne({ vendorId: doctor._id }).lean();
 
+        // Check if date is globally marked as holiday/blocked
+        if (availabilityConfig && Array.isArray(availabilityConfig.blockedDates)) {
+            const isDateBlocked = availabilityConfig.blockedDates.some(d => moment(d).format("YYYY-MM-DD") === targetDateStr);
+            if (isDateBlocked) {
+                return res.status(200).json({
+                    success: true,
+                    isClosed: true,
+                    reason: `OPD is closed on ${targetDateStr} (Holiday / Off-day).`,
+                    slots: []
+                });
+            }
+        }
+
+        // Helper function: Normalize any time string (12H or 24H) to standard "HH:mm" (24H format)
+        const normalizeTo24H = (timeStr) => {
+            if (!timeStr) return "";
+            const clean = String(timeStr).trim();
+            if (/^\d{1,2}:\d{2}$/.test(clean)) {
+                const [h, m] = clean.split(':').map(Number);
+                return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            }
+            const parsed = moment(clean, ["hh:mm A", "h:mm A", "HH:mm", "H:mm", "hh:mma", "h:mma"]);
+            return parsed.isValid() ? parsed.format("HH:mm") : clean;
+        };
+
+        // 4. MAP DYNAMIC SHIFTS (Resolves Multiple Daily Shifts and End-Time cutoff issues)
+        const dayName = targetDate.format('ddd'); // 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'
+        let shiftsToProcess = [];
+
+        // Check day-specific shifts from doctor.availability array
         if (Array.isArray(doctor.availability) && doctor.availability.length > 0) {
-            const dayConfig = doctor.availability.find(a => a.day === dayOfWeek);
-            if (dayConfig && dayConfig.startTime && dayConfig.endTime) {
-                startHour = dayConfig.startTime;
-                endHour = dayConfig.endTime;
-                isDayActive = true;
+            const dayMatches = doctor.availability.filter(a => a.day === dayName && a.startTime && a.endTime);
+            if (dayMatches.length > 0) {
+                shiftsToProcess = dayMatches.map(s => ({
+                    startTime: normalizeTo24H(s.startTime),
+                    endTime: normalizeTo24H(s.endTime)
+                }));
             }
         }
 
-        if (!isDayActive || !startHour || !endHour) {
-            return res.status(200).json({
-                success: true,
-                date: targetDate,
-                isDoctorOff: true,
-                message: `Dr. ${doctor.name} does not have an active OPD schedule on ${dayOfWeek}s.`,
-                slots: []
+        // Fallback to Availability document if day-specific array is empty
+        if (shiftsToProcess.length === 0 && availabilityConfig && availabilityConfig.startTime && availabilityConfig.endTime) {
+            shiftsToProcess.push({
+                startTime: normalizeTo24H(availabilityConfig.startTime),
+                endTime: normalizeTo24H(availabilityConfig.endTime)
             });
         }
 
-        // 4. Fetch Blocked Slots & Premium Slots Config from Availability Model
-        const availabilityConfig = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
-        const blockedSlotsMap = {};
-        const premiumSlotsList = availabilityConfig?.premiumSlots || [];
+        // Absolute default fallback if unconfigured
+        if (shiftsToProcess.length === 0) {
+            shiftsToProcess.push({ startTime: "09:00", endTime: "18:00" });
+        }
 
-        (availabilityConfig?.blockedSlotsWithReason || []).forEach(b => {
-            if (b.date === targetDate) {
-                blockedSlotsMap[b.time] = b.reason;
-            }
-        });
+        // 5. FETCH BOOKED APPOINTMENTS FOR THIS DAY
+        const dayStart = targetDate.clone().startOf('day').toDate();
+        const dayEnd = targetDate.clone().endOf('day').toDate();
 
-        // 5. Fetch Booked Appointments for this Date
         const bookedAppointments = await Appointment.find({
-            hospitalId,
-            doctorId,
+            doctorId: doctor._id,
             bookingType: 'OPD',
-            appointmentDate: {
-                $gte: targetMoment.toDate(),
-                $lte: moment(targetDate).endOf('day').toDate()
-            },
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            appointmentDate: { $gte: dayStart, $lte: dayEnd }
         }).select('appointmentTime').lean();
 
-        const bookedTimes = bookedAppointments.map(b => b.appointmentTime);
-        const opdConsultationFee = Number(doctor.fees?.clinic !== undefined ? doctor.fees.clinic : 0);
+        const bookedTimes24 = bookedAppointments.map(a => normalizeTo24H(a.appointmentTime));
 
-        // 6. Generate Slots Grid with Dynamic Premium Fees
+        // 6. BUILD BLOCKED SLOTS & PREMIUM MAPS SAFELY
+        const unavailableSlots24 = (availabilityConfig?.unavailableSlots || []).map(normalizeTo24H);
+
+        // Map blocked slots with specific reasons matching targetDate safely
+        const blockedReasonsMap = {};
+        (availabilityConfig?.blockedSlotsWithReason || []).forEach(item => {
+            const itemDateStr = moment(item.date).format("YYYY-MM-DD");
+            if (itemDateStr === targetDateStr) {
+                const normalizedTime = normalizeTo24H(item.time);
+                blockedReasonsMap[normalizedTime] = item.reason || "Doctor unavailable";
+            }
+        });
+
+        // Map premium slot fees
+        const premiumSlotsMap = {};
+        (availabilityConfig?.premiumSlots || []).forEach(item => {
+            const normalizedTime = normalizeTo24H(item.time);
+            premiumSlotsMap[normalizedTime] = Number(item.extraFee || 0);
+        });
+
+        // 7. SLOT GENERATION ENGINE (Timezone Aware for IST + Preserves Block Reasons)
+        const duration = Math.max(5, Number(doctor.slotDuration || 15));
+        const baseConsultationFee = Number(doctor.fees?.clinic || 500);
         const slots = [];
-        const startMoment = moment(`${targetDate} ${startHour}`, 'YYYY-MM-DD HH:mm');
-        const endMoment = moment(`${targetDate} ${endHour}`, 'YYYY-MM-DD HH:mm');
-        const nowMoment = moment();
 
-        while (startMoment.isBefore(endMoment)) {
-            const timeString = startMoment.format('hh:mm A');
-            const time24 = startMoment.format('HH:mm');
-            const isPast = moment(targetDate).isSame(moment(), 'day') && startMoment.isBefore(nowMoment);
-            const isBooked = bookedTimes.includes(timeString);
-            const blockedReason = blockedSlotsMap[timeString] || null;
-            const isManuallyBlocked = !!blockedReason;
+        // Exact Indian Standard Time (IST) Clock
+        const nowIST = moment().utcOffset("+05:30");
+        const isToday = targetDateStr === nowIST.format("YYYY-MM-DD");
 
-            const isAvailable = !isPast && !isBooked && !isManuallyBlocked;
-            let statusText = "Available";
-            if (isPast) statusText = "Passed";
-            else if (isBooked) statusText = "Booked";
-            else if (isManuallyBlocked) statusText = "Unavailable";
+        for (const shift of shiftsToProcess) {
+            const [startH, startM] = shift.startTime.split(':').map(Number);
+            const [endH, endM] = shift.endTime.split(':').map(Number);
 
-            // Check if this slot is configured as Premium
-            const matchedPremium = premiumSlotsList.find(p => p.time === timeString || p.time === time24);
-            const isPremium = !!matchedPremium && Number(matchedPremium.extraFee || 0) > 0;
-            const premiumFee = isPremium ? Number(matchedPremium.extraFee) : 0;
-            const totalSlotFee = opdConsultationFee + premiumFee;
+            let currentMinutes = startH * 60 + startM;
+            const endMinutes = endH * 60 + endM;
 
-            slots.push({
-                time: timeString,
-                time24,
-                isAvailable,
-                status: statusText,
-                blockedReason,
-                isPremium,
-                premiumFee,
-                totalSlotFee
-            });
+            while (currentMinutes + duration <= endMinutes) {
+                const h = Math.floor(currentMinutes / 60);
+                const m = currentMinutes % 60;
+                const timeStr24 = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                const timeFormatted = moment(timeStr24, "HH:mm").format("hh:mm A");
 
-            startMoment.add(slotDuration, 'minutes');
+                // Shift categorization
+                let category = "Morning";
+                if (h >= 12 && h < 17) category = "Afternoon";
+                else if (h >= 17) category = "Evening";
+
+                // Check past status using strict IST time
+                const slotMomentIST = moment.utc(`${targetDateStr} ${timeStr24}`, "YYYY-MM-DD HH:mm").utcOffset("+05:30");
+                const isPast = isToday && slotMomentIST.isBefore(nowIST);
+
+                const isAlreadyBooked = bookedTimes24.includes(timeStr24);
+                const blockReason = blockedReasonsMap[timeStr24] || null;
+                const isBlockedWithReason = Boolean(blockReason);
+                const isManuallyUnavailable = unavailableSlots24.includes(timeStr24);
+
+                // 🚨 CRITICAL FIX: Status Priority Logic (Block Reason preserved even if slot passed)
+                let status = "Available";
+                let isAvailable = true;
+
+                if (isBlockedWithReason) {
+                    status = "Blocked";
+                    isAvailable = false;
+                } else if (isManuallyUnavailable) {
+                    status = "Unavailable";
+                    isAvailable = false;
+                } else if (isAlreadyBooked) {
+                    status = "Booked";
+                    isAvailable = false;
+                } else if (isPast) {
+                    status = "Past";
+                    isAvailable = false;
+                }
+
+                // Premium Slot Calculation
+                const extraFee = premiumSlotsMap[timeStr24] || 0;
+                const isPremium = extraFee > 0;
+                const totalFee = baseConsultationFee + extraFee;
+
+                slots.push({
+                    time: timeFormatted,
+                    time24: timeStr24,
+                    category,
+                    isAvailable,
+                    status,
+                    isPremium,
+                    premiumFee: extraFee,
+                    baseFee: baseConsultationFee,
+                    totalFee,
+                    blockReason: blockReason || (status === "Unavailable" ? "Slot disabled by doctor" : null)
+                });
+
+                currentMinutes += duration;
+            }
+        }
+
+        // Avoid duplicate slots if overlapping shifts exist
+        const uniqueSlots = [];
+        const seenTimes = new Set();
+        for (const s of slots) {
+            if (!seenTimes.has(s.time24)) {
+                seenTimes.add(s.time24);
+                uniqueSlots.push(s);
+            }
         }
 
         res.status(200).json({
             success: true,
-            date: targetDate,
+            isClosed: false,
+            date: targetDateStr,
             doctor: {
                 id: doctor._id,
                 name: doctor.name,
                 speciality: doctor.speciality,
-                opdFee: opdConsultationFee,
-                opdRoomNumber: doctor.department?.roomNumber || null,
-                slotDurationMinutes: slotDuration
+                cabinRoom: doctor.department?.roomNumber || "Cabin 1",
+                baseOpdFee: baseConsultationFee,
+                slotDurationMinutes: duration
             },
-            slots
+            totalSlots: uniqueSlots.length,
+            availableSlotsCount: uniqueSlots.filter(s => s.isAvailable).length,
+            slots: uniqueSlots
         });
 
     } catch (error) {

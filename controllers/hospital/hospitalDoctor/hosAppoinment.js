@@ -666,7 +666,108 @@ const getHospitalPendingAdmissionHolds = async (req, res) => {
     }
 };
 
+// @desc    Hospital Receptionist Switches Held Bed Before Payment (Releases old bed, locks new bed & recalculates deposit)
+// @route   PATCH /hospital/doctor/appointments/admission/switch-bed/:id
+// @access  Private (Hospital Admin / Reception)
+const switchAdmissionHeldBedAtCounter = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const hospitalId = req.user.id;
+        const { newBedId } = req.body;
+
+        if (!newBedId) {
+            return res.status(400).json({ success: false, message: "newBedId parameter is required." });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            hospitalId,
+            bookingType: 'Admission',
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Bed admission record not found." });
+        }
+
+        if (appointment.paymentStatus === 'Paid') {
+            return res.status(400).json({ success: false, message: "Deposit is already paid for this bed. To transfer an occupied bed, use Bed Transfer API." });
+        }
+
+        const now = new Date();
+        // Check if hold window already expired
+        if (appointment.admissionHoldExpiresAt && now > new Date(appointment.admissionHoldExpiresAt)) {
+            if (appointment.bedId) {
+                await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
+            }
+            appointment.status = 'Cancelled-By-Hospital';
+            await appointment.save();
+
+            return res.status(400).json({ success: false, message: "Hold has expired. Please ask doctor to re-initiate admission." });
+        }
+
+        // Verify new bed is available
+        const newTargetBed = await Bed.findById(newBedId).populate('wardId');
+        if (!newTargetBed || newTargetBed.status !== 'Available') {
+            return res.status(400).json({ success: false, message: "Target bed is not available." });
+        }
+
+        // 1. Release previous held bed immediately back to Available pool
+        if (appointment.bedId) {
+            await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
+        }
+
+        // 2. Lock new bed to Reserved
+        newTargetBed.status = 'Reserved';
+        await newTargetBed.save();
+
+        const days = Number(appointment.stayDuration || 1);
+        const newDeposit = Number(newTargetBed.pricePerDay || 1000) * days;
+        const newWardTitle = newTargetBed.wardId?.name || "General Ward";
+
+        // 3. Update appointment with new bed details and recalculated deposit
+        appointment.bedId = newTargetBed._id;
+        appointment.bedNumber = newTargetBed.bedNumber;
+        appointment.wardName = newWardTitle;
+        appointment.totalAmount = newDeposit;
+        if (!appointment.pricingBreakdown) appointment.pricingBreakdown = {};
+        appointment.pricingBreakdown.baseFee = newDeposit;
+        appointment.pricingBreakdown.subtotal = newDeposit;
+        appointment.pricingBreakdown.depositPaidOnBooking = newDeposit;
+
+        await appointment.save();
+
+        // 4. Alert Patient Mobile App with updated bed & new deposit
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    "Bed Changed by Reception Desk",
+                    `Your held bed has been updated to ${newWardTitle} (${newTargetBed.bedNumber}). New deposit payable: ₹${newDeposit}.`,
+                    { appointmentId: appointment._id.toString(), type: 'admission_bed_switched', newDeposit: String(newDeposit) }
+                );
+            } catch (e) {}
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Bed successfully changed to ${newWardTitle} (${newTargetBed.bedNumber}). New deposit: ₹${newDeposit}.`,
+            bookingId: appointment.bookingId,
+            newBedNumber: newTargetBed.bedNumber,
+            newWardName: newWardTitle,
+            newDepositPayable: newDeposit,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Switch Admission Bed Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     getHospitalAllBookings, approveHospitalBooking, rejectHospitalBooking, getHospitalStats, collectHospitalOpdCounterPayment, recordOpdPatientVitals,
-    collectAdmissionCounterPayment,getHospitalPendingAdmissionHolds
+    collectAdmissionCounterPayment,getHospitalPendingAdmissionHolds,switchAdmissionHeldBedAtCounter
 };

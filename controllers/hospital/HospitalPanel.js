@@ -207,12 +207,68 @@ const createWardUnit = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 2. GET BEDS BY WARD (For Grid View in Figma Screenshot 27) ---
+// @desc    Get All Beds in a Specific Ward with Live Color-Coded Status (Option 2 - Step 2)
+// @route   GET /hospital/panel/ward/:wardId/beds
+// @access  Private (Hospital Admin / Reception Desk)
 const getBedsInWard = async (req, res) => {
     try {
-        const beds = await Bed.find({ wardId: req.params.wardId });
-        res.json({ success: true, data: beds });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const { wardId } = req.params;
+        const hospitalId = req.user.id;
+        const now = new Date();
+
+        // 1. Live Lazy-Release: If any 30-min bed hold in this ward expired, release it immediately
+        const expiredHolds = await Appointment.find({
+            hospitalId,
+            bookingType: 'Admission',
+            admissionHoldExpiresAt: { $lt: now, $ne: null },
+            paymentStatus: 'Pending',
+            bedId: { $ne: null }
+        });
+
+        for (let appt of expiredHolds) {
+            await Bed.findByIdAndUpdate(appt.bedId, { $set: { status: 'Available' } });
+            appt.admissionHoldExpiresAt = null;
+            appt.status = 'Cancelled-By-Hospital';
+            appt.cancellationDetails = {
+                reason: "30-Minute admission deposit window expired. Bed released automatically.",
+                cancelledAt: now
+            };
+            await appt.save();
+        }
+
+        // 2. Fetch all beds inside the selected ward
+        const beds = await Bed.find({ wardId, hospitalId })
+            .populate('wardId', 'name type')
+            .sort({ bedNumber: 1 })
+            .lean();
+
+        if (!beds) {
+            return res.status(404).json({ success: false, message: "No beds found for this ward." });
+        }
+
+        // 3. Format response with clear UI status tags and pricing
+        const formattedBeds = beds.map(b => ({
+            bedId: b._id,
+            bedNumber: b.bedNumber,
+            wardName: b.wardId?.name || "Ward",
+            wardType: b.wardId?.type || "Ward",
+            pricePerDay: b.pricePerDay,
+            isVentilatorAvailable: b.isVentilatorAvailable || false,
+            status: b.status, // 'Available', 'Occupied', 'Reserved', 'Maintenance'
+            isClickable: b.status === 'Available' // Helper flag for Frontend: Only 'Available' can be selected
+        }));
+
+        res.status(200).json({
+            success: true,
+            totalBeds: formattedBeds.length,
+            availableBedsCount: formattedBeds.filter(b => b.status === 'Available').length,
+            data: formattedBeds
+        });
+
+    } catch (error) {
+        console.error("Get Beds in Ward Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 const updateBedDetails = async (req, res) => {
     try {

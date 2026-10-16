@@ -8,7 +8,8 @@ const {
     rejectHospitalBooking,
     getHospitalStats  ,
     collectHospitalOpdCounterPayment,
-    recordOpdPatientVitals,getHospitalPendingAdmissionHolds,collectAdmissionCounterPayment
+    recordOpdPatientVitals,getHospitalPendingAdmissionHolds,collectAdmissionCounterPayment,
+    switchAdmissionHeldBedAtCounter
 } = require('../../../controllers/hospital/hospitalDoctor/hosAppoinment');
 
 // Base URL: /hospital/doctor/appointments
@@ -24,6 +25,9 @@ router.patch('/opd-vitals/:id', protect('hospital'), recordOpdPatientVitals);
 
 router.get('/admissions/pending-holds', protect('hospital'), getHospitalPendingAdmissionHolds);
 router.patch('/admission/collect-payment/:id', protect('hospital'), collectAdmissionCounterPayment);
+
+router.patch('/admission/switch-bed/:id', protect('hospital'), switchAdmissionHeldBedAtCounter);
+
 
 
 module.exports = router;
