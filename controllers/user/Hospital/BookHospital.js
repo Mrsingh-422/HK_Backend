@@ -457,13 +457,16 @@ const getAvailableBedsForRange = async (req, res) => {
 };
 
 // for conditional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
-// @desc    Calculate Comprehensive IPD Checkout Summary (Includes Bed, Special Services, Triage & Coupons)
+// @desc    Calculate Comprehensive IPD Checkout Summary (Bed Stay + Doctor Visit + Special Services + Triage - Coupon)
 // @route   POST /user/hospital/checkout-summary
 // @access  Private (User)
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { hospitalId, bedId, startDate, endDate, specialServices, triageLevel = 'Routine', couponCode } = req.body;
+        const { hospitalId, bedId, startDate, endDate, triageLevel = 'Routine', couponCode } = req.body;
+
+        // Support both specialServices and specialServices[] keys from frontend
+        const rawSpecialServices = req.body.specialServices || req.body['specialServices[]'] || req.body.selectedServices;
 
         if (!hospitalId || !bedId || !startDate || !endDate) {
             return res.status(400).json({ 
@@ -490,7 +493,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
         }
 
         const baseBedPrice = Number(bed.pricePerDay || 1000) * stayDays;
-        const doctorVisitCharge = 200; // Standard hospital in-patient daily rounds baseline
+        const doctorVisitCharge = 200; // Standard in-patient baseline
 
         // 2. Triage Surcharge
         let triageSurcharge = 0;
@@ -498,20 +501,31 @@ const getHospitalCheckoutSummary = async (req, res) => {
         else if (triageLevel === 'Very Urgent') triageSurcharge = 300;
         else if (triageLevel === 'Urgent') triageSurcharge = 150;
 
-        // 🚨 3. SPECIAL SERVICES CALCULATION (DB Verified)
+        // 3. 🚨 SPECIAL SERVICES CALCULATION (De-duplicated & DB Verified)
         let verifiedSpecialServicesList = [];
         let specialServicesTotal = 0;
 
-        if (specialServices && Array.isArray(specialServices) && specialServices.length > 0) {
-            // Extract IDs safely whether passed as array of strings or array of objects
-            const serviceIds = specialServices.map(s => {
-                if (typeof s === 'string') return s;
-                return s._id || s.serviceId || s.id;
-            }).filter(id => mongoose.isValidObjectId(id));
+        if (rawSpecialServices) {
+            let serviceIds = [];
+            if (typeof rawSpecialServices === 'string') {
+                try {
+                    const parsed = JSON.parse(rawSpecialServices);
+                    serviceIds = Array.isArray(parsed) 
+                        ? parsed.map(s => typeof s === 'string' ? s : (s._id || s.serviceId || s.id)) 
+                        : [rawSpecialServices];
+                } catch(e) {
+                    serviceIds = rawSpecialServices.split(',').map(s => s.trim());
+                }
+            } else if (Array.isArray(rawSpecialServices)) {
+                serviceIds = rawSpecialServices.map(s => typeof s === 'string' ? s : (s._id || s.serviceId || s.id));
+            }
 
-            if (serviceIds.length > 0) {
+            // Remove duplicates and filter valid MongoDB ObjectIds
+            const cleanIds = [...new Set(serviceIds.filter(id => mongoose.isValidObjectId(id)))];
+
+            if (cleanIds.length > 0) {
                 const dbServices = await HospitalService.find({
-                    _id: { $in: serviceIds },
+                    _id: { $in: cleanIds },
                     hospitalId: hospitalId
                 }).lean();
 
@@ -534,9 +548,9 @@ const getHospitalCheckoutSummary = async (req, res) => {
         let couponDiscount = 0;
         let appliedCouponData = null;
 
-        if (couponCode && couponCode.trim() !== '') {
+        if (couponCode && String(couponCode).trim() !== '') {
             const coupon = await Coupon.findOne({
-                couponName: couponCode.trim().toUpperCase(),
+                couponName: String(couponCode).trim().toUpperCase(),
                 isActive: true,
                 expiryDate: { $gte: new Date() }
             });
@@ -570,8 +584,8 @@ const getHospitalCheckoutSummary = async (req, res) => {
                 pricePerDay: bed.pricePerDay,
                 visitCharge: doctorVisitCharge,
                 triageSurcharge: triageSurcharge,
-                serviceCharge: specialServicesTotal, // 👈 Special Services Total
-                specialServicesBreakdown: verifiedSpecialServicesList, // 👈 List of selected services
+                serviceCharge: specialServicesTotal, // Sum of special services
+                specialServicesBreakdown: verifiedSpecialServicesList, // Verified array
                 subtotal: subtotal,
                 discount: couponDiscount,
                 appliedCoupon: appliedCouponData,
@@ -587,7 +601,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
 
 
 
-// @desc    Confirm Final IPD Bed Booking (Includes Verified Special Services in Order & Payment Total)
+// @desc    Confirm Final IPD Bed Booking (Saves Special Services, Insurance Document & Sets Pricing Snapshots)
 // @route   POST /user/hospital/book
 // @access  Private (User)
 const finalHospitalBooking = async (req, res) => {
@@ -598,13 +612,18 @@ const finalHospitalBooking = async (req, res) => {
             bedId, 
             startDate, 
             endDate, 
-            specialServices, 
             triageLevel = 'Routine', 
             couponCode, 
             paymentMethod = 'COD', 
             patients,
-            bookingReason
+            bookingReason,
+            hasInsurance,
+            insuranceNumber,
+            companyName,
+            insuranceType
         } = req.body;
+
+        const rawSpecialServices = req.body.specialServices || req.body['specialServices[]'] || req.body.selectedServices;
 
         if (!hospitalId || !bedId || !startDate || !endDate) {
             return res.status(400).json({ success: false, message: "hospitalId, bedId, startDate, and endDate are required." });
@@ -629,24 +648,26 @@ const finalHospitalBooking = async (req, res) => {
         else if (triageLevel === 'Very Urgent') triageSurcharge = 300;
         else if (triageLevel === 'Urgent') triageSurcharge = 150;
 
-        // 🚨 2. VERIFY SPECIAL SERVICES FROM DB RATE CARD
+        // 2. 🚨 VERIFY SPECIAL SERVICES FROM DATABASE
         let verifiedSpecialServices = [];
         let specialServicesTotal = 0;
 
-        if (specialServices) {
+        if (rawSpecialServices) {
             let serviceIds = [];
-            if (typeof specialServices === 'string') {
+            if (typeof rawSpecialServices === 'string') {
                 try {
-                    const parsed = JSON.parse(specialServices);
-                    serviceIds = Array.isArray(parsed) ? parsed.map(s => typeof s === 'string' ? s : (s._id || s.serviceId)) : [];
+                    const parsed = JSON.parse(rawSpecialServices);
+                    serviceIds = Array.isArray(parsed) 
+                        ? parsed.map(s => typeof s === 'string' ? s : (s._id || s.serviceId || s.id)) 
+                        : [rawSpecialServices];
                 } catch(e) {
-                    serviceIds = specialServices.split(',').map(s => s.trim());
+                    serviceIds = rawSpecialServices.split(',').map(s => s.trim());
                 }
-            } else if (Array.isArray(specialServices)) {
-                serviceIds = specialServices.map(s => typeof s === 'string' ? s : (s._id || s.serviceId));
+            } else if (Array.isArray(rawSpecialServices)) {
+                serviceIds = rawSpecialServices.map(s => typeof s === 'string' ? s : (s._id || s.serviceId || s.id));
             }
 
-            const cleanIds = serviceIds.filter(id => mongoose.isValidObjectId(id));
+            const cleanIds = [...new Set(serviceIds.filter(id => mongoose.isValidObjectId(id)))];
             if (cleanIds.length > 0) {
                 const dbServices = await HospitalService.find({
                     _id: { $in: cleanIds },
@@ -686,7 +707,7 @@ const finalHospitalBooking = async (req, res) => {
         const bookingId = `HKH-IPD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         const isOnline = (paymentMethod === 'Online' || paymentMethod === 'online');
 
-        // Parse patients array safely
+        // Safe Patient Parsing
         let patientList = [];
         if (typeof patients === 'string') {
             try { patientList = JSON.parse(patients); } catch(e) {}
@@ -703,7 +724,22 @@ const finalHospitalBooking = async (req, res) => {
             }];
         }
 
-        // 4. Create In-Patient Booking
+        // 4. 🚨 INSURANCE DOCUMENT UPLOAD HANDLING (Multer file capture)
+        let insuranceDocPath = null;
+        if (req.file) {
+            insuranceDocPath = `/uploads/insurance/${req.file.filename}`;
+        }
+
+        const insurancePayload = {
+            hasInsurance: Boolean(hasInsurance === 'true' || hasInsurance === true),
+            insuranceNumber: insuranceNumber ? String(insuranceNumber).trim() : "",
+            companyName: companyName ? String(companyName).trim() : "",
+            insuranceType: insuranceType ? String(insuranceType).trim() : "",
+            insuranceDocument: insuranceDocPath,
+            approvalStatus: (hasInsurance === 'true' || hasInsurance === true) ? 'Pending' : 'Rejected'
+        };
+
+        // 5. Create In-Patient Admission Document
         const appointment = await Appointment.create({
             userId,
             hospitalId,
@@ -718,15 +754,16 @@ const finalHospitalBooking = async (req, res) => {
             endDate: endMoment.toDate(),
             stayDuration: stayDays,
             bookingReason: bookingReason || "Direct In-Patient Bed Admission",
-            specialServices: verifiedSpecialServices, // 👈 Saved in database
+            specialServices: verifiedSpecialServices, // Verified array stored
+            insuranceDetails: insurancePayload,       // Linked insurance & document
             status: isOnline ? 'Pending' : 'Hospital-Pending',
             paymentStatus: 'Pending',
             paymentMethod: isOnline ? 'Online' : 'COD',
-            totalAmount: totalPayable, // 👈 Includes Special Services Price
+            totalAmount: totalPayable,
             pricingBreakdown: {
                 baseFee: baseBedPrice,
                 visitCharges: doctorVisitCharge,
-                extraCharges: triageSurcharge + specialServicesTotal, // 👈 Includes Special Services
+                extraCharges: triageSurcharge + specialServicesTotal, // Includes verified special services
                 discountAmount: couponDiscount,
                 subtotal: subtotal,
                 bookedDurationDays: stayDays,
@@ -740,11 +777,11 @@ const finalHospitalBooking = async (req, res) => {
             patients: patientList
         });
 
-        // 5. Lock Bed
-        bed.status = isOnline ? 'Reserved' : 'Reserved';
+        // 6. Lock Bed
+        bed.status = 'Reserved';
         await bed.save();
 
-        // 6. Handle Online Payment (Razorpay Order)
+        // 7. Online Razorpay Flow
         if (isOnline) {
             const receiptId = `ipd_rcpt_${bookingId}`;
             const rzpOrder = await createRazorpayOrder(totalPayable, receiptId);
@@ -759,11 +796,12 @@ const finalHospitalBooking = async (req, res) => {
                 appointmentId: appointment._id,
                 bookingId: appointment.bookingId,
                 totalPayable: totalPayable,
+                specialServicesIncluded: verifiedSpecialServices,
                 data: appointment
             });
         }
 
-        // Return COD / Pay at Hospital Counter response
+        // 8. COD / Pay at Hospital Counter Flow
         res.status(201).json({
             success: true,
             isOnlinePayment: false,
@@ -782,128 +820,66 @@ const finalHospitalBooking = async (req, res) => {
 };
 
 
-// @desc    Verify Razorpay Payment Signature for Hospital (Unified for both OPD Consultation & IPD Bed Admissions)
+// @desc    Verify Razorpay Signature for IPD Bed Booking (Locks Bed to Occupied & Decrements Ward Capacity)
 // @route   POST /user/hospital/verify-payment
 // @access  Private (User)
 const verifyHospitalPayment = async (req, res) => {
     try {
-        const { appointmentId, bookingId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+        const { appointmentId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+        const userId = req.user.id;
 
-        const targetId = appointmentId || bookingId;
-        if (!targetId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "appointmentId/bookingId, razorpayOrderId, razorpayPaymentId, and razorpaySignature are mandatory." 
-            });
+        if (!appointmentId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({ success: false, message: "Missing Razorpay payment verification parameters." });
         }
 
-        // 1. Verify Razorpay Signature
-        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
-        if (!isVerified && process.env.NODE_ENV === 'production') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Signature verification failed. Invalid transaction signature." 
-            });
-        }
-
-        // 2. Find Appointment Document (Dual identifier support: _id or bookingId)
-        const query = mongoose.isValidObjectId(targetId)
-            ? { _id: targetId, userId: req.user.id }
-            : { bookingId: String(targetId).trim(), userId: req.user.id };
-
-        const appointment = await Appointment.findOne(query)
-            .populate('doctorId', 'name speciality')
-            .populate('hospitalId', 'name city');
-
+        const appointment = await Appointment.findOne({ _id: appointmentId, userId });
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
         }
 
-        // Fetch & Map real payment method (UPI, Card, Netbanking, Wallet) from Razorpay
-        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+        if (appointment.paymentStatus === 'Paid') {
+            return res.status(400).json({ success: false, message: "This booking is already paid." });
+        }
+
+        // Verify Signature
+        const isSignatureValid = verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+        if (!isSignatureValid) {
+            return res.status(400).json({ success: false, message: "Payment signature verification failed." });
+        }
+
+        const now = new Date();
+        const rzpDetails = await fetchAndMapRazorpayPayment(razorpay_payment_id, razorpay_signature);
+
+        // Lock Bed to Occupied & Decrement Ward
+        const bed = await Bed.findById(appointment.bedId);
+        if (bed) {
+            bed.status = 'Occupied';
+            await bed.save();
+            if (bed.wardId) {
+                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
+            }
+        }
 
         appointment.paymentStatus = 'Paid';
-        appointment.status = 'Hospital-Pending';
-        appointment.transactionId = razorpayPaymentId;
+        appointment.paymentMethod = 'Online';
+        appointment.status = 'In-Progress'; // Patient is actively admitted
         appointment.paymentDetails = rzpDetails || {
-            razorpayPaymentId,
-            razorpayOrderId,
-            razorpaySignature,
+            razorpayPaymentId: razorpay_payment_id,
+            razorpayOrderId: razorpay_order_id,
+            razorpaySignature: razorpay_signature,
             method: 'Online',
-            amount: appointment.totalAmount,
-            currency: 'INR',
             status: 'captured',
-            paidAt: new Date()
+            paidAt: now
         };
-
-        const isOPD = appointment.bookingType === 'OPD';
-
-        // ==========================================
-        // 🏨 CASE A: IPD ADMISSION LOGIC
-        // ==========================================
-        if (!isOPD && appointment.bedId) {
-            const bed = await Bed.findById(appointment.bedId);
-            if (bed) {
-                if (bed.wardId && bed.status === 'Available') {
-                    await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
-                }
-                await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Reserved' } });
-            }
-
-            // Deduct subscription hospital benefit if applied
-            if (appointment.subscriptionDetails?.isSubscriptionApplied) {
-                await deductBenefitCount(appointment.userId, 'freeHospitalStaysCount');
-            }
-
-            // Notify Hospital Desk
-            await notifyAdminsAndVendor(
-                appointment.hospitalId._id,
-                'hospital',
-                "Paid IPD Admission Confirmed!",
-                `Patient ${appointment.patients[0]?.patientName || 'Patient'} has paid ₹${appointment.totalAmount} for Bed admission #${appointment.bookingId}.`,
-                { bookingId: appointment._id.toString(), type: 'hospital_booking_paid' }
-            );
-        }
-
-        // ==========================================
-        // 🩺 CASE B: OPD CONSULTATION LOGIC
-        // ==========================================
-        if (isOPD) {
-            // Deduct subscription doctor benefit if applied
-            if (appointment.subscriptionDetails?.isSubscriptionApplied) {
-                await deductBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
-            }
-
-            // Notify Hospital Reception
-            await notifyAdminsAndVendor(
-                appointment.hospitalId._id,
-                'hospital',
-                `Paid OPD Consultation! (Token #${appointment.tokenNumber || '1'})`,
-                `Patient ${appointment.patients[0]?.patientName} paid online for Dr. ${appointment.doctorId?.name || 'Doctor'} (Token #${appointment.tokenNumber}).`,
-                { appointmentId: appointment._id.toString(), type: 'opd_payment_verified', tokenNumber: appointment.tokenNumber }
-            );
-
-            // Notify Hospital Doctor directly
-            if (appointment.doctorId) {
-                await sendPushNotification(
-                    appointment.doctorId._id,
-                    'doctor',
-                    `New Paid OPD Patient! (Token #${appointment.tokenNumber || '1'})`,
-                    `Patient ${appointment.patients[0]?.patientName} paid fee online for ${appointment.appointmentTime}. Token #${appointment.tokenNumber}.`,
-                    { appointmentId: appointment._id.toString(), type: 'opd_patient_paid', tokenNumber: appointment.tokenNumber }
-                );
-            }
-        }
 
         await appointment.save();
 
         res.status(200).json({
             success: true,
-            message: isOPD 
-                ? `Online payment verified successfully! Your OPD Token is #${appointment.tokenNumber || '1'}`
-                : "Online payment verified successfully! IPD Admission request submitted.",
-            bookingType: appointment.bookingType,
-            tokenNumber: appointment.tokenNumber,
+            message: "Payment verified successfully! Bed is now Occupied and Admission is confirmed.",
+            bookingId: appointment.bookingId,
+            status: appointment.status,
+            paymentStatus: appointment.paymentStatus,
             data: appointment
         });
 
