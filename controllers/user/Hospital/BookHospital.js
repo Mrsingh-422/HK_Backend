@@ -457,367 +457,322 @@ const getAvailableBedsForRange = async (req, res) => {
 };
 
 // for conditional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
-// --- 2. UPDATED CHECKOUT (Updated with COD Check) ---
+// @desc    Calculate Comprehensive IPD Checkout Summary (Includes Bed, Special Services, Triage & Coupons)
+// @route   POST /user/hospital/checkout-summary
+// @access  Private (User)
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
-        let body = { ...req.body };
-
-        if (typeof body.patients === 'string') {
-            try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
-        }
-        if (typeof body.address === 'string') {
-            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
-        }
-        if (typeof body.specialServices === 'string') {
-            try { body.specialServices = JSON.parse(body.specialServices); } catch (e) { body.specialServices = []; }
-        }
-
-        const { 
-            hospitalId, 
-            bedId, 
-            startDate, 
-            endDate, 
-            couponCode, 
-            patients = [], 
-            address = null,
-            specialServices = []
-        } = body;
+        const userId = req.user.id;
+        const { hospitalId, bedId, startDate, endDate, specialServices, triageLevel = 'Routine', couponCode } = req.body;
 
         if (!hospitalId || !bedId || !startDate || !endDate) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Validation Error: Required fields (hospitalId, bedId, startDate, endDate) are missing." 
+                message: "hospitalId, bedId, startDate (YYYY-MM-DD), and endDate (YYYY-MM-DD) are required." 
             });
         }
 
-        // 🚀 SMART COD CHECK: Passes req.user.id (Subscribers get COD always true)
-        const isCodAllowed = await isCodEnabled('Hospital', req.user ? req.user.id : null);
+        const startMoment = moment(startDate, "YYYY-MM-DD").startOf('day');
+        const endMoment = moment(endDate, "YYYY-MM-DD").startOf('day');
 
-        const bed = await Bed.findById(bedId);
+        if (!startMoment.isValid() || !endMoment.isValid() || endMoment.isBefore(startMoment)) {
+            return res.status(400).json({ success: false, message: "Invalid date range. End date must be on or after start date." });
+        }
+
+        // Calculate Stay Duration (Minimum 1 day)
+        let stayDays = endMoment.diff(startMoment, 'days');
+        if (stayDays <= 0) stayDays = 1;
+
+        // 1. Fetch Bed and Ward Details
+        const bed = await Bed.findOne({ _id: bedId, hospitalId }).populate('wardId', 'name type');
         if (!bed) {
-            return res.status(404).json({ success: false, message: "Selected Bed not found in the system." });
+            return res.status(404).json({ success: false, message: "Selected bed not found in this hospital." });
         }
 
-        const start = moment(startDate).startOf('day');
-        const end = moment(endDate).endOf('day');
-        const stayDuration = end.diff(start, 'days') + 1;
+        const baseBedPrice = Number(bed.pricePerDay || 1000) * stayDays;
+        const doctorVisitCharge = 200; // Standard hospital in-patient daily rounds baseline
 
-        if (isNaN(stayDuration) || stayDuration <= 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Date validation error: Check-out date must be scheduled after check-in date." 
-            });
-        }
+        // 2. Triage Surcharge
+        let triageSurcharge = 0;
+        if (triageLevel === 'Emergency') triageSurcharge = 500;
+        else if (triageLevel === 'Very Urgent') triageSurcharge = 300;
+        else if (triageLevel === 'Urgent') triageSurcharge = 150;
 
-        const dailyRate = bed.pricePerDay || 500;
-        const baseFee = dailyRate * stayDuration;
+        // 🚨 3. SPECIAL SERVICES CALCULATION (DB Verified)
+        let verifiedSpecialServicesList = [];
+        let specialServicesTotal = 0;
 
-        let originalBaseFee = baseFee; 
-        let finalBaseFee = baseFee;
-        let isSubscriptionApplied = false;
-        let planName = "";
-        let userSubscriptionId = null;
+        if (specialServices && Array.isArray(specialServices) && specialServices.length > 0) {
+            // Extract IDs safely whether passed as array of strings or array of objects
+            const serviceIds = specialServices.map(s => {
+                if (typeof s === 'string') return s;
+                return s._id || s.serviceId || s.id;
+            }).filter(id => mongoose.isValidObjectId(id));
 
-        // 🚀 Dynamic Subscription benefit check
-        const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
-        const admissionBenefit = await checkAndApplyBenefit(req.user.id, 'freeHospitalStaysCount', baseFee);
-        
-        if (admissionBenefit.isApplied) {
-            finalBaseFee = 0;
-            isSubscriptionApplied = true;
+            if (serviceIds.length > 0) {
+                const dbServices = await HospitalService.find({
+                    _id: { $in: serviceIds },
+                    hospitalId: hospitalId
+                }).lean();
 
-            const activeSub = await UserSubscription.findOne({
-                userId: req.user.id,
-                status: 'Active',
-                endDate: { $gt: new Date() }
-            }).populate({
-                path: 'planId',
-                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
-            });
-
-            if (activeSub && activeSub.planId) {
-                planName = activeSub.planId.name || "Premium Care Plan";
-                userSubscriptionId = activeSub._id;
+                dbServices.forEach(srv => {
+                    const price = Number(srv.price || 0);
+                    specialServicesTotal += price;
+                    verifiedSpecialServicesList.push({
+                        serviceId: srv._id,
+                        serviceName: srv.serviceName,
+                        price: price,
+                        description: srv.description || ""
+                    });
+                });
             }
         }
 
-        const servicesTotal = specialServices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
-        let subtotal = finalBaseFee + servicesTotal;
+        const subtotal = baseBedPrice + doctorVisitCharge + triageSurcharge + specialServicesTotal;
 
-        let discount = 0;
-        if (couponCode) {
-            const coupon = await Coupon.findOne({ 
-                couponName: couponCode.toUpperCase(), 
+        // 4. Coupon Discount Calculation
+        let couponDiscount = 0;
+        let appliedCouponData = null;
+
+        if (couponCode && couponCode.trim() !== '') {
+            const coupon = await Coupon.findOne({
+                couponName: couponCode.trim().toUpperCase(),
                 isActive: true,
                 expiryDate: { $gte: new Date() }
             });
-            if (coupon && subtotal >= coupon.minOrderAmount) {
-                discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+
+            if (coupon && subtotal >= (coupon.minOrderAmount || 0)) {
+                if (coupon.vendorId?.toString() === hospitalId.toString() || coupon.vendorType === 'Hospital' || coupon.vendorType === 'All') {
+                    couponDiscount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount || 9999);
+                    appliedCouponData = {
+                        couponId: coupon._id,
+                        couponCode: coupon.couponName,
+                        discountPercentage: coupon.discountPercentage,
+                        discountAmount: couponDiscount
+                    };
+                }
             }
         }
 
-        res.json({
+        const totalPayable = Math.max(0, Math.round(subtotal - couponDiscount));
+
+        res.status(200).json({
             success: true,
+            message: "IPD Checkout summary calculated successfully.",
             data: {
-                baseFee: finalBaseFee,
-                originalBaseFee, 
-                servicesTotal,
-                discount: Math.round(discount),
-                subtotal: Math.round(subtotal),
-                totalPayable: Math.max(0, Math.round(subtotal - discount)),
-                stayDuration,
-                patients,
-                address,
-                isCodAvailable: isCodAllowed, // 👈 Always true for subscribers
-                subscriptionDetails: {
-                    isSubscriptionApplied,
-                    userSubscriptionId,
-                    planName
-                }
+                hospitalId,
+                bedId: bed._id,
+                bedNumber: bed.bedNumber,
+                wardName: bed.wardId?.name || "General Ward",
+                wardType: bed.wardId?.type || "Ward",
+                days: stayDays,
+                baseFee: baseBedPrice,
+                pricePerDay: bed.pricePerDay,
+                visitCharge: doctorVisitCharge,
+                triageSurcharge: triageSurcharge,
+                serviceCharge: specialServicesTotal, // 👈 Special Services Total
+                specialServicesBreakdown: verifiedSpecialServicesList, // 👈 List of selected services
+                subtotal: subtotal,
+                discount: couponDiscount,
+                appliedCoupon: appliedCouponData,
+                totalPayable: totalPayable
             }
         });
 
     } catch (error) {
-        console.error("getHospitalCheckoutSummary Exception:", error);
-        res.status(500).json({ success: false, message: "Internal checkout summary parsing error: " + error.message });
+        console.error("Get Hospital Checkout Summary Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 
 
-// @desc    Book Hospital IPD Admission (Bed is Mandatory, Attending Doctor is OPTIONAL)
+// @desc    Confirm Final IPD Bed Booking (Includes Verified Special Services in Order & Payment Total)
 // @route   POST /user/hospital/book
 // @access  Private (User)
 const finalHospitalBooking = async (req, res) => {
     try {
+        const userId = req.user.id;
         const { 
             hospitalId, 
             bedId, 
-            doctorId,           // 👈 Optional Attending Doctor selected by patient
             startDate, 
             endDate, 
-            patients, 
-            address,
-            bookingReason,      
-            hasInsurance,       
-            paymentMethod,
-            couponCode 
+            specialServices, 
+            triageLevel = 'Routine', 
+            couponCode, 
+            paymentMethod = 'COD', 
+            patients,
+            bookingReason
         } = req.body;
 
-        const userId = req.user.id;
-
         if (!hospitalId || !bedId || !startDate || !endDate) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "hospitalId, bedId, startDate, and endDate are required for IPD Admission." 
-            });
+            return res.status(400).json({ success: false, message: "hospitalId, bedId, startDate, and endDate are required." });
         }
 
-        // Validate COD Policy
-        if (paymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Hospital', userId);
-            if (!isCodAllowed) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Cash on Delivery is currently disabled for Hospital Admissions. Please pay online."
+        const startMoment = moment(startDate, "YYYY-MM-DD").startOf('day');
+        const endMoment = moment(endDate, "YYYY-MM-DD").startOf('day');
+        let stayDays = endMoment.diff(startMoment, 'days');
+        if (stayDays <= 0) stayDays = 1;
+
+        // 1. Verify Bed is Available
+        const bed = await Bed.findOne({ _id: bedId, hospitalId }).populate('wardId');
+        if (!bed || bed.status !== 'Available') {
+            return res.status(400).json({ success: false, message: "Selected bed is no longer available. Please select another bed." });
+        }
+
+        const baseBedPrice = Number(bed.pricePerDay || 1000) * stayDays;
+        const doctorVisitCharge = 200;
+
+        let triageSurcharge = 0;
+        if (triageLevel === 'Emergency') triageSurcharge = 500;
+        else if (triageLevel === 'Very Urgent') triageSurcharge = 300;
+        else if (triageLevel === 'Urgent') triageSurcharge = 150;
+
+        // 🚨 2. VERIFY SPECIAL SERVICES FROM DB RATE CARD
+        let verifiedSpecialServices = [];
+        let specialServicesTotal = 0;
+
+        if (specialServices) {
+            let serviceIds = [];
+            if (typeof specialServices === 'string') {
+                try {
+                    const parsed = JSON.parse(specialServices);
+                    serviceIds = Array.isArray(parsed) ? parsed.map(s => typeof s === 'string' ? s : (s._id || s.serviceId)) : [];
+                } catch(e) {
+                    serviceIds = specialServices.split(',').map(s => s.trim());
+                }
+            } else if (Array.isArray(specialServices)) {
+                serviceIds = specialServices.map(s => typeof s === 'string' ? s : (s._id || s.serviceId));
+            }
+
+            const cleanIds = serviceIds.filter(id => mongoose.isValidObjectId(id));
+            if (cleanIds.length > 0) {
+                const dbServices = await HospitalService.find({
+                    _id: { $in: cleanIds },
+                    hospitalId: hospitalId
+                }).lean();
+
+                dbServices.forEach(srv => {
+                    const p = Number(srv.price || 0);
+                    specialServicesTotal += p;
+                    verifiedSpecialServices.push({
+                        serviceName: srv.serviceName,
+                        price: p
+                    });
                 });
             }
         }
 
-        let finalInsuranceData = {
-            hasInsurance: false,
-            insuranceNumber: "",
-            companyName: "",
-            insuranceType: "",
-            insuranceDocument: null
-        };
+        const subtotal = baseBedPrice + doctorVisitCharge + triageSurcharge + specialServicesTotal;
 
-        const isInsuranceApplied = hasInsurance === 'true' || hasInsurance === true;
-
-        if (isInsuranceApplied) {
-            const userProfile = await User.findById(userId);
-            if (!userProfile) return res.status(404).json({ success: false, message: "User profile not found." });
-
-            finalInsuranceData.hasInsurance = true;
-            if (req.file) {
-                finalInsuranceData.insuranceDocument = `/uploads/insurance/${req.file.filename}`;
-                finalInsuranceData.insuranceNumber = req.body.insuranceNumber || "";
-                finalInsuranceData.companyName = req.body.companyName || "";
-                finalInsuranceData.insuranceType = req.body.insuranceType || "";
-            } else if (userProfile.insuranceDetails?.hasInsurance && userProfile.insuranceDetails?.insuranceDocument) {
-                finalInsuranceData.insuranceDocument = userProfile.insuranceDetails.insuranceDocument;
-                finalInsuranceData.insuranceNumber = userProfile.insuranceDetails.insuranceNumber || "";
-                finalInsuranceData.companyName = userProfile.insuranceDetails.companyName || "";
-                finalInsuranceData.insuranceType = userProfile.insuranceDetails.insuranceType || "";
-            }
-        }
-
-        const bed = await Bed.findById(bedId);
-        if (!bed) return res.status(404).json({ success: false, message: "Selected Bed not found." });
-        if (bed.status === 'Maintenance') return res.status(400).json({ success: false, message: "Bed is under maintenance." });
-
-        const ward = await Ward.findById(bed.wardId);
-        const wardName = ward ? ward.name : "N/A";
-
-        const start = moment(startDate).startOf('day').toDate();
-        const end = moment(endDate).endOf('day').toDate();
-        const stayDuration = moment(end).diff(moment(start), 'days') + 1;
-
-        if (stayDuration <= 0) {
-            return res.status(400).json({ success: false, message: "End Date must be after Start Date." });
-        }
-
-        // Check Overlapping Occupancy
-        const isAlreadyBooked = await Appointment.findOne({
-            bedId,
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] },
-            $and: [
-                { startDate: { $lte: end } },
-                { endDate: { $gte: start } }
-            ]
-        });
-
-        if (isAlreadyBooked) {
-            return res.status(400).json({
-                success: false,
-                message: "This bed is already booked or occupied for the selected dates."
-            });
-        }
-
-        const basePrice = bed.pricePerDay * stayDuration;
-        let originalBasePrice = basePrice;
-        let finalBasePrice = basePrice;
-        let isSubscriptionApplied = false;
-        let planName = "";
-        let userSubscriptionId = null;
-
-        const admissionBenefit = await checkAndApplyBenefit(userId, 'freeHospitalStaysCount', basePrice);
-        if (admissionBenefit.isApplied) {
-            finalBasePrice = 0;
-            isSubscriptionApplied = true;
-
-            const activeSub = await UserSubscription.findOne({
-                userId,
-                status: 'Active',
-                endDate: { $gt: new Date() }
-            }).populate({ path: 'planId', populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }] });
-
-            if (activeSub?.planId) {
-                planName = activeSub.planId.name || "Premium Care Plan";
-                userSubscriptionId = activeSub._id;
-            }
-        }
-
+        // 3. Coupon Discount
         let couponDiscount = 0;
-        let couponDetailsObj = null;
-
-        if (couponCode) {
+        let couponId = null;
+        if (couponCode && String(couponCode).trim() !== '') {
             const coupon = await Coupon.findOne({
-                couponName: couponCode.toUpperCase(),
+                couponName: String(couponCode).trim().toUpperCase(),
                 isActive: true,
-                expiryDate: { $gte: new Date() },
-                $or: [
-                    { vendorId: hospitalId },
-                    { isAdminCreated: true, vendorType: { $in: ['Hospital', 'All'] } }
-                ]
+                expiryDate: { $gte: new Date() }
             });
 
-            if (coupon && finalBasePrice >= coupon.minOrderAmount) {
-                let disc = (finalBasePrice * coupon.discountPercentage) / 100;
-                if (disc > coupon.maxDiscount) disc = coupon.maxDiscount;
-                couponDiscount = Math.round(disc);
-                couponDetailsObj = {
-                    couponId: coupon._id,
-                    couponCode: coupon.couponName,
-                    discountValue: couponDiscount
-                };
+            if (coupon && subtotal >= (coupon.minOrderAmount || 0)) {
+                couponDiscount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount || 9999);
+                couponId = coupon._id;
             }
         }
 
-        const totalAmount = Math.max(0, finalBasePrice - couponDiscount);
-        const tempBookingId = `HKH-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+        const totalPayable = Math.max(0, Math.round(subtotal - couponDiscount));
+        const bookingId = `HKH-IPD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const isOnline = (paymentMethod === 'Online' || paymentMethod === 'online');
 
-        let rzpOrder = null;
-        if (paymentMethod !== 'COD' && totalAmount > 0) {
-            rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
+        // Parse patients array safely
+        let patientList = [];
+        if (typeof patients === 'string') {
+            try { patientList = JSON.parse(patients); } catch(e) {}
+        } else if (Array.isArray(patients)) {
+            patientList = patients;
         }
 
-        const parsedPatients = typeof patients === 'string' ? JSON.parse(patients) : (Array.isArray(patients) && patients.length > 0 ? patients : [{ patientName: req.user.name || "Patient", patientAge: 30, gender: "Male", relation: "Self" }]);
-        const parsedAddress = typeof address === 'string' ? JSON.parse(address) : address;
+        if (patientList.length === 0) {
+            patientList = [{
+                patientName: req.user.name || "Patient",
+                patientAge: req.user.age || 30,
+                gender: req.user.gender || "Male",
+                relation: "Self"
+            }];
+        }
 
-        const booking = await Appointment.create({
-            bookingId: tempBookingId,
+        // 4. Create In-Patient Booking
+        const appointment = await Appointment.create({
             userId,
             hospitalId,
-            doctorId: doctorId && mongoose.isValidObjectId(doctorId) ? doctorId : null, // 👈 Optional Attending Doctor
-            bedId,
-            wardName,
+            bedId: bed._id,
             bedNumber: bed.bedNumber,
-            bookingType: 'Admission', // 👈 IPD Admission
-            patients: parsedPatients,
-            address: parsedAddress,
-            startDate: start,
-            endDate: end,
-            stayDuration,
-            bookingReason: bookingReason || "",
-            insuranceDetails: finalInsuranceData,
-            pricingBreakdown: {
-                baseFee: finalBasePrice,
-                originalBaseFee: originalBasePrice,
-                discountAmount: couponDiscount,
-                subtotal: finalBasePrice
-            },
-            couponDetails: couponDetailsObj,
-            totalAmount: Math.round(totalAmount),
-            paymentMethod: paymentMethod || 'Online',
+            wardName: bed.wardId?.name || "General Ward",
+            bookingId,
+            bookingType: 'Admission',
+            bedBookingType: triageLevel === 'Emergency' ? 'Emergency-Bed' : 'General-Bed',
+            triageLevel,
+            startDate: startMoment.toDate(),
+            endDate: endMoment.toDate(),
+            stayDuration: stayDays,
+            bookingReason: bookingReason || "Direct In-Patient Bed Admission",
+            specialServices: verifiedSpecialServices, // 👈 Saved in database
+            status: isOnline ? 'Pending' : 'Hospital-Pending',
             paymentStatus: 'Pending',
-            status: (paymentMethod === 'COD' || totalAmount === 0) ? 'Hospital-Pending' : 'Pending',
-            treatmentHistory: [{
-                action: 'Initial-Assignment',
-                notes: `Admitted via IPD Admission Flow. Attending Doctor: ${doctorId ? 'Selected' : 'Unassigned'}`,
-                subscriptionDetails: {
-                    isSubscriptionApplied,
-                    userSubscriptionId,
-                    planName
-                },
-                timestamp: new Date()
-            }]
+            paymentMethod: isOnline ? 'Online' : 'COD',
+            totalAmount: totalPayable, // 👈 Includes Special Services Price
+            pricingBreakdown: {
+                baseFee: baseBedPrice,
+                visitCharges: doctorVisitCharge,
+                extraCharges: triageSurcharge + specialServicesTotal, // 👈 Includes Special Services
+                discountAmount: couponDiscount,
+                subtotal: subtotal,
+                bookedDurationDays: stayDays,
+                depositPaidOnBooking: totalPayable
+            },
+            couponDetails: couponId ? {
+                couponId: couponId,
+                couponCode: String(couponCode).toUpperCase(),
+                discountValue: couponDiscount
+            } : undefined,
+            patients: patientList
         });
 
-        if (paymentMethod === 'COD' || totalAmount === 0) {
-            if (isSubscriptionApplied) {
-                await deductBenefitCount(userId, 'freeHospitalStaysCount');
-            }
+        // 5. Lock Bed
+        bed.status = isOnline ? 'Reserved' : 'Reserved';
+        await bed.save();
 
-            if (bed.status === 'Available') {
-                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
-            }
-            bed.status = 'Reserved'; 
-            await bed.save();
-
-            await notifyAdminsAndVendor(
-                hospitalId,
-                'hospital',
-                "New IPD Bed Admission Requested!",
-                `Admission request #${tempBookingId} for Bed ${bed.bedNumber} (${wardName}) submitted.`,
-                { bookingId: booking._id.toString(), type: 'new_hospital_booking' }
-            );
+        // 6. Handle Online Payment (Razorpay Order)
+        if (isOnline) {
+            const receiptId = `ipd_rcpt_${bookingId}`;
+            const rzpOrder = await createRazorpayOrder(totalPayable, receiptId);
 
             return res.status(201).json({
                 success: true,
-                message: "IPD Admission request successfully submitted!",
-                data: booking
+                isOnlinePayment: true,
+                key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
+                amount: rzpOrder.amount,
+                currency: "INR",
+                razorpayOrderId: rzpOrder.id,
+                appointmentId: appointment._id,
+                bookingId: appointment.bookingId,
+                totalPayable: totalPayable,
+                data: appointment
             });
         }
 
+        // Return COD / Pay at Hospital Counter response
         res.status(201).json({
             success: true,
-            message: "Razorpay order created. Complete payment to confirm admission.",
-            key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
-            amount: rzpOrder.amount,
-            razorpayOrderId: rzpOrder.id,
-            bookingId: tempBookingId,
-            appointmentId: booking._id
+            isOnlinePayment: false,
+            message: "In-Patient Admission booking created. Please pay deposit at Hospital Counter.",
+            bookingId: appointment.bookingId,
+            appointmentId: appointment._id,
+            totalPayable: totalPayable,
+            specialServicesIncluded: verifiedSpecialServices,
+            data: appointment
         });
 
     } catch (error) {
@@ -1903,212 +1858,130 @@ const getHospitalOpdCheckoutSummary = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// @desc    Book Hospital OPD Appointment (Persists Premium Slot Fee in pricingBreakdown & Razorpay Order)
+// @desc    Patient Books Hospital OPD Consultation (With Concurrent Double-Booking & Slot Validation Protection)
 // @route   POST /user/hospital/opd/book
 // @access  Private (User)
 const bookHospitalOpdAppointment = async (req, res) => {
     try {
         const userId = req.user.id;
-        const {
-            hospitalId,
-            doctorId,
-            appointmentDate,
-            appointmentTime,
-            patients,
-            bookingReason,
-            paymentMethod = 'Online',
-            couponCode
-        } = req.body;
+        const { hospitalId, doctorId, appointmentDate, appointmentTime, paymentMethod = 'COD', patients } = req.body;
 
         if (!hospitalId || !doctorId || !appointmentDate || !appointmentTime) {
-            return res.status(400).json({
-                success: false,
-                message: "hospitalId, doctorId, appointmentDate, and appointmentTime are required."
+            return res.status(400).json({ success: false, message: "hospitalId, doctorId, appointmentDate (YYYY-MM-DD), and appointmentTime are required." });
+        }
+
+        const targetDate = moment(appointmentDate.trim(), "YYYY-MM-DD").startOf('day');
+        if (!targetDate.isValid()) {
+            return res.status(400).json({ success: false, message: "Invalid appointmentDate format. Use YYYY-MM-DD." });
+        }
+
+        // 1. Verify Doctor & Hospital Association
+        const doctor = await Doctor.findOne({ _id: doctorId, hospitalId })
+            .select('name speciality fees department leaves slotDuration')
+            .lean();
+
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor not found or not associated with this hospital." });
+        }
+
+        const targetDateStr = targetDate.format("YYYY-MM-DD");
+
+        // 2. CHECK APPROVED LEAVES: Block booking if doctor is on approved leave
+        const isOnLeave = Array.isArray(doctor.leaves) && doctor.leaves.some(l => {
+            if (l.status !== 'Approved') return false;
+            const s = moment(l.startDate).format("YYYY-MM-DD");
+            const e = moment(l.endDate).format("YYYY-MM-DD");
+            return targetDateStr >= s && targetDateStr <= e;
+        });
+
+        if (isOnLeave) {
+            return res.status(400).json({ success: false, message: `Dr. ${doctor.name} is on approved leave on ${targetDateStr}. Please select another date.` });
+        }
+
+        // 3. 🚨 CONCURRENT DOUBLE-BOOKING GUARD: Check if slot was already taken in the last few seconds
+        const dayStart = targetDate.clone().startOf('day').toDate();
+        const dayEnd = targetDate.clone().endOf('day').toDate();
+
+        const isSlotAlreadyTaken = await Appointment.findOne({
+            doctorId,
+            hospitalId,
+            bookingType: 'OPD',
+            appointmentDate: { $gte: dayStart, $lte: dayEnd },
+            appointmentTime: appointmentTime.trim(),
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] }
+        });
+
+        if (isSlotAlreadyTaken) {
+            return res.status(409).json({ 
+                success: false, 
+                message: `The slot ${appointmentTime} on ${targetDateStr} was just booked by another patient. Please select another slot.` 
             });
         }
 
-        const doctor = await Doctor.findOne({ _id: doctorId, hospitalId, profileStatus: 'Approved', isActive: true });
-        if (!doctor) {
-            return res.status(404).json({ success: false, message: "Doctor not found in this hospital." });
-        }
+        // 4. CHECK IF SLOT WAS BLOCKED BY DOCTOR WITH REASON
+        const availability = await Availability.findOne({ vendorId: doctor._id }).lean();
+        if (availability) {
+            const isBlockedByDoctor = (availability.blockedSlotsWithReason || []).some(b => {
+                return moment(b.date).format("YYYY-MM-DD") === targetDateStr && b.time === appointmentTime.trim();
+            });
 
-        if (paymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Hospital', userId);
-            if (!isCodAllowed) {
-                return res.status(400).json({ success: false, message: "Cash on Delivery is disabled. Please pay online." });
+            if (isBlockedByDoctor) {
+                return res.status(400).json({ success: false, message: `The slot ${appointmentTime} is blocked by doctor for emergency duties. Please choose another slot.` });
             }
         }
 
-        const targetDate = moment(appointmentDate).startOf('day').toDate();
-        const endOfDay = moment(appointmentDate).endOf('day').toDate();
-
-        // Sequential Daily OPD Token Number for that Date
-        const todayBookingsCount = await Appointment.countDocuments({
+        // 5. Generate Daily Sequential Token Number
+        const dailyCount = await Appointment.countDocuments({
             hospitalId,
             doctorId,
-            bookingType: 'OPD',
-            appointmentDate: { $gte: targetDate, $lte: endOfDay }
+            appointmentDate: { $gte: dayStart, $lte: dayEnd },
+            bookingType: 'OPD'
         });
-        const tokenNumber = todayBookingsCount + 1;
+        const assignedToken = dailyCount + 1;
 
-        // Base Fee & Subscription Benefit
-        const baseFee = Number(doctor.fees?.clinic !== undefined ? doctor.fees.clinic : 0);
-        let finalBaseFee = baseFee;
-        let isSubscriptionApplied = false;
-        let planName = "";
-        let userSubscriptionId = null;
+        const baseConsultationFee = Number(doctor.fees?.clinic || 500);
+        const cabinNumber = doctor.department?.roomNumber || "Cabin 1";
+        const bookingId = `HKH-OPD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-        if (baseFee > 0) {
-            const consultBenefit = await checkAndApplyBenefit(userId, 'freeDoctorAppointmentsCount', baseFee);
-            if (consultBenefit.isApplied) {
-                finalBaseFee = 0;
-                isSubscriptionApplied = true;
-                planName = consultBenefit.planName || "Active Care Plan";
-                userSubscriptionId = consultBenefit.subId || null;
-            }
-        }
+        // 6. Create Confirmed / Pending Appointment
+        const isOnline = (paymentMethod === 'Online' || paymentMethod === 'online');
+        const initialStatus = isOnline ? 'Pending' : 'Hospital-Pending'; // If online, becomes Confirmed after signature verification
 
-        // 🚨 Dynamic Premium Slot Surcharge Evaluation
-        let premiumFee = 0;
-        const availabilityConfig = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
-        if (availabilityConfig && Array.isArray(availabilityConfig.premiumSlots)) {
-            const cleanTime = String(appointmentTime).trim();
-            const matchedPremium = availabilityConfig.premiumSlots.find(p => p.time === cleanTime);
-            if (matchedPremium && Number(matchedPremium.extraFee || 0) > 0) {
-                premiumFee = Number(matchedPremium.extraFee);
-            }
-        }
-
-        const subtotal = finalBaseFee + premiumFee;
-
-        // Apply Coupon Discount
-        let couponDiscount = 0;
-        let couponDetailsObj = null;
-
-        if (couponCode && subtotal > 0) {
-            const coupon = await Coupon.findOne({
-                couponName: String(couponCode).toUpperCase().trim(),
-                isActive: true,
-                expiryDate: { $gte: new Date() },
-                $or: [
-                    { vendorId: hospitalId },
-                    { isAdminCreated: true, vendorType: { $in: ['Hospital', 'Doctor', 'All'] } }
-                ]
-            });
-
-            if (coupon && subtotal >= (coupon.minOrderAmount || 0)) {
-                let disc = (subtotal * coupon.discountPercentage) / 100;
-                if (coupon.maxDiscount && disc > coupon.maxDiscount) disc = coupon.maxDiscount;
-                couponDiscount = Math.round(disc);
-                couponDetailsObj = {
-                    couponId: coupon._id,
-                    couponCode: coupon.couponName,
-                    discountValue: couponDiscount
-                };
-            }
-        }
-
-        const totalAmount = Math.max(0, subtotal - couponDiscount);
-        const tempBookingId = `HK-OPD-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
-
-        // Dynamic Patient Information
-        let parsedPatients = [];
-        if (Array.isArray(patients) && patients.length > 0) {
-            parsedPatients = patients;
-        } else if (typeof patients === 'string') {
-            try { parsedPatients = JSON.parse(patients); } catch(e) {}
-        }
-
-        if (parsedPatients.length === 0) {
-            parsedPatients = [{
-                patientName: req.body.patientName || req.user.name || "Patient",
-                patientAge: Number(req.body.patientAge || (req.user.dob ? moment().diff(moment(req.user.dob), 'years') : 25)),
-                gender: req.body.gender || req.user.gender || "Other",
-                relation: req.body.relation || "Self",
-                reasonForVisit: bookingReason || ""
-            }];
-        }
-
-        const newAppointment = await Appointment.create({
-            bookingId: tempBookingId,
+        const appointment = await Appointment.create({
             userId,
             hospitalId,
             doctorId,
+            bookingId,
             bookingType: 'OPD',
-            consultationType: 'Clinic Visit',
-            tokenNumber,
-            opdRoomNumber: doctor.department?.roomNumber || null,
-            patients: parsedPatients,
-            appointmentDate: targetDate,
-            appointmentTime,
-            bookingReason: bookingReason || "OPD Consultation",
+            tokenNumber: assignedToken,
+            opdRoomNumber: cabinNumber,
+            appointmentDate: targetDate.toDate(),
+            appointmentTime: appointmentTime.trim(),
+            status: initialStatus,
+            paymentStatus: 'Pending',
+            paymentMethod: isOnline ? 'Online' : 'COD',
+            totalAmount: baseConsultationFee,
             pricingBreakdown: {
-                baseFee: finalBaseFee,
-                originalBaseFee: baseFee,
-                extraCharges: premiumFee, // 👈 Saved Premium Slot Surcharge
-                discountAmount: couponDiscount,
-                subtotal,
-                totalPrice: totalAmount
+                baseFee: baseConsultationFee,
+                subtotal: baseConsultationFee
             },
-            couponDetails: couponDetailsObj,
-            totalAmount: Math.round(totalAmount),
-            paymentMethod,
-            paymentStatus: (paymentMethod === 'COD' || totalAmount === 0) ? 'Pending' : 'Pending',
-            status: (paymentMethod === 'COD' || totalAmount === 0) ? 'Hospital-Pending' : 'Pending',
-            subscriptionDetails: {
-                isSubscriptionApplied,
-                userSubscriptionId,
-                planName
-            }
+            patients: Array.isArray(patients) && patients.length > 0 ? patients : [{
+                patientName: req.user.name || "Patient",
+                patientAge: req.user.age || 30,
+                gender: req.user.gender || "Male",
+                relation: "Self"
+            }]
         });
-
-        // COD or Zero Total Confirmation
-        if (paymentMethod === 'COD' || totalAmount === 0) {
-            if (isSubscriptionApplied) {
-                await deductBenefitCount(userId, 'freeDoctorAppointmentsCount');
-            }
-
-            // Real-Time Notifications
-            await notifyAdminsAndVendor(
-                hospitalId,
-                'hospital',
-                `New OPD Consultation Booked! (Token #${tokenNumber})`,
-                `Patient ${parsedPatients[0]?.patientName} booked OPD for Dr. ${doctor.name}. Time: ${appointmentTime} ${premiumFee > 0 ? '(Premium Slot)' : ''}.`,
-                { appointmentId: newAppointment._id.toString(), type: 'new_opd_booking' }
-            );
-
-            await sendPushNotification(
-                doctorId,
-                'doctor',
-                `New OPD Patient Assigned! (Token #${tokenNumber})`,
-                `Patient ${parsedPatients[0]?.patientName} booked for ${appointmentTime}.`,
-                { appointmentId: newAppointment._id.toString(), type: 'new_opd_patient' }
-            );
-
-            return res.status(201).json({
-                success: true,
-                message: `OPD Appointment booked successfully! Your Token is #${tokenNumber}`,
-                tokenNumber,
-                bookingId: tempBookingId,
-                appointmentId: newAppointment._id,
-                data: newAppointment
-            });
-        }
-
-        // Online Payment Flow (Razorpay Order with Exact Total including Premium Fee)
-        const rzpOrder = await createRazorpayOrder(totalAmount, `receipt_${tempBookingId}`);
 
         res.status(201).json({
             success: true,
-            message: "Razorpay order initiated. Complete payment to confirm OPD booking.",
-            key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
-            amount: rzpOrder.amount, // Exact amount in paise including premium slot fee
-            currency: "INR",
-            razorpayOrderId: rzpOrder.id,
-            bookingId: tempBookingId,
-            appointmentId: newAppointment._id,
-            tokenNumber,
-            data: newAppointment
+            message: `OPD Consultation booked successfully. Token #${assignedToken} allocated.`,
+            tokenNumber: assignedToken,
+            cabinRoom: cabinNumber,
+            bookingId,
+            status: appointment.status,
+            totalAmount: baseConsultationFee,
+            data: appointment
         });
 
     } catch (error) {

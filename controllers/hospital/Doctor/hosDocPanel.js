@@ -2728,13 +2728,13 @@ const startOpdConsultation = async (req, res) => {
     }
 };
 
-// @desc    Hospital Doctor Marks an OPD Patient as No-Show / Absent
+// @desc    Doctor Marks Patient No-Show & Automatically Alerts the Next Waiting Patient in Queue
 // @route   PATCH /hospital-doctor/panel/opd/no-show/:appointmentId
 // @access  Private (Hospital Doctor)
 const markOpdNoShow = async (req, res) => {
     try {
-        const doctorId = req.user.id;
         const { appointmentId } = req.params;
+        const doctorId = req.user.id;
         const { reason } = req.body;
 
         const isObjectId = mongoose.isValidObjectId(appointmentId);
@@ -2744,18 +2744,54 @@ const markOpdNoShow = async (req, res) => {
             ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
         };
 
-        const appointment = await Appointment.findOne(query);
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "OPD Appointment not found." });
+            return res.status(404).json({ success: false, message: "OPD Appointment record not found for this doctor." });
         }
 
+        const now = new Date();
         appointment.status = 'No-Show';
-        appointment.cancelReason = reason || "Patient did not report to the OPD cabin when token was called.";
+        appointment.rescheduleReason = reason || "Patient did not report to cabin when called.";
+
+        // If patient never paid at counter, mark payment as Failed
+        if (appointment.paymentStatus === 'Pending') {
+            appointment.paymentStatus = 'Failed';
+        }
+
         await appointment.save();
+
+        // 🚀 AUTO-CALL NEXT PATIENT: Find the next confirmed token waiting for this doctor today
+        const todayStart = moment(now).startOf('day').toDate();
+        const todayEnd = moment(now).endOf('day').toDate();
+
+        const nextWaitingPatient = await Appointment.findOne({
+            doctorId,
+            hospitalId: appointment.hospitalId,
+            bookingType: 'OPD',
+            status: 'Confirmed',
+            tokenNumber: { $gt: Number(appointment.tokenNumber || 0) },
+            appointmentDate: { $gte: todayStart, $lte: todayEnd }
+        }).sort({ tokenNumber: 1 }).populate('userId', 'fcmToken name');
+
+        if (nextWaitingPatient && nextWaitingPatient.userId) {
+            try {
+                const cabinRoom = req.user.department?.roomNumber ? `Cabin ${req.user.department.roomNumber}` : "the OPD Cabin";
+                await sendPushNotification(
+                    nextWaitingPatient.userId._id,
+                    'user',
+                    `Your Turn is Next! (Token #${nextWaitingPatient.tokenNumber}) 🔔`,
+                    `Please proceed towards ${cabinRoom}. Dr. ${req.user.name} is ready for you.`,
+                    { appointmentId: nextWaitingPatient._id.toString(), type: 'opd_next_token_called', tokenNumber: String(nextWaitingPatient.tokenNumber) }
+                );
+            } catch (e) {}
+        }
 
         res.status(200).json({
             success: true,
-            message: `Token #${appointment.tokenNumber} marked as No-Show / Absent.`,
+            message: `Token #${appointment.tokenNumber} marked as No-Show. Next token #${nextWaitingPatient?.tokenNumber || 'None'} alerted.`,
+            tokenNumber: appointment.tokenNumber,
+            status: "No-Show",
+            nextWaitingToken: nextWaitingPatient?.tokenNumber || null,
             data: appointment
         });
 
@@ -2966,19 +3002,16 @@ const blockOpdSlotWithReason = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// @desc    Hospital Doctor Reschedules OPD Appointment to Another Date/Slot with Clinical Reason
+// @desc    Doctor Reschedules OPD Appointment to Another Date/Slot (Regenerates Token & Alerts Patient)
 // @route   POST /hospital-doctor/panel/opd/reschedule
 // @access  Private (Hospital Doctor)
 const doctorRescheduleOpdAppointment = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        const { appointmentId, newDate, newTimeSlot, reason } = req.body;
+        const { appointmentId, newDate, newTime, reason } = req.body;
 
-        if (!appointmentId || !newDate || !newTimeSlot || !reason) {
-            return res.status(400).json({
-                success: false,
-                message: "appointmentId, newDate, newTimeSlot, and explanation reason are mandatory."
-            });
+        if (!appointmentId || !newDate || !newTime) {
+            return res.status(400).json({ success: false, message: "appointmentId, newDate (YYYY-MM-DD), and newTime are required." });
         }
 
         const isObjectId = mongoose.isValidObjectId(appointmentId);
@@ -2990,58 +3023,78 @@ const doctorRescheduleOpdAppointment = async (req, res) => {
 
         const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "OPD Appointment not found." });
+            return res.status(404).json({ success: false, message: "OPD Appointment not found or unauthorized." });
         }
 
-        if (['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'].includes(appointment.status)) {
-            return res.status(400).json({ success: false, message: `Cannot reschedule appointment in '${appointment.status}' state.` });
+        const targetDate = moment(newDate.trim(), "YYYY-MM-DD").startOf('day');
+        if (!targetDate.isValid()) {
+            return res.status(400).json({ success: false, message: "Invalid newDate format. Use YYYY-MM-DD." });
         }
 
-        const targetDate = moment(newDate).startOf('day').toDate();
-        const endOfDay = moment(newDate).endOf('day').toDate();
+        // 1. Check if Target Slot is Already Booked on that Date
+        const dayStart = targetDate.clone().startOf('day').toDate();
+        const dayEnd = targetDate.clone().endOf('day').toDate();
 
-        // Recalculate sequential OPD token number for the new date
-        const newDayTokensCount = await Appointment.countDocuments({
-            hospitalId: appointment.hospitalId,
+        const isSlotTaken = await Appointment.findOne({
             doctorId,
             bookingType: 'OPD',
-            appointmentDate: { $gte: targetDate, $lte: endOfDay },
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
+            appointmentDate: { $gte: dayStart, $lte: dayEnd },
+            appointmentTime: newTime.trim(),
+            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] },
+            _id: { $ne: appointment._id }
         });
-        const newTokenNumber = newDayTokensCount + 1;
 
-        appointment.appointmentDate = targetDate;
-        appointment.appointmentTime = newTimeSlot;
+        if (isSlotTaken) {
+            return res.status(409).json({ success: false, message: `Slot ${newTime} on ${newDate} is already booked by another patient.` });
+        }
+
+        // 2. Generate Fresh Daily Token for the New Date (Prevents Token Collision)
+        const dailyCount = await Appointment.countDocuments({
+            hospitalId: appointment.hospitalId,
+            doctorId,
+            appointmentDate: { $gte: dayStart, $lte: dayEnd },
+            bookingType: 'OPD',
+            _id: { $ne: appointment._id }
+        });
+        const newTokenNumber = dailyCount + 1;
+
+        // 3. Update Appointment
+        appointment.appointmentDate = targetDate.toDate();
+        appointment.appointmentTime = newTime.trim();
         appointment.tokenNumber = newTokenNumber;
-        appointment.rescheduleReason = String(reason).trim();
         appointment.rescheduleCount = (appointment.rescheduleCount || 0) + 1;
-        appointment.status = 'Rescheduled';
-
-        appointment.treatmentHistory.push({
-            action: 'Transfer-Initiated',
-            notes: `Doctor Rescheduled to ${moment(newDate).format('YYYY-MM-DD')} at ${newTimeSlot}. Reason: "${reason.trim()}". New Token #${newTokenNumber}`,
-            timestamp: new Date()
-        });
+        appointment.rescheduleReason = reason || "Doctor schedule adjusted";
+        appointment.status = 'Confirmed';
 
         await appointment.save();
 
-        // Real-Time Notification to Patient
+        // 4. Alert Patient with New Date, Time and New Token Number
         if (appointment.userId) {
             try {
+                const cabin = req.user.department?.roomNumber ? `Cabin ${req.user.department.roomNumber}` : "OPD Cabin";
                 await sendPushNotification(
                     appointment.userId._id,
                     'user',
-                    "OPD Appointment Rescheduled by Doctor",
-                    `Dr. ${req.user.name || 'Doctor'} rescheduled your appointment to ${moment(newDate).format('DD MMM')} at ${newTimeSlot}. Your new Token is #${newTokenNumber}. Reason: "${reason.trim()}"`,
-                    { appointmentId: appointment._id.toString(), type: 'opd_doctor_rescheduled', tokenNumber: newTokenNumber }
+                    `Appointment Rescheduled (New Token #${newTokenNumber})`,
+                    `Dr. ${req.user.name} rescheduled your visit to ${newDate} at ${newTime}. Your new token is #${newTokenNumber} (${cabin}).`,
+                    { 
+                        appointmentId: appointment._id.toString(), 
+                        type: 'opd_rescheduled',
+                        newTokenNumber: String(newTokenNumber),
+                        newDate,
+                        newTime
+                    }
                 );
             } catch (e) {}
         }
 
         res.status(200).json({
             success: true,
-            message: `OPD Appointment successfully rescheduled. New Token is #${newTokenNumber}. Patient notified.`,
-            tokenNumber: newTokenNumber,
+            message: `Appointment rescheduled successfully. New Token #${newTokenNumber} assigned for ${newDate}.`,
+            bookingId: appointment.bookingId,
+            newDate: newDate.trim(),
+            newTime: newTime.trim(),
+            newGeneratedTokenNumber: newTokenNumber,
             data: appointment
         });
 
