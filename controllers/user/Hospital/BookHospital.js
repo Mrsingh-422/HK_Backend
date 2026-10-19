@@ -457,7 +457,7 @@ const getAvailableBedsForRange = async (req, res) => {
 };
 
 // for conditional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
-// @desc    Calculate Comprehensive IPD Checkout Summary (Bed Stay + Doctor Visit + Special Services + Triage - Coupon)
+// @desc    Calculate Clean IPD Checkout Summary (Only Bed Fee + Selected Special Services - Coupon)
 // @route   POST /user/hospital/checkout-summary
 // @access  Private (User)
 const getHospitalCheckoutSummary = async (req, res) => {
@@ -492,16 +492,10 @@ const getHospitalCheckoutSummary = async (req, res) => {
             return res.status(404).json({ success: false, message: "Selected bed not found in this hospital." });
         }
 
+        // Base Bed Price (Rate per day * days)
         const baseBedPrice = Number(bed.pricePerDay || 1000) * stayDays;
-        const doctorVisitCharge = 200; // Standard in-patient baseline
 
-        // 2. Triage Surcharge
-        let triageSurcharge = 0;
-        if (triageLevel === 'Emergency') triageSurcharge = 500;
-        else if (triageLevel === 'Very Urgent') triageSurcharge = 300;
-        else if (triageLevel === 'Urgent') triageSurcharge = 150;
-
-        // 3. 🚨 SPECIAL SERVICES CALCULATION (De-duplicated & DB Verified)
+        // 2. SPECIAL SERVICES CALCULATION (Only selected services from DB)
         let verifiedSpecialServicesList = [];
         let specialServicesTotal = 0;
 
@@ -520,7 +514,6 @@ const getHospitalCheckoutSummary = async (req, res) => {
                 serviceIds = rawSpecialServices.map(s => typeof s === 'string' ? s : (s._id || s.serviceId || s.id));
             }
 
-            // Remove duplicates and filter valid MongoDB ObjectIds
             const cleanIds = [...new Set(serviceIds.filter(id => mongoose.isValidObjectId(id)))];
 
             if (cleanIds.length > 0) {
@@ -542,9 +535,10 @@ const getHospitalCheckoutSummary = async (req, res) => {
             }
         }
 
-        const subtotal = baseBedPrice + doctorVisitCharge + triageSurcharge + specialServicesTotal;
+        // Subtotal = Only Bed Stay Fee + Selected Special Services Total
+        const subtotal = baseBedPrice + specialServicesTotal;
 
-        // 4. Coupon Discount Calculation
+        // 3. Coupon Discount Calculation
         let couponDiscount = 0;
         let appliedCouponData = null;
 
@@ -582,10 +576,9 @@ const getHospitalCheckoutSummary = async (req, res) => {
                 days: stayDays,
                 baseFee: baseBedPrice,
                 pricePerDay: bed.pricePerDay,
-                visitCharge: doctorVisitCharge,
-                triageSurcharge: triageSurcharge,
-                serviceCharge: specialServicesTotal, // Sum of special services
-                specialServicesBreakdown: verifiedSpecialServicesList, // Verified array
+                triageLevel: triageLevel,
+                serviceCharge: specialServicesTotal, // Only selected special services total
+                specialServicesBreakdown: verifiedSpecialServicesList,
                 subtotal: subtotal,
                 discount: couponDiscount,
                 appliedCoupon: appliedCouponData,
@@ -601,7 +594,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
 
 
 
-// @desc    Confirm Final IPD Bed Booking (Saves Special Services, Insurance Document & Sets Pricing Snapshots)
+// @desc    Confirm Final IPD Bed Booking (Strictly Bed Price + Selected Special Services)
 // @route   POST /user/hospital/book
 // @access  Private (User)
 const finalHospitalBooking = async (req, res) => {
@@ -641,14 +634,8 @@ const finalHospitalBooking = async (req, res) => {
         }
 
         const baseBedPrice = Number(bed.pricePerDay || 1000) * stayDays;
-        const doctorVisitCharge = 200;
 
-        let triageSurcharge = 0;
-        if (triageLevel === 'Emergency') triageSurcharge = 500;
-        else if (triageLevel === 'Very Urgent') triageSurcharge = 300;
-        else if (triageLevel === 'Urgent') triageSurcharge = 150;
-
-        // 2. 🚨 VERIFY SPECIAL SERVICES FROM DATABASE
+        // 2. VERIFY SPECIAL SERVICES FROM DB
         let verifiedSpecialServices = [];
         let specialServicesTotal = 0;
 
@@ -685,7 +672,8 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        const subtotal = baseBedPrice + doctorVisitCharge + triageSurcharge + specialServicesTotal;
+        // Subtotal = Only Bed Price + Selected Special Services
+        const subtotal = baseBedPrice + specialServicesTotal;
 
         // 3. Coupon Discount
         let couponDiscount = 0;
@@ -724,7 +712,7 @@ const finalHospitalBooking = async (req, res) => {
             }];
         }
 
-        // 4. 🚨 INSURANCE DOCUMENT UPLOAD HANDLING (Multer file capture)
+        // Insurance Document Upload Handling
         let insuranceDocPath = null;
         if (req.file) {
             insuranceDocPath = `/uploads/insurance/${req.file.filename}`;
@@ -739,7 +727,7 @@ const finalHospitalBooking = async (req, res) => {
             approvalStatus: (hasInsurance === 'true' || hasInsurance === true) ? 'Pending' : 'Rejected'
         };
 
-        // 5. Create In-Patient Admission Document
+        // 4. Create In-Patient Admission Document
         const appointment = await Appointment.create({
             userId,
             hospitalId,
@@ -749,21 +737,21 @@ const finalHospitalBooking = async (req, res) => {
             bookingId,
             bookingType: 'Admission',
             bedBookingType: triageLevel === 'Emergency' ? 'Emergency-Bed' : 'General-Bed',
-            triageLevel,
+            triageLevel, // Saved purely as clinical priority, 0 rupees surcharge
             startDate: startMoment.toDate(),
             endDate: endMoment.toDate(),
             stayDuration: stayDays,
             bookingReason: bookingReason || "Direct In-Patient Bed Admission",
-            specialServices: verifiedSpecialServices, // Verified array stored
-            insuranceDetails: insurancePayload,       // Linked insurance & document
+            specialServices: verifiedSpecialServices,
+            insuranceDetails: insurancePayload,
             status: isOnline ? 'Pending' : 'Hospital-Pending',
             paymentStatus: 'Pending',
             paymentMethod: isOnline ? 'Online' : 'COD',
             totalAmount: totalPayable,
             pricingBreakdown: {
                 baseFee: baseBedPrice,
-                visitCharges: doctorVisitCharge,
-                extraCharges: triageSurcharge + specialServicesTotal, // Includes verified special services
+                visitCharges: 0, // Removed hardcoded visit charge
+                extraCharges: specialServicesTotal, // Only selected special services
                 discountAmount: couponDiscount,
                 subtotal: subtotal,
                 bookedDurationDays: stayDays,
@@ -777,11 +765,11 @@ const finalHospitalBooking = async (req, res) => {
             patients: patientList
         });
 
-        // 6. Lock Bed
+        // 5. Lock Bed
         bed.status = 'Reserved';
         await bed.save();
 
-        // 7. Online Razorpay Flow
+        // 6. Online Razorpay Flow
         if (isOnline) {
             const receiptId = `ipd_rcpt_${bookingId}`;
             const rzpOrder = await createRazorpayOrder(totalPayable, receiptId);
@@ -801,7 +789,7 @@ const finalHospitalBooking = async (req, res) => {
             });
         }
 
-        // 8. COD / Pay at Hospital Counter Flow
+        // 7. COD / Counter Flow
         res.status(201).json({
             success: true,
             isOnlinePayment: false,
