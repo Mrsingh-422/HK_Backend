@@ -46,9 +46,17 @@ const calculateHospitalBalances = async (hospitalId) => {
 
         let effectiveVendorCredit = 0;
 
-        if (appt.paymentMethod === 'COD') {
+        // Both Cash collected at hospital counter & COD mean hospital already has physical cash
+        const isCounterCashOrCod = appt.paymentMethod === 'COD' || 
+                                   appt.paymentMethod === 'Cash' || 
+                                   String(appt.paymentMethod).toUpperCase() === 'CASH' ||
+                                   String(appt.paymentMethod).toUpperCase() === 'COD';
+
+        if (isCounterCashOrCod) {
+            // Deduct Admin platform commission from wallet
             effectiveVendorCredit = -adminCutoff;
         } else {
+            // Online gateway; credit net vendor amount to wallet
             effectiveVendorCredit = netVendorAmount;
         }
 

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware.js'); 
-const { userProfileUpload, insuranceUpload } = require('../../middleware/multer');
+const { userProfileUpload, insuranceUpload,insuranceCardUploads } = require('../../middleware/multer');
 const { 
     registerUser, checkUserExists,
     loginUser, 
@@ -80,7 +80,7 @@ router.put('/edit-family-member/:itemId', protect('user'), userProfileUpload, ed
 router.delete('/remove-family-member/:itemId', protect('user'), removeFamilyMember); // remove family member
 
 
-router.put('/update-insurance', protect('user'), insuranceUpload.single('insuranceDocument'), updateInsuranceDetails);
+router.put('/update-insurance', protect('user'), insuranceCardUploads, updateInsuranceDetails);
 router.get('/my-insurance', protect('user'), getMyInsurance);
 
 

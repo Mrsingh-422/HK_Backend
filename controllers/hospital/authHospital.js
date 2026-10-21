@@ -273,14 +273,15 @@ const toggleHospitalOnlineStatus = async (req, res) => {
     }
 };
 
-// --- 3. UPDATE HOSPITAL PROFILE ---
-// Endpoint: PUT /api/auth/hospital/profile/update
+// @desc    Update Hospital Profile (Supports isInsuranceAccepted toggle & acceptedInsurances list)
+// @route   PUT /api/auth/hospital/profile/update
+// @access  Private (Hospital)
 const updateHospitalProfile = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const updates = { ...req.body };
- 
-        // 🚨 SECURITY LOCKS
+
+        // Security Locks: Remove immutable credentials
         delete updates.email;
         delete updates.phone;
         delete updates.password;
@@ -290,7 +291,18 @@ const updateHospitalProfile = async (req, res) => {
         delete updates.hospitalImage;
         delete updates.licenseDocument;
         delete updates.otherDocuments;
- 
+
+        // Parse Insurance Acceptance Fields safely
+        if (updates.isInsuranceAccepted !== undefined) {
+            updates.isInsuranceAccepted = (updates.isInsuranceAccepted === 'true' || updates.isInsuranceAccepted === true);
+        }
+
+        if (updates.acceptedInsurances) {
+            updates.acceptedInsurances = typeof updates.acceptedInsurances === 'string'
+                ? JSON.parse(updates.acceptedInsurances)
+                : updates.acceptedInsurances;
+        }
+
         // Clean up previous unapproved pending request if exists
         await ProfileUpdateRequest.findOneAndDelete({ vendorId: hospitalId, vendorModel: 'Hospital', status: 'Pending' });
 
@@ -300,40 +312,64 @@ const updateHospitalProfile = async (req, res) => {
             updatedFields: updates,
             status: 'Pending'
         });
- 
-        res.json({
+
+        // Instant update for operational insurance parameters in Hospital document
+        if (updates.isInsuranceAccepted !== undefined || updates.acceptedInsurances) {
+            const operationalUpdates = {};
+            if (updates.isInsuranceAccepted !== undefined) operationalUpdates.isInsuranceAccepted = updates.isInsuranceAccepted;
+            if (updates.acceptedInsurances) operationalUpdates.acceptedInsurances = updates.acceptedInsurances;
+
+            await Hospital.findByIdAndUpdate(hospitalId, { $set: operationalUpdates });
+        }
+
+        res.status(200).json({
             success: true,
-            message: "Profile changes submitted to Admin for review. Your profile will update once approved.",
+            message: "Profile and Insurance acceptance updated successfully.",
             data: request
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Update Hospital Profile Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
  
+// @desc    Get Logged-in Hospital Full Profile including Capacity & Insurance Settings
+// @route   GET /api/auth/hospital/profile
+// @access  Private (Hospital)
 const getMyHospitalProfile = async (req, res) => {
     try {
-        const hospital = await Hospital.findById(req.user.id).select('-password');
-        const wards = await Ward.find({ hospitalId: req.user.id });
+        const hospital = await Hospital.findById(req.user.id).select('-password').lean();
+        if (!hospital) {
+            return res.status(404).json({ success: false, message: "Hospital profile not found." });
+        }
+
+        const wards = await Ward.find({ hospitalId: req.user.id }).lean();
         
         // Dynamic capacity calculation
-        const totalBeds = wards.reduce((sum, w) => sum + w.totalBeds, 0);
-        const allocated = wards.reduce((sum, w) => sum + (w.totalBeds - w.availableBeds), 0);
+        const totalBeds = wards.reduce((sum, w) => sum + (w.totalBeds || 0), 0);
+        const allocated = wards.reduce((sum, w) => sum + ((w.totalBeds || 0) - (w.availableBeds || 0)), 0);
 
-        res.json({
+        res.status(200).json({
             success: true,
             data: {
-                hospital,
+                hospital: {
+                    ...hospital,
+                    isInsuranceAccepted: hospital.isInsuranceAccepted !== false,
+                    acceptedInsurances: hospital.acceptedInsurances || []
+                },
                 capacity: {
                     total: totalBeds,
                     allocated: allocated,
-                    remaining: totalBeds - allocated
+                    remaining: Math.max(0, totalBeds - allocated)
                 },
-                wards // Lists ICU and Ward Units separately
+                wards
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) {
+        console.error("Get My Hospital Profile Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // GET: Fetch latest profile update request status for logged-in Hospital

@@ -84,7 +84,7 @@ const adminGetApprovedHospitals = async (req, res) => {
     }
 };
 
-// @desc    Admin: Get Hospital Bookings (Supports filtering by bookingType 'OPD', 'Admission', or 'All')
+// @desc    Admin: Get Hospital Bookings (Includes OPD/IPD indicators, token numbers & Insurance details)
 // @route   GET /admin/hospital/appointments
 // @access  Private (Admin)
 const adminGetHospitalBookings = async (req, res) => {
@@ -95,7 +95,6 @@ const adminGetHospitalBookings = async (req, res) => {
         
         let query = {};
 
-        // 🚨 Supports filtering by 'OPD', 'Admission', or both by default
         if (bookingType && bookingType !== 'All') {
             query.bookingType = bookingType;
         } else {
@@ -126,17 +125,14 @@ const adminGetHospitalBookings = async (req, res) => {
 
         const data = await Appointment.find(query)
             .populate('userId', 'name phone email')
-            .populate('hospitalId', 'name address hospitalImage city')
+            .populate('hospitalId', 'name address hospitalImage city isInsuranceAccepted')
             .populate('doctorId', 'name speciality profileImage department fees')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
-                populate: {
-                    path: 'wardId',
-                    select: 'name type'
-                }
+                populate: { path: 'wardId', select: 'name type' }
             })
-            .sort({ tokenNumber: 1, createdAt: -1 })
+            .sort(bookingType === 'OPD' ? { tokenNumber: 1, createdAt: -1 } : { createdAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean();
@@ -147,7 +143,11 @@ const adminGetHospitalBookings = async (req, res) => {
             isIpd: item.bookingType === 'Admission',
             displaySubtitle: item.bookingType === 'OPD' 
                 ? `OPD Token #${item.tokenNumber || '1'} - Dr. ${item.doctorId?.name || 'Doctor'}`
-                : `Bed: ${item.bedNumber || 'Unassigned'} (${item.wardName || 'Ward'})`
+                : `Bed: ${item.bedNumber || 'Unassigned'} (${item.wardName || 'Ward'})`,
+            hasInsurance: Boolean(item.insuranceDetails?.hasInsurance),
+            insuranceClaimStatus: item.insuranceDetails?.hasInsurance 
+                ? (item.insuranceDetails?.approvalStatus || 'Pending') 
+                : 'Self-Pay (No Insurance)'
         }));
 
         res.status(200).json({ 

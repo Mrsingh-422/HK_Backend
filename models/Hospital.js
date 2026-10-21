@@ -69,7 +69,15 @@ const hospitalSchema = new mongoose.Schema({
         ifscCode: { type: String, default: "" },
         upiId: { type: String, default: "" },
         isVerified: { type: Boolean, default: false }
-    }
+    },
+    isInsuranceAccepted: { 
+        type: Boolean, 
+        default: true 
+    },
+    acceptedInsurances: [{ 
+        type: String, 
+        default: [] 
+    }], // e.g. ["HDFC ERGO", "Star Health", "Care Health", "RGHS", "Ayushman Bharat"]
 
 }, { timestamps: true });
 

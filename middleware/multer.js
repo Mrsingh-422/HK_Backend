@@ -905,8 +905,9 @@ const hospitalDischargeFieldsUpload = multer({
 ]);
 
 const insuranceCardUploads = insuranceUpload.fields([
-    { name: 'insuranceDocumentFront', maxCount: 1 },
-    { name: 'insuranceDocumentBack', maxCount: 1 }
+    { name: 'insuranceDocument', maxCount: 1 },      // Single PDF or combined photo
+    { name: 'insuranceDocumentFront', maxCount: 1 }, // Front side of card
+    { name: 'insuranceDocumentBack', maxCount: 1 }   // Back side of card
 ]);
 
 // ==========================================

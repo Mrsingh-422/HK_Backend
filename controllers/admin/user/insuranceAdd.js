@@ -51,34 +51,61 @@ const addInsurance = async (req, res) => {
     }
 };
 
-// 4. GET INSURANCE LIST (Search in both Provider and Name)
+// @desc    Get Insurance Companies List (Supports search, active filter & full dropdown export)
+// @route   GET /admin/user/insurance/insurance-list
+// @access  Public
 const getInsuranceList = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search = "" } = req.query;
+        const { page = 1, limit = 10, search = "", isActive, all } = req.query;
         
-        // Search filter: Provider ya Insurance Name dono mein search karega
-        const filter = search ? {
-            $or: [
-                { insuranceName: { $regex: search, $options: 'i' } },
-                { provider: { $regex: search, $options: 'i' } }
-            ]
-        } : {};
+        const filter = {};
+        if (isActive !== undefined && isActive !== 'All') {
+            filter.isActive = (isActive === 'true' || isActive === true);
+        }
 
-        const list = await Insurance.find(filter)
-            .skip((page - 1) * limit)
-            .limit(parseInt(limit))
-            .sort({ createdAt: -1 });
+        if (search && search.trim() !== "") {
+            filter.$or = [
+                { insuranceName: { $regex: search.trim(), $options: 'i' } },
+                { provider: { $regex: search.trim(), $options: 'i' } },
+                { type: { $regex: search.trim(), $options: 'i' } }
+            ];
+        }
 
-        const totalDocs = await Insurance.countDocuments(filter);
-        res.json({ 
+        // Agar all=true bheja ho toh dropdowns ke liye unpaginated list milti hai
+        if (all === 'true' || all === true) {
+            const list = await Insurance.find(filter).sort({ provider: 1, insuranceName: 1 }).lean();
+            return res.status(200).json({
+                success: true,
+                count: list.length,
+                data: list
+            });
+        }
+
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
+        const [totalDocs, list] = await Promise.all([
+            Insurance.countDocuments(filter),
+            Insurance.find(filter)
+                .skip(skip)
+                .limit(limitNum)
+                .sort({ createdAt: -1 })
+                .lean()
+        ]);
+
+        res.status(200).json({ 
             success: true, 
             totalDocs, 
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(totalDocs / limit),
+            currentPage: pageNum,
+            totalPages: Math.ceil(totalDocs / limitNum),
+            count: list.length,
             data: list 
         });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Get Insurance List Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

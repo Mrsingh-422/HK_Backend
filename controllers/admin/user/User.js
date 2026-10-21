@@ -79,14 +79,36 @@ const searchUsersAdmin = async (req, res) => {
     }
 };
 
-// 3. GET SINGLE USER DETAILS (Full Data)
+// @desc    Get Single User Full Profile with Populated Insurance Details
+// @route   GET /admin/users/details/:id
+// @access  Private (Admin)
 const getUserDetailsAdmin = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id).populate('insuranceId');
-        if (!user) return res.status(404).json({ message: "User not found" });
-        res.json({ success: true, data: user });
+        const { id } = req.params;
+
+        if (!mongoose.isValidObjectId(id)) {
+            return res.status(400).json({ success: false, message: "Invalid User ID format." });
+        }
+
+        const user = await User.findById(id)
+            .select('-password -token -healthLockerPin')
+            .populate('insuranceId')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+            .populate('familyMember.insuranceId', 'provider insuranceName type')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            data: user 
+        });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Get User Details Admin Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

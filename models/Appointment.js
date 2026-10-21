@@ -80,9 +80,9 @@ const appointmentSchema = new mongoose.Schema({
     },
 
     paymentMethod: { type: String, enum: [
-        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
-        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater',
-        'ONLINE', 'COD'
+        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 'Cash',
+        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater', 'cash',
+        'ONLINE', 'COD', 'CASH'
     ], default: 'COD' },
 
     totalAmount: { type: Number }, // Final Payable
@@ -99,6 +99,8 @@ const appointmentSchema = new mongoose.Schema({
         companyName: { type: String, default: "" },
         insuranceType: { type: String, default: "" },
         insuranceDocument: { type: String, default: null }, // Snapshot path of PDF or image
+        insuranceDocumentFront: { type: String, default: null },
+        insuranceDocumentBack: { type: String, default: null },
         // 🚀 NEW: TPA Approval Letter PDF from insurance company
         approvalLetterPdf: { type: String, default: null },
         // 🚀 NEW: Approval status ('Pending' until PDF is uploaded, then 'Approved')

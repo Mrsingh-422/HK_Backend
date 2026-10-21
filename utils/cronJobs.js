@@ -42,6 +42,7 @@ const initCronJobs = () => {
             const now = new Date();
             const expiredAdmissions = await Appointment.find({
                 bookingType: 'Admission',
+                status: 'Hospital-Pending',
                 admissionHoldExpiresAt: { $lt: now, $ne: null },
                 paymentStatus: 'Pending',
                 bedId: { $ne: null }

@@ -3572,83 +3572,84 @@ const getReferralHospitals = async (req, res) => {
 /////////////////////////// INSURANCE  ///////////////////////////
 /////////////////////////////////////////////////////////////////
 
-// --- API 1: GET PATIENTS LIST FOR TPA INSURANCE DESK (With insuranceType & Approval Status) ---
-// Endpoint: GET /hospital/panel/insurance/patients?tab=Insured&page=1
+// @desc    Get Hospital Insured Patients for TPA Desk (Default: Strictly only insured patients)
+// @route   GET /hospital/panel/insurance/patients
+// @access  Private (Hospital)
 const getInsurancePatientsList = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { tab = 'Un-Insured', page = 1, limit = 10, search } = req.query;
+        const { status = 'All', search = "", page = 1, limit = 20 } = req.query;
 
-        const pageNum = parseInt(page) || 1;
-        const limitNum = parseInt(limit) || 10;
-        const skip = (pageNum - 1) * limitNum;
+        const query = { hospitalId };
 
-        // DATA ISOLATION GUARD: Fetch only patients who have interacted with this specific hospital
-        const uniquePatientIds = await Appointment.find({ hospitalId }).distinct('userId');
-
-        let query = {
-            _id: { $in: uniquePatientIds }
-        };
-
-        if (tab === 'Insured') {
-            query["insuranceDetails.hasInsurance"] = true;
+        // 🚨 CRITICAL FIX: By default, the Insurance Desk must ONLY show patients with hasInsurance === true!
+        if (status === 'Uninsured') {
+            // Only show non-insured / self-pay patients if explicitly requested
+            query['insuranceDetails.hasInsurance'] = false;
+        } else if (status === 'Pending' || status === 'PendingApproval') {
+            query['insuranceDetails.hasInsurance'] = true;
+            query['insuranceDetails.approvalStatus'] = 'Pending';
+        } else if (status === 'Approved') {
+            query['insuranceDetails.hasInsurance'] = true;
+            query['insuranceDetails.approvalStatus'] = 'Approved';
+        } else if (status === 'Rejected') {
+            query['insuranceDetails.hasInsurance'] = true;
+            query['insuranceDetails.approvalStatus'] = 'Rejected';
         } else {
-            query["insuranceDetails.hasInsurance"] = { $ne: true };
+            // Default (status === 'All', 'Insured' or no query param): Strictly show ONLY Insured patients!
+            query['insuranceDetails.hasInsurance'] = true;
         }
 
-        if (search) {
+        if (search && search.trim() !== '') {
             query.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { phone: { $regex: search, $options: 'i' } }
+                { bookingId: { $regex: search.trim(), $options: 'i' } },
+                { 'patients.patientName': { $regex: search.trim(), $options: 'i' } },
+                { 'insuranceDetails.insuranceNumber': { $regex: search.trim(), $options: 'i' } }
             ];
         }
 
-        const totalRecords = await User.countDocuments(query);
+        const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        const patients = await User.find(query)
-            .select('name phone email profilePic gender dob insuranceDetails')
-            .populate('insuranceDetails.masterInsuranceId', 'insuranceName provider type')
-            .sort({ updatedAt: -1 })
-            .skip(skip)
-            .limit(limitNum);
+        const [total, patients] = await Promise.all([
+            Appointment.countDocuments(query),
+            Appointment.find(query)
+                .populate('userId', 'name phone email profilePic')
+                .populate('doctorId', 'name speciality')
+                .populate('bedId', 'bedNumber wardId')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean()
+        ]);
 
-        // 🚀 SYNC FIX: Map insuranceType and lookup active appointment approval status
-        const enrichedPatients = await Promise.all(patients.map(async (p) => {
-            const pObj = p.toObject ? p.toObject() : { ...p };
-            
-            // Find latest active/pending appointment for this patient at this hospital
-            const activeAppt = await Appointment.findOne({
-                hospitalId,
-                userId: p._id
-            })
-            .sort({ createdAt: -1 })
-            .select('bookingId status insuranceDetails createdAt')
-            .lean();
-
-            // Approval status is Pending by default until hospital uploads the approval letter PDF
-            const approvalStatus = activeAppt?.insuranceDetails?.approvalStatus || (activeAppt?.insuranceDetails?.approvalLetterPdf ? 'Approved' : 'Pending');
-            const approvalLetterPdf = activeAppt?.insuranceDetails?.approvalLetterPdf || null;
-
-            return {
-                ...pObj,
-                insuranceType: pObj.insuranceDetails?.insuranceType || pObj.insuranceDetails?.masterInsuranceId?.type || "Cashless Insurance",
-                latestAppointment: activeAppt ? {
-                    appointmentId: activeAppt._id,
-                    bookingId: activeAppt.bookingId,
-                    appointmentStatus: activeAppt.status,
-                    approvalStatus, // 👈 'Pending' by default, turns 'Approved' when PDF is uploaded
-                    approvalLetterPdf // 👈 Path of uploaded TPA approval letter PDF
-                } : null
-            };
+        const formatted = patients.map(p => ({
+            appointmentId: p._id,
+            bookingId: p.bookingId,
+            bookingType: p.bookingType,
+            patientName: p.patients?.[0]?.patientName || p.userId?.name || "Patient",
+            phone: p.userId?.phone || "N/A",
+            wardName: p.wardName || "N/A",
+            bedNumber: p.bedNumber || "N/A",
+            status: p.status,
+            insurance: {
+                hasInsurance: Boolean(p.insuranceDetails?.hasInsurance),
+                companyName: p.insuranceDetails?.companyName || "N/A",
+                insuranceNumber: p.insuranceDetails?.insuranceNumber || "N/A",
+                insuranceType: p.insuranceDetails?.insuranceType || "N/A",
+                approvalStatus: p.insuranceDetails?.approvalStatus || "Pending",
+                approvalLetterPdf: p.insuranceDetails?.approvalLetterPdf || null,
+                cardFront: p.insuranceDetails?.insuranceDocumentFront || p.insuranceDetails?.insuranceDocument || null,
+                cardBack: p.insuranceDetails?.insuranceDocumentBack || null
+            }
         }));
 
-        res.json({
+        res.status(200).json({
             success: true,
-            totalRecords,
-            totalPages: Math.ceil(totalRecords / limitNum),
-            currentPage: pageNum,
-            count: enrichedPatients.length,
-            data: enrichedPatients
+            total,
+            count: formatted.length,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / parseInt(limit)),
+            data: formatted
         });
 
     } catch (error) {
@@ -3657,69 +3658,65 @@ const getInsurancePatientsList = async (req, res) => {
     }
 };
 
-// --- API: UPLOAD TPA APPROVAL LETTER PDF & AUTO-CONFIRM ORDER (NEW API) ---
-// Endpoint: PUT /hospital/panel/insurance/upload-approval-letter/:appointmentId
+// @desc    Upload TPA Insurance Approval Letter for Patient Appointment
+// @route   PUT /hospital/panel/insurance/upload-approval-letter/:appointmentId
+// @access  Private (Hospital)
 const uploadInsuranceApprovalLetter = async (req, res) => {
     try {
-        const hospitalId = req.user.id;
         const { appointmentId } = req.params;
+        const hospitalId = req.user.id;
 
         if (!req.file) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Kripya insurance company ka approval letter PDF upload karein (approvalLetterPdf key me)." 
-            });
+            return res.status(400).json({ success: false, message: "Approval letter file (PDF or Image) is required." });
         }
 
-        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            hospitalId,
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query);
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission booking record not found." });
+            return res.status(404).json({ success: false, message: "Appointment record not found." });
         }
 
-        const pdfPath = `/uploads/insurance_approvals/${req.file.filename}`;
+        // Delete old approval letter if re-uploading
+        if (appointment.insuranceDetails?.approvalLetterPdf) {
+            deleteFile(appointment.insuranceDetails.approvalLetterPdf);
+        }
 
-        // 1. Save approval letter PDF and update status to Approved
         if (!appointment.insuranceDetails) {
             appointment.insuranceDetails = { hasInsurance: true };
         }
-        
-        appointment.hasInsurance = true;
+
+        const letterPath = `/uploads/insurance_approvals/${req.file.filename}`;
         appointment.insuranceDetails.hasInsurance = true;
-        appointment.insuranceDetails.approvalLetterPdf = pdfPath;
-        appointment.insuranceDetails.approvalStatus = 'Approved'; // 🚀 Turns Approved
-
-        // 2. 🚀 AUTO-CONFIRM ORDER: Transition appointment status from pending to Confirmed!
-        if (appointment.status === 'Hospital-Pending' || appointment.status === 'Pending') {
-            appointment.status = 'Confirmed';
-        }
-
-        // Reserve assigned bed if present
-        if (appointment.bedId) {
-            const Bed = require('../../models/Bed');
-            await Bed.findByIdAndUpdate(appointment.bedId, { status: 'Reserved' });
-        }
+        appointment.insuranceDetails.approvalLetterPdf = letterPath;
+        appointment.insuranceDetails.approvalStatus = 'Approved';
 
         await appointment.save();
 
-        // 3. Trigger Notification to Patient
-        const { sendPushNotification } = require('../../utils/notification');
-        await sendPushNotification(
-            appointment.userId,
-            'user',
-            "🎉 Cashless Admission Approved & Confirmed!",
-            `Your cashless admission #${appointment.bookingId} has been verified with TPA insurance approval letter. Booking is now Confirmed.`,
-            { appointmentId: appointment._id.toString(), type: 'cashless_approval_confirmed' }
-        );
+        // Notify Patient
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId,
+                    'user',
+                    "Insurance Claim Approved! 📄",
+                    `Your TPA Cashless insurance approval letter has been uploaded for Booking #${appointment.bookingId}.`,
+                    { appointmentId: appointment._id.toString(), type: 'insurance_claim_approved' }
+                );
+            } catch (e) {}
+        }
 
-        res.json({
+        res.status(200).json({
             success: true,
-            message: "TPA Approval letter uploaded successfully. Order is now Confirmed!",
+            message: "Insurance approval letter uploaded and verified successfully.",
             data: {
                 appointmentId: appointment._id,
                 bookingId: appointment.bookingId,
-                status: appointment.status,
-                approvalStatus: 'Approved',
-                approvalLetterPdf: pdfPath
+                insuranceDetails: appointment.insuranceDetails
             }
         });
 
@@ -3730,107 +3727,99 @@ const uploadInsuranceApprovalLetter = async (req, res) => {
 };
 
 
-// --- API 2: GET MASTER DROPDOWNS DATA FOR ADDING INSURANCE (Figma Screen 3 Selector) ---
-// Endpoint: GET /hospital/panel/insurance/master-data
+
+// @desc    Get Active Insurance Master Dropdowns for Hospital Desk
+// @route   GET /hospital/panel/insurance/master-data
+// @access  Private (Hospital)
 const getInsuranceMasterDropdowns = async (req, res) => {
     try {
-        const InsuranceType = require('../../models/InsuranceType'); // Safe path load
-        const Insurance = require('../../models/Insurance');
-
-        const [types, providers] = await Promise.all([
-            InsuranceType.find({ isActive: true }).select('name'),
-            Insurance.find({ isActive: true }).select('insuranceName provider type')
+        const [companies, types] = await Promise.all([
+            Insurance.find({ isActive: true }).select('provider insuranceName type').sort({ provider: 1 }).lean(),
+            InsuranceType.find({ isActive: true }).select('name').sort({ name: 1 }).lean()
         ]);
 
-        res.json({
+        res.status(200).json({
             success: true,
-            data: {
-                insuranceTypes: types, // e.g., ["Non Cashless", "Cashless", "Other"]
-                insuranceProviders: providers // e.g., ["HDFC Ergo", "SBI General", "LIC Health Plus"]
-            }
+            companies: companies || [],
+            types: (types || []).map(t => t.name)
         });
 
     } catch (error) {
+        console.error("Get Insurance Master Data Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- API 3: SAVE/UPDATE PATIENT INSURANCE DETAILS WITH DUAL SIDE UPLOADS (Figma Save Button) ---
-// Endpoint: PUT /hospital/panel/insurance/save/:patientUserId
+// @desc    Hospital Desk Saves or Updates Patient Insurance Details and Syncs Active Appointment
+// @route   PUT /hospital/panel/insurance/save/:patientUserId
+// @access  Private (Hospital)
 const savePatientInsuranceDetails = async (req, res) => {
     try {
-        const hospitalId = req.user.id;
         const { patientUserId } = req.params;
-        const { 
-            insuranceNumber, 
-            companyName, 
-            insuranceType, 
-            startDate, 
-            endDate, 
-            masterInsuranceId 
-        } = req.body;
+        const hospitalId = req.user.id;
+        const { insuranceNumber, companyName, insuranceType, startDate, endDate, masterInsuranceId } = req.body;
 
-        // Verify patient isolation ownership
-        const hasInteracted = await Appointment.exists({ hospitalId, userId: patientUserId });
-        if (!hasInteracted) {
-            return res.status(403).json({ success: false, message: "Access Denied: Patient has no registered clinical interaction with your hospital." });
+        const user = await User.findById(patientUserId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "Patient user record not found." });
         }
 
-        const patientUser = await User.findById(patientUserId);
-        if (!patientUser) {
-            return res.status(404).json({ success: false, message: "Patient user profile not found." });
+        let frontCard = user.insuranceDetails?.insuranceDocumentFront || null;
+        let backCard = user.insuranceDetails?.insuranceDocumentBack || null;
+
+        if (req.files) {
+            if (req.files.insuranceDocumentFront && req.files.insuranceDocumentFront[0]) {
+                if (frontCard) deleteFile(frontCard);
+                frontCard = `/uploads/insurance/${req.files.insuranceDocumentFront[0].filename}`;
+            }
+            if (req.files.insuranceDocumentBack && req.files.insuranceDocumentBack[0]) {
+                if (backCard) deleteFile(backCard);
+                backCard = `/uploads/insurance/${req.files.insuranceDocumentBack[0].filename}`;
+            }
         }
 
-        // Initialize file paths from Multer fields
-        const files = req.files || {};
-        const frontCardPath = files.insuranceDocumentFront ? `/uploads/insurance/${files.insuranceDocumentFront[0].filename}` : patientUser.insuranceDetails?.insuranceDocumentFront;
-        const backCardPath = files.insuranceDocumentBack ? `/uploads/insurance/${files.insuranceDocumentBack[0].filename}` : patientUser.insuranceDetails?.insuranceDocumentBack;
-
-        const updatedInsuranceData = {
+        const insuranceObj = {
             hasInsurance: true,
-            insuranceNumber: insuranceNumber || patientUser.insuranceDetails?.insuranceNumber,
-            companyName: companyName || patientUser.insuranceDetails?.companyName,
-            insuranceType: insuranceType || patientUser.insuranceDetails?.insuranceType,
-            startDate: startDate || patientUser.insuranceDetails?.startDate,
-            endDate: endDate || patientUser.insuranceDetails?.endDate,
-            insuranceDocumentFront: frontCardPath,
-            insuranceDocumentBack: backCardPath,
-            masterInsuranceId: masterInsuranceId && mongoose.Types.ObjectId.isValid(masterInsuranceId) ? masterInsuranceId : (patientUser.insuranceDetails?.masterInsuranceId || null)
+            insuranceNumber: insuranceNumber || user.insuranceDetails?.insuranceNumber || "",
+            companyName: companyName || user.insuranceDetails?.companyName || "",
+            insuranceType: insuranceType || user.insuranceDetails?.insuranceType || "Cashless Mediclaim",
+            startDate: startDate || user.insuranceDetails?.startDate || null,
+            endDate: endDate || user.insuranceDetails?.endDate || null,
+            masterInsuranceId: masterInsuranceId || user.insuranceDetails?.masterInsuranceId || null,
+            insuranceDocumentFront: frontCard,
+            insuranceDocumentBack: backCard
         };
 
-        // 1. Save directly inside Patient User document
-        patientUser.insuranceDetails = updatedInsuranceData;
-        await patientUser.save();
+        user.insuranceDetails = insuranceObj;
+        await user.save();
 
-        // 2. 🚀 CRITICAL SYNC FIX: Update cashless details for BOTH 'Hospital-Pending' and 'In-Progress' (Active Stays) appointments
+        // 🚨 CRITICAL FIX: Synchronize current active stay appointment in this hospital!
         await Appointment.updateMany(
-            { 
-                hospitalId, 
-                userId: patientUserId, 
-                status: { $in: ['Hospital-Pending', 'In-Progress'] } // 👈 Mapped both check-in states
+            {
+                userId: patientUserId,
+                hospitalId,
+                status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress'] }
             },
-            { 
-                $set: { 
-                    hasInsurance: true,
-                    insuranceDetails: {
-                        hasInsurance: true,
-                        insuranceNumber: updatedInsuranceData.insuranceNumber,
-                        companyName: updatedInsuranceData.companyName,
-                        insuranceType: updatedInsuranceData.insuranceType,
-                        insuranceDocument: frontCardPath // Uses card front as primary doc fallback
-                    }
-                } 
+            {
+                $set: {
+                    "insuranceDetails.hasInsurance": true,
+                    "insuranceDetails.insuranceNumber": insuranceObj.insuranceNumber,
+                    "insuranceDetails.companyName": insuranceObj.companyName,
+                    "insuranceDetails.insuranceType": insuranceObj.insuranceType,
+                    "insuranceDetails.insuranceDocumentFront": frontCard,
+                    "insuranceDetails.insuranceDocumentBack": backCard
+                }
             }
         );
 
-        res.json({
+        res.status(200).json({
             success: true,
-            message: "Patient health insurance details saved and active check-ins synchronized successfully.",
-            data: patientUser.insuranceDetails
+            message: "Patient insurance details updated and synchronized with hospital stay.",
+            data: insuranceObj
         });
 
     } catch (error) {
-        console.error("Save Insurance Details Error:", error);
+        console.error("Save Patient Insurance Details Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

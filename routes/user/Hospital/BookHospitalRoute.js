@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { insuranceUpload } = require('../../../middleware/multer');
+const { insuranceUpload,insuranceCardUploads } = require('../../../middleware/multer');
 const { 
     getHospitals, 
     getWards, getBedGrid, getDoctorsByHospitalId,getServicesByHospitalId,
@@ -45,7 +45,7 @@ router.post('/validate-coupon', protect('user'), validateHospitalCoupon); // Val
 router.post('/check-availability', getAvailableBedsForRange);
 // Payment & Logic
 router.post('/checkout-summary', protect('user'), getHospitalCheckoutSummary);
-router.post('/book', protect('user'), insuranceUpload.single('insuranceDocument'), finalHospitalBooking);
+router.post('/book', protect('user'), insuranceCardUploads, finalHospitalBooking);
 router.post('/verify-payment', protect('user'), verifyHospitalPayment);
 
 router.patch('/cancel/:id', protect('user'), cancelBedBooking);
@@ -71,7 +71,7 @@ router.get('/doctors/:doctorId/opd-slots', getHospitalDoctorOpdSlots);
 router.post('/opd/checkout-summary', protect('user'), getHospitalOpdCheckoutSummary);
 
 // 3. Book OPD Appointment (Token Generation)
-router.post('/opd/book', protect('user'), bookHospitalOpdAppointment);
+router.post('/opd/book', protect('user'), insuranceCardUploads, bookHospitalOpdAppointment);
 router.get('/opd/live-queue/:appointmentId', protect('user'), getHospitalOpdLiveQueue);
 router.get('/opd/prescription/:appointmentId', protect('user'), getUserOpdPrescription);
 

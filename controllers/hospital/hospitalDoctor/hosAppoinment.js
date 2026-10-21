@@ -89,7 +89,7 @@ const getHospitalAllBookings = async (req, res) => {
     }
 };
 
-// @desc    Hospital Admin Approves Booking (Reserves Bed for IPD / Assigns Cabin & Token for OPD)
+// @desc    Hospital Admin Approves Booking (Supports both MongoDB _id and custom bookingId safely)
 // @route   PATCH /hospital/doctor/appointments/approve/:id
 // @access  Private (Hospital Admin)
 const approveHospitalBooking = async (req, res) => {
@@ -97,7 +97,13 @@ const approveHospitalBooking = async (req, res) => {
         const { doctorId } = req.body; 
         const hospitalId = req.user.id;
 
-        const appointment = await Appointment.findOne({ _id: req.params.id, hospitalId });
+        const isObjectId = mongoose.isValidObjectId(req.params.id);
+        const query = {
+            hospitalId,
+            ...(isObjectId ? { _id: req.params.id } : { bookingId: String(req.params.id).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query);
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
@@ -107,7 +113,7 @@ const approveHospitalBooking = async (req, res) => {
 
         // 1. IPD ADMISSION LOGIC
         if (appointment.bookingType === 'Admission') {
-            if (doctorId) {
+            if (doctorId && mongoose.isValidObjectId(doctorId)) {
                 appointment.doctorId = doctorId;
                 appointment.treatmentHistory.push({
                     toDoctorId: doctorId,
@@ -146,16 +152,14 @@ const approveHospitalBooking = async (req, res) => {
         if (appointment.bookingType === 'OPD') {
             const assignedDoctorId = doctorId || appointment.doctorId;
 
-            if (assignedDoctorId) {
+            if (assignedDoctorId && mongoose.isValidObjectId(assignedDoctorId)) {
                 appointment.doctorId = assignedDoctorId;
-                // Fetch Doctor to auto-map Cabin Room Number
                 const docData = await Doctor.findById(assignedDoctorId).select('department');
                 if (docData && docData.department?.roomNumber) {
                     appointment.opdRoomNumber = docData.department.roomNumber;
                 }
             }
 
-            // Ensure Token Number exists for this day if not yet assigned
             if (!appointment.tokenNumber) {
                 const targetDate = appointment.appointmentDate || now;
                 const startOfDay = moment(targetDate).startOf('day').toDate();
@@ -173,7 +177,6 @@ const approveHospitalBooking = async (req, res) => {
 
             await appointment.save();
 
-            // Alert Patient with accurate Cabin Room Number and Token
             if (appointment.userId) {
                 try {
                     const cabinInfo = appointment.opdRoomNumber ? `Cabin: ${appointment.opdRoomNumber}` : "OPD Waiting Lounge";
@@ -203,7 +206,7 @@ const approveHospitalBooking = async (req, res) => {
     }
 };
 
-// @desc    Hospital Rejects / Cancels Booking (Distinguishes Online Gateway vs Counter Cash Refunds)
+// @desc    Hospital Rejects / Cancels Booking (Fix: Prevents Ward availableBeds corruption on unconfirmed hold cancellation)
 // @route   PATCH /hospital/doctor/appointments/reject/:id
 // @access  Private (Hospital Admin)
 const rejectHospitalBooking = async (req, res) => {
@@ -227,16 +230,17 @@ const rejectHospitalBooking = async (req, res) => {
 
         appointment.status = 'Cancelled-By-Hospital';
 
-        // Check if payment was cash at counter vs online gateway
-        const isCounterCash = appointment.paymentMethod === 'Cash' || (appointment.paymentDetails?.razorpayPaymentId || '').startsWith('COUNTER-REC-');
+        const isCounterCash = appointment.paymentMethod === 'Cash' || 
+                              String(appointment.paymentMethod).toUpperCase() === 'CASH' || 
+                              (appointment.paymentDetails?.razorpayPaymentId || '').startsWith('COUNTER-REC-');
         
         let refundInstruction = "Full online refund initiated.";
         if (appointment.paymentStatus === 'Paid') {
             if (isCounterCash) {
-                appointment.paymentStatus = 'Refunded'; // Cash returned at physical desk
+                appointment.paymentStatus = 'Refunded';
                 refundInstruction = "Please collect your refund from the Hospital Cash Counter.";
             } else if (appointment.paymentMethod !== 'COD') {
-                appointment.paymentStatus = 'Refund-Initiated'; // Online gateway queue
+                appointment.paymentStatus = 'Refund-Initiated';
             }
         } else {
             appointment.paymentStatus = 'Failed';
@@ -249,11 +253,17 @@ const rejectHospitalBooking = async (req, res) => {
             cancelledAt: new Date()
         };
 
-        // IPD Bed Release
+        // IPD Bed Release - Only increment availableBeds if bed was physically Occupied (prevents overcounting)
         if (!isOPD && appointment.bedId) {
-            const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
-            if (bed && bed.wardId) {
-                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
+            const bed = await Bed.findById(appointment.bedId);
+            if (bed) {
+                const wasOccupied = bed.status === 'Occupied';
+                bed.status = 'Available';
+                await bed.save();
+                
+                if (wasOccupied && bed.wardId) {
+                    await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
+                }
             }
         }
 
@@ -273,7 +283,6 @@ const rejectHospitalBooking = async (req, res) => {
 
         await appointment.save();
 
-        // Push Notification to Patient
         if (appointment.userId) {
             try {
                 const notifTitle = isOPD ? "OPD Appointment Cancelled by Hospital" : "Hospital Admission Declined";
@@ -402,13 +411,14 @@ const collectHospitalOpdCounterPayment = async (req, res) => {
     }
 };
 
-// @desc    OPD Triage Nurse / Reception Records Pre-Consultation Vitals (BP, Pulse, Temp, SpO2 strictly matching schema)
+// @desc    OPD Triage Nurse / Reception Records Pre-Consultation Vitals (Strictly 4 standard vitals, weight excluded)
 // @route   PATCH /hospital/doctor/appointments/opd-vitals/:id
 // @access  Private (Hospital Admin or Hospital Doctor)
 const recordOpdPatientVitals = async (req, res) => {
     try {
         const { id } = req.params;
         const hospitalId = req.user.id;
+        // Strictly destructure only the 4 standard medical vitals and notes
         const { bp, pulse, temp, spo2, notes } = req.body;
 
         const isObjectId = mongoose.isValidObjectId(id);
@@ -423,7 +433,7 @@ const recordOpdPatientVitals = async (req, res) => {
             return res.status(404).json({ success: false, message: "OPD Appointment record not found." });
         }
 
-        // Strictly capture only the 4 fields configured in Appointment schema vitals
+        // Strictly capture only the 4 configured schema fields
         const recordedVitals = {
             bp: bp ? String(bp).trim() : (appointment.clinicalSummary?.vitals?.bp || ""),
             pulse: pulse ? String(pulse).trim() : (appointment.clinicalSummary?.vitals?.pulse || ""),
