@@ -221,12 +221,18 @@ const addToLabCart = async (req, res) => {
 };
 
 
-// 2. UPDATE QUANTITY (Inc/Dec)
+// @desc    Update Lab Cart Item Quantity (Null-Safe)
+// @route   PUT /user/cart/quantity
+// @access  Private (User)
 const updateCartQuantity = async (req, res) => {
     try {
         const { itemId, action } = req.body;
         const cart = await Cart.findOne({ userId: req.user.id });
         
+        if (!cart || !cart.labCart || !Array.isArray(cart.labCart.items)) {
+            return res.status(404).json({ success: false, message: "Cart not found or empty." });
+        }
+
         const itemIndex = cart.labCart.items.findIndex(i => i.itemId.toString() === itemId);
         if (itemIndex > -1) {
             if (action === 'inc') cart.labCart.items[itemIndex].quantity += 1;
@@ -240,14 +246,17 @@ const updateCartQuantity = async (req, res) => {
         if (cart.labCart.items.length === 0) {
             cart.labCart.categoryType = null;
             cart.labCart.labId = null;
+            cart.labCart.selectedPatients = [];
         }
 
-        // 🚨 ADD ONLY THIS ONE LINE (Aapka purana baki saara logic same hai) [cite: custom_context]
         await recalculateLabCartCategory(cart); 
 
         await cart.save();
-        res.json({ success: true, data: cart });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(200).json({ success: true, data: cart });
+    } catch (error) { 
+        console.error("Update Cart Quantity Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 // endpoint: POST /user/cart/lab/select-patients
 // ==========================================
@@ -402,38 +411,56 @@ const getMyCart = async (req, res) => {
 };
 
 
-// 3. REMOVE ITEM / CLEAR LAB CART
-// endpoint: /user/cart/lab/clear
+// @desc    Clear Entire Lab Cart (Resets items, lab, category, and selected patients)
+// @route   POST /user/cart/lab/clear
+// @access  Private (User)
 const clearLabCart = async (req, res) => {
     try {
         await Cart.findOneAndUpdate(
             { userId: req.user.id },
-            { $set: { "labCart.items": [], "labCart.categoryType": null, "labCart.labId": null } }
+            { 
+                $set: { 
+                    "labCart.items": [], 
+                    "labCart.categoryType": null, 
+                    "labCart.labId": null,
+                    "labCart.selectedPatients": [] 
+                } 
+            }
         );
-        res.json({ success: true, message: "Lab cart cleared" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(200).json({ success: true, message: "Lab cart cleared successfully" });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// 4. REMOVE ITEM
-// endpoint: /user/cart/item/:itemId
+// @desc    Remove Specific Item from Lab Cart (Null-Safe)
+// @route   DELETE /user/cart/item/:itemId
+// @access  Private (User)
 const removeItem = async (req, res) => {
     try {
         const { itemId } = req.params;
         const cart = await Cart.findOne({ userId: req.user.id });
         
+        if (!cart || !cart.labCart || !Array.isArray(cart.labCart.items)) {
+            return res.status(404).json({ success: false, message: "Cart not found or empty." });
+        }
+
         cart.labCart.items = cart.labCart.items.filter(i => i.itemId.toString() !== itemId);
         
         if (cart.labCart.items.length === 0) {
             cart.labCart.categoryType = null;
             cart.labCart.labId = null;
+            cart.labCart.selectedPatients = [];
         }
 
-        // 🚨 ADD ONLY THIS ONE LINE (Aapka purana baki saara logic same hai) [cite: custom_context]
         await recalculateLabCartCategory(cart); 
 
         await cart.save();
-        res.json({ success: true, message: "Item removed", data: cart });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(200).json({ success: true, message: "Item removed", data: cart });
+    } catch (error) { 
+        console.error("Remove Item Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 

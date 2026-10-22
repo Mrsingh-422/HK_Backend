@@ -18,6 +18,9 @@ const getLabProfile = async (req, res) => {
 };
 
 
+// @desc    Update Lab Profile (Syncs live operational toggles directly & stages document edits for Admin)
+// @route   PUT /provider/labs/profile/update
+// @access  Private (Lab)
 const updateLabProfile = async (req, res) => {
     try {
         const labId = req.user.id;
@@ -35,21 +38,49 @@ const updateLabProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: "Lab not found." });
         }
 
-        let updateData = {
-            name, about, address, country, state, city,
-            isHomeCollectionAvailable: isHomeCollectionAvailable === 'true' || isHomeCollectionAvailable === true,
-            isRapidServiceAvailable: isRapidServiceAvailable === 'true' || isRapidServiceAvailable === true,
-            isInsuranceAccepted: isInsuranceAccepted === 'true' || isInsuranceAccepted === true,
-            is24x7: is24x7 === 'true' || is24x7 === true,
-            location: { lat: Number(lat || existingLab.location?.lat || 0), lng: Number(lng || existingLab.location?.lng || 0) },
-            alternatePhone
-        };
- 
+        const boolHome = isHomeCollectionAvailable !== undefined 
+            ? (isHomeCollectionAvailable === 'true' || isHomeCollectionAvailable === true) 
+            : existingLab.isHomeCollectionAvailable;
+
+        const boolRapid = isRapidServiceAvailable !== undefined 
+            ? (isRapidServiceAvailable === 'true' || isRapidServiceAvailable === true) 
+            : existingLab.isRapidServiceAvailable;
+
+        const boolInsurance = isInsuranceAccepted !== undefined 
+            ? (isInsuranceAccepted === 'true' || isInsuranceAccepted === true) 
+            : existingLab.isInsuranceAccepted;
+
+        const bool24x7 = is24x7 !== undefined 
+            ? (is24x7 === 'true' || is24x7 === true) 
+            : existingLab.is24x7;
+
+        let parsedInsurances = existingLab.acceptedInsurances || [];
         if (acceptedInsurances) {
-            updateData.acceptedInsurances = typeof acceptedInsurances === 'string'
+            parsedInsurances = typeof acceptedInsurances === 'string'
                 ? JSON.parse(acceptedInsurances)
                 : acceptedInsurances;
         }
+
+        const targetLocation = {
+            lat: Number(lat !== undefined ? lat : (existingLab.location?.lat || 0)),
+            lng: Number(lng !== undefined ? lng : (existingLab.location?.lng || 0))
+        };
+
+        let updateData = {
+            name: name ? name.trim() : existingLab.name,
+            about: about !== undefined ? about : existingLab.about,
+            address: address !== undefined ? address : existingLab.address,
+            country: country || existingLab.country,
+            state: state || existingLab.state,
+            city: city || existingLab.city,
+            isHomeCollectionAvailable: boolHome,
+            isRapidServiceAvailable: boolRapid,
+            isInsuranceAccepted: boolInsurance,
+            acceptedInsurances: parsedInsurances,
+            is24x7: bool24x7,
+            location: targetLocation,
+            alternatePhone: alternatePhone || existingLab.alternatePhone
+        };
  
         if (req.files && req.files.profileImage && req.files.profileImage[0]) {
             updateData.profileImage = req.files.profileImage[0].path;
@@ -63,7 +94,21 @@ const updateLabProfile = async (req, res) => {
             updateData['documents.nablNumber'] = nablNumber;
         }
 
-        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        // Instant update for real-time operational availability so customers see correct toggles
+        await Lab.findByIdAndUpdate(labId, {
+            $set: {
+                isHomeCollectionAvailable: boolHome,
+                isRapidServiceAvailable: boolRapid,
+                isInsuranceAccepted: boolInsurance,
+                acceptedInsurances: parsedInsurances,
+                is24x7: bool24x7,
+                location: targetLocation,
+                ...(updateData.profileImage && { profileImage: updateData.profileImage }),
+                ...(updateData.signatureImage && { signatureImage: updateData.signatureImage })
+            }
+        });
+
+        // Stage profile request for admin review
         const existingPending = await ProfileUpdateRequest.findOne({ vendorId: labId, vendorModel: 'Lab', status: 'Pending' });
         if (existingPending) {
             if (updateData.profileImage && existingPending.updatedFields?.profileImage) {
@@ -82,14 +127,14 @@ const updateLabProfile = async (req, res) => {
             status: 'Pending'
         });
        
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            message: "Lab operational status updated and profile changes submitted for review.", 
             data: request 
         });
     } catch (error) {
-        console.error("Update Error:", error);
-        res.status(500).json({ message: error.message });
+        console.error("Update Lab Profile Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
  

@@ -11,41 +11,41 @@ const labBookingSchema = new mongoose.Schema({
     // FLOW: User can book via 2 ways:
     // 1. Direct: Picks tests from list (CBC, Thyroid, etc.)
     // 2. Prescription: Uploads a photo or picks from Doctor's prescription
-    bookingType: { 
-        type: String, 
-        enum: ['Direct', 'Prescription-Based'], 
-        default: 'Direct' 
+    bookingType: {
+        type: String,
+        enum: ['Direct', 'Prescription-Based'],
+        default: 'Direct'
     },
     prescriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Prescription', default: null },
-        patients: [{
-    patientId: { type: String, required: true }, // 'Self' or family member ID
-    name: { type: String, required: true },
-    age: { type: Number },
-    gender: { type: String },
-    relation: { type: String },
-    medicalReport: { type: String, default: null },
+    patients: [{
+        patientId: { type: String, required: true }, // 'Self' or family member ID
+        name: { type: String, required: true },
+        age: { type: Number },
+        gender: { type: String },
+        relation: { type: String },
+        medicalReport: { type: String, default: null },
 
-    // 🚨 NEW: Dynamic, separate collection address for this patient (Figma Screen 3)
-    address: {
-        name: String,
-        phone: String,
-        houseNo: String,
-        sector: String,
-        landmark: String,
-        city: String,
-        state: String,
-        pincode: String,
-        addressType: String
-    },
+        // 🚨 NEW: Dynamic, separate collection address for this patient (Figma Screen 3)
+        address: {
+            name: String,
+            phone: String,
+            houseNo: String,
+            sector: String,
+            landmark: String,
+            city: String,
+            state: String,
+            pincode: String,
+            addressType: String
+        },
 
-    // 🚨 NEW: Specific items assigned to this patient (Figma Screen 2)
-    assignedItems: [{
-        itemId: { type: mongoose.Schema.Types.ObjectId },
-        productType: { type: String, enum: ['LabTest', 'LabPackage'] },
-        name: { type: String },
-        price: { type: Number }
-    }]
-}],
+        // 🚨 NEW: Specific items assigned to this patient (Figma Screen 2)
+        assignedItems: [{
+            itemId: { type: mongoose.Schema.Types.ObjectId },
+            productType: { type: String, enum: ['LabTest', 'LabPackage'] },
+            name: { type: String },
+            price: { type: Number }
+        }]
+    }],
 
     items: {
         tests: [{
@@ -58,7 +58,7 @@ const labBookingSchema = new mongoose.Schema({
             packageId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabPackage' },
             price: Number,
             name: String,
-            precaution: { type: String, default: "" } 
+            precaution: { type: String, default: "" }
         }]
     },
 
@@ -75,13 +75,13 @@ const labBookingSchema = new mongoose.Schema({
         addressType: String
     },
 
-    appointmentDate: { type: Date }, 
+    appointmentDate: { type: Date },
     appointmentTime: { type: String }, // e.g. "09:00 AM - 10:00 AM"
 
     billSummary: {
         itemTotal: { type: Number, default: 0 },       // Sum of all tests/packages
         itemDiscount: { type: Number, default: 0 },    // Lab side discount
-appliedCoupon: {
+        appliedCoupon: {
             couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
             couponName: String,
             discountPercentage: Number,
@@ -89,7 +89,7 @@ appliedCoupon: {
             minOrderAmount: Number
         },
         couponDiscount: { type: Number, default: 0 },  // Calculated from Coupon Model
-        
+
         // Charges logic:
         // 1. Home Visit: If collectionType === 'Home Collection', use DeliveryCharge.fixedPrice
         // 2. Distance: (User Dist - fixedDistance) * pricePerKM
@@ -97,15 +97,16 @@ appliedCoupon: {
         homeVisitCharge: { type: Number, default: 0 },
         distanceCharge: { type: Number, default: 0 },
         rapidDeliveryCharge: { type: Number, default: 0 },
-        
+
         totalAmount: { type: Number, default: 0 },      // Final Payable
 
         cancellationFeeApplied: { type: Number, default: 0 },
         noShowFeeApplied: { type: Number, default: 0 }
     },
+    totalPrice: { type: Number, default: 0 },
 
-    status: { 
-        type: String, 
+    status: {
+        type: String,
         enum: [
             'Prescription Uploaded', // User just uploaded photo
             'Under Review',          // Lab is checking prescription
@@ -113,23 +114,26 @@ appliedCoupon: {
             'Pending',               // User confirmed but payment pending (for Online)
             'Confirmed',             // Order ready to process
             'Phlebotomist Assigned', // Lab assigned a Driver/Phlebotomist
+            'Arrived',               // Driver reached
             'Sample Collected',      // Driver reached and took blood sample
             'Sample Deposited',
             'Testing',               // Sample reached lab and in-process
             'Report Generated',      // Result ready
             'Completed',             // Report uploaded and sent to User
-            'Cancelled'
+            'Cancelled',
+            'No-Show'
         ],
         default: 'Pending'
     },
 
     // Link to Driver model where vendorType is 'Lab'
     phlebotomistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
-    
-    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Done', 'Failed', 'Refunded','Refund-Initiated'], default: 'Pending' },
+
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Done', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
     paymentMethod: { type: String, enum: [
-        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
-        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater'
+        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 'Cash', // 👈 Added: 'Cash', 'cash', 'CASH'
+        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater', 'cash',
+        'ONLINE', 'COD', 'CASH'
     ], default: 'COD' },
 
     // The final output
@@ -141,12 +145,12 @@ appliedCoupon: {
     }],
     testResults: { type: mongoose.Schema.Types.Mixed, default: {} },
     cancelReason: { type: String },
-      tracking: {
+    tracking: {
         otp: { type: String, default: null }
     },
-        phlebotomistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
-        rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
-        // 🌟 Figma Screen 12 (Lab Deposit details)
+    phlebotomistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
+    rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
+    // 🌟 Figma Screen 12 (Lab Deposit details)
     labDepositName: { type: String, default: null },
 
     // 🌟 Figma Screen 21 (No Show logs)

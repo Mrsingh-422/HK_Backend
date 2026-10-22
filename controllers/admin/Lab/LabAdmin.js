@@ -31,37 +31,53 @@ const adminGetApprovedLabs = async (req, res) => {
     }
 };
 
-// --- 2. ADMIN: GET LAB BOOKINGS (Filter by labId & Limit: 25) ---
-// Endpoint: GET /admin/lab/bookings?labId=ID&page=1
+// @desc    Admin: Get Lab Bookings (Supports search, lab filter, and status=All)
+// @route   GET /admin/lab/bookings
+// @access  Private (Admin)
 const adminGetLabBookings = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 25; // 👈 25 items limit
+        const limit = 25;
         const skip = (page - 1) * limit;
-        const { status, userId, labId } = req.query; // 👈 Added labId
+        const { status, userId, labId, search } = req.query;
 
         let query = {};
-        if (status) query.status = status;
+        
+        // Fix: Do not query literally for 'All'
+        if (status && status !== 'All') {
+            query.status = status;
+        }
         if (userId) query.userId = userId;
-        if (labId) query.labId = labId; // 👈 Vendor wise filter
+        if (labId) query.labId = labId;
+
+        if (search && search.trim() !== "") {
+            query.$or = [
+                { bookingId: { $regex: search.trim(), $options: 'i' } },
+                { 'address.phone': { $regex: search.trim(), $options: 'i' } },
+                { 'patients.name': { $regex: search.trim(), $options: 'i' } }
+            ];
+        }
 
         const bookings = await LabBooking.find(query)
             .populate('userId', 'name phone email')
             .populate('labId', 'name city profileImage')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
         const total = await LabBooking.countDocuments(query);
             
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             count: bookings.length, 
             totalPages: Math.ceil(total / limit),
             currentPage: page,
+            totalRecords: total,
             data: bookings 
         });
     } catch (error) { 
+        console.error("Admin Get Lab Bookings Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

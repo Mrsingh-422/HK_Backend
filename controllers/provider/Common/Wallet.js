@@ -15,6 +15,7 @@ const { calculateAdminCommission } = require('../../../utils/policyHelper');
 
 // 1. CALCULATE PROVIDER BALANCES (With Strict COD vs Online & Compensations)
 // =========================================================================
+// Calculate Provider Balances (Fix: Both COD & Doorstep Cash deduct platform commission instead of double crediting)
 const calculateProviderBalances = async (vendorId, role) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const vendorObjId = new mongoose.Types.ObjectId(vendorId);
@@ -41,7 +42,6 @@ const calculateProviderBalances = async (vendorId, role) => {
         throw new Error("Invalid Provider Role inside Wallet controller.");
     }
 
-    // 1. Fetch Completed Orders & Compensated Cancellation/No-Show Orders
     const [completedOrders, compensatedOrders] = await Promise.all([
         BookingModel.find({
             ...matchQuery,
@@ -61,12 +61,11 @@ const calculateProviderBalances = async (vendorId, role) => {
     ]);
 
     let grossEarnings = 0;
-    let totalEarnings = 0; // Net virtual balance
+    let totalEarnings = 0;
     let adminCommissionDeducted = 0;
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 2. Process Completed Orders (With Doorstep Cash Add-ons Split for Nurse)
     for (let order of completedOrders) {
         let grossAmount = 0;
         if (role === 'Lab' || role === 'Pharmacy') {
@@ -82,16 +81,19 @@ const calculateProviderBalances = async (vendorId, role) => {
 
         let effectiveVendorCredit = 0;
 
-        if (order.paymentMethod === 'COD') {
-            // Full COD: 100% of cash collected physically by driver; deduct admin commission from wallet
+        // Both Cash collected at doorstep by Phlebotomist and COD mean vendor physically took the cash
+        const isCashOrCod = order.paymentMethod === 'COD' || 
+                            order.paymentMethod === 'Cash' || 
+                            String(order.paymentMethod).toUpperCase() === 'CASH' ||
+                            String(order.paymentMethod).toUpperCase() === 'COD';
+
+        if (isCashOrCod) {
+            // Deduct Admin platform commission from digital wallet
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online Order: Base amount paid online
-            // Check if doorstep extra cash was collected by nurse on visit
+            // Online gateway; handle doorstep extra cash for nurse or credit net amount
             const doorstepCashCollected = Number(order.totalConsumableCharges || 0) + Number(order.extraServicePayment || 0);
-            
             if (doorstepCashCollected > 0) {
-                // Deduct physically collected cash from platform payout to prevent double credit
                 effectiveVendorCredit = netVendorAmount - doorstepCashCollected;
             } else {
                 effectiveVendorCredit = netVendorAmount;
@@ -100,7 +102,6 @@ const calculateProviderBalances = async (vendorId, role) => {
 
         totalEarnings += effectiveVendorCredit;
 
-        // 7-Day Rolling Settlement Lock
         if (new Date(order.updatedAt) <= sevenDaysAgo) {
             clearedEarnings += effectiveVendorCredit;
         } else {
@@ -108,7 +109,6 @@ const calculateProviderBalances = async (vendorId, role) => {
         }
     }
 
-    // 3. Process Compensations (100% Vendor's earnings for customer fault)
     for (let compOrder of compensatedOrders) {
         let compFee = 0;
         if (role === 'Lab' || role === 'Pharmacy') {
@@ -127,7 +127,6 @@ const calculateProviderBalances = async (vendorId, role) => {
         }
     }
 
-    // 4. Total Withdrawals Requested
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
@@ -140,7 +139,6 @@ const calculateProviderBalances = async (vendorId, role) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    // 5. Active Commission Policy Details
     const AdminCommissionConfig = require('../../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: role, isActive: true }).lean();
 

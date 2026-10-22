@@ -1,7 +1,8 @@
 const LabBooking = require('../../../models/LabBooking');
 const Driver = require('../../../models/Driver');
-const LabTest = require('../../../models/LabTest'); // 👈 Added Schema
-const LabPackage = require('../../../models/LabPackage'); // 👈 Added Schema
+const LabTest = require('../../../models/LabTest');
+const LabPackage = require('../../../models/LabPackage');
+const User = require('../../../models/User');
 const bcrypt = require('bcryptjs');
 const moment = require('moment');
 const NoShowConfig = require('../../../models/NoShowConfig');
@@ -447,11 +448,9 @@ const deliverSampleToLab = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// ==========================================
-// 3. DYNAMIC BOOKING & PATIENT ADDITIONS (Figma 14, 15, 16, 17, 24)
-// ==========================================
-
-// Create Fresh Diagnostic Booking from Patient's House (Figma Screen 14, 15)
+// @desc    Create Fresh Diagnostic Booking from Patient's House (Links real Patient User ID)
+// @route   POST /driver/lab/orders/create
+// @access  Private (Driver)
 const createBookingAtHome = async (req, res) => {
     try {
         const phlebotomistId = req.user.id;
@@ -464,32 +463,52 @@ const createBookingAtHome = async (req, res) => {
             packagesSelected 
         } = req.body;
 
+        if (!name || !phone) {
+            return res.status(400).json({ success: false, message: "Patient Name and Phone number are required." });
+        }
+
+        const cleanPhone = String(phone).trim().replace(/\D/g, "").slice(-10);
+
+        // 1. Find or create the Patient User Account so it doesn't link to Driver's ID
+        let targetPatientUser = await User.findOne({ phone: cleanPhone });
+        if (!targetPatientUser) {
+            const tempPassword = await bcrypt.hash('Patient@123', 10);
+            targetPatientUser = await User.create({
+                name: name.trim(),
+                phone: cleanPhone,
+                countryCode: '+91',
+                password: tempPassword,
+                role: 'user',
+                isPhoneVerified: true,
+                profileStatus: 'Approved'
+            });
+        }
+
         const bookingId = "ORD-" + Math.random().toString(36).substring(2, 10).toUpperCase();
 
-        // 🚨 FIXED: labId is driver's vendorId, not driver himself
         let newOrder = await LabBooking.create({
             bookingId,
-            userId: req.user.id, // Fallback link
-            labId: driver.vendorId, // 👈 Target Lab assigned
+            userId: targetPatientUser._id, // 👈 Saved actual patient user account
+            labId: driver.vendorId,        // Lab vendor
             bookingType: "Direct",
             patients: [{
                 patientId: "Self",
-                name,
-                age: dob ? new Date().getFullYear() - new Date(dob).getFullYear() : 30,
-                gender,
+                name: name.trim(),
+                age: dob ? Math.max(1, new Date().getFullYear() - new Date(dob).getFullYear()) : 30,
+                gender: gender || "Male",
                 relation: "Self"
             }],
             items: {
-                tests: testsSelected ? testsSelected.map(id => ({ testId: id })) : [],
-                packages: packagesSelected ? packagesSelected.map(id => ({ packageId: id })) : []
+                tests: Array.isArray(testsSelected) ? testsSelected.map(id => ({ testId: id })) : [],
+                packages: Array.isArray(packagesSelected) ? packagesSelected.map(id => ({ packageId: id })) : []
             },
             collectionType: "Home Collection",
             address: {
-                name,
-                phone,
-                houseNo: address,
-                city,
-                pincode,
+                name: name.trim(),
+                phone: cleanPhone,
+                houseNo: address || "",
+                city: city || "",
+                pincode: pincode || "",
                 addressType: "Home"
             },
             status: "Phlebotomist Assigned",
@@ -498,8 +517,13 @@ const createBookingAtHome = async (req, res) => {
 
         newOrder = await recalculateBookingPrice(newOrder._id);
 
-        res.status(201).json({ success: true, message: "Diagnostic booking registered successfully!", data: newOrder });
+        res.status(201).json({ 
+            success: true, 
+            message: "Diagnostic booking registered and linked to patient account successfully!", 
+            data: newOrder 
+        });
     } catch (error) { 
+        console.error("Create Booking At Home Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -561,8 +585,9 @@ const getAdminContact = async (req, res) => {
     });
 };
 
-// REASSIGN LAB ORDER DUE TO EMERGENCY (With Vendor Push Alert)
-// Endpoint: POST /driver/lab/orders/reassign-emergency
+// @desc    Reassign Lab Order due to Driver Emergency (Safe array tracking & Vendor alert)
+// @route   POST /driver/lab/orders/reassign-emergency
+// @access  Private (Driver)
 const reassignLabOrderDueToEmergency = async (req, res) => {
     try {
         const { bookingId, reason } = req.body;
@@ -570,23 +595,27 @@ const reassignLabOrderDueToEmergency = async (req, res) => {
 
         const driver = await Driver.findById(driverId);
         const order = await LabBooking.findById(bookingId);
-        if (!order) return res.status(404).json({ message: "Order not found" });
+        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized." });
+            return res.status(403).json({ success: false, message: "Unauthorized operation." });
         }
 
-        const labId = order.labId; // Target Lab Vendor
+        const labId = order.labId;
 
         order.phlebotomistId = null;
         order.status = 'Confirmed'; 
-        order.cancelReason = reason || "Emergency Release";
+        order.cancelReason = reason || "Emergency Release by Phlebotomist";
+        
+        if (!Array.isArray(order.rejectedBy)) {
+            order.rejectedBy = [];
+        }
         order.rejectedBy.push(driverId);
         await order.save();
 
-        await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
+        await Driver.findByIdAndUpdate(driverId, { status: 'Available', isOnline: true });
 
-        // 🚨 CRITICAL FIX: Alert Lab Vendor that duty has been dropped
+        // Alert Lab Vendor
         if (labId) {
             await sendPushNotification(
                 labId,
@@ -597,9 +626,10 @@ const reassignLabOrderDueToEmergency = async (req, res) => {
             );
         }
 
-        res.json({ success: true, message: "Lab collection duty released and Vendor notified.", data: order });
+        res.status(200).json({ success: true, message: "Lab collection duty released and Vendor notified.", data: order });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Reassign Lab Order Emergency Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
