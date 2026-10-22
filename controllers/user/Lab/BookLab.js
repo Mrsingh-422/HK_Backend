@@ -1024,72 +1024,134 @@ const searchLabInventoryPackages = async (req, res) => {
 
 
 
-// 3. GET AVAILABLE SLOTS
+// Helper: Normalizes any time string ("09:00", "09:00 AM", "09:00 AM - 10:00 AM") to strict 24-hr "HH:mm"
+const normalizeTimeSlot = (timeStr) => {
+    if (!timeStr) return "";
+    let clean = String(timeStr).trim();
+    // If range like "09:00 AM - 10:00 AM" or "09:00 - 10:00", extract the start time
+    if (clean.includes('-')) {
+        clean = clean.split('-')[0].trim();
+    }
+    const m = moment(clean, ["HH:mm", "H:mm", "hh:mm A", "h:mm A", "hh:mma", "h:mma"]);
+    return m.isValid() ? m.format("HH:mm") : clean;
+};
+
+// @desc    Get Lab Time Slots for Date (Accurately matches all 12-hr/24-hr/Range time formats against bookings & prescriptions)
+// @route   GET /user/labs/slots
+// @access  Public / User
 const getLabSlots = async (req, res) => {
     try {
-        const { labId, date } = req.query; // date format: YYYY-MM-DD
-        
+        const { labId, date } = req.query;
+
         if (!labId || !date) {
-            return res.status(400).json({ success: false, message: "Lab ID and Date are required" });
+            return res.status(400).json({ success: false, message: "labId and date (YYYY-MM-DD) are required." });
         }
 
-        const config = await Availability.findOne({ vendorId: labId });
-        if (!config) return res.status(404).json({ success: false, message: "Slots not configured by Lab" });
+        if (!mongoose.isValidObjectId(labId)) {
+            return res.status(400).json({ success: false, message: "Invalid Lab ID format." });
+        }
 
-        // 1. Check for Weekly Off-days (e.g., Sunday)
+        const config = await Availability.findOne({ vendorId: labId, vendorType: 'Lab' }).lean();
+        if (!config) {
+            return res.status(404).json({ success: false, message: "Slots are not configured for this Lab." });
+        }
+
         const dayName = moment(date).format('dddd');
-        if (config.offDays.includes(dayName)) {
-            return res.json({ success: true, isClosed: true, message: "Lab is closed (Weekly Off)", slots: [] });
+        if (Array.isArray(config.offDays) && config.offDays.includes(dayName)) {
+            return res.status(200).json({
+                success: true,
+                isClosed: true,
+                message: `Lab is closed on ${dayName}s.`,
+                slots: []
+            });
         }
 
-        // 2. Check for Specific Blocked Dates (Holidays/Emergency)
-        if (config.blockedDates && config.blockedDates.includes(date)) {
-            return res.json({ success: true, isClosed: true, message: "Lab is closed on this specific date", slots: [] });
-        }
+        const allSlots = generateTimeSlots(config);
+        const startOfDay = moment(date).startOf('day').toDate();
+        const endOfDay = moment(date).endOf('day').toDate();
 
-        // 3. Generate base slots using helper
-        const allGeneratedSlots = generateTimeSlots(config);
+        // 1. Fetch Confirmed Lab Bookings
+        const bookedOrders = await LabBooking.find({
+            labId,
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+            status: { $nin: ['Cancelled', 'No-Show'] }
+        }).select('appointmentTime').lean();
 
-        // 4. Capacity Logic: Calculate existing bookings for this date
-        // Hum un bookings ko count karenge jo 'Cancelled' nahi hain
-        const bookedCounts = await LabBooking.aggregate([
-            { 
-                $match: { 
-                    labId: new mongoose.Types.ObjectId(labId), 
-                    appointmentDate: new Date(date), 
-                    status: { $ne: 'Cancelled' } 
-                } 
-            },
-            { 
-                $group: { 
-                    _id: "$appointmentTime", 
-                    count: { $sum: 1 } 
-                } 
+        // 2. Fetch Active Prescription Requests holding a slot
+        const activePrescriptionHolds = await LabPrescriptionRequest.find({
+            labId,
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+            status: { $in: ['Pending Review', 'Reviewing', 'Bill Generated', 'Pending Payment'] }
+        }).select('appointmentTime').lean();
+
+        // 3. Aggregate Usage Count using Normalized "HH:mm" Keys
+        const slotOccupancyMap = {};
+
+        bookedOrders.forEach(b => {
+            if (b.appointmentTime) {
+                const normalized = normalizeTimeSlot(b.appointmentTime);
+                slotOccupancyMap[normalized] = (slotOccupancyMap[normalized] || 0) + 1;
             }
-        ]);
+        });
 
-        // 5. Merge Booking count with Generated Slots
-        const finalSlots = allGeneratedSlots.map(slot => {
-            const booking = bookedCounts.find(b => b._id === slot.time);
-            const currentCount = booking ? booking.count : 0;
+        activePrescriptionHolds.forEach(pr => {
+            if (pr.appointmentTime) {
+                const normalized = normalizeTimeSlot(pr.appointmentTime);
+                slotOccupancyMap[normalized] = (slotOccupancyMap[normalized] || 0) + 1;
+            }
+        });
+
+        const maxCapacity = Number(config.maxClientsPerSlot || 0); // 0 means unlimited
+        const isToday = moment().format('YYYY-MM-DD') === moment(date).format('YYYY-MM-DD');
+        const currentTime = moment();
+
+        const formattedSlots = allSlots.map(slot => {
+            const normalizedSlotTime = normalizeTimeSlot(slot.time);
+            const slotStartMoment = moment(`${date} ${normalizedSlotTime}`, 'YYYY-MM-DD HH:mm');
+            const isPast = isToday && slotStartMoment.isBefore(currentTime);
+            const isManuallyBlocked = Array.isArray(config.unavailableSlots) && 
+                config.unavailableSlots.some(un => normalizeTimeSlot(un) === normalizedSlotTime);
+
+            const totalBookedCount = slotOccupancyMap[normalizedSlotTime] || 0;
+            const isCapacityFull = maxCapacity > 0 && totalBookedCount >= maxCapacity;
+
+            let status = "Available";
+            let isAvailable = true;
+
+            if (isPast) {
+                status = "Past";
+                isAvailable = false;
+            } else if (isManuallyBlocked) {
+                status = "Unavailable";
+                isAvailable = false;
+            } else if (isCapacityFull) {
+                status = "Booked";
+                isAvailable = false;
+            }
 
             return {
-                ...slot, // includes time, category, and extraFee from helper
-                currentBookings: currentCount,
-                // Agar maxClientsPerSlot 0 hai toh unlimited, warna limit check karein
-                isFull: config.maxClientsPerSlot !== 0 && currentCount >= config.maxClientsPerSlot
+                ...slot,
+                normalizedTime: normalizedSlotTime,
+                displayTime: moment(normalizedSlotTime, "HH:mm").format("hh:mm A"),
+                isAvailable,
+                status,
+                currentBookedCount: totalBookedCount,
+                maxAllowedClients: maxCapacity > 0 ? maxCapacity : "Unlimited"
             };
         });
 
-        res.json({ 
-            success: true, 
-            isClosed: false, 
-            labName: config.vendorType, 
-            slots: finalSlots 
+        res.status(200).json({
+            success: true,
+            isClosed: false,
+            date,
+            totalSlots: formattedSlots.length,
+            availableSlotsCount: formattedSlots.filter(s => s.isAvailable).length,
+            slots: formattedSlots
         });
 
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Get Lab Slots Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -3198,64 +3260,168 @@ const searchMasterTestsForPrescription = async (req, res) => {
     }
 };
 
-// 1. CREATE LAB PRESCRIPTION REQUEST (Accepts strictly manual test names list)
+// @desc    Create Lab Prescription Request (Validates Slot Availability Before Holding)
+// @route   POST /user/labs/prescription-request
+// @access  Private (User)
 const createLabPrescriptionRequest = async (req, res) => {
     try {
-        const { labId, patients, collectionType, address, requestedTests, appointmentDate, appointmentTime } = req.body;
         const userId = req.user.id;
+        let {
+            labId, collectionType, appointmentDate, appointmentTime,
+            patients, address, requestedTests
+        } = req.body;
 
-        if (!req.file) {
-            return res.status(400).json({ success: false, message: "Please upload prescription image file." });
+        if (typeof patients === 'string') {
+            try { patients = JSON.parse(patients); } catch (e) {}
+        }
+        if (typeof address === 'string') {
+            try { address = JSON.parse(address); } catch (e) {}
+        }
+        if (typeof requestedTests === 'string') {
+            try { requestedTests = JSON.parse(requestedTests); } catch (e) {}
         }
 
-        const parsedPatients = typeof patients === 'string' ? JSON.parse(patients) : patients;
-        const parsedTests = typeof requestedTests === 'string' ? JSON.parse(requestedTests) : requestedTests;
+        if (!labId || !collectionType || !appointmentDate || !appointmentTime) {
+            return res.status(400).json({
+                success: false,
+                message: "labId, collectionType, appointmentDate, and appointmentTime are required."
+            });
+        }
 
-        const verifiedPatients = await mapPatients(userId, parsedPatients || ['Self']);
+        if (!req.file && (!req.body.prescriptionImage || req.body.prescriptionImage.trim() === "")) {
+            return res.status(400).json({
+                success: false,
+                message: "Prescription image file is required."
+            });
+        }
 
-        // 🚨 FIXED: Map requested tests array carrying master prices, productTypes, and master IDs [1]
-        const formattedRequestedTests = (parsedTests || []).map(test => {
-            const masterId = test.masterId || test.id;
-            return {
-                name: test.name || "General Diagnostic Test",
-                price: Number(test.price || 0), // 👈 Saved price fetched from master list [1]
-                masterId: masterId && mongoose.isValidObjectId(masterId) ? masterId : null,
-                productType: test.productType || 'Manual' // "LabTest", "LabPackage", or "Manual" if custom-typed
-            };
-        });
+        const uploadedImage = req.file ? `/uploads/pharmacy_prescriptions/${req.file.filename}` : req.body.prescriptionImage;
 
-        const tempReqId = `REQ-LAB-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        // 🚨 RACE-CONDITION CHECK: Ensure the selected slot is not already fully booked
+        const config = await Availability.findOne({ vendorId: labId, vendorType: 'Lab' }).lean();
+        if (config && config.maxClientsPerSlot > 0) {
+            const startOfDay = moment(appointmentDate).startOf('day').toDate();
+            const endOfDay = moment(appointmentDate).endOf('day').toDate();
+
+            const [bookedCount, prescriptionHoldCount] = await Promise.all([
+                LabBooking.countDocuments({
+                    labId,
+                    appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+                    appointmentTime: String(appointmentTime).trim(),
+                    status: { $nin: ['Cancelled', 'No-Show'] }
+                }),
+                LabPrescriptionRequest.countDocuments({
+                    labId,
+                    appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+                    appointmentTime: String(appointmentTime).trim(),
+                    status: { $in: ['Pending Review', 'Reviewing', 'Bill Generated', 'Pending Payment'] }
+                })
+            ]);
+
+            if ((bookedCount + prescriptionHoldCount) >= config.maxClientsPerSlot) {
+                return res.status(400).json({
+                    success: false,
+                    errorType: "SLOT_ALREADY_BOOKED",
+                    message: `The selected time slot (${appointmentTime}) on ${appointmentDate} is already booked. Please choose another slot.`
+                });
+            }
+        }
+
+        const requestId = `HK-LREQ-${Date.now().toString().slice(-6)}${Math.floor(10 + Math.random() * 90)}`;
 
         const newRequest = await LabPrescriptionRequest.create({
-            requestId: tempReqId,
+            requestId,
             userId,
             labId,
-            prescriptionImage: req.file.path,
-            patients: verifiedPatients,
+            prescriptionImage: uploadedImage,
             collectionType,
-            address: typeof address === 'string' ? JSON.parse(address) : address,
-            requestedTests: formattedRequestedTests, // 👈 Saved formatted object array [1]
-            appointmentDate: appointmentDate ? new Date(appointmentDate) : undefined, 
-            appointmentTime: appointmentTime || null,                               
+            appointmentDate: new Date(appointmentDate),
+            appointmentTime: String(appointmentTime).trim(),
+            patients: Array.isArray(patients) && patients.length > 0 ? patients : [{
+                patientId: "Self",
+                name: req.user.name || "Patient",
+                relation: "Self"
+            }],
+            address: address || {},
+            requestedTests: Array.isArray(requestedTests) ? requestedTests : [],
             status: 'Pending Review'
         });
 
-        // Trigger Notification
-        await notifyAdminsAndVendor(
-            labId,
-            'lab',
-            "New Prescription Uploaded!",
-            `A new laboratory prescription request #${tempReqId} is pending your manual audit.`,
-            { requestId: newRequest._id.toString(), type: 'lab_prescription_review' }
-        );
+        // Notify Lab Vendor
+        try {
+            await sendPushNotification(
+                labId,
+                'lab',
+                "New Prescription Inquiry! 🔬",
+                `New diagnostic prescription inquiry #${requestId} received for ${appointmentTime}. Slot is locked for review.`,
+                { requestId: newRequest.requestId, type: 'new_lab_prescription_request' }
+            );
+        } catch (e) {}
 
         res.status(201).json({
             success: true,
-            message: "Prescription request placed successfully with test price configs!",
+            message: `Prescription request created and slot (${appointmentTime}) locked for review!`,
+            requestId: newRequest.requestId,
             data: newRequest
         });
+
     } catch (error) {
-        console.error("createLabPrescriptionRequest Error:", error);
+        console.error("Create Lab Prescription Request Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Cancel Lab Prescription Request by User (Instantly frees the held time slot)
+// @route   PATCH /user/labs/prescription-request/cancel/:requestId
+// @access  Private (User)
+const cancelLabPrescriptionRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { reason } = req.body;
+        const userId = req.user.id;
+
+        const request = await LabPrescriptionRequest.findOne({ requestId, userId });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Prescription request not found." });
+        }
+
+        if (request.status === 'Paid') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cannot cancel. This prescription has already been paid and converted into a confirmed lab booking." 
+            });
+        }
+
+        if (request.status === 'Cancelled' || request.status === 'Rejected') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Request is already in '${request.status}' state.` 
+            });
+        }
+
+        request.status = 'Cancelled';
+        request.rejectReason = reason || "Cancelled by user before payment";
+        await request.save();
+
+        // Notify Lab that hold was released
+        try {
+            await sendPushNotification(
+                request.labId,
+                'lab',
+                "Prescription Inquiry Cancelled",
+                `Prescription #${request.requestId} was cancelled by user. Slot (${request.appointmentTime}) is now free.`,
+                { requestId: request.requestId, type: 'prescription_request_cancelled' }
+            );
+        } catch (e) {}
+
+        res.status(200).json({
+            success: true,
+            message: "Prescription request cancelled successfully. Time slot has been freed.",
+            data: request
+        });
+
+    } catch (error) {
+        console.error("Cancel Lab Prescription Request Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -3612,6 +3778,7 @@ module.exports = {
     // Prescription Flow
     scanLabPrescription,searchMasterTestsForPrescription,
     createLabPrescriptionRequest,
+    cancelLabPrescriptionRequest,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,

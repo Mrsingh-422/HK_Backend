@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 const codConfigSchema = new mongoose.Schema({
     vendorType: {
         type: String,
-        enum: ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Doctor', 'Ambulance'],
+        enum: ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Doctor', 'Ambulance',
+            'Ambulance-Accident', 'Ambulance-Medical', 'Ambulance-Referral'],
         required: true,
         unique: true
     },

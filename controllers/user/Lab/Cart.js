@@ -14,6 +14,7 @@ const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Coupon = require('../../../models/Coupon');
 const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
+const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest');
 
 
 const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid, vendorType, userId = null) => {

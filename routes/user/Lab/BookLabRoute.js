@@ -22,7 +22,7 @@ const {
     
     // Prescription Flow
     scanLabPrescription,searchMasterTestsForPrescription,
-    createLabPrescriptionRequest,
+    createLabPrescriptionRequest,cancelLabPrescriptionRequest,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
@@ -123,6 +123,7 @@ router.post(
     prescriptionUploads.single('prescriptionImage'), // single upload key
     createLabPrescriptionRequest
 );
+router.patch('/prescription-request/cancel/:requestId', protect('user'), cancelLabPrescriptionRequest);
 
 router.get(
     '/prescription-request/list', 

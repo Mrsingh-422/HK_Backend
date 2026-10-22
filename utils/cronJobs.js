@@ -2,12 +2,14 @@
 const cron = require('node-cron');
 const NursingPrescriptionRequest = require('../models/NursingPrescriptionRequest');
 const UserSubscription = require('../models/UserSubscription');
+const LabPrescriptionRequest = require('../models/LabPrescriptionRequest');
 const Appointment = require('../models/Appointment');
 const Bed = require('../models/Bed');
 const { sendPushNotification } = require('./notification');
 
+// @desc    Initialize Background Schedulers (Nursing Expiry, Subscription Expiry, Bed Hold Auto-Release & Lab Prescription Expiry)
 const initCronJobs = () => {
-    // 1. Hourly check for expired prescription requests
+    // 1. Hourly check for expired nursing prescription requests (UNTOUCHED)
     cron.schedule('0 * * * *', async () => {
         try {
             const now = new Date();
@@ -16,11 +18,11 @@ const initCronJobs = () => {
                 { $set: { status: 'Expired' } }
             );
         } catch (error) {
-            console.error("[Cron Job Error]:", error);
+            console.error("[Nursing Cron Job Error]:", error);
         }
     });
 
-    // 2. Daily Midnight check: Mark ended subscriptions as 'Expired'
+    // 2. Daily Midnight check: Mark ended subscriptions as 'Expired' (UNTOUCHED)
     cron.schedule('0 0 * * *', async () => {
         try {
             const now = new Date();
@@ -29,14 +31,14 @@ const initCronJobs = () => {
                 { $set: { status: 'Expired' } }
             );
             if (result.modifiedCount > 0) {
-                console.log(`\x1b[33m[Cron Job]: Archived ${result.modifiedCount} expired user subscriptions.\x1b[0m`);
+                console.log(`\x1b[33m[Subscription Cron Job]: Archived ${result.modifiedCount} expired user subscriptions.\x1b[0m`);
             }
         } catch (error) {
             console.error("[Subscription Cron Job Error]:", error);
         }
     });
 
-    // 3. Real-Time 2-Minute Cron: Release Unpaid 30-Minute Expired Bed Holds + Notify User
+    // 3. Real-Time 2-Minute Cron: Release Unpaid 30-Minute Expired Bed Holds + Notify User (UNTOUCHED)
     cron.schedule('*/2 * * * *', async () => {
         try {
             const now = new Date();
@@ -74,6 +76,30 @@ const initCronJobs = () => {
             }
         } catch (error) {
             console.error("[Bed Release Cron Error]:", error);
+        }
+    });
+
+    // 4. Daily 1:00 AM Cron: Auto-Expire Stale Lab Prescription Requests whose appointmentDate has passed (NEW)
+    cron.schedule('0 1 * * *', async () => {
+        try {
+            const yesterdayEnd = moment().subtract(1, 'day').endOf('day').toDate();
+            const result = await LabPrescriptionRequest.updateMany(
+                {
+                    status: { $in: ['Pending Review', 'Reviewing', 'Bill Generated', 'Pending Payment'] },
+                    appointmentDate: { $lte: yesterdayEnd }
+                },
+                { 
+                    $set: { 
+                        status: 'Expired', 
+                        rejectReason: "Automated: Appointment date passed without confirmation." 
+                    } 
+                }
+            );
+            if (result.modifiedCount > 0) {
+                console.log(`\x1b[33m[Lab Prescription Expiry Cron]: Auto-expired ${result.modifiedCount} stale lab prescription requests.\x1b[0m`);
+            }
+        } catch (error) {
+            console.error("[Lab Prescription Expiry Cron Error]:", error);
         }
     });
 };

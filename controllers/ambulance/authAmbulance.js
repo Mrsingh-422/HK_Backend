@@ -137,15 +137,21 @@ const loginAmbulance = async (req, res) => {
     }
 };
 
-// --- 1. COMPLETE AMBULANCE PROFILE (Step 2 Onboarding with Safe JSON Parsers) ---
-// Endpoint: PUT /api/auth/ambulance/complete-profile
+// @desc    Complete Ambulance Profile (Step 2 Onboarding - Preserves existing documents on partial upload)
+// @route   PUT /api/auth/ambulance/complete-profile
+// @access  Private (Ambulance)
 const completeAmbulanceProfile = async (req, res) => {
     try {
         const ambId = req.user.id;
         const updates = { ...req.body };
         const files = req.files || {};
 
-        // Safe JSON Parsing for form-data stringified fields
+        const currentAmb = await Ambulance.findById(ambId);
+        if (!currentAmb) {
+            return res.status(404).json({ success: false, message: "Ambulance driver not found." });
+        }
+
+        // Safe JSON parsing for stringified fields from multipart form-data
         if (typeof updates.pricing === 'string') {
             try { updates.pricing = JSON.parse(updates.pricing); } catch (e) {}
         }
@@ -159,22 +165,34 @@ const completeAmbulanceProfile = async (req, res) => {
             try { updates.optionalServices = JSON.parse(updates.optionalServices); } catch (e) {}
         }
 
-        // Map Clean Web-Accessible File Paths
-        if (Object.keys(files).length > 0) {
-            const documentPaths = {
-                drivingLicenseFile: files.drivingLicenseFile ? `/uploads/ambulances/${files.drivingLicenseFile[0].filename}` : null,
-                rcFile: files.rcFile ? `/uploads/ambulances/${files.rcFile[0].filename}` : null,
-                insuranceFile: files.insuranceFile ? `/uploads/ambulances/${files.insuranceFile[0].filename}` : null,
-                fitnessCertificate: files.fitnessCertificate ? `/uploads/ambulances/${files.fitnessCertificate[0].filename}` : null,
-                ambulancePermit: files.ambulancePermit ? `/uploads/ambulances/${files.ambulancePermit[0].filename}` : null
-            };
-            
-            updates.documents = documentPaths;
+        // Preserve previous documents so partial re-uploads do not overwrite existing files with null
+        const existingDocs = currentAmb.documents || {};
+        const documentPaths = {
+            drivingLicenseFile: files.drivingLicenseFile 
+                ? `/uploads/ambulances/${files.drivingLicenseFile[0].filename}` 
+                : (existingDocs.drivingLicenseFile || null),
+            rcFile: files.rcFile 
+                ? `/uploads/ambulances/${files.rcFile[0].filename}` 
+                : (existingDocs.rcFile || null),
+            insuranceFile: files.insuranceFile 
+                ? `/uploads/ambulances/${files.insuranceFile[0].filename}` 
+                : (existingDocs.insuranceFile || null),
+            fitnessCertificate: files.fitnessCertificate 
+                ? `/uploads/ambulances/${files.fitnessCertificate[0].filename}` 
+                : (existingDocs.fitnessCertificate || null),
+            ambulancePermit: files.ambulancePermit 
+                ? `/uploads/ambulances/${files.ambulancePermit[0].filename}` 
+                : (existingDocs.ambulancePermit || null)
+        };
+        
+        updates.documents = documentPaths;
 
-            if (files.drivingLicenseFile && files.rcFile) {
-                updates.profileStatus = 'Pending';
-                updates.rejectionReason = null;
-            }
+        const hasDl = Boolean(documentPaths.drivingLicenseFile);
+        const hasRc = Boolean(documentPaths.rcFile);
+
+        if (hasDl && hasRc) {
+            updates.profileStatus = 'Pending';
+            updates.rejectionReason = null;
         }
 
         const updatedAmb = await Ambulance.findByIdAndUpdate(
@@ -183,16 +201,13 @@ const completeAmbulanceProfile = async (req, res) => {
             { new: true, runValidators: true }
         ).select('-password');
 
-        if (!updatedAmb) {
-            return res.status(404).json({ success: false, message: "Ambulance driver not found." });
-        }
-
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: updates.profileStatus === 'Pending' ? 'Profile submitted for Admin review.' : 'Profile partially updated.', 
             data: updatedAmb 
         });
     } catch (error) {
+        console.error("Complete Ambulance Profile Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

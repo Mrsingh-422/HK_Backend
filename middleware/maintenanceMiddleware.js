@@ -19,6 +19,7 @@ const checkMaintenanceMode = async (req, res, next) => {
             url.startsWith('/api/maintenance') ||  // Public Status check API
             url.startsWith('/public') ||           // Images/Banners
             url.startsWith('/uploads') ||          // Images/Banners
+            url.startsWith('/socket.io') ||          // whitelisted for socket.io connections
             url === '/' ||
             url.startsWith('/forgotpassword.html') ||
             url.startsWith('/doctor_register.html');

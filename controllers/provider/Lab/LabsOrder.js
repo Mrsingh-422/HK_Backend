@@ -1015,42 +1015,75 @@ const submitLabReviewBill = async (req, res) => {
     }
 };
 
-// 5. REJECT LAB PRESCRIPTION REQUEST (With Push Alert)
+// @desc    Reject Lab Prescription Request by Vendor (Instantly frees the locked time slot and alerts patient)
+// @route   POST /provider/labs/prescription-request/reject/:requestId
+// @access  Private (Lab Provider)
 const rejectLabPrescriptionRequest = async (req, res) => {
     try {
         const { requestId } = req.params;
         const { reason } = req.body;
         const labId = req.user.id;
 
-        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
-        const query = { labId };
-        if (isObjectId) query._id = requestId;
-        else query.requestId = requestId;
+        if (!requestId) {
+            return res.status(400).json({ success: false, message: "requestId parameter is required." });
+        }
+
+        // Support lookup by custom requestId (e.g. HK-LREQ-XXXX) or MongoDB ObjectId
+        const isObjectId = mongoose.isValidObjectId(requestId);
+        const query = {
+            labId,
+            ...(isObjectId ? { $or: [{ _id: requestId }, { requestId: String(requestId).trim() }] } : { requestId: String(requestId).trim() })
+        };
 
         const request = await LabPrescriptionRequest.findOne(query);
         if (!request) {
-            return res.status(404).json({ success: false, message: "Request not found" });
+            return res.status(404).json({ success: false, message: "Prescription inquiry record not found or unauthorized access." });
         }
 
+        if (request.status === 'Paid') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cannot reject. This prescription has already been paid and converted into a confirmed lab booking." 
+            });
+        }
+
+        if (request.status === 'Rejected') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "This prescription request has already been marked as Rejected." 
+            });
+        }
+
+        // 🚨 CRITICAL STATE TRANSITION: Marking status as 'Rejected' automatically frees the time slot in getLabSlots engine
         request.status = 'Rejected';
-        request.rejectReason = reason || "Invalid Prescription criteria";
+        request.rejectReason = reason ? String(reason).trim() : "Prescription verification check failed / Reagents out of stock.";
         await request.save();
 
-        // 🚨 TRIGGER PUSH NOTIFICATION: Patient ko rejection ki suchna dein
-        await sendPushNotification(
-            request.userId,
-            "Prescription Request Rejected",
-            `Your prescription upload was rejected. Reason: ${request.rejectReason}`,
-            { requestId: request._id.toString(), type: 'lab_prescription_rejected' }
-        );
+        // Send Real-time Push Notification to Patient
+        if (request.userId) {
+            try {
+                await sendPushNotification(
+                    request.userId,
+                    'user',
+                    "❌ Lab Prescription Request Rejected",
+                    `Your prescription inquiry #${request.requestId} was rejected by the lab. Reason: "${request.rejectReason}". Please select another lab.`,
+                    { requestId: request.requestId, type: 'lab_prescription_rejected' }
+                );
+            } catch (notifErr) {
+                console.error("Patient Notification Error:", notifErr.message);
+            }
+        }
 
-        res.json({
+        res.status(200).json({
             success: true,
-            message: "Request rejected successfully",
+            message: "Prescription request has been rejected successfully. The booked time slot is now released and free for other users.",
+            requestId: request.requestId,
             rejectReason: request.rejectReason,
             data: request
         });
+
     } catch (error) {
+        console.error("Reject Lab Prescription Request Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

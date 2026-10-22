@@ -156,9 +156,9 @@ const creditVendorCompensation = async (vendorId, vendorModel, amount, bookingId
 };
 
 /**
- * 🚀 SMART COD EVALUATOR:
+ * 🚀 SMART UNIVERSAL COD EVALUATOR:
  * 1. If User has an ACTIVE SUBSCRIPTION ➔ COD is ALWAYS TRUE (100% UNLOCKED).
- * 2. If User has NO Active Plan ➔ Checks Admin Global CodConfig.
+ * 2. If User has NO Active Plan ➔ Checks Admin Global CodConfig with case-insensitive and subtype fallbacks.
  * @param {String} vendorType - 'Doctor', 'Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance'
  * @param {String} [userId] - Optional User ID
  * @returns {Promise<Boolean>}
@@ -173,18 +173,41 @@ const isCodEnabled = async (vendorType, userId = null) => {
                 endDate: { $gt: new Date() }
             });
 
-            // If user has an active care subscription plan -> COD ALWAYS ALLOWED!
+            // Subscribed users have 100% guaranteed unlimited COD on all bookings
             if (activeSubscription) {
                 return true; 
             }
         }
 
+        if (!vendorType) return true;
+
+        // Normalize casing to match schema enum
+        const typeMapping = {
+            'doctor': 'Doctor', 'Doctor': 'Doctor',
+            'hospital': 'Hospital', 'Hospital': 'Hospital',
+            'lab': 'Lab', 'Lab': 'Lab',
+            'pharmacy': 'Pharmacy', 'Pharmacy': 'Pharmacy',
+            'nurse': 'Nurse', 'Nurse': 'Nurse',
+            'ambulance': 'Ambulance', 'Ambulance': 'Ambulance',
+            'ambulance-accident': 'Ambulance-Accident', 'Ambulance-Accident': 'Ambulance-Accident',
+            'ambulance-medical': 'Ambulance-Medical', 'Ambulance-Medical': 'Ambulance-Medical',
+            'ambulance-referral': 'Ambulance-Referral', 'Ambulance-Referral': 'Ambulance-Referral'
+        };
+
+        const targetVendorType = typeMapping[vendorType] || vendorType;
+
         // 🌟 2. NON-SUBSCRIBER: Check Admin Policy Configuration
-        const config = await CodConfig.findOne({ vendorType });
+        let config = await CodConfig.findOne({ vendorType: targetVendorType });
+
+        // Fallback for ambulance sub-types if generic 'Ambulance' switch is configured
+        if (!config && String(targetVendorType).startsWith('Ambulance')) {
+            config = await CodConfig.findOne({ vendorType: 'Ambulance' });
+        }
+
         return config ? config.isCodAvailable : true;
     } catch (error) {
-        console.error("COD check error:", error);
-        return true;
+        console.error("Universal COD check error:", error);
+        return true; // Fail-safe default
     }
 };
 

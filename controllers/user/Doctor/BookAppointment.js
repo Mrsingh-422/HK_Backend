@@ -281,404 +281,377 @@ const validateCoupon = async (req, res) => {
 };
 
 // for condtional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
+// @desc    Calculate Doctor Consultation Checkout Summary (Zero Static 500 Fallback & Video COD Block)
+// @route   POST /user/doctors/checkout-summary
+// @access  Private (User)
 const getCheckoutSummary = async (req, res) => {
     try {
-        // 🖨️ YEH LOG FRONTEND KA POORA DATA TERMINAL ME PRINT KAREGA:
-        console.log("\n📦 ================= INCOMING FRONTEND CHECKOUT DATA =================");
-        console.log("👤 Logged In User ID :", req.user?.id || req.user?._id);
-        console.log("📩 Raw Request Body  :", JSON.stringify(req.body, null, 2));
-        console.log("=======================================================================\n");
+        const userId = req.user.id;
+        const { doctorId, consultationType, timeSlot, appointmentDate, couponCode, distance } = req.body;
 
-        let body = { ...req.body };
-
-        // 🚨 SAFE MULTIPART PARSER
-        if (typeof body.patients === 'string') {
-            try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
-        }
-        if (typeof body.address === 'string') {
-            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
-        }
-        if (typeof body.specialServices === 'string') {
-            try { body.specialServices = JSON.parse(body.specialServices); } catch (e) { body.specialServices = []; }
+        if (!doctorId || !consultationType) {
+            return res.status(400).json({ success: false, message: "doctorId and consultationType are required." });
         }
 
-        const { 
-            doctorId, consultationType, couponCode, 
-            distance = 0, timeSlot, appointmentDate, 
-            specialServices = [], patients = [], address = null 
-        } = body;
+        if (!mongoose.isValidObjectId(doctorId)) {
+            return res.status(400).json({ success: false, message: "Invalid Doctor ID format." });
+        }
 
-        const doctor = await Doctor.findById(doctorId);
+        const doctor = await Doctor.findById(doctorId).select('name speciality fees consultationStatus slotDuration').lean();
         if (!doctor) {
-            console.log("❌ REJECTED: Doctor ID not found in database ->", doctorId);
-            return res.status(404).json({ message: "Doctor not found" });
+            return res.status(404).json({ success: false, message: "Doctor profile not found." });
         }
 
-        const isCodAllowed = await isCodEnabled('Doctor', req.user ? req.user.id : null);
+        // 1. Dynamic Fee Resolution Strictly From Doctor DB Record (No Arbitrary 500 Fallback!)
+        let realBaseFee = 0;
+        let visitCharge = 0;
+        const type = String(consultationType).trim();
 
-        // FAMILY MEMBERS CHECK
-        const user = await User.findById(req.user.id).select('familyMember');
-        if (!user) return res.status(404).json({ message: "User account not found" });
+        if (type === 'Video Consult') {
+            if (doctor.consultationStatus?.online === false) {
+                return res.status(400).json({ success: false, message: "Doctor is currently not accepting video consultations." });
+            }
+            realBaseFee = Number(doctor.fees?.online ?? 0);
+        } else if (type === 'Home Visit') {
+            if (doctor.consultationStatus?.home === false) {
+                return res.status(400).json({ success: false, message: "Doctor is currently not accepting home visits." });
+            }
+            realBaseFee = Number(doctor.fees?.home ?? 0);
 
-        if (patients && Array.isArray(patients)) {
-            for (const patient of patients) {
-                const pName = patient.patientName || patient.name || "Self";
-                const isSelf = patient.relation === 'Self' || pName.toLowerCase() === 'self';
+            // Fetch dynamic travel charges
+            const chargesConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
+            if (chargesConfig) {
+                const tripDistance = Math.max(0, parseFloat(distance) || 0);
+                const freeDistance = Number(chargesConfig.fixedDistance || 3);
+                const baseVisitFee = Number(chargesConfig.fixedPrice || 100);
+                const perKmRate = Number(chargesConfig.pricePerKM || 10);
                 
-                if (!isSelf) {
-                    const isRegisteredMember = user.familyMember.some(member => 
-                        member.memberName && member.memberName.toLowerCase() === pName.toLowerCase()
-                    );
+                const extraDistance = Math.max(0, tripDistance - freeDistance);
+                visitCharge = Math.round(baseVisitFee + (extraDistance * perKmRate));
+            }
+        } else {
+            // Default: Clinic Visit
+            if (doctor.consultationStatus?.clinic === false) {
+                return res.status(400).json({ success: false, message: "Doctor is currently not accepting clinic visits." });
+            }
+            realBaseFee = Number(doctor.fees?.clinic ?? 0);
+        }
 
-                    if (!isRegisteredMember) {
-                        // 🖨️ Yahan print hoga ki kyu reject hua:
-                        console.log(`❌ 400 REJECTED: Patient '${pName}' is NOT in familyMember array of user '${req.user.name || req.user.id}'`);
-                        
-                        return res.status(400).json({
-                            success: false,
-                            message: `Access Blocked: Patient '${pName}' is not registered under your family profile.`
-                        });
-                    }
+        // 2. Premium Slot Surcharge Evaluation
+        let premiumSlotFee = 0;
+        if (timeSlot) {
+            const availability = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
+            if (availability && Array.isArray(availability.premiumSlots)) {
+                const cleanSlot = String(timeSlot).trim().toLowerCase();
+                const matchedSlot = availability.premiumSlots.find(s => 
+                    s.time && String(s.time).trim().toLowerCase() === cleanSlot
+                );
+                if (matchedSlot) {
+                    premiumSlotFee = Number(matchedSlot.extraFee || 0);
                 }
             }
         }
 
-        const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
-        let baseFee = doctor.fees[typeMap[consultationType]] || 0;
+        // 3. Subscription Benefit (Free Doctor Consultation Waiver)
+        const subBenefit = await checkAndApplyBenefit(userId, 'freeDoctorAppointmentsCount', realBaseFee);
+        const isSubscriptionApplied = subBenefit.isApplied;
+        const payableBaseFee = isSubscriptionApplied ? 0 : realBaseFee;
 
-        let originalBaseFee = baseFee; 
-        let isSubscriptionApplied = false;
-        let planName = "";
-        let userSubscriptionId = null;
+        const subtotal = payableBaseFee + visitCharge + premiumSlotFee;
 
-        const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
-        const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
-        
-        if (docBenefit.isApplied) {
-            baseFee = 0; 
-            isSubscriptionApplied = true;
+        // 4. Coupon Discount Calculation
+        let discount = 0;
+        let appliedCoupon = null;
 
-            const UserSubscription = require('../../../models/UserSubscription');
-            const activeSub = await UserSubscription.findOne({
-                userId: req.user.id,
-                status: 'Active',
-                endDate: { $gt: new Date() }
-            }).populate({
-                path: 'planId',
-                populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
+        if (couponCode && couponCode.trim() !== "" && subtotal > 0) {
+            const coupon = await Coupon.findOne({
+                couponName: couponCode.trim().toUpperCase(),
+                isActive: true,
+                expiryDate: { $gte: new Date() }
             });
 
-            if (activeSub && activeSub.planId) {
-                planName = activeSub.planId.name || "Premium Care Plan";
-                userSubscriptionId = activeSub._id;
+            if (coupon && subtotal >= (coupon.minOrderAmount || 0)) {
+                discount = Math.min(Math.round((subtotal * coupon.discountPercentage) / 100), coupon.maxDiscount || subtotal);
+                appliedCoupon = {
+                    couponId: coupon._id,
+                    couponCode: coupon.couponName,
+                    discountPercentage: coupon.discountPercentage,
+                    discountAmount: discount
+                };
             }
         }
 
-        let visitCharge = 0;
-        if (consultationType === 'Home Visit') {
-            if (!address) return res.status(400).json({ message: "Address required for Home Visit" });
+        const totalPayable = Math.max(0, subtotal - discount);
 
-            const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-            if (chargeConfig) {
-                visitCharge = chargeConfig.fixedPrice; 
-                if (distance > chargeConfig.fixedDistance) {
-                    visitCharge += (distance - chargeConfig.fixedDistance) * chargeConfig.pricePerKM;
-                }
-            } else {
-                visitCharge = 100; 
+        // 5. 🚨 STRICT COD EVALUATION: Video Consultations ALWAYS have COD Disabled!
+        let isCodAvailable = false;
+        let codDisabledReason = null;
+
+        if (type === 'Video Consult') {
+            isCodAvailable = false;
+            codDisabledReason = "Online Video Consultation requires online payment (UPI/Card). Cash on Delivery is disabled.";
+        } else {
+            // Clinic Visit and Home Visit check Admin Policy & VIP Subscription
+            isCodAvailable = await isCodEnabled('Doctor', userId);
+            if (!isCodAvailable) {
+                codDisabledReason = "Cash on Delivery is currently disabled by administrator for clinic/home doctor appointments.";
             }
         }
 
-        let premiumFee = 0;
-        const avail = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-        const slot = avail?.premiumSlots.find(s => s.time === timeSlot);
-        if (slot) premiumFee = slot.extraFee;
-
-        const servicesTotal = specialServices.reduce((sum, s) => sum + (s.price || 0), 0);
-        let subtotal = baseFee + visitCharge + premiumFee + servicesTotal;
-
-        let discount = 0;
-        if (couponCode) {
-            const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-            if (coupon && subtotal >= coupon.minOrderAmount) {
-                discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
-            }
-        }
-
-        console.log("✅ CHECKOUT SUMMARY CALCULATED SUCCESSFULLY for User:", req.user.id);
-
-        res.json({
+        res.status(200).json({
             success: true,
+            isCodAvailable,
+            codDisabledReason,
             data: {
-                baseFee,
-                originalBaseFee, 
-                visitCharge, 
-                premiumFee,
-                servicesTotal,
+                consultationType: type,
+                doctorName: doctor.name,
+                speciality: doctor.speciality,
+                baseFee: realBaseFee,
+                originalBaseFee: realBaseFee,
+                visitCharge,
+                premiumSlotFee,
+                subtotal: realBaseFee + visitCharge + premiumSlotFee,
                 discount,
-                subtotal,
-                totalPayable: Math.max(0, subtotal - discount),
-                patients,
-                address: consultationType === 'Home Visit' ? address : null,
-                isCodAvailable: isCodAllowed,
+                appliedCoupon,
+                totalPayable,
+                isCodAvailable,
+                codDisabledReason,
                 subscriptionDetails: {
-                    isSubscriptionApplied, 
-                    userSubscriptionId,
-                    planName
+                    isSubscriptionApplied,
+                    userSubscriptionId: subBenefit.subId || null,
+                    planName: subBenefit.planName || ""
                 }
             }
         });
-    } catch (error) { 
-        console.error("Checkout Summary Error:", error);
-        res.status(500).json({ message: error.message }); 
+
+    } catch (error) {
+        console.error("Doctor Checkout Summary Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 
-// 2. BOOK APPOINTMENT (Corrected with req.user.id)
+// @desc    Book Doctor Appointment (Strict Backend Check: Blocks COD for Video Consultations)
+// @route   POST /user/doctors/book
+// @access  Private (User)
 const bookAppointment = async (req, res) => {
     try {
-        let body = { ...req.body };
+        const userId = req.user.id;
+        let {
+            doctorId, consultationType, appointmentDate, appointmentTime,
+            patients, paymentMethod, couponCode, distance, bookingReason,
+            hasInsurance, insuranceNumber, companyName, insuranceType
+        } = req.body;
 
-        if (typeof body.patients === 'string') {
-            try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
-        }
-        if (typeof body.address === 'string') {
-            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
-        }
-        if (typeof body.pricingBreakdown === 'string') {
-            try { body.pricingBreakdown = JSON.parse(body.pricingBreakdown); } catch (e) { body.pricingBreakdown = {}; }
-        }
-
-        const { 
-            doctorId, 
-            appointmentDate, 
-            timeSlot, 
-            appointmentTime: incomingApptTime,
-            consultationType, 
-            patients = [], 
-            address,
-            pricingBreakdown = {},  
-            totalAmount        
-        } = body;
-
-        const appointmentTime = timeSlot || incomingApptTime; 
-        const pricingData = pricingBreakdown; 
-
-        if (!doctorId || !appointmentDate || !appointmentTime) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Validation Error: Required fields (doctorId, appointmentDate, timeSlot/appointmentTime) are missing." 
-            });
+        if (typeof patients === 'string') {
+            try { patients = JSON.parse(patients); } catch (e) {}
         }
 
-        const allowedPaymentMethods = ['Online', 'UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
-        const activePaymentMethod = body.paymentMethod || "Online";
-        
-        if (!allowedPaymentMethods.includes(activePaymentMethod)) {
+        if (!doctorId || !consultationType || !appointmentDate || !appointmentTime || !patients || patients.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: `Invalid paymentMethod '${activePaymentMethod}'. Allowed values are: ${allowedPaymentMethods.join(', ')}`
+                message: "Doctor, Consultation Type, Date, Time slot, and Patient details are required."
             });
         }
 
-        if (activePaymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Doctor', req.user.id);
-            if (!isCodAllowed) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Cash on Delivery is currently disabled for doctor appointments. Please pay online to complete your booking."
-                });
-            }
+        if (!mongoose.isValidObjectId(doctorId)) {
+            return res.status(400).json({ success: false, message: "Invalid Doctor ID format." });
         }
 
-        const doctor = await Doctor.findById(doctorId);
+        const type = String(consultationType).trim();
+        const requestedMethod = String(paymentMethod || 'Online').trim();
+        const isRequestedCashOrCod = requestedMethod === 'COD' || 
+                                     requestedMethod === 'Cash' || 
+                                     requestedMethod.toUpperCase() === 'COD' || 
+                                     requestedMethod.toUpperCase() === 'CASH';
+
+        // 🚨 1. STRICT SECURITY & FLOW ENFORCEMENT: Block COD on Video Calls
+        if (type === 'Video Consult' && isRequestedCashOrCod) {
+            return res.status(400).json({
+                success: false,
+                errorType: "COD_NOT_ALLOWED_FOR_VIDEO_CALL",
+                message: "Cash on Delivery (COD) is not allowed for Online Video Consultations. Please select Online Payment (UPI / Card / NetBanking)."
+            });
+        }
+
+        const doctor = await Doctor.findById(doctorId).select('name fees consultationStatus').lean();
         if (!doctor) {
             return res.status(404).json({ success: false, message: "Doctor not found." });
         }
-        if (doctor.role !== 'doctor') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "This booking route only supports independent doctors." 
-            });
+
+        // 2. Dynamic Real Base Fee Resolution (Strictly No Arbitrary 500 Number!)
+        let realBaseFee = 0;
+        let visitCharge = 0;
+
+        if (type === 'Video Consult') {
+            if (doctor.consultationStatus?.online === false) {
+                return res.status(400).json({ success: false, message: "Doctor is currently not accepting video consultations." });
+            }
+            realBaseFee = Number(doctor.fees?.online ?? 0);
+        } else if (type === 'Home Visit') {
+            if (doctor.consultationStatus?.home === false) {
+                return res.status(400).json({ success: false, message: "Doctor is currently not accepting home visits." });
+            }
+            realBaseFee = Number(doctor.fees?.home ?? 0);
+
+            const chargesConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
+            if (chargesConfig) {
+                const tripDistance = Math.max(0, parseFloat(distance) || 0);
+                const freeDistance = Number(chargesConfig.fixedDistance || 3);
+                const baseVisitFee = Number(chargesConfig.fixedPrice || 100);
+                const perKmRate = Number(chargesConfig.pricePerKM || 10);
+                const extraDistance = Math.max(0, tripDistance - freeDistance);
+                visitCharge = Math.round(baseVisitFee + (extraDistance * perKmRate));
+            }
+        } else {
+            if (doctor.consultationStatus?.clinic === false) {
+                return res.status(400).json({ success: false, message: "Doctor is currently not accepting clinic visits." });
+            }
+            realBaseFee = Number(doctor.fees?.clinic ?? 0);
         }
 
-        if (doctor.isOnline === false) {
-            return res.status(400).json({
-                success: false,
-                message: "Booking Blocked: Doctor is currently offline and not accepting appointments."
-            });
+        // 3. Premium Slot Surcharge
+        let premiumFee = 0;
+        const availability = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
+        if (availability && Array.isArray(availability.premiumSlots)) {
+            const cleanSlot = String(appointmentTime).trim().toLowerCase();
+            const matchedSlot = availability.premiumSlots.find(s => 
+                s.time && String(s.time).trim().toLowerCase() === cleanSlot
+            );
+            if (matchedSlot) {
+                premiumFee = Number(matchedSlot.extraFee || 0);
+            }
         }
 
-        // 🛡️ ZOMBIE SLOT GUARD: Check if slot is booked by a confirmed appointment OR a fresh (<15m) pending session
-        const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
-        const isBooked = await Appointment.findOne({ 
-            doctorId, 
-            appointmentDate: { 
-                $gte: moment(appointmentDate).startOf('day').toDate(),
-                $lte: moment(appointmentDate).endOf('day').toDate()
-            }, 
-            appointmentTime, 
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] },
-            $or: [
-                { status: { $ne: 'Pending' } },
-                { status: 'Pending', createdAt: { $gte: fifteenMinutesAgo } } // Only active pending orders block slot
-            ]
+        // 4. Subscription Benefit
+        const subBenefit = await checkAndApplyBenefit(userId, 'freeDoctorAppointmentsCount', realBaseFee);
+        const isSubscriptionApplied = subBenefit.isApplied;
+        const payableBaseFee = isSubscriptionApplied ? 0 : realBaseFee;
+
+        const subtotal = payableBaseFee + visitCharge + premiumFee;
+
+        // 5. Coupon Discount
+        let discount = 0;
+        let couponObj = null;
+
+        if (couponCode && couponCode.trim() !== "" && subtotal > 0) {
+            const coupon = await Coupon.findOne({
+                couponName: couponCode.trim().toUpperCase(),
+                isActive: true,
+                expiryDate: { $gte: new Date() }
+            });
+            if (coupon && subtotal >= (coupon.minOrderAmount || 0)) {
+                discount = Math.min(Math.round((subtotal * coupon.discountPercentage) / 100), coupon.maxDiscount || subtotal);
+                couponObj = {
+                    couponId: coupon._id,
+                    couponCode: coupon.couponName,
+                    discountValue: discount
+                };
+            }
+        }
+
+        const totalAmount = Math.max(0, subtotal - discount);
+
+        // 6. Policy Check on Clinic / Home Visit COD
+        if (isRequestedCashOrCod) {
+            const codPermitted = await isCodEnabled('Doctor', userId);
+            if (!codPermitted) {
+                return res.status(400).json({
+                    success: false,
+                    errorType: "COD_POLICY_RESTRICTED",
+                    message: "Cash on Delivery is currently disabled by administrator. Please pay online."
+                });
+            }
+        }
+
+        const cleanPaymentMethod = isRequestedCashOrCod ? 'COD' : 'Online';
+        const bookingId = `HKD-${Date.now().toString().slice(-6)}${Math.floor(10 + Math.random() * 90)}`;
+
+        const appointment = await Appointment.create({
+            userId,
+            doctorId,
+            bookingId,
+            bookingType: 'Appointment',
+            consultationType: type,
+            appointmentDate: new Date(appointmentDate),
+            appointmentTime,
+            patients: patients.map(p => ({
+                patientName: p.patientName,
+                patientAge: Number(p.patientAge) || 25,
+                gender: p.gender || "Male",
+                relation: p.relation || "Self",
+                reasonForVisit: p.reasonForVisit || bookingReason || "Doctor Consultation"
+            })),
+            bookingReason: bookingReason || "Doctor Appointment",
+            pricingBreakdown: {
+                baseFee: realBaseFee,
+                originalBaseFee: realBaseFee,
+                visitCharges: visitCharge,
+                extraCharges: premiumFee,
+                discountAmount: discount,
+                subtotal: realBaseFee + visitCharge + premiumFee,
+                depositPaidOnBooking: cleanPaymentMethod === 'COD' ? 0 : totalAmount
+            },
+            totalAmount,
+            paymentMethod: cleanPaymentMethod,
+            paymentStatus: totalAmount === 0 ? 'Paid' : 'Pending',
+            status: totalAmount === 0 ? 'Confirmed' : (cleanPaymentMethod === 'Online' ? 'Pending' : 'Confirmed'),
+            couponDetails: couponObj,
+            subscriptionDetails: {
+                isSubscriptionApplied,
+                userSubscriptionId: subBenefit.subId || null,
+                planName: subBenefit.planName || ""
+            },
+            tracking: {
+                otp: Math.floor(1000 + Math.random() * 9000).toString(),
+                status: 'Confirmed'
+            }
         });
 
-        if (isBooked) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `This slot (${appointmentTime}) is already booked for this doctor. Please choose another time slot.` 
-            });
-        }
-
-        const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
-        const rawDoctorFee = doctor.fees?.[typeMap[consultationType]] || 0;
-
-        let originalBaseFee = rawDoctorFee;
-        let isSubscriptionApplied = false;
-        let planName = "";
-        let userSubscriptionId = null;
-
-        const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', rawDoctorFee);
-        
-        if (docBenefit.isApplied) {
-            isSubscriptionApplied = true;
-            try {
-                const UserSubscription = require('../../../models/UserSubscription');
-                const activeSub = await UserSubscription.findOne({
-                    userId: req.user.id,
-                    status: 'Active',
-                    endDate: { $gt: new Date() }
-                }).populate({
-                    path: 'planId',
-                    populate: [{ path: 'categoryId' }, { path: 'diseaseIds' }]
-                });
-
-                if (activeSub && activeSub.planId) {
-                    planName = activeSub.planId.name || "Premium Care Plan";
-                    userSubscriptionId = activeSub._id;
-                }
-            } catch (e) {}
-        }
-
-        const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        const finalPayable = Number(totalAmount !== undefined ? totalAmount : (pricingData.subtotal || 0));
-
-        // CASE A: FREE BOOKING VIA SUBSCRIPTION / COD
-        if (finalPayable === 0 || activePaymentMethod === 'COD') {
-            const appointment = await Appointment.create({
-                userId: req.user.id,
-                doctorId,
-                patients: patients,
-                address: consultationType === 'Home Visit' ? address : undefined,
-                appointmentDate: new Date(appointmentDate),
-                appointmentTime, 
-                consultationType: consultationType || 'Clinic Visit',
-                paymentMethod: activePaymentMethod,
-                
-                pricingBreakdown: {
-                    baseFee: Number(pricingData.baseFee || 0),
-                    originalBaseFee: Number(originalBaseFee), 
-                    visitCharges: Number(pricingData.visitCharges || 0),
-                    extraCharges: Number(pricingData.extraCharges || 0),
-                    discountAmount: Number(pricingData.discountAmount || 0),
-                    subtotal: Number(pricingData.subtotal || 0)
-                },
-                
-                totalAmount: finalPayable,
-                bookingId: tempBookingId,
-                status: 'Confirmed',
-                paymentStatus: finalPayable === 0 ? 'Paid' : 'Pending',
-                transactionId: `FREE-${tempBookingId}`,
-                'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
-
-                subscriptionDetails: {
-                    isSubscriptionApplied: isSubscriptionApplied,
-                    userSubscriptionId: userSubscriptionId,
-                    planName: planName
-                }
-            });
-
-            if (isSubscriptionApplied) {
-                await deductBenefitCount(req.user.id, 'freeDoctorAppointmentsCount');
-            }
-
-            try {
-                await notifyAdminsAndVendor(
-                    doctorId,
-                    'doctor',
-                    "New Appointment Confirmed!",
-                    `Appointment scheduled on ${moment(appointmentDate).format('YYYY-MM-DD')} at ${appointmentTime}.`,
-                    { appointmentId: appointment._id.toString(), type: 'new_appointment' }
-                );
-            } catch (e) {}
+        // 7. Online Payment Flow (Razorpay Order)
+        if (cleanPaymentMethod === 'Online' && totalAmount > 0) {
+            const rzpOrder = await createRazorpayOrder(totalAmount, `rec_doc_${bookingId}`);
+            appointment.transactionId = rzpOrder.id;
+            await appointment.save();
 
             return res.status(201).json({
                 success: true,
-                message: "Appointment successfully confirmed!",
-                data: appointment
+                isOnlinePayment: true,
+                message: "Appointment initiated. Complete online payment to confirm booking.",
+                key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
+                amount: rzpOrder.amount,
+                currency: "INR",
+                razorpayOrderId: rzpOrder.id,
+                appointmentId: appointment._id,
+                bookingId: appointment.bookingId,
+                totalPayable: totalAmount
             });
         }
 
-        // CASE B: PAID ONLINE APPOINTMENT (RAZORPAY)
-        let rzpOrder;
+        // 8. Offline / COD / Free Subscribed Appointment
         try {
-            rzpOrder = await createRazorpayOrder(finalPayable, `receipt_${tempBookingId}`);
-        } catch (rzpErr) {
-            return res.status(400).json({
-                success: false,
-                message: `Payment Gateway Error: ${rzpErr.message || "Failed to initialize Razorpay order."}`
-            });
-        }
+            await sendPushNotification(
+                doctorId,
+                'doctor',
+                "New Consultation Booked!",
+                `New appointment #${bookingId} booked for ${appointmentTime}.`,
+                { appointmentId: appointment._id.toString(), type: 'new_appointment_booked' }
+            );
+        } catch (e) {}
 
-        const appointment = await Appointment.create({
-            userId: req.user.id,
-            doctorId,
-            patients: patients,
-            address: consultationType === 'Home Visit' ? address : undefined,
-            appointmentDate: new Date(appointmentDate),
-            appointmentTime, 
-            consultationType: consultationType || 'Clinic Visit',
-            paymentMethod: activePaymentMethod,
-            
-            pricingBreakdown: {
-                baseFee: Number(pricingData.baseFee || 0),
-                originalBaseFee: Number(originalBaseFee), 
-                visitCharges: Number(pricingData.visitCharges || 0),
-                extraCharges: Number(pricingData.extraCharges || 0),
-                discountAmount: Number(pricingData.discountAmount || 0),
-                subtotal: Number(pricingData.subtotal || finalPayable)
-            },
-            
-            totalAmount: finalPayable,
-            bookingId: tempBookingId,
-            status: 'Pending', 
-            paymentStatus: 'Pending',
-            transactionId: rzpOrder.id, 
-            'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
-
-            subscriptionDetails: {
-                isSubscriptionApplied: isSubscriptionApplied,
-                userSubscriptionId: userSubscriptionId,
-                planName: planName
-            }
-        });
-
-        res.status(201).json({ 
-            success: true, 
-            message: "Razorpay order created. Complete payment to confirm.",
-            key_id: process.env.RAZORPAY_KEY_ID, 
-            amount: rzpOrder.amount, 
-            razorpayOrderId: rzpOrder.id,
+        res.status(201).json({
+            success: true,
+            isOnlinePayment: false,
+            message: "Doctor appointment booked successfully!",
+            bookingId: appointment.bookingId,
             appointmentId: appointment._id,
-            bookingId: tempBookingId
+            totalAmount,
+            data: appointment
         });
 
-    } catch (error) { 
-        console.error("Critical Booking Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal server error" }); 
+    } catch (error) {
+        console.error("Book Doctor Appointment Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1201,71 +1174,77 @@ const getMyPrescriptions = async (req, res) => {
     }
 };
 
-// GET SLOTS
+// @desc    Get Available Slots from Cart View (Now with full real-time occupancy & prescription holds checking)
+// @route   GET /user/cart/available-slots
+// @access  Private (User)
 const getAvailableSlots = async (req, res) => {
     try {
-        const { doctorId } = req.params;
-        const { date } = req.query; // Date in 'YYYY-MM-DD' format
+        const { vendorId, date } = req.query; 
 
-        if (!date) {
-            return res.status(400).json({ success: false, message: "Date query parameter is required." });
-        }
-        
-        const config = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-        
-        if (!config) {
-            return res.json({ success: true, message: "Availability not set", slots: [] });
+        if (!vendorId || !date) {
+            return res.status(400).json({ success: false, message: "vendorId and date are required." });
         }
 
-        const dayName = moment(date).format('dddd'); 
-        if (config.offDays.includes(dayName) || config.blockedDates.includes(date)) {
-            return res.json({ success: true, message: "Doctor is unavailable on this date", slots: [] });
+        const config = await Availability.findOne({ vendorId }).lean();
+        if (!config) return res.status(404).json({ success: false, message: "Slots not configured" });
+
+        const dayName = moment(date).format('dddd');
+        if (Array.isArray(config.offDays) && config.offDays.includes(dayName)) {
+            return res.status(200).json({ success: true, isClosed: true, slots: [] });
         }
 
-        // 🚀 SYNC FIX 1: Safe Date-Range boundaries to prevent UTC offset mismatches
-        const queryStart = moment(date).startOf('day').toDate();
-        const queryEnd = moment(date).endOf('day').toDate();
+        const allSlots = generateTimeSlots(config);
+        const startOfDay = moment(date).startOf('day').toDate();
+        const endOfDay = moment(date).endOf('day').toDate();
 
-        // 🚀 SYNC FIX 2: Excluded 'No-Show' along with Cancelled states to free up slots
-        const booked = await Appointment.find({ 
-            doctorId, 
-            appointmentDate: { $gte: queryStart, $lte: queryEnd },
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] } 
-        }).select('appointmentTime');
-        
-        const bookedTimes = booked.map(b => b.appointmentTime);
+        // 1. Check bookings & prescription holds
+        const [bookedOrders, activePrescriptions] = await Promise.all([
+            LabBooking.find({
+                labId: vendorId,
+                appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+                status: { $nin: ['Cancelled', 'No-Show'] }
+            }).select('appointmentTime').lean(),
 
-        let slots = [];
-        let start = moment(config.startTime, "HH:mm");
-        let end = moment(config.endTime, "HH:mm");
+            LabPrescriptionRequest.find({
+                labId: vendorId,
+                appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+                status: { $in: ['Pending Review', 'Reviewing', 'Bill Generated', 'Pending Payment'] }
+            }).select('appointmentTime').lean()
+        ]);
 
-        while (start.isBefore(end)) {
-            const timeStr = start.format("HH:mm");
-            
-            const isBooked = bookedTimes.includes(timeStr);
-            const isBlocked = config.unavailableSlots.includes(timeStr);
+        const normalize = (t) => {
+            if (!t) return "";
+            let c = String(t).trim().split('-')[0].trim();
+            const m = moment(c, ["HH:mm", "H:mm", "hh:mm A", "h:mm A"]);
+            return m.isValid() ? m.format("HH:mm") : c;
+        };
 
-            const premiumEntry = config.premiumSlots.find(p => p.time === timeStr);
-            const premiumFee = premiumEntry ? premiumEntry.extraFee : 0;
-
-            slots.push({
-                time: timeStr,
-                isBooked: isBooked,
-                isBlocked: isBlocked,
-                available: !isBooked && !isBlocked,
-                premiumFee: premiumFee, 
-            });
-            
-            start.add(config.slotDuration || 30, 'minutes');
-        }
-
-        res.json({ 
-            success: true, 
-            date, 
-            baseFee: 0, 
-            slots 
+        const usageMap = {};
+        bookedOrders.forEach(b => {
+            const k = normalize(b.appointmentTime);
+            if (k) usageMap[k] = (usageMap[k] || 0) + 1;
         });
+        activePrescriptions.forEach(p => {
+            const k = normalize(p.appointmentTime);
+            if (k) usageMap[k] = (usageMap[k] || 0) + 1;
+        });
+
+        const maxCapacity = Number(config.maxClientsPerSlot || 0);
+
+        const mappedSlots = allSlots.map(s => {
+            const slotK = normalize(s.time);
+            const isFull = maxCapacity > 0 && (usageMap[slotK] || 0) >= maxCapacity;
+            return {
+                ...s,
+                isAvailable: !isFull,
+                isFull,
+                currentBookings: usageMap[slotK] || 0
+            };
+        });
+
+        res.status(200).json({ success: true, isClosed: false, slots: mappedSlots });
     } catch (error) { 
+        console.error("Cart Get Available Slots Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

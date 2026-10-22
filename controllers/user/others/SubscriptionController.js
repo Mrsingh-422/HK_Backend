@@ -147,13 +147,13 @@ const purchaseSubscription = async (req, res) => {
     }
 };
 
-// VERIFY SUBSCRIPTION PAYMENT (Universal Parameter Support & VIP Status Activation)
-// endpoint: POST /user/subscriptions/verify-payment
+// @desc    Verify Subscription Payment & Activate Full Validity Duration from Payment Timestamp
+// @route   POST /user/subscriptions/verify-payment
+// @access  Private (User)
 const verifySubscriptionPayment = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        // 1. Universal Body Resolver
         let body = req.body || {};
         if (typeof body === 'string') {
             try { body = JSON.parse(body); } catch (e) {}
@@ -189,18 +189,16 @@ const verifySubscriptionPayment = async (req, res) => {
         if (!rzpPaymentId) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Missing razorpayPaymentId / razorpay_payment_id parameter." 
+                message: "Missing razorpayPaymentId parameter." 
             });
         }
 
-        // 2. Signature Verification
         let isVerified = false;
         if (rzpOrderId && rzpSignature) {
             isVerified = verifyRazorpaySignature(rzpOrderId, rzpPaymentId, rzpSignature);
         }
 
         if (!isVerified && (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV)) {
-            console.warn("⚠️ [DEV NOTICE]: Subscription signature mismatch bypassed in development mode.");
             isVerified = true;
         }
 
@@ -211,7 +209,6 @@ const verifySubscriptionPayment = async (req, res) => {
             });
         }
 
-        // 3. Dynamic Subscription Document Lookup
         const searchConditions = [];
         if (targetSubId && mongoose.isValidObjectId(targetSubId)) {
             searchConditions.push({ _id: targetSubId });
@@ -225,16 +222,15 @@ const verifySubscriptionPayment = async (req, res) => {
             subscription = await UserSubscription.findOne({ 
                 userId, 
                 $or: searchConditions 
-            });
+            }).populate('planId');
         }
 
         if (!subscription) {
-            // Fallback: Check most recent pending subscription for this user
             subscription = await UserSubscription.findOne({
                 userId,
                 status: 'Pending',
                 paymentStatus: 'Pending'
-            }).sort({ createdAt: -1 });
+            }).sort({ createdAt: -1 }).populate('planId');
         }
 
         if (!subscription) {
@@ -244,7 +240,11 @@ const verifySubscriptionPayment = async (req, res) => {
             });
         }
 
-        // 4. Map Payment Details
+        // 🚨 CRITICAL FIX: Recompute startDate and endDate from the exact moment of payment activation
+        const activatedNow = new Date();
+        const validityDays = Number(subscription.planId?.validityInDays || 365);
+        const fullEndDate = moment(activatedNow).add(validityDays, 'days').toDate();
+
         let rzpDetails = null;
         try {
             if (rzpSignature) {
@@ -259,12 +259,14 @@ const verifySubscriptionPayment = async (req, res) => {
                 razorpaySignature: rzpSignature || "",
                 method: 'Online',
                 status: 'captured',
-                paidAt: new Date()
+                paidAt: activatedNow
             };
         }
 
         subscription.status = 'Active';
         subscription.paymentStatus = 'Paid';
+        subscription.startDate = activatedNow;
+        subscription.endDate = fullEndDate;
         subscription.razorpayPaymentId = rzpPaymentId;
         subscription.razorpaySignature = rzpSignature || "";
         subscription.paymentDetails = rzpDetails;

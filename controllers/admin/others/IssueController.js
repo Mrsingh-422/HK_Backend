@@ -3,9 +3,9 @@ const Issue = require('../../../models/Issue');
 const moment = require('moment');
 const { sendPushNotification } = require('../../../utils/notification');
 
-// =========================================================================
-// 1. GET ALL ISSUES (Admin Panel Table with Search & Filters)
-// =========================================================================
+// @desc    Get All Reported Issues for Admin (Sorted newest first so fresh tickets appear on Page 1)
+// @route   GET /admin/issues
+// @access  Private (Admin)
 const getAllIssuesForAdmin = async (req, res) => {
     try {
         const { 
@@ -37,16 +37,18 @@ const getAllIssuesForAdmin = async (req, res) => {
             ];
         }
 
-        const skip = (Number(page) - 1) * Number(limit);
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
 
+        // 🚨 CRITICAL FIX: Sort by createdAt: -1 (Newest tickets on top)
         const [issues, total] = await Promise.all([
             Issue.find(query)
-                // 🚀 Populates all possible name fields across User, Vendors, Fire & Police
                 .populate('reporterId', 'name fullName hqName headquarterName stationName fireStationName policeStationName labName pharmacyName email phone profileImage profilePic')
                 .populate('resolutionDetails.resolvedBy', 'name email role')
-                .sort({ issueNumber: 1 })
+                .sort({ createdAt: -1 }) // 👈 Newest First
                 .skip(skip)
-                .limit(Number(limit))
+                .limit(limitNum)
                 .lean(),
             Issue.countDocuments(query)
         ]);
@@ -73,15 +75,15 @@ const getAllIssuesForAdmin = async (req, res) => {
                 status: item.status,
                 reporter: {
                     id: rep?._id || null,
-                    name: reporterDisplayName, // 👈 Exact FireHQ / Station name
+                    name: reporterDisplayName,
                     email: rep?.email || "N/A",
                     phone: rep?.phone || "N/A",
                     role: item.reporterModel
                 },
-                attachments: item.attachments,
+                attachments: item.attachments || [],
                 resolvedByAdmin: item.resolutionDetails?.resolvedBy?.name || null,
                 resolvedAt: item.resolutionDetails?.resolvedAt || null,
-                timeline: item.timeline
+                timeline: item.timeline || []
             };
         });
 
@@ -96,9 +98,9 @@ const getAllIssuesForAdmin = async (req, res) => {
         res.status(200).json({
             success: true,
             totalRecords: total,
-            totalPages: Math.ceil(total / Number(limit)),
-            currentPage: Number(page),
-            pageSize: Number(limit),
+            totalPages: Math.ceil(total / limitNum),
+            currentPage: pageNum,
+            pageSize: limitNum,
             overview: {
                 totalOpen,
                 totalInProgress,

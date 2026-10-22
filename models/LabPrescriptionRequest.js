@@ -42,7 +42,7 @@ const labPrescriptionRequestSchema = new mongoose.Schema({
 
     status: {
         type: String,
-        enum: ['Pending Review', 'Reviewing', 'Bill Generated', 'Rejected', 'Paid', 'Pending Payment'],
+        enum: ['Pending Review', 'Reviewing', 'Bill Generated', 'Rejected', 'Paid', 'Pending Payment','Cancelled','Expired'],
         default: 'Pending Review'
     },
     rejectReason: { type: String, default: null },
