@@ -289,7 +289,9 @@ const updateSelectedPatients = async (req, res) => {
 };
 
 
-// 3. GET COMBINED CART (Lab + Pharmacy)
+// @desc    Get Combined Basket (Lab + Pharmacy) with Accurate Multi-Patient Multipliers
+// @route   GET /user/cart
+// @access  Private (User)
 const getMyCart = async (req, res) => {
     try {
         const cart = await Cart.findOne({ userId: req.user.id })
@@ -299,10 +301,10 @@ const getMyCart = async (req, res) => {
             .populate('pharmacyCart.items.comboOfferId');
 
         if (!cart) {
-            return res.json({ 
+            return res.status(200).json({ 
                 success: true, 
                 data: { 
-                    labCart: { items: [] }, 
+                    labCart: { items: [], selectedPatients: [] }, 
                     pharmacyCart: { items: [] },
                     labCartTotal: 0,
                     pharmacyCartTotal: 0,
@@ -311,13 +313,18 @@ const getMyCart = async (req, res) => {
             });
         }
 
-        let labTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-        
-        // 🚨 DYNAMIC PHARMACY CART TOTAL (Subtracts free BOGO units from cart total)
-        let medTotal = 0;
-        const today = new Date();
+        // 🚨 CRITICAL FIX: Multiply lab tests by the number of selected patients in cart!
+        const patientMultiplier = (Array.isArray(cart.labCart?.selectedPatients) && cart.labCart.selectedPatients.length > 0)
+            ? cart.labCart.selectedPatients.length
+            : 1;
 
-        const mappedPharmacyItems = await Promise.all(cart.pharmacyCart.items.map(async (item) => {
+        let labTotal = (cart.labCart?.items || []).reduce(
+            (acc, i) => acc + (Number(i.price || 0) * Number(i.quantity || 1) * patientMultiplier), 
+            0
+        );
+        
+        let medTotal = 0;
+        const mappedPharmacyItems = await Promise.all((cart.pharmacyCart?.items || []).map(async (item) => {
             const itemObj = item.toObject();
             const orderedQty = Number(itemObj.quantity || 1);
             const unitPrice = Number(itemObj.price || 0);
@@ -352,11 +359,11 @@ const getMyCart = async (req, res) => {
             return itemObj;
         }));
 
-        let labItemCount = cart.labCart.items.reduce((acc, i) => acc + i.quantity, 0);
-        let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
+        let labItemCount = (cart.labCart?.items || []).reduce((acc, i) => acc + i.quantity, 0);
+        let pharmacyItemCount = (cart.pharmacyCart?.items || []).reduce((acc, i) => acc + i.quantity, 0);
         let totalItems = labItemCount + pharmacyItemCount;
 
-        const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
+        const mappedLabItems = await Promise.all((cart.labCart?.items || []).map(async (item) => {
             let precaution = "No special preparation required."; 
             let itemCategory = "Pathology"; 
 
@@ -368,7 +375,7 @@ const getMyCart = async (req, res) => {
                 }
             } else if (item.productType === 'LabPackage') {
                 const pkg = await LabPackage.findById(item.itemId)
-                    .select('precaution')
+                    .select('precaution mainCategory tests')
                     .populate({
                         path: 'tests',
                         model: 'MasterLabTest',
@@ -377,7 +384,7 @@ const getMyCart = async (req, res) => {
                 if (pkg) {
                     if (pkg.precaution) precaution = pkg.precaution;
                     const hasRadiology = pkg.tests && pkg.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
-                    itemCategory = hasRadiology ? 'Radiology' : 'General';
+                    itemCategory = hasRadiology ? 'Radiology' : (pkg.mainCategory || 'General');
                 }
             }
 
@@ -388,13 +395,14 @@ const getMyCart = async (req, res) => {
             };
         }));
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             data: { 
                 ...cart._doc, 
                 labCart: {
                     ...cart.labCart.toObject(),
-                    items: mappedLabItems 
+                    items: mappedLabItems,
+                    totalPatientsCount: patientMultiplier
                 },
                 pharmacyCart: {
                     ...cart.pharmacyCart.toObject(),
@@ -402,11 +410,12 @@ const getMyCart = async (req, res) => {
                 },
                 labCartTotal: Math.round(labTotal), 
                 pharmacyCartTotal: Math.round(medTotal),
-                totalItems: totalItems 
+                totalItems 
             } 
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Get My Cart Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

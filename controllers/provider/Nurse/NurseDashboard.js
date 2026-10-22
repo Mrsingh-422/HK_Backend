@@ -453,7 +453,7 @@ const getBookingRequests = async (req, res) => {
     }
 };
 
-// @desc    Accept or Reject Patient Booking Request by Bureau (With Auto-Refund, Benefit Restore & Staff Release)
+// @desc    Accept or Reject Patient Booking Request by Bureau (Supports both MongoDB _id & custom bookingId)
 // @route   POST /provider/nurse/dash/booking/action
 // @access  Private (Nurse Bureau)
 const handleBookingAction = async (req, res) => {
@@ -468,7 +468,13 @@ const handleBookingAction = async (req, res) => {
             });
         }
 
-        const booking = await NurseBooking.findOne({ _id: bookingId, nurseId });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            nurseId,
+            ...(isObjectId ? { _id: bookingId } : { bookingId: String(bookingId).trim() })
+        };
+
+        const booking = await NurseBooking.findOne(query);
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
         }
@@ -500,19 +506,16 @@ const handleBookingAction = async (req, res) => {
             booking.status = 'Cancelled';
             booking.cancelReason = reason || "Provider unavailable at requested slot.";
 
-            // If an assigned staff nurse was allocated, release them back to Available
             if (booking.assignedStaffId) {
                 await Driver.findByIdAndUpdate(booking.assignedStaffId, {
                     $set: { status: 'Available', isOnline: true }
                 });
             }
 
-            // Queue payment refund if already paid online
             if (booking.paymentStatus === 'Paid') {
                 booking.paymentStatus = 'Refund-Initiated';
             }
 
-            // Restore subscription benefit quota if applied
             if (booking.subscriptionDetails?.isSubscriptionApplied) {
                 const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
                 await refundBenefitCount(booking.userId, 'freeNurseVisitsCount');
@@ -550,14 +553,25 @@ const getAvailableStaff = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 1. ASSIGN STAFF TO BOOKING (With Real-Time Driver Push Notification)
-// Endpoint: POST /provider/nurse/dash/staff/assign
+// @desc    Assign Staff to Booking (Supports both MongoDB _id & custom bookingId)
+// @route   POST /provider/nurse/dash/staff/assign
+// @access  Private (Nurse Bureau)
 const assignStaffToBooking = async (req, res) => {
     try {
         const { bookingId, staffId } = req.body;
         const nurseId = req.user.id;
 
-        const booking = await NurseBooking.findOne({ _id: bookingId, nurseId });
+        if (!bookingId || !staffId) {
+            return res.status(400).json({ success: false, message: "bookingId and staffId are required." });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            nurseId,
+            ...(isObjectId ? { _id: bookingId } : { bookingId: String(bookingId).trim() })
+        };
+
+        const booking = await NurseBooking.findOne(query);
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking not found or unauthorized." });
         }
@@ -573,21 +587,23 @@ const assignStaffToBooking = async (req, res) => {
 
         await Driver.findByIdAndUpdate(staffId, { status: 'Busy' });
 
-        // 🚨 FCM PUSH NOTIFICATION: Alert Nurse Staff on New Assignment
-        await sendPushNotification(
-            staffId,
-            'driver',
-            "New Nursing Care Task Assigned!",
-            `You have been assigned booking #${booking.bookingId || booking._id}. Tap to view patient address.`,
-            { bookingId: booking._id.toString(), type: 'nurse_task_assigned' }
-        );
+        try {
+            await sendPushNotification(
+                staffId,
+                'driver',
+                "New Nursing Care Task Assigned!",
+                `You have been assigned booking #${booking.bookingId || booking._id}. Tap to view patient address.`,
+                { bookingId: booking._id.toString(), type: 'nurse_task_assigned' }
+            );
+        } catch (e) {}
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: "Nurse Staff assigned successfully & alert sent.", 
             data: booking 
         });
     } catch (error) { 
+        console.error("Assign Staff Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

@@ -209,11 +209,13 @@ const getLocalDatabaseContext = async (message, userId) => {
     return context;
 };
 
-// --- GET HOMEPAGE SUGGESTIONS ---
+// @desc    Get Homepage Search Suggestions (Supports natural 'lab' and 'nurse' type queries)
+// @route   GET /user/homepage/suggestions
+// @access  Public
 const getHomepageSuggestions = async (req, res) => {
     try {
         const { query, type } = req.query;
-        if (!query || query.trim().length < 2) return res.json({ success: true, data: [] });
+        if (!query || query.trim().length < 2) return res.status(200).json({ success: true, data: [] });
 
         const regex = new RegExp(query.trim(), 'i');
         const cleanType = type ? type.trim().toLowerCase() : null;
@@ -227,17 +229,19 @@ const getHomepageSuggestions = async (req, res) => {
         if (!cleanType || cleanType === 'hospital') {
             tasks.push(Hospital.find({ isActive: true, profileStatus: 'Approved', name: regex }).select('name hospitalImage city').limit(3).lean().then(res => hospitals = res));
         }
-        if (!cleanType || cleanType === 'labprovider') {
+        // Accepts both 'lab' and 'labprovider'
+        if (!cleanType || cleanType === 'lab' || cleanType === 'labprovider') {
             tasks.push(
                 Lab.find({ isActive: true, profileStatus: 'Approved', name: regex }).select('name profileImage city').limit(3).lean().then(res => labs = res),
                 LabTest.find({ isActive: true, testName: regex }).select('testName amount discountPrice').limit(3).lean().then(res => labTests = res),
                 LabPackage.find({ isActive: true, packageName: regex }).select('packageName offerPrice mrp').limit(3).lean().then(res => labPackages = res)
             );
         }
-        if (!cleanType || cleanType === 'pharmacy') {
+        if (!cleanType || cleanType === 'pharmacy' || cleanType === 'medicine') {
             tasks.push(Medicine.find({ $or: [{ name: regex }, { salt_composition: regex }] }).select('name salt_composition image_url').limit(3).lean().then(res => medicines = res));
         }
-        if (!cleanType || cleanType === 'nurseprovider') {
+        // Accepts both 'nurse' and 'nurseprovider'
+        if (!cleanType || cleanType === 'nurse' || cleanType === 'nurseprovider') {
             tasks.push(NurseService.find({ status: 'Approved', title: regex }).select('title pricing nurseId').populate('nurseId', 'name profileImage').limit(3).lean().then(res => nurseServices = res));
         }
         if (!cleanType || cleanType === 'ambulance') {
@@ -256,13 +260,16 @@ const getHomepageSuggestions = async (req, res) => {
         nurseServices.forEach(ns => suggestions.push({ id: ns._id, title: ns.title, subtitle: `Provided by: ${ns.nurseId?.name || "Provider"}`, type: "Nurse Service", image: ns.nurseId?.profileImage || null }));
         ambulances.forEach(amb => suggestions.push({ id: amb._id, title: amb.name, subtitle: `${amb.vehicleType} - Base Rate: ₹${amb.pricing?.fixedPrice || 0}`, type: "Ambulance", image: null }));
 
-        res.json({ success: true, count: suggestions.length, data: suggestions });
+        res.status(200).json({ success: true, count: suggestions.length, data: suggestions });
     } catch (error) {
+        console.error("Get Homepage Suggestions Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- DEEP SEARCH DETAILS ---
+// @desc    Execute Full Deep Search (Supports both 'lab' and 'nurse' type filters)
+// @route   GET /user/homepage/search
+// @access  Public
 const searchHomepage = async (req, res) => {
     try {
         const { query, type } = req.query;
@@ -280,16 +287,18 @@ const searchHomepage = async (req, res) => {
         if (!cleanType || cleanType === 'hospital') {
             tasks.push(Hospital.find({ isActive: true, profileStatus: 'Approved', $or: [{ name: regex }, { city: regex }] }).select('-password -token').limit(10).lean().then(res => hospitals = res));
         }
-        if (!cleanType || cleanType === 'labprovider') {
+        // Accepts both 'lab' and 'labprovider'
+        if (!cleanType || cleanType === 'lab' || cleanType === 'labprovider') {
             tasks.push(
                 Lab.find({ isActive: true, profileStatus: 'Approved', $or: [{ name: regex }, { city: regex }] }).select('-password -token').limit(10).lean().then(res => labs = res),
                 LabTest.find({ isActive: true, testName: regex }).populate('labId', 'name city profileImage').limit(10).lean().then(res => labTests = res)
             );
         }
-        if (!cleanType || cleanType === 'pharmacy') {
+        if (!cleanType || cleanType === 'pharmacy' || cleanType === 'medicine') {
             tasks.push(Medicine.find({ $or: [{ name: regex }, { salt_composition: regex }, { manufacturers: regex }] }).limit(10).lean().then(res => medicines = res));
         }
-        if (!cleanType || cleanType === 'nurseprovider') {
+        // Accepts both 'nurse' and 'nurseprovider'
+        if (!cleanType || cleanType === 'nurse' || cleanType === 'nurseprovider') {
             tasks.push(NurseService.find({ status: 'Approved', $or: [{ title: regex }, { description: regex }] }).populate('nurseId', 'name profileImage city speciality').limit(10).lean().then(res => nurseServices = res));
         }
         if (!cleanType || cleanType === 'ambulance') {
@@ -298,13 +307,14 @@ const searchHomepage = async (req, res) => {
 
         await Promise.all(tasks);
 
-        res.json({
+        res.status(200).json({
             success: true,
             query: query.trim(),
             typeFiltered: cleanType || "All",
             data: { doctors, hospitals, labs, labTests, medicines, nurseServices, ambulances }
         });
     } catch (error) {
+        console.error("Deep Search Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

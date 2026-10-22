@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { addReview, getVendorReviews } = require('../../../controllers/user/others/Review');
 
-// Base URL: /user/review
+// Base URL: /api/user/review
 
 // Add a review (Protected)
 // Body: { targetId, targetType, orderId, rating, comment }

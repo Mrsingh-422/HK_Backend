@@ -123,19 +123,34 @@ const addPill = async (req, res) => {
     }
 };
 
-// 2. GET TODAY'S SCHEDULE (With Dynamic Statistics Aggregation)
+// @desc    Get Today's Pill Schedule (Excludes expired medication courses & checks active dates)
+// @route   GET /user/doctor/pills/today
+// @access  Private (User)
 const getTodaySchedule = async (req, res) => {
     try {
         const todayStr = req.query.clientDate || moment().format('YYYY-MM-DD');
         const dayNum = req.query.clientDay !== undefined ? parseInt(req.query.clientDay) : moment().day();
 
+        const todayMoment = moment(todayStr, 'YYYY-MM-DD');
+        const startOfToday = todayMoment.clone().startOf('day').toDate();
+        const endOfToday = todayMoment.clone().endOf('day').toDate();
+
+        // Query active pills that have started and have NOT passed their endDate
         let pills = await PillReminder.find({
             userId: req.user.id,
             status: 'Active',
-            startDate: { $lte: new Date() },
-            $or: [{ frequency: 'Daily' }, { daysOfWeek: dayNum }]
+            startDate: { $lte: endOfToday },
+            $or: [
+                { endDate: null },
+                { endDate: { $exists: false } },
+                { endDate: { $gte: startOfToday } } // Only include if course is ongoing today
+            ],
+            $and: [
+                { $or: [{ frequency: 'Daily' }, { daysOfWeek: dayNum }] }
+            ]
         });
 
+        // Reset isTakenToday if not recorded for todayStr
         for (let pill of pills) {
             let needsSave = false;
             pill.times.forEach(t => {
@@ -170,20 +185,21 @@ const getTodaySchedule = async (req, res) => {
 
         const streak = calculateStreak(overallHistory);
         const totalDosesTakenOverall = overallHistory.filter(h => h.action === 'Taken').length;
-        const upcomingCount = totalDosesToday - takenDosesToday;
+        const upcomingCount = Math.max(0, totalDosesToday - takenDosesToday);
 
         const enrichedPills = pills.map(p => enrichPillWithProgress(p));
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             progressRatio: `${takenDosesToday} / ${totalDosesToday}`,
             progressPercentage: totalDosesToday > 0 ? Math.round((takenDosesToday / totalDosesToday) * 100) : 0,
             streak: streak || 0,
             totalDosesTakenOverall: totalDosesTakenOverall || 0,
-            upcomingCount: upcomingCount >= 0 ? upcomingCount : 0,
+            upcomingCount,
             data: enrichedPills 
         });
     } catch (error) { 
+        console.error("Get Today Schedule Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

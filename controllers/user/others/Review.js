@@ -14,9 +14,16 @@ const getModelByType = (type) => {
     return map[type];
 };
 
+// @desc    Add Review for Doctor / Hospital / Lab / Pharmacy / Nurse / Ambulance / Driver
+// @route   POST /api/user/review/add
+// @access  Private (User)
 const addReview = async (req, res) => {
     try {
         const { targetId, targetType, orderId, rating, comment } = req.body;
+
+        if (!targetId || !targetType || !rating) {
+            return res.status(400).json({ success: false, message: "targetId, targetType, and rating are required." });
+        }
 
         // 1. Create Review
         const review = await Review.create({
@@ -25,22 +32,32 @@ const addReview = async (req, res) => {
             targetId,
             targetType,
             orderId,
-            rating,
-            comment
+            rating: Number(rating),
+            comment: comment || ""
         });
 
         // 2. Update Vendor's Average Rating
         const Model = getModelByType(targetType);
-        const allReviews = await Review.find({ targetId });
-        const avgRating = allReviews.reduce((acc, item) => item.rating + acc, 0) / allReviews.length;
+        if (Model) {
+            const allReviews = await Review.find({ targetId });
+            const avgRating = allReviews.reduce((acc, item) => item.rating + acc, 0) / allReviews.length;
+            const formattedAvg = parseFloat(avgRating.toFixed(1));
 
-        await Model.findByIdAndUpdate(targetId, {
-            rating: avgRating.toFixed(1),
-            totalReviews: allReviews.length
-        });
+            // Set both rating and averageRating to support Doctor schema (averageRating) and Vendor schemas (rating)
+            await Model.findByIdAndUpdate(targetId, {
+                $set: {
+                    rating: formattedAvg,
+                    averageRating: formattedAvg,
+                    totalReviews: allReviews.length
+                }
+            });
+        }
 
-        res.status(201).json({ success: true, message: "Review added", data: review });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(201).json({ success: true, message: "Review submitted and ratings updated successfully.", data: review });
+    } catch (error) { 
+        console.error("Add Review Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // GET ALL REVIEWS FOR A VENDOR (For Doctor/Lab Profile Screen)

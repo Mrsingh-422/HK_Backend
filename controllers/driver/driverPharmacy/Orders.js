@@ -371,30 +371,40 @@ const verifyOtpAndDeliver = async (req, res) => {
 };
 
 
-// Return Order with Reason Form Submission (Figma Screen 13 "Return" Option)
+// @desc    Return Order with Reason (Supports both MongoDB _id & custom orderId)
+// @route   POST /driver/pharmacy/orders/return/:orderId
+// @access  Private (Driver)
 const returnOrder = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { returnReason } = req.body;
         const driverId = req.user.id;
 
-        const order = await PharmacyBooking.findById(orderId);
-        if (!order) return res.status(404).json({ message: "Order not found" });
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            driverId,
+            ...(isObjectId ? { _id: orderId } : { orderId: String(orderId).trim() })
+        };
 
-        if (!order.driverId || order.driverId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized" });
-        }
+        const order = await PharmacyBooking.findOne(query);
+        if (!order) return res.status(404).json({ success: false, message: "Order not found or unauthorized." });
 
         order.deliveryStatus = 'CancelledByDriver';
         order.status = 'Cancelled';
-        order.returnReason = returnReason || "Returned to Store";
+        order.returnReason = returnReason || "Returned to Store by Driver";
         await order.save();
 
-        // Release driver back to Available
-        await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
+        await Driver.findByIdAndUpdate(driverId, { status: 'Available', isOnline: true });
 
-        res.json({ success: true, message: "Order returned successfully. Driver is now Available.", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(200).json({ 
+            success: true, 
+            message: "Order returned successfully. Driver is now Available.", 
+            data: order 
+        });
+    } catch (error) { 
+        console.error("Return Order Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Support/Contact Admin Config (Figma Screen 10)
@@ -544,17 +554,26 @@ const getAboutContent = async (req, res) => {
 };
 
 
+// @desc    Report Pharmacy Delivery No-Show (Supports both MongoDB _id & custom orderId)
+// @route   POST /driver/pharmacy/orders/no-show
+// @access  Private (Driver)
 const reportPharmacyNoShow = async (req, res) => {
     try {
         const { orderId, comments } = req.body;
         const courierId = req.user.id;
 
-        // 🚨 FIXED: Compatible with both Placed and Shipped active orders
-        const order = await PharmacyBooking.findOne({ 
-            _id: orderId, 
-            driverId: courierId, 
-            status: { $in: ['Placed', 'Shipped', 'Packed'] } 
-        });
+        if (!orderId) {
+            return res.status(400).json({ success: false, message: "orderId is required." });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            driverId: courierId,
+            status: { $in: ['Placed', 'Shipped', 'Packed'] },
+            ...(isObjectId ? { _id: orderId } : { orderId: String(orderId).trim() })
+        };
+
+        const order = await PharmacyBooking.findOne(query);
 
         if (!order) {
             return res.status(404).json({ 
@@ -575,6 +594,7 @@ const reportPharmacyNoShow = async (req, res) => {
 
         order.status = 'No-Show';
         order.deliveryStatus = 'UserUnreachable';
+        if (!order.billSummary) order.billSummary = {};
         order.billSummary.noShowFeeApplied = noShowFee;
         order.paymentStatus = noShowFee > 0 ? 'Refund-Initiated' : 'Refunded';
         order.cancelReason = comments || "Customer unreachable at delivery destination.";
@@ -589,18 +609,17 @@ const reportPharmacyNoShow = async (req, res) => {
             }
         }
 
-        // Release driver back to Available
-        await Driver.findByIdAndUpdate(courierId, { status: 'Available' });
-
+        await Driver.findByIdAndUpdate(courierId, { status: 'Available', isOnline: true });
         await order.save();
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: "Medicine Delivery No-Show logged. Stock returned to inventory.", 
             noShowFeeApplied: noShowFee,
             data: order 
         });
     } catch (error) {
+        console.error("Report Pharmacy No-Show Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

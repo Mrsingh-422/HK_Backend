@@ -368,26 +368,25 @@ const arriveAtLocation = async (req, res) => {
 };
 
 
-// ==========================================
-// 2. VERIFY FIREBASE OTP & COLLECT BLOOD SAMPLE
-// Endpoint: POST /driver/lab/orders/verify-otp
-// ==========================================
+// @desc    Verify Doorstep Sample Collection via Firebase Token OR Patient App OTP
+// @route   POST /driver/lab/orders/verify-otp
+// @access  Private (Driver)
 const verifySampleCollection = async (req, res) => {
     try {
         const { orderId, idToken, otp } = req.body;
         const driverId = req.user.id;
 
         const order = await LabBooking.findById(orderId).populate('userId', 'phone');
-        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+        if (!order) return res.status(404).json({ success: false, message: "Order not found." });
 
         if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
-            return res.status(403).json({ success: false, message: "Unauthorized" });
+            return res.status(403).json({ success: false, message: "Unauthorized. You are not assigned to this booking." });
         }
 
         const patientPhone = order.address?.phone || order.userId?.phone;
         const cleanPatientPhone = patientPhone ? patientPhone.trim().replace(/\D/g, "").slice(-10) : "";
 
-        // 🚨 REAL FIREBASE PHONE AUTH VERIFICATION
+        // 1. Firebase Phone Auth Verification
         if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
             if (!idToken) {
                 return res.status(400).json({ 
@@ -400,24 +399,31 @@ const verifySampleCollection = async (req, res) => {
             if (!verification.success) {
                 return res.status(400).json({ success: false, message: verification.message });
             }
-        } else if (otp) {
-            if (otp !== '123456') {
-                return res.status(400).json({ success: false, message: "Invalid Dev OTP (Use 123456)." });
+        } 
+        // 2. Direct 6-Digit OTP Handshake (Accepts patient app live OTP or dev 123456)
+        else if (otp) {
+            const incomingOtp = String(otp).trim();
+            const bookedOtp = order.tracking?.otp ? String(order.tracking.otp).trim() : null;
+            const isMatch = (incomingOtp === '123456' || (bookedOtp && bookedOtp === incomingOtp));
+
+            if (!isMatch) {
+                return res.status(400).json({ success: false, message: "Invalid OTP code entered." });
             }
         } else {
-            return res.status(400).json({ success: false, message: "Verification idToken is required." });
+            return res.status(400).json({ success: false, message: "Verification idToken or OTP code is required." });
         }
 
         order.status = 'Sample Collected';
         order.collectedAt = new Date();
         await order.save();
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: "Sample collected and verified via Firebase OTP! Please deposit sample at lab.", 
+            message: "Sample collected and verified successfully! Please deposit sample at lab.", 
             data: order 
         });
     } catch (error) { 
+        console.error("Verify Sample Collection Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -528,22 +534,52 @@ const createBookingAtHome = async (req, res) => {
     }
 };
 
-// Add Family Members to Existing Booking
+// @desc    Add Family Members to Existing Doorstep Booking (Auto-generates required patientId)
+// @route   POST /driver/lab/orders/add-family/:bookingId
+// @access  Private (Driver)
 const addFamilyToBooking = async (req, res) => {
     try {
         const { bookingId } = req.params;
-        const { familyList } = req.body; 
+        let { familyList } = req.body; 
+
+        if (typeof familyList === 'string') {
+            try { familyList = JSON.parse(familyList); } catch (e) {}
+        }
+
+        if (!Array.isArray(familyList) || familyList.length === 0) {
+            return res.status(400).json({ success: false, message: "Valid non-empty familyList array is required." });
+        }
 
         let order = await LabBooking.findById(bookingId);
-        if (!order) return res.status(404).json({ message: "Booking not found" });
+        if (!order) return res.status(404).json({ success: false, message: "Booking not found." });
 
-        order.patients.push(...familyList);
+        // Ensure patientId is never null/undefined to prevent schema validation failure
+        const formattedMembers = familyList.map((m, idx) => ({
+            patientId: m.patientId ? String(m.patientId).trim() : `Fam-${Date.now()}-${idx + 1}`,
+            name: m.name ? String(m.name).trim() : "Family Member",
+            age: Number(m.age) || 30,
+            gender: m.gender || "Male",
+            relation: m.relation || "Family"
+        }));
+
+        if (!Array.isArray(order.patients)) {
+            order.patients = [];
+        }
+
+        order.patients.push(...formattedMembers);
         await order.save();
 
         order = await recalculateBookingPrice(bookingId);
 
-        res.json({ success: true, message: "Family members added successfully", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(200).json({ 
+            success: true, 
+            message: `${formattedMembers.length} family member(s) added successfully. Price updated.`, 
+            data: order 
+        });
+    } catch (error) { 
+        console.error("Add Family To Booking Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // Add New Tests/Packages Dynamically

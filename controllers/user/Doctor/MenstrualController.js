@@ -300,7 +300,9 @@ const editPeriodDate = async (req, res) => {
     }
 };
 
-// C. DELETE PERIOD LOG (With dynamic recalculation)
+// @desc    Delete Logged Period Entry (Clean reset if all periods deleted)
+// @route   DELETE /user/doctor/menstrual/delete-period
+// @access  Private (User)
 const deletePeriodDate = async (req, res) => {
     try {
         const { startDate } = req.body;
@@ -318,22 +320,24 @@ const deletePeriodDate = async (req, res) => {
             return res.status(404).json({ success: false, message: "No logged period matches this date" });
         }
 
-        // Recalculate metrics post deletion
         recalculateCycleMetrics(tracker);
 
+        // If no periods left, reset lastPeriodDate to null so dashboard displays clean zero-state
         if (tracker.periods.length > 0) {
             const sorted = [...tracker.periods].sort((a, b) => new Date(b.startDate) - new Date(a.startDate));
             tracker.lastPeriodDate = sorted[0].startDate;
         } else {
-            tracker.lastPeriodDate = new Date();
+            tracker.lastPeriodDate = null;
         }
 
         await tracker.save();
-        res.json({ success: true, message: "Logged period deleted successfully", data: tracker });
+        res.status(200).json({ success: true, message: "Logged period deleted successfully", data: tracker });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Delete Period Date Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
 module.exports = { 
     updatePeriodSettings, 
     logNewPeriodDate, 

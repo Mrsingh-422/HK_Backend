@@ -3,7 +3,9 @@ const Appointment = require('../../models/Appointment');
 const Booking = require('../../models/AmbulanceBooking');
 const Ambulance = require('../../models/Ambulance');
 
-// --- 1. START RIDE (Figma Screen 37) ---
+// @desc    Start Ambulance Ride (Enforces Driver Ownership Verification)
+// @route   POST /driver/ambulance/start-ride
+// @access  Private (Ambulance Driver)
 const startAmbulanceRide = async (req, res) => {
     try {
         const { bookingId } = req.body;
@@ -21,6 +23,11 @@ const startAmbulanceRide = async (req, res) => {
             return res.status(404).json({ success: false, message: "Ambulance trip record not found." });
         }
 
+        // Security Check: Verify that this ambulance booking is assigned to this driver
+        if (booking.ambulanceId && booking.ambulanceId.toString() !== driverId.toString()) {
+            return res.status(403).json({ success: false, message: "Unauthorized. This trip is assigned to another ambulance driver." });
+        }
+
         booking.status = 'En-Route';
         booking.trackingTimeline.push({
             status: 'En-Route',
@@ -28,13 +35,11 @@ const startAmbulanceRide = async (req, res) => {
             note: "Ambulance driver started the journey to destination hospital."
         });
         
-        // Lock driver busy state
         await Ambulance.findByIdAndUpdate(driverId, { 
             $set: { availableForEmergency: false, isOnline: true } 
         });
         await booking.save();
 
-        // Sync linked hospital appointment if exists
         if (booking.bookingId) {
             await Appointment.findOneAndUpdate(
                 { transactionId: booking.bookingId },
@@ -42,17 +47,20 @@ const startAmbulanceRide = async (req, res) => {
             );
         }
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: "Ride started. Live patient and fleet tracking active.", 
             data: booking 
         });
     } catch (error) { 
+        console.error("Start Ambulance Ride Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// --- 2. REACHED HOSPITAL (Handover Drop) ---
+// @desc    Complete Ambulance Ride (Enforces Driver Ownership Verification)
+// @route   POST /driver/ambulance/complete-ride
+// @access  Private (Ambulance Driver)
 const completeAmbulanceRide = async (req, res) => {
     try {
         const { appointmentId, bookingId } = req.body;
@@ -66,9 +74,13 @@ const completeAmbulanceRide = async (req, res) => {
         const isObjectId = mongoose.isValidObjectId(targetId);
         const query = isObjectId ? { _id: targetId } : { bookingId: String(targetId).trim() };
 
-        // 1. Sync Booking Model
         const booking = await Booking.findOne(query);
         if (booking) {
+            // Security Check
+            if (booking.ambulanceId && booking.ambulanceId.toString() !== driverId.toString()) {
+                return res.status(403).json({ success: false, message: "Unauthorized. This trip is assigned to another driver." });
+            }
+
             booking.status = 'Delivered';
             if (booking.paymentMethod === 'COD') {
                 booking.paymentStatus = 'Paid';
@@ -76,7 +88,6 @@ const completeAmbulanceRide = async (req, res) => {
             await booking.save();
         }
 
-        // 2. Sync Appointment Model
         const apptQuery = isObjectId ? { _id: targetId } : { transactionId: String(targetId).trim() };
         const appointment = await Appointment.findOne(apptQuery);
         if (appointment) {
@@ -86,17 +97,17 @@ const completeAmbulanceRide = async (req, res) => {
             await appointment.save();
         }
 
-        // Release Driver back to Available
         await Ambulance.findByIdAndUpdate(driverId, { 
             $set: { availableForEmergency: true, isOnline: true } 
         });
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: "Handover successful. Ambulance is now free and available for next trip.",
             data: booking || appointment 
         });
     } catch (error) { 
+        console.error("Complete Ambulance Ride Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

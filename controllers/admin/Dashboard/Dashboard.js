@@ -15,7 +15,7 @@ const Ambulance = require('../../../models/Ambulance');
 
 const mongoose = require('mongoose');
 
-// @desc    Admin Dashboard Counters (Includes both Hospital IPD and OPD bookings in stats)
+// @desc    Admin Dashboard Counters (Accurate status grouping excluding No-Show from active pending)
 // @route   GET /admin/dashboard/order-stats
 // @access  Private (Admin)
 const getDashboardOrderStats = async (req, res) => {
@@ -24,28 +24,25 @@ const getDashboardOrderStats = async (req, res) => {
             labPending, labCompleted, labCancelled,
             pharmacyPending, pharmacyCompleted, pharmacyCancelled,
             nursePending, nurseCompleted, nurseCancelled,
-            // Hospital (Admission + OPD combined)
             hospitalPending, hospitalCompleted, hospitalCancelled,
-            // Doctor (Independent Clinic Appointments)
             doctorPending, doctorCompleted, doctorCancelled,
             ambulancePending, ambulanceCompleted, ambulanceCancelled
         ] = await Promise.all([
-            LabBooking.countDocuments({ status: { $nin: ['Completed', 'Cancelled'] } }),
+            LabBooking.countDocuments({ status: { $nin: ['Completed', 'Cancelled', 'No-Show'] } }),
             LabBooking.countDocuments({ status: 'Completed' }),
-            LabBooking.countDocuments({ status: 'Cancelled' }),
+            LabBooking.countDocuments({ status: { $in: ['Cancelled', 'No-Show'] } }),
 
-            PharmacyBooking.countDocuments({ status: { $nin: ['Delivered', 'Cancelled'] } }),
+            PharmacyBooking.countDocuments({ status: { $nin: ['Delivered', 'Cancelled', 'No-Show'] } }),
             PharmacyBooking.countDocuments({ status: 'Delivered' }),
-            PharmacyBooking.countDocuments({ status: 'Cancelled' }),
+            PharmacyBooking.countDocuments({ status: { $in: ['Cancelled', 'No-Show'] } }),
 
-            NurseBooking.countDocuments({ status: { $nin: ['Completed', 'Cancelled'] } }),
+            NurseBooking.countDocuments({ status: { $nin: ['Completed', 'Cancelled', 'No-Show'] } }),
             NurseBooking.countDocuments({ status: 'Completed' }),
-            NurseBooking.countDocuments({ status: 'Cancelled' }),
+            NurseBooking.countDocuments({ status: { $in: ['Cancelled', 'No-Show'] } }),
 
-            // Hospital (Includes Admission and Hospital OPD)
             Appointment.countDocuments({ 
                 bookingType: { $in: ['Admission', 'OPD'] }, 
-                status: { $nin: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] } 
+                status: { $nin: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'] } 
             }),
             Appointment.countDocuments({ 
                 bookingType: { $in: ['Admission', 'OPD'] }, 
@@ -53,13 +50,12 @@ const getDashboardOrderStats = async (req, res) => {
             }),
             Appointment.countDocuments({ 
                 bookingType: { $in: ['Admission', 'OPD'] }, 
-                status: { $in: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] } 
+                status: { $in: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'] } 
             }),
 
-            // Doctor (Independent Clinic Appointments)
             Appointment.countDocuments({ 
                 bookingType: 'Appointment', 
-                status: { $nin: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor'] } 
+                status: { $nin: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] } 
             }),
             Appointment.countDocuments({ 
                 bookingType: 'Appointment', 
@@ -67,7 +63,7 @@ const getDashboardOrderStats = async (req, res) => {
             }),
             Appointment.countDocuments({ 
                 bookingType: 'Appointment', 
-                status: { $in: ['Cancelled-By-User', 'Cancelled-By-Doctor'] } 
+                status: { $in: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'] } 
             }),
 
             AmbulanceBooking.countDocuments({ status: { $nin: ['Delivered', 'Cancelled'] } }),

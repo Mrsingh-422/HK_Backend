@@ -7,12 +7,11 @@ const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
 
-// 2. CALCULATE DOCTOR BALANCES (With COD Commission & Compensations)
+// Calculate Doctor Balances (Fix: Both COD & Counter Cash correctly deduct platform commission instead of double crediting)
 const calculateVendorBalances = async (vendorId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const doctorObjId = new mongoose.Types.ObjectId(vendorId);
 
-    // 1. Fetch Completed Appointments & Compensated Cancellations/No-Shows
     const [completedAppointments, compensatedAppointments] = await Promise.all([
         Appointment.find({
             doctorId: doctorObjId,
@@ -35,7 +34,6 @@ const calculateVendorBalances = async (vendorId) => {
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 2. Process Completed Appointments
     for (let appt of completedAppointments) {
         const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
         const grossAmount = isSub 
@@ -49,9 +47,17 @@ const calculateVendorBalances = async (vendorId) => {
 
         let effectiveVendorCredit = 0;
 
-        if (appt.paymentMethod === 'COD') {
+        // Both Cash collected at doctor's clinic desk and COD mean doctor physically collected cash
+        const isCashOrCod = appt.paymentMethod === 'COD' || 
+                            appt.paymentMethod === 'Cash' || 
+                            String(appt.paymentMethod).toUpperCase() === 'CASH' ||
+                            String(appt.paymentMethod).toUpperCase() === 'COD';
+
+        if (isCashOrCod) {
+            // Deduct Admin platform commission from digital wallet
             effectiveVendorCredit = -adminCutoff;
         } else {
+            // Online gateway; credit net amount after commission to digital wallet
             effectiveVendorCredit = netVendorAmount;
         }
 
@@ -64,7 +70,6 @@ const calculateVendorBalances = async (vendorId) => {
         }
     }
 
-    // 3. Process Compensations for No-Show / Late User Cancellation
     for (let compAppt of compensatedAppointments) {
         const compFee = Number(compAppt.pricingBreakdown?.noShowFeeApplied || compAppt.pricingBreakdown?.cancellationFeeApplied || 0);
         if (compFee > 0) {
@@ -77,7 +82,6 @@ const calculateVendorBalances = async (vendorId) => {
         }
     }
 
-    // 4. Total Withdrawals Requested
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {

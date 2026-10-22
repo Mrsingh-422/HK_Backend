@@ -7,12 +7,11 @@ const moment = require('moment');
 const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
-// 💰 CENTRALIZED AMBULANCE LEDGER & BALANCE ENGINE
+// Calculate Ambulance Balances (Fix: Cash & COD rides correctly deduct platform commission instead of double crediting)
 const calculateAmbulanceBalances = async (ambulanceId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const ambulanceObjId = new mongoose.Types.ObjectId(ambulanceId);
 
-    // 1. Fetch Completed Trips & Compensated Cancelled/No-Show Trips
     const [allCompletedTrips, compensatedTrips] = await Promise.all([
         Booking.find({
             ambulanceId: ambulanceObjId,
@@ -35,7 +34,6 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 2. Process Completed Trips (COD vs Online vs Free Case Accidental)
     for (let trip of allCompletedTrips) {
         let vendorSubtype = 'Ambulance-Medical';
         if (trip.serviceType === 'Accident emergency') vendorSubtype = 'Ambulance-Accident';
@@ -54,21 +52,24 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
 
         let effectiveVendorCredit = 0;
 
-        // 🚨 CRITICAL MARKETPLACE ACCOUNTING LOGIC:
+        const isCashOrCod = trip.paymentMethod === 'COD' || 
+                            trip.paymentMethod === 'Cash' || 
+                            String(trip.paymentMethod).toUpperCase() === 'CASH' ||
+                            String(trip.paymentMethod).toUpperCase() === 'COD';
+
         if (trip.isFreeCase === true || trip.serviceType === 'Accident emergency') {
-            // Case A: 100% Free SOS ➔ Platform subsidizes driver wallet with Net Fare
+            // Free emergency SOS rides are subsidized by platform
             effectiveVendorCredit = netVendorAmount;
-        } else if (trip.paymentMethod === 'COD') {
-            // Case B: Cash On Delivery ➔ Driver already collected full cash physically; deduct Admin Commission from wallet
+        } else if (isCashOrCod) {
+            // Driver collected physical cash directly from patient; deduct platform commission
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Case C: Online Payment (Razorpay) ➔ Platform collected money; credit Net Fare to driver wallet
+            // Online Razorpay gateway ride; credit net amount after commission to digital wallet
             effectiveVendorCredit = netVendorAmount;
         }
 
         totalEarnings += effectiveVendorCredit;
 
-        // 7-Day Rolling Settlement Lock
         if (new Date(trip.updatedAt) <= sevenDaysAgo) {
             clearedEarnings += effectiveVendorCredit;
         } else {
@@ -76,7 +77,6 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
         }
     }
 
-    // 3. Include Driver Compensation for Cancellations & No-Shows (100% Driver's money)
     for (let compTrip of compensatedTrips) {
         const compFee = Number(compTrip.pricing?.noShowFeeApplied || compTrip.pricing?.cancellationFeeApplied || 0);
         if (compFee > 0) {
@@ -89,7 +89,6 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
         }
     }
 
-    // 4. Total Withdrawals Requested
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
@@ -102,7 +101,6 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    // 5. Active Commission Policy Details
     const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Ambulance-Medical', isActive: true }).lean();
 

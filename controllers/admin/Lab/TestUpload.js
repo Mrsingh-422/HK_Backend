@@ -12,51 +12,59 @@ const fs = require('fs');
 const path = require('path');
 const MasterReportTemplate = require('../../../models/MasterReportTemplate'); 
 
-// upload master tests // Example CSV Format: 
-// endpoint: POST /admin/lab/tests/upload
-// testName: CBC, parameters: Hb||WBC||RBC, faqs: What is CBC?:It is blood test||Why do it?:To check health
+// @desc    Upload Master Lab Tests via Excel/CSV (Automatically deletes temp file after DB import)
+// @route   POST /admin/lab/tests/upload
+// @access  Private (Admin)
 const uploadMasterTests = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "Upload Excel/CSV file" });
+        if (!req.file) return res.status(400).json({ success: false, message: "Upload Excel/CSV file" });
 
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
         const formattedData = data.map(item => ({
-            testName: item.testName,
-            testCode: item.testCode,
-            mainCategory: item.mainCategory,
-            category: item.category,
-            sampleType: item.sampleType || 'NA',
-            pretestPreparation: item.pretestPreparation,
+            testName: item.testName ? String(item.testName).trim() : "Diagnostic Test",
+            testCode: item.testCode ? String(item.testCode).trim() : `TEST-${Date.now().toString().slice(-4)}`,
+            mainCategory: item.mainCategory || 'Pathology',
+            category: item.category || 'General Health',
+            sampleType: item.sampleType || 'Blood',
+            pretestPreparation: item.pretestPreparation || "No fasting required",
             standardMRP: item.standardMRP ? parseFloat(item.standardMRP) : 0,
-            
-            // Logic: "Hb||WBC" -> ["Hb", "WBC"]
             parameters: item.parameters ? item.parameters.split('||').map(s => s.trim()) : [],
-            
-            // Logic: "Q:A || Q:A" -> [{question:Q, answer:A}]
             faqs: item.faqs ? item.faqs.split('||').map(pair => {
                 const [q, a] = pair.split(':');
                 return { question: q?.trim(), answer: a?.trim() };
             }) : [],
-
-            // Logic: "Title:Desc || Title:Desc"
             detailedDescription: item.detailedDescription ? item.detailedDescription.split('||').map(pair => {
                 const [title, content] = pair.split(':');
                 return { sectionTitle: title?.trim(), sectionContent: content?.trim() };
             }) : []
         }));
 
-        await MasterLabTest.insertMany(formattedData, { ordered: false }); 
-        res.json({ success: true, message: "Master Test List Updated with FAQs & Details" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        await MasterLabTest.insertMany(formattedData, { ordered: false });
+
+        // Clean up temporary excel file from disk storage
+        if (fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: `Successfully processed and imported ${formattedData.length} Master Tests. Temporary file deleted.` 
+        });
+    } catch (error) { 
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        console.error("Upload Master Tests Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// Upload Master Packages
-// endpoint: POST admin/lab/tests/upload-packages
+// @desc    Upload Master Lab Packages via Excel/CSV (Automatically deletes temp file after DB import)
+// @route   POST /admin/lab/tests/upload-packages
+// @access  Private (Admin)
 const uploadMasterPackages = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "Upload Excel/CSV file" });
+        if (!req.file) return res.status(400).json({ success: false, message: "Upload Excel/CSV file" });
 
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
@@ -64,46 +72,34 @@ const uploadMasterPackages = async (req, res) => {
         let formattedData = [];
 
         for (let item of data) {
-            // 1. Logic: Excel se Test Names uthakar unki IDs find karna
             let testIds = [];
             if (item.tests) {
                 const testNamesArray = item.tests.split('||').map(t => t.trim());
-                // Database mein tests search karein
                 const foundTests = await MasterLabTest.find({ testName: { $in: testNamesArray } }).select('_id');
                 testIds = foundTests.map(t => t._id);
             }
 
             formattedData.push({
-                packageName: item.packageName,
-                shortDescription: item.shortDescription,
-                longDescription: item.longDescription,
+                packageName: item.packageName ? String(item.packageName).trim() : "Master Health Package",
+                shortDescription: item.shortDescription || "",
+                longDescription: item.longDescription || "",
                 mainCategory: item.mainCategory || 'Pathology',
-                category: item.category,
-                reportTime: item.reportTime,
+                category: item.category || 'Full Body',
+                reportTime: item.reportTime || "24 Hours",
                 standardMRP: item.standardMRP ? parseFloat(item.standardMRP) : 0,
-                
-                // Foreign Keys (Tests)
                 tests: testIds,
-                
-                // Simple Arrays: "Value1||Value2" -> ["Value1", "Value2"]
-                sampleTypes: item.sampleTypes ? item.sampleTypes.split('||').map(s => s.trim()) : [],
+                sampleTypes: item.sampleTypes ? item.sampleTypes.split('||').map(s => s.trim()) : ['Blood'],
                 preparations: item.preparations ? item.preparations.split('||').map(p => p.trim()) : [],
                 tags: item.tags ? item.tags.split('||').map(t => t.trim()) : [],
                 lifestyleTags: item.lifestyleTags ? item.lifestyleTags.split('||').map(l => l.trim()) : [],
-
-                // Booleans
                 isFastingRequired: item.isFastingRequired === 'TRUE' || item.isFastingRequired === true,
-                fastingDuration: item.fastingDuration,
+                fastingDuration: item.fastingDuration || "",
                 gender: item.gender || 'Both',
                 ageGroup: item.ageGroup || 'All',
-
-                // Object Arrays: "Q:A || Q:A"
                 faqs: item.faqs ? item.faqs.split('||').map(pair => {
                     const [q, a] = pair.split(':');
                     return { question: q?.trim(), answer: a?.trim() };
                 }) : [],
-
-                // Object Arrays: "Title:Desc || Title:Desc"
                 detailedDescription: item.detailedDescription ? item.detailedDescription.split('||').map(pair => {
                     const [title, content] = pair.split(':');
                     return { sectionTitle: title?.trim(), sectionContent: content?.trim() };
@@ -111,16 +107,22 @@ const uploadMasterPackages = async (req, res) => {
             });
         }
 
-        // Database mein insert karein (Duplicates skip karne ke liye ordered: false)
         await MasterLabPackage.insertMany(formattedData, { ordered: false });
+
+        // Clean up temporary excel file from disk storage
+        if (fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
         
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: `Successfully uploaded ${formattedData.length} Master Packages` 
+            message: `Successfully uploaded ${formattedData.length} Master Packages. Storage cleaned.` 
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        console.error("Upload Master Packages Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

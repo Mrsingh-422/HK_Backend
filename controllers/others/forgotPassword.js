@@ -5,6 +5,7 @@ const User = require("../../models/User");
 const Lab = require("../../models/Lab");
 const Pharmacy = require("../../models/Pharmacy");
 const Nurse = require("../../models/Nurse");
+const Ambulance = require("../../models/Ambulance"); 
 const PoliceHQ = require("../../models/PoliceHQ");
 const PoliceStation = require("../../models/PoliceStation");
 const PoliceStaff = require("../../models/PoliceStaff");
@@ -28,6 +29,7 @@ const modelsList = [
     { name: "Lab", model: Lab, phoneKey: "phone", emailKey: "email" },
     { name: "Pharmacy", model: Pharmacy, phoneKey: "phone", emailKey: "email" },
     { name: "Nurse", model: Nurse, phoneKey: "phone", emailKey: "email" },
+    { name: "Ambulance", model: Ambulance, phoneKey: "phone", emailKey: "email" },
     { name: "Driver", model: Driver, phoneKey: "phone", emailKey: "username" },
     { name: "PoliceHQ", model: PoliceHQ, phoneKey: "phone", emailKey: "email" },
     { name: "PoliceStation", model: PoliceStation, phoneKey: "phone", emailKey: "email" },
@@ -380,32 +382,45 @@ const verifyOtp = async (req, res) => {
     }
 };
 
-// 3. RESET PASSWORD VIA EMAIL
-// Endpoint: POST /api/password/reset-password
+// @desc    Reset Password via Email (Secured: Verifies that an active, unexpired OTP session exists)
+// @route   POST /api/password/reset-password
+// @access  Public
 const resetPassword = async (req, res) => {
     try {
         const { email, newPassword, confirmPassword } = req.body;
 
-        if (!newPassword || newPassword !== confirmPassword) {
-            return res.status(400).json({ success: false, message: "Passwords do not match or missing" });
+        if (!email || !newPassword || newPassword !== confirmPassword) {
+            return res.status(400).json({ success: false, message: "Passwords do not match or email is missing." });
         }
 
         if (newPassword.length < 6) {
-            return res.status(400).json({ success: false, message: "Password must be at least 6 characters long" });
+            return res.status(400).json({ success: false, message: "Password must be at least 6 characters long." });
         }
 
         const cleanEmail = email.toLowerCase().trim();
         const result = await findAccountByEmail(cleanEmail);
 
         if (!result) {
-            return res.status(404).json({ success: false, message: "User not found" });
+            return res.status(404).json({ success: false, message: "Account not found with this email address." });
         }
 
-        const { account, Model } = result;
+        const { account, Model, meta } = result;
+
+        // Security Lock: Ensure target account actually requested an OTP and is within the 10-min window
+        const rawAccount = await Model.collection.findOne({ [meta.emailKey]: cleanEmail });
+        const hasActiveOtp = rawAccount && rawAccount.resetPasswordOtp;
+        const isNotExpired = rawAccount?.resetPasswordExpires && (new Date(rawAccount.resetPasswordExpires).getTime() >= Date.now());
+
+        if (!hasActiveOtp || !isNotExpired) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Security Block: Password reset session expired or invalid. Please request a new OTP first." 
+            });
+        }
 
         const hashedPassword = await bcrypt.hash(String(newPassword), 10);
 
-        // 🚨 Update password, revoke JWT session & delete temporary OTP fields
+        // Update password, invalidate active sessions & clean up temporary OTP fields
         await Model.collection.updateOne(
             { _id: account._id },
             {
@@ -420,7 +435,7 @@ const resetPassword = async (req, res) => {
             }
         );
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: "Password Reset Successfully. Please Login with your new password." 
         });
