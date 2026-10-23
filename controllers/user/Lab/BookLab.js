@@ -11,7 +11,7 @@ const MasterLabPackage = require('../../../models/MasterLabPackage');
 const MasterRequest = require('../../../models/MasterRequest');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
 const Review = require('../../../models/Review'); // 👈 Import the polymorphic Review model
-const UserSubscription = require('../../../models/UserSubscription');
+const UserSubscription = require('../../../models/UserSubscription'); // user subscription
 
 const Cart = require('../../../models/Cart'); // Import check karein
 const User = require('../../../models/User');
