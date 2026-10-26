@@ -29,6 +29,9 @@ const connectDB = require('./config/db');
 // Connect DB
 connectDB();
 
+// 🚨 INITIALIZE FIREBASE ADMIN SDK ON SERVER BOOT
+require('./config/firebase');
+
 // --- Initialize Background Workers ---
 const initCronJobs = require('./utils/cronJobs'); // 👈 Add this require
 initCronJobs(); // 👈 Start the background scheduler on server startup

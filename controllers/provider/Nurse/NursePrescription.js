@@ -123,17 +123,37 @@ const submitProposal = async (req, res) => {
 
         await request.save();
 
-        // 🔔 Patient Push Notification: Alert user that a proposal bill has arrived
+        // Fetch Nurse Bureau Details for notification
+        const nurse = await Nurse.findById(nurseId).select('name');
+        const nurseName = nurse?.name || "Nursing Care Bureau";
+
+        const serviceNames = servicesPricing.map(s => s.title).slice(0, 3).join(', ');
+        const servicesSummary = servicesPricing.length > 3 ? `${serviceNames} +${servicesPricing.length - 3} more` : serviceNames;
+
+        // 🔔 Alert patient with complete details for direct payment routing
         if (request.userId) {
             try {
                 await sendPushNotification(
                     request.userId,
                     'user',
-                    "📋 New Nursing Proposal Bill Received!",
-                    `A nearby nurse bureau submitted a proposal of ₹${totalPrice} for your prescription inquiry. Tap to review.`,
-                    { requestId: request._id.toString(), type: 'new_prescription_proposal' }
+                    `🧾 Nursing Care Bill Ready: ₹${totalPrice} (${nurseName})`,
+                    `${nurseName} has generated your care bill of ₹${totalPrice} for [${servicesSummary}]. Tap to review and pay.`,
+                    { 
+                        type: 'PRESCRIPTION_BILL_GENERATED',
+                        serviceType: 'Nurse',
+                        requestId: String(request._id), 
+                        proposalId: String(proposal._id || ""),
+                        totalAmount: String(totalPrice),
+                        vendorName: String(nurseName),
+                        itemCount: String(servicesPricing.length),
+                        itemsSummary: String(servicesSummary),
+                        paymentRoute: '/nurse/prescription-bill',
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
                 );
-            } catch (e) {}
+            } catch (e) {
+                console.error("Nurse Bill Notification Error:", e.message);
+            }
         }
 
         res.status(200).json({

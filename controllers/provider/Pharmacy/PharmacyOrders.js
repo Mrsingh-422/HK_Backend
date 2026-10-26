@@ -7,6 +7,7 @@ const moment = require('moment');
 const Wallet = require('../../../models/Wallet');
 const HsnMaster = require('../../../models/HsnMaster'); // Import HSN Master model
 const MedicineInventory = require('../../../models/MedicineInventory');
+const Pharmacy = require('../../../models/Pharmacy'); 
 const { sendPushNotification } = require('../../../utils/notification');
 
 // 🔢 Helper: Indian Currency Number to Words Converter
@@ -442,13 +443,16 @@ const startPrescriptionReview = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// 2. PHARMACIST PORTAL: SUBMIT REVIEW & BILL (Vendor reviews, matches prices, and adds verifiedBill)
+// @desc    Pharmacist generates/updates verified bill & dispatches detailed push notification to patient
+// @route   POST /provider/pharmacy/orders/prescription-request/review/:requestId
+// @access  Private (Pharmacy)
 const submitPharmacistReview = async (req, res) => {
     try {
         const { requestId } = req.params;
         const pharmacyId = req.user.id;
         const { items, deliveryCharge } = req.body; 
 
+        // 1. Fetch prescription inquiry for this logged-in pharmacy
         const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
         if (!request) {
             return res.status(404).json({ 
@@ -457,23 +461,36 @@ const submitPharmacistReview = async (req, res) => {
             });
         }
 
-        if (request.status !== 'Pending Review' && request.status !== 'Reviewing') {
+        // 2. Status Validation Check: Block only if already Paid, Cancelled or Rejected
+        if (request.status === 'Paid') {
             return res.status(400).json({ 
                 success: false, 
-                message: `Cannot generate bill. Current status is already '${request.status}'.` 
+                message: "Cannot generate bill. This prescription order has already been paid and processed." 
             });
         }
 
-        // 🛡️ SAFE PARSER: Handle JSON string or raw Array
-        let parsedItems = [];
-        if (typeof items === 'string') {
-            try { parsedItems = JSON.parse(items); } catch(e) { parsedItems = []; }
-        } else if (Array.isArray(items)) {
-            parsedItems = items;
+        if (['Rejected', 'Cancelled', 'Expired'].includes(request.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot generate bill. Current prescription status is already '${request.status}'.` 
+            });
         }
 
-        if (parsedItems.length === 0) {
-            return res.status(400).json({ success: false, message: "Please provide valid billed medicine items." });
+        // 3. Multi-Key Fallback: Accepts 'items', 'medicines', or 'requestedMedicines'
+        const rawItems = items || req.body.medicines || req.body.requestedMedicines;
+
+        let parsedItems = [];
+        if (typeof rawItems === 'string') {
+            try { parsedItems = JSON.parse(rawItems); } catch(e) { parsedItems = []; }
+        } else if (Array.isArray(rawItems)) {
+            parsedItems = rawItems;
+        }
+
+        if (!parsedItems || parsedItems.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please provide valid billed medicine items in 'items' array with at least one medicine." 
+            });
         }
 
         let itemTotal = 0;
@@ -484,7 +501,8 @@ const submitPharmacistReview = async (req, res) => {
 
         for (const item of parsedItems) {
             const qty = Number(item.quantity || 1);
-            const subtotal = Number(item.pricePerUnit || 0) * qty;
+            const price = Number(item.pricePerUnit || item.price || 0);
+            const subtotal = price * qty;
             itemTotal += subtotal;
 
             let verifiedMrp = Number(item.mrp || 0);
@@ -524,9 +542,9 @@ const submitPharmacistReview = async (req, res) => {
 
             verifiedItems.push({
                 medicineId: mongoose.isValidObjectId(item.medicineId) ? item.medicineId : null,
-                name: item.name,
-                mrp: verifiedMrp,
-                pricePerUnit: Number(item.pricePerUnit || 0),
+                name: item.name || "Billed Medicine",
+                mrp: verifiedMrp || price,
+                pricePerUnit: price,
                 quantity: qty,
                 totalPrice: subtotal,
                 hsn_number: verifiedHsn || "",
@@ -552,28 +570,53 @@ const submitPharmacistReview = async (req, res) => {
         request.status = 'Bill Generated';
         await request.save();
 
-        // 🛡️ PATIENT ALERT: Push Notification sent to user to review and pay bill
-        const { sendPushNotification } = require('../../../utils/notification');
-        await sendPushNotification(
-            request.userId,
-            'user',
-            "🧾 Prescription Verified & Bill Ready!",
-            `Pharmacist has generated a bill of ₹${Math.round(totalAmount)} for your prescription #${request.requestId}. Tap to complete payment.`,
-            { requestId: request._id.toString(), type: 'prescription_bill_generated' }
-        );
+        // 4. In-Memory Store Name resolution (No extra DB query needed, zero chance of ReferenceError)
+        const pharmacyName = req.user?.name || "Pharmacy Store";
 
-        res.json({
+        const itemNames = verifiedItems.map(i => i.name).slice(0, 3).join(', ');
+        const itemsSummary = verifiedItems.length > 3 ? `${itemNames} +${verifiedItems.length - 3} more` : itemNames;
+
+        // 5. Fail-Safe Patient Notification Dispatch
+        if (request.userId) {
+            try {
+                await sendPushNotification(
+                    request.userId,
+                    'user',
+                    `🧾 Pharmacy Bill Ready: ₹${Math.round(totalAmount)} (${pharmacyName})`,
+                    `${pharmacyName} has verified your prescription #${request.requestId} for [${itemsSummary}]. Total bill is ₹${Math.round(totalAmount)}. Tap to review & pay.`,
+                    { 
+                        type: 'PRESCRIPTION_BILL_GENERATED',
+                        serviceType: 'Pharmacy',
+                        requestId: String(request.requestId), 
+                        id: String(request._id), 
+                        totalAmount: String(Math.round(totalAmount)),
+                        vendorName: String(pharmacyName),
+                        itemCount: String(verifiedItems.length),
+                        itemsSummary: String(itemsSummary),
+                        paymentRoute: '/pharmacy/prescription-bill',
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (notifErr) {
+                console.error("Pharmacy Bill Push Notification Non-Blocking Error:", notifErr.message);
+            }
+        }
+
+        // 6. Clean 200 OK Response
+        return res.status(200).json({
             success: true,
-            message: "Invoice successfully generated and sent to client.",
+            message: "Invoice successfully generated and detailed notification sent to patient.",
             data: request
         });
+
     } catch (error) {
-        console.error("submitPharmacistReview Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("submitPharmacistReview Critical Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
-// --- REJECT PRESCRIPTION REQUEST (With Patient Real-Time Alert) ---
-// Endpoint: POST /provider/pharmacy/orders/prescription-request/reject/:requestId
+// @desc    Pharmacist rejects prescription request & dispatches rejection notification
+// @route   POST /provider/pharmacy/orders/prescription-request/reject/:requestId
+// @access  Private (Pharmacy)
 const rejectPrescriptionRequest = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -592,23 +635,39 @@ const rejectPrescriptionRequest = async (req, res) => {
             });
         }
 
+        const pharmacy = await Pharmacy.findById(pharmacyId).select('name');
+        const pharmacyName = pharmacy?.name || "Pharmacy Partner";
+
         request.status = 'Rejected';
         request.rejectReason = reason || "Prescription verification failed or medicines out of stock.";
         await request.save();
 
-        // 🛡️ PATIENT ALERT: Notify user regarding prescription rejection
-        const { sendPushNotification } = require('../../../utils/notification');
-        await sendPushNotification(
-            request.userId,
-            'user',
-            "❌ Prescription Request Rejected",
-            `Your prescription request #${request.requestId} was rejected. Reason: ${request.rejectReason}`,
-            { requestId: request._id.toString(), type: 'prescription_rejected' }
-        );
+        // 🔔 PATIENT ALERT: Consistent serviceType and type payload for in-app inbox & deep-link
+        if (request.userId) {
+            try {
+                await sendPushNotification(
+                    request.userId,
+                    'user',
+                    `❌ Prescription Declined (${pharmacyName})`,
+                    `${pharmacyName} could not fulfill prescription #${request.requestId}. Reason: "${request.rejectReason}". Tap to choose another pharmacy.`,
+                    { 
+                        type: 'PRESCRIPTION_REJECTED',
+                        serviceType: 'Pharmacy',
+                        requestId: String(request.requestId), 
+                        id: String(request._id), 
+                        vendorName: String(pharmacyName),
+                        rejectReason: String(request.rejectReason),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (notifErr) {
+                console.error("Prescription Rejection Push Notification Error:", notifErr.message);
+            }
+        }
 
-        res.json({
+        res.status(200).json({
             success: true,
-            message: "Prescription request has been rejected successfully.",
+            message: "Prescription request rejected and notification dispatched to patient.",
             rejectReason: request.rejectReason,
             data: request
         });

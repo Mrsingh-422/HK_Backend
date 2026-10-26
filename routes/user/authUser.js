@@ -32,7 +32,13 @@ const {
     removeAddress,
     removeEmergency,getUserDashboard
     ,verifyPhoneAndSetPassword,
-    requestUserUnban
+    requestUserUnban,
+
+    getUserNotifications,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
+        deleteUserNotification,updateUserFcmToken
+
 } = require('../../controllers/user/authUser.js'); 
 
 // Base route: /api/auth/user
@@ -122,6 +128,15 @@ router.post('/verify-phone-and-set-password', protect('user'), verifyPhoneAndSet
 
 // Public: Submit Unban Request Without Login
 router.post('/request-unban', requestUserUnban);
+
+
+// Global User In-App Notifications
+router.get('/notifications', protect('user'), getUserNotifications);
+router.patch('/notifications/read/:id', protect('user'), markNotificationAsRead);
+router.patch('/notifications/mark-all-read', protect('user'), markAllNotificationsAsRead);
+router.delete('/notifications/:id', protect('user'), deleteUserNotification);
+
+router.patch('/fcm-token', protect('user'), updateUserFcmToken);
 
 
 module.exports = router;

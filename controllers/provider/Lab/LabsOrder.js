@@ -930,87 +930,111 @@ const startLabPrescriptionReview = async (req, res) => {
     }
 };
 
-// 4. SUBMIT LAB REVIEW & BILL (Generate Suggested Invoice)
+// @desc    Lab generates verified bill for prescription & sends detailed notification to user
+// @route   POST /provider/labs/prescription-request/review/:requestId
+// @access  Private (Lab)
 const submitLabReviewBill = async (req, res) => {
     try {
         const { requestId } = req.params;
-        // 🚨 STRICT SYNC: Capturing tests and packages carrying precautions separately [cite: custom_context]
-        const { tests, packages, homeVisitCharge } = req.body; 
         const labId = req.user.id;
+        const { items, deliveryCharge } = req.body;
 
-        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
-        const query = { labId };
-        if (isObjectId) query._id = requestId;
-        else query.requestId = requestId;
-
-        const request = await LabPrescriptionRequest.findOne(query);
+        const request = await LabPrescriptionRequest.findOne({ requestId, labId });
         if (!request) {
-            return res.status(404).json({ success: false, message: "Request details not found" });
+            return res.status(404).json({
+                success: false,
+                message: "Review request not found or unauthorized to bill this prescription."
+            });
+        }
+
+        if (request.status !== 'Pending Review' && request.status !== 'Reviewing') {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot generate bill. Current status is already '${request.status}'.`
+            });
+        }
+
+        let parsedItems = [];
+        if (typeof items === 'string') {
+            try { parsedItems = JSON.parse(items); } catch(e) { parsedItems = []; }
+        } else if (Array.isArray(items)) {
+            parsedItems = items;
+        }
+
+        if (parsedItems.length === 0) {
+            return res.status(400).json({ success: false, message: "Please provide valid test items for the bill." });
         }
 
         let itemTotal = 0;
-        const verifiedTests = [];
-        const verifiedPackages = [];
+        const verifiedItems = [];
 
-        // Map tests array safely with precautions [cite: custom_context]
-        if (tests && tests.length > 0) {
-            for (let t of tests) {
-                const subtotal = Number(t.pricePerUnit || 0);
-                itemTotal += subtotal;
-                verifiedTests.push({
-                    testId: t.testId && mongoose.isValidObjectId(t.testId) ? t.testId : null,
-                    name: t.name,
-                    mrp: Number(t.mrp || 0),
-                    pricePerUnit: subtotal,
-                    precaution: t.precaution || "" // 👈 Dynamic precaution saved [cite: custom_context]
-                });
-            }
+        for (const item of parsedItems) {
+            const qty = Number(item.quantity || 1);
+            const price = Number(item.pricePerUnit || item.price || 0);
+            const subtotal = price * qty;
+            itemTotal += subtotal;
+
+            verifiedItems.push({
+                name: item.name,
+                mrp: Number(item.mrp || price),
+                pricePerUnit: price,
+                quantity: qty,
+                totalPrice: subtotal
+            });
         }
 
-        // Map packages array safely with precautions [cite: custom_context]
-        if (packages && packages.length > 0) {
-            for (let p of packages) {
-                const subtotal = Number(p.pricePerUnit || 0);
-                itemTotal += subtotal;
-                verifiedPackages.push({
-                    packageId: p.packageId && mongoose.isValidObjectId(p.packageId) ? p.packageId : null,
-                    name: p.name,
-                    mrp: Number(p.mrp || 0),
-                    pricePerUnit: subtotal,
-                    precaution: p.precaution || "" // 👈 Dynamic precaution saved [cite: custom_context]
-                });
-            }
-        }
+        const totalAmount = itemTotal + Number(deliveryCharge || 0);
 
-        const patientCount = request.patients.length || 1;
-        const subtotalSum = itemTotal * patientCount;
-        const totalAmount = subtotalSum + Number(homeVisitCharge || 0);
-
-        // Saved matching your updated database schema keys
         request.verifiedBill = {
-            tests: verifiedTests,
-            packages: verifiedPackages,
-            itemTotal: subtotalSum,
-            homeVisitCharge: Number(homeVisitCharge || 0),
+            items: verifiedItems,
+            itemTotal,
+            deliveryCharge: Number(deliveryCharge || 0),
             totalAmount: Math.round(totalAmount)
         };
         request.status = 'Bill Generated';
         await request.save();
 
-        // Trigger Notification
-        await sendPushNotification(
-            request.userId,
-            "Lab Bill Generated!",
-            `Your prescription review is complete. View suggested tests & make payment of ₹${request.verifiedBill.totalAmount}.`,
-            { requestId: request._id.toString(), type: 'lab_bill_generated' }
-        );
+        // Fetch Lab details for notification
+        const lab = await Lab.findById(labId).select('name');
+        const labName = lab?.name || "Diagnostic Lab";
 
-        res.json({
+        const testNames = verifiedItems.map(i => i.name).slice(0, 3).join(', ');
+        const testsSummary = verifiedItems.length > 3 ? `${testNames} +${verifiedItems.length - 3} more` : testNames;
+
+        // 🔔 Alert patient with complete details for direct payment routing
+        if (request.userId) {
+            try {
+                await sendPushNotification(
+                    request.userId,
+                    'user',
+                    `🧾 Lab Quotation Ready: ₹${Math.round(totalAmount)} (${labName})`,
+                    `${labName} has generated your lab tests bill #${request.requestId} for [${testsSummary}]. Total bill is ₹${Math.round(totalAmount)}. Tap to review & pay.`,
+                    { 
+                        type: 'PRESCRIPTION_BILL_GENERATED',
+                        serviceType: 'Lab',
+                        requestId: String(request.requestId), 
+                        id: String(request._id), 
+                        totalAmount: String(Math.round(totalAmount)),
+                        vendorName: String(labName),
+                        itemCount: String(verifiedItems.length),
+                        itemsSummary: String(testsSummary),
+                        paymentRoute: '/lab/prescription-bill',
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (notifErr) {
+                console.error("Lab Bill Notification Error:", notifErr.message);
+            }
+        }
+
+        res.status(200).json({
             success: true,
-            message: "Suggested bill generated successfully!",
+            message: "Lab bill generated successfully and detailed notification sent to patient.",
             data: request
         });
+
     } catch (error) {
+        console.error("submitLabReviewBill Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -12,6 +12,7 @@ const { getActiveSubscriptionMetadata } = require('../../utils/subscriptionBenef
 const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); // 👈 Firebase Helper
 const UnbanRequest = require('../../models/UnbanRequest');
 const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
+const UserNotification = require('../../models/UserNotification');
 
 
 // Helper: Token Generator
@@ -83,19 +84,17 @@ const checkUserExists = async (req, res) => {
 };
 
 
-// ==========================================
-// 1. REGISTER USER (With Firebase Phone Verification)
-// Endpoint: POST /api/auth/user/register
-// ==========================================
+// @desc    Register new patient (Verifies Firebase token & stores initial FCM token)
+// @route   POST /api/auth/user/register
+// @access  Public
 const registerUser = async (req, res) => {
     try {
         const { 
             name, email, phone, countryCode,
             country, state, city, 
-            password, confirmPassword, idToken 
+            password, confirmPassword, idToken, fcmToken 
         } = req.body;
 
-        // 1. Validations
         if (!name || !phone || !password) {
             return res.status(400).json({ 
                 success: false, 
@@ -113,7 +112,6 @@ const registerUser = async (req, res) => {
         const normalizedEmail = email ? email.toLowerCase().trim() : null;
         const cleanPhone = phone.trim();
 
-        // 2. Duplicate Check
         const query = [{ phone: cleanPhone }];
         if (normalizedEmail) query.push({ email: normalizedEmail });
 
@@ -125,7 +123,6 @@ const registerUser = async (req, res) => {
             });
         }
 
-        // 3. 🚨 Firebase Phone Verification Check
         if (process.env.NODE_ENV === 'production' || (idToken && idToken.trim() !== "")) {
             if (!idToken) {
                 return res.status(400).json({ 
@@ -145,10 +142,8 @@ const registerUser = async (req, res) => {
             }
         }
 
-        // 4. Hash Password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // 5. Create User (Instantly Approved with Phone Verified)
         const user = await User.create({
             name,
             email: normalizedEmail || undefined,
@@ -159,11 +154,11 @@ const registerUser = async (req, res) => {
             city: city || null,
             password: hashedPassword,
             role: 'user',
-            isPhoneVerified: true, // Phone verified via Firebase
-            profileStatus: 'Approved' // Users are directly approved
+            fcmToken: fcmToken ? String(fcmToken).trim() : null, // 👈 Saved FCM Token
+            isPhoneVerified: true,
+            profileStatus: 'Approved'
         });
 
-        // 6. Generate Session Token
         const token = generateToken(user._id, 'user');
         user.token = token;
         await user.save();
@@ -190,12 +185,12 @@ const registerUser = async (req, res) => {
     }
 };
 
-// ==========================================
-// 1. UPDATED: LOGIN USER (With Banned Flag & Unban Prompt)// Endpoint: POST /api/auth/user/login
-// ==========================================
+// @desc    Login user (Captures device FCM token & verifies ban/active status)
+// @route   POST /api/auth/user/login
+// @access  Public
 const loginUser = async (req, res) => {
     try {
-        const { email, phone, countryCode, password } = req.body;
+        const { email, phone, countryCode, password, fcmToken } = req.body;
 
         let query = {};
         if (email) {
@@ -206,14 +201,12 @@ const loginUser = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Provide Email or Phone number' });
         }
 
-        // Fetch user with password
         const user = await User.findOne(query).select('+password');
 
         if (!user || !(await bcrypt.compare(String(password), user.password))) {
             return res.status(400).json({ success: false, message: 'Invalid Credentials' });
         }
 
-        // 🚨 1. DEACTIVATED CHECK: If Admin deactivated this user (isActive === false)
         if (user.isActive === false) {
             return res.status(403).json({ 
                 success: false, 
@@ -224,7 +217,6 @@ const loginUser = async (req, res) => {
             });
         }
 
-        // 🚨 2. AUTO-BAN CHECK: If user was auto-banned for 2 cancellations
         if (user.isBanned === true) {
             return res.status(403).json({ 
                 success: false, 
@@ -235,7 +227,6 @@ const loginUser = async (req, res) => {
             });
         }
 
-        // Generate Token
         let token = null;
         if (process.env.NODE_ENV === 'development' && user.token) {
             try {
@@ -247,12 +238,17 @@ const loginUser = async (req, res) => {
         if (!token) {
             token = generateToken(user._id, 'user');
             user.token = token;
-            await user.save();
         }
+
+        // 🚨 CRITICAL UPDATE: Save FCM Push Token on login
+        if (fcmToken) {
+            user.fcmToken = String(fcmToken).trim();
+        }
+
+        await user.save();
 
         user.password = undefined;
 
-        // ✅ Normal Active Login Response
         res.json({
             success: true,
             token,
@@ -391,8 +387,9 @@ const getUserProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// Update Profile (Existing Code)
-// endpoint: PUT /api/auth/user/update
+// @desc    Update User Profile (Supports updating basic details and rotated FCM token)
+// @route   PUT /api/auth/user/update
+// @access  Private (User)
 const updateUserProfile = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -402,43 +399,41 @@ const updateUserProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        // Profile Pic handling
         if (req.file) {
             user.profilePic = `/uploads/users/${req.file.filename}`;
         }
 
-        // Destructure all fields including bloodGroup
         const { 
             name, fatherName, phone, countryCode, email, 
             weight, gender, dob, height, bloodGroup,
             country, state, city, 
-            insuranceId 
+            insuranceId, fcmToken 
         } = req.body;
 
-        // Basic Info
         if (name) user.name = name;
         if (fatherName) user.fatherName = fatherName;
         if (email) user.email = email.toLowerCase().trim();
         
-        // Stats & Medical Info
         if (weight) user.weight = weight;
         if (gender) user.gender = gender;
         if (dob) user.dob = dob;
         if (height) user.height = height;
-        if (bloodGroup !== undefined) user.bloodGroup = bloodGroup; // 👈 Blood Group Saved
+        if (bloodGroup !== undefined) user.bloodGroup = bloodGroup;
 
-        // Phone Update
         if (phone && countryCode) {
             user.phone = phone.trim().replace(/\D/g, "").slice(-10);
             user.countryCode = countryCode;
         }
 
-        // Location Info
         if (country) user.country = country;
         if (state) user.state = state;
         if (city) user.city = city;
-        
         if (insuranceId) user.insuranceId = insuranceId;
+
+        // 🚨 FCM Token update on token rotation
+        if (fcmToken) {
+            user.fcmToken = String(fcmToken).trim();
+        }
 
         await user.save();
 
@@ -992,22 +987,27 @@ const removeUserSubItem = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-// ==========================================
-// 8. LOGOUT USER
-// endpoint: POST /api/auth/user/logout
+// @desc    Logout User (Revokes JWT session & invalidates device FCM token to stop unwanted notifications)
+// @route   POST /api/auth/user/logout
+// @access  Private (User)
 const logoutUser = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        // Server side par token null kar rahe hain taaki session terminate ho jaye
-        await User.findByIdAndUpdate(userId, { token: null });
+        // 🚨 CRITICAL FIX: Both session token and fcmToken are cleared on logout
+        await User.findByIdAndUpdate(userId, { 
+            $set: { 
+                token: null, 
+                fcmToken: null 
+            } 
+        });
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: 'Logged out successfully' 
+            message: 'Logged out successfully and FCM push notifications unregistered.' 
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1342,6 +1342,160 @@ const requestUserUnban = async (req, res) => {
 };
 
 
+// @desc    Get Global In-App Notifications for Logged-In User
+// @route   GET /api/auth/user/notifications
+// @access  Private (User)
+const getUserNotifications = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { serviceType, type } = req.query;
+
+        let query = { userId };
+        if (serviceType && serviceType !== 'All') {
+            query.serviceType = serviceType; // 'Pharmacy', 'Lab', 'Nurse', etc.
+        }
+        if (type && type !== 'All') {
+            query.type = type; // e.g. 'PRESCRIPTION_BILL_GENERATED'
+        }
+
+        const [notifications, total, unreadCount] = await Promise.all([
+            UserNotification.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            UserNotification.countDocuments(query),
+            UserNotification.countDocuments({ userId, isRead: false })
+        ]);
+
+        res.status(200).json({
+            success: true,
+            total,
+            unreadCount,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: notifications
+        });
+
+    } catch (error) {
+        console.error("Get User Notifications Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Mark a single notification as read
+// @route   PATCH /api/auth/user/notifications/read/:id
+// @access  Private (User)
+const markNotificationAsRead = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+
+        const notif = await UserNotification.findOneAndUpdate(
+            { _id: id, userId },
+            { $set: { isRead: true } },
+            { new: true }
+        );
+
+        if (!notif) {
+            return res.status(404).json({ success: false, message: "Notification not found." });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Notification marked as read.",
+            data: notif
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Mark all unread notifications as read for logged-in user
+// @route   PATCH /api/auth/user/notifications/mark-all-read
+// @access  Private (User)
+const markAllNotificationsAsRead = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const result = await UserNotification.updateMany(
+            { userId, isRead: false },
+            { $set: { isRead: true } }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: "All notifications marked as read.",
+            modifiedCount: result.modifiedCount
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Delete single notification from user inbox
+// @route   DELETE /api/auth/user/notifications/:id
+// @access  Private (User)
+const deleteUserNotification = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+
+        const deleted = await UserNotification.findOneAndDelete({ _id: id, userId });
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: "Notification not found." });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Notification removed successfully."
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Update / Rotate User FCM Device Token on app boot or token refresh
+// @route   PATCH /api/auth/user/fcm-token
+// @access  Private (User)
+const updateUserFcmToken = async (req, res) => {
+    try {
+        const { fcmToken } = req.body;
+        const userId = req.user.id;
+
+        if (!fcmToken || String(fcmToken).trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "fcmToken parameter is required." 
+            });
+        }
+
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $set: { fcmToken: String(fcmToken).trim() } },
+            { new: true }
+        ).select('name phone email fcmToken');
+
+        if (!updatedUser) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "FCM device token registered successfully for push alerts.",
+            data: {
+                userId: updatedUser._id,
+                fcmToken: updatedUser.fcmToken
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = { 
     checkUserExists,
     registerUser, 
@@ -1380,5 +1534,10 @@ module.exports = {
     removeEmergency,
     getUserDashboard,
     verifyPhoneAndSetPassword,
-    requestUserUnban
+    requestUserUnban,
+
+    getUserNotifications,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
+    deleteUserNotification,updateUserFcmToken
 };
