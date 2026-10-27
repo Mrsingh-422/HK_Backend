@@ -116,6 +116,8 @@ const labBookingSchema = new mongoose.Schema({
             'Phlebotomist Assigned', // Lab assigned a Driver/Phlebotomist
             'Arrived',               // Driver reached
             'Sample Collected',      // Driver reached and took blood sample
+            'Sample on the way to lab',   // NAYA STATUS 1 (Sample lab ke raste me hai)
+            'Sample Delivered to Lab',    // NAYA STATUS 2 (Lab me deliver ho gaya)
             'Sample Deposited',
             'Testing',               // Sample reached lab and in-process
             'Report Generated',      // Result ready
@@ -179,7 +181,10 @@ const labBookingSchema = new mongoose.Schema({
             type: String
         },
         paidAt: { type: Date, default: null }
-    }
+    },
+      // Timestamps
+    sampleTransitStartedAt: { type: Date, default: null }, // 👈 In-transit timestamp
+    sampleDeliveredToLabAt: { type: Date, default: null }, // 👈 Lab arrival timestamp
 
 
 

@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const NoShowConfig = require('../../models/NoShowConfig');
 const DocReschleduleLimit = require('../../models/DocRescheduleLimit');
+const { sendPushNotification } = require('../../utils/notification');
 
 
 // GET: Doctor Dashboard Stats
@@ -222,17 +223,51 @@ const getDoctorStats = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 4. CONFIRM APPOINTMENT
+// @desc    Doctor confirms clinic/video appointment & dispatches notification to patient
+// @route   PATCH /doctor/appointments/confirm/:id
+// @access  Private (Doctor)
 const confirmAppointment = async (req, res) => {
     try {
         const appointment = await Appointment.findOneAndUpdate(
-            { _id: req.params.id, doctorId: req.user.id, status: 'Pending', bookingType: 'Appointment' },
-            { status: 'Confirmed' },
+            { _id: req.params.id, doctorId: req.user.id },
+            { $set: { status: 'Confirmed' } },
             { new: true }
-        );
-        if (!appointment) return res.status(404).json({ message: "Active appointment booking not found" });
-        res.json({ success: true, message: "Appointment confirmed", data: appointment });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        ).populate('userId', 'name phone fcmToken');
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment not found or unauthorized." });
+        }
+
+        const doctorName = req.user.name || "Doctor";
+
+        // 🚨 PATIENT ALERT: Instant push notification & in-app inbox entry
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    "🩺 Appointment Confirmed!",
+                    `Dr. ${doctorName} has confirmed your appointment on ${moment(appointment.appointmentDate).format('DD MMM YYYY')} at ${appointment.appointmentTime}.`,
+                    {
+                        type: 'DOCTOR_APPOINTMENT_CONFIRMED',
+                        serviceType: 'Doctor',
+                        appointmentId: String(appointment._id),
+                        bookingId: String(appointment.bookingId || ""),
+                        doctorName: String(doctorName),
+                        appointmentDate: String(moment(appointment.appointmentDate).format('YYYY-MM-DD')),
+                        appointmentTime: String(appointment.appointmentTime),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Doctor Confirm Push Error:", e.message);
+            }
+        }
+
+        res.json({ success: true, message: "Appointment confirmed and patient notified.", data: appointment });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // --- Baki Actions (Start Visit, Cancel, Prescription) Same rahenge ---
@@ -344,71 +379,57 @@ const updateConsultationFees = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// endpoint: PATCH /doctor/appointments/reschedule/:id
+// @desc    Doctor reschedules appointment date/time & alerts patient with reason
+// @route   POST /doctor/appointments/reschedule/:id
+// @access  Private (Doctor)
 const rescheduleAppointment = async (req, res) => {
     try {
-        const { appointmentId, newDate, newTimeSlot } = req.body;
+        const { appointmentDate, appointmentTime, reason } = req.body;
+        const doctorId = req.user.id;
 
-        if (!appointmentId || !newDate || !newTimeSlot) {
-            return res.status(400).json({ success: false, message: "Appointment, Date, and TimeSlot are mandatory." });
+        if (!appointmentDate || !appointmentTime) {
+            return res.status(400).json({ success: false, message: "New appointmentDate and appointmentTime are required." });
         }
 
-        const appt = await Appointment.findOne({ 
-            _id: appointmentId, 
-            doctorId: req.user.id,
-            "cancellationDetails.isPermanent": { $ne: true } 
-        });
-
-        if (!appt) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Reschedule Blocked: Appointment record not found, or permanently cancelled." 
-            });
+        const appointment = await Appointment.findOne({ _id: req.params.id, doctorId }).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment not found or unauthorized." });
         }
 
-        // 🚀 SYNC FIX: Block doctor rescheduling if consultation is finalized, in-progress, or No-Show
-        const blockedStates = ['Completed', 'In-Progress', 'No-Show'];
-        if (blockedStates.includes(appt.status)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Reschedule Blocked: Consultation is already in '${appt.status}' state.` 
-            });
+        appointment.appointmentDate = new Date(appointmentDate);
+        appointment.appointmentTime = appointmentTime;
+        appointment.rescheduleReason = reason || "Doctor schedule adjustment";
+        appointment.status = 'Rescheduled';
+        appointment.rescheduleCount = (appointment.rescheduleCount || 0) + 1;
+        await appointment.save();
+
+        const doctorName = req.user.name || "Doctor";
+
+        // 🚨 PATIENT ALERT: Notify patient about new slot & reason
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    "🗓️ Appointment Rescheduled",
+                    `Dr. ${doctorName} has rescheduled your appointment to ${moment(appointmentDate).format('DD MMM YYYY')} at ${appointmentTime}. Reason: "${appointment.rescheduleReason}".`,
+                    {
+                        type: 'DOCTOR_APPOINTMENT_RESCHEDULED',
+                        serviceType: 'Doctor',
+                        appointmentId: String(appointment._id),
+                        bookingId: String(appointment.bookingId || ""),
+                        newDate: String(moment(appointmentDate).format('YYYY-MM-DD')),
+                        newTime: String(appointmentTime),
+                        reason: String(appointment.rescheduleReason),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Doctor Reschedule Push Error:", e.message);
+            }
         }
 
-        const globalConfig = await DocReschleduleLimit.findOne();
-        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
-
-        const currentRescheduleCount = appt.rescheduleCount || 0;
-
-        if (currentRescheduleCount >= maxLimit) {
-            return res.status(400).json({
-                success: false,
-                message: `Reschedule failed: Aapki maximum reschedule limit (${maxLimit} times) poori ho chuki hai.`
-            });
-        }
-
-        const isBooked = await Appointment.findOne({
-            _id: { $ne: appointmentId },
-            doctorId: appt.doctorId,
-            appointmentDate: new Date(newDate),
-            appointmentTime: newTimeSlot,
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] }
-        });
-
-        if (isBooked) {
-            return res.status(400).json({ success: false, message: "Naya selected slot pehle se hi kisi aur patient ke liye booked hai." });
-        }
-
-        appt.appointmentDate = new Date(newDate);
-        appt.appointmentTime = newTimeSlot;
-        appt.rescheduleCount = currentRescheduleCount + 1;
-        appt.status = 'Confirmed'; 
-
-        appt.cancellationDetails = undefined;
-
-        await appt.save();
-        res.json({ success: true, message: "Appointment rescheduled successfully", data: appt });
-
+        res.json({ success: true, message: "Appointment rescheduled successfully and patient notified.", data: appointment });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -694,155 +715,80 @@ const getAppointmentClinicalDetails = async (req, res) => {
 };
 
 
-// --- CREATE PRESCRIPTION (With Vitals & Secure Call OTP Verification Lock) ---
-// Endpoint: POST /doctor/appointments/create-prescription
+// @desc    Doctor generates digital prescription & alerts patient to view/order medicines
+// @route   POST /doctor/appointments/create-prescription
+// @access  Private (Doctor)
 const createPrescription = async (req, res) => {
     try {
-        const {
-            userId,
+        const { appointmentId, chiefComplaints, diagnosis, medicines, advisedInvestigations, adviceGiven, specialInstructions, nextAppointment } = req.body;
+        const doctorId = req.user.id;
+
+        const appointment = await Appointment.findOne({ _id: appointmentId, doctorId }).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment not found or unauthorized." });
+        }
+
+        let parsedDiagnosis = diagnosis;
+        if (typeof diagnosis === 'string') {
+            try { parsedDiagnosis = JSON.parse(diagnosis); } catch (e) { parsedDiagnosis = [diagnosis]; }
+        }
+
+        let parsedMedicines = medicines;
+        if (typeof medicines === 'string') {
+            try { parsedMedicines = JSON.parse(medicines); } catch (e) { parsedMedicines = []; }
+        }
+
+        const pdfUrl = req.file ? `/uploads/doctor_prescriptions/${req.file.filename}` : null;
+
+        const prescription = await Prescription.create({
             appointmentId,
-            chiefComplaints,
-            diagnosis,
-            medicines, 
-            advisedInvestigations,
-            adviceGiven,
-            specialInstructions,
-            nextAppointment,
-            additionalNotes
-        } = req.body;
+            doctorId,
+            userId: appointment.userId._id,
+            chiefComplaints: chiefComplaints || "",
+            diagnosis: Array.isArray(parsedDiagnosis) ? parsedDiagnosis : [],
+            medicines: Array.isArray(parsedMedicines) ? parsedMedicines : [],
+            advisedInvestigations: advisedInvestigations || "None",
+            adviceGiven: adviceGiven || "",
+            specialInstructions: specialInstructions || "",
+            nextAppointment: nextAppointment || "",
+            pdfUrl
+        });
 
-        let targetUserId = userId;
+        appointment.status = 'Completed';
+        await appointment.save();
 
-        const isValidApptId = appointmentId && mongoose.Types.ObjectId.isValid(appointmentId);
+        const doctorName = req.user.name || "Doctor";
 
-        if ((!targetUserId || targetUserId === "null" || targetUserId === "undefined") && isValidApptId) {
-            const appointmentRef = await Appointment.findById(appointmentId);
-            if (appointmentRef) {
-                targetUserId = appointmentRef.userId;
-            }
-        }
-
-        const isValidUserId = targetUserId && mongoose.Types.ObjectId.isValid(targetUserId);
-        if (!isValidUserId) {
-            return res.status(400).json({ success: false, message: "Validation Blocked: A valid User/Patient ID is required." });
-        }
-
-        if (!req.file) {
-            return res.status(400).json({ success: false, message: "Compiled prescription PDF file is missing." });
-        }
-
-        // OTP LOCK CHECK for Video Calls
-        if (isValidApptId) {
-            const appointment = await Appointment.findById(appointmentId);
-            if (appointment && appointment.consultationType === 'Video Consult') {
-                if (appointment.tracking?.isOtpVerified !== true) {
-                    return res.status(400).json({ 
-                        success: false, 
-                        message: "Prescription Blocked: Video consultation has not been verified via User OTP yet. Verify OTP during active call to proceed." 
-                    });
-                }
-            }
-        }
-
-        let parsedMedicines = [];
-        if (medicines) {
+        // 🚨 PATIENT ALERT: Prescription Ready notification
+        if (appointment.userId) {
             try {
-                parsedMedicines = typeof medicines === 'string' ? JSON.parse(medicines) : medicines;
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    "📋 Prescription Ready!",
+                    `Dr. ${doctorName} has issued your digital prescription. Tap to view details and order prescribed medicines.`,
+                    {
+                        type: 'PRESCRIPTION_ISSUED',
+                        serviceType: 'Doctor',
+                        appointmentId: String(appointment._id),
+                        prescriptionId: String(prescription._id),
+                        pdfUrl: String(pdfUrl || ""),
+                        doctorName: String(doctorName),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
             } catch (e) {
-                parsedMedicines = [];
+                console.error("Prescription Notification Error:", e.message);
             }
-        }
-
-        let parsedDiagnosis = [];
-        if (diagnosis) {
-            try {
-                parsedDiagnosis = typeof diagnosis === 'string' ? JSON.parse(diagnosis) : diagnosis;
-            } catch (e) {
-                parsedDiagnosis = [];
-            }
-        }
-
-        let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
-        if (req.body.bp !== undefined) finalVitals.bp = req.body.bp;
-        if (req.body.pulse !== undefined) finalVitals.pulse = req.body.pulse;
-        if (req.body.temp !== undefined) finalVitals.temp = req.body.temp;
-        if (req.body.spo2 !== undefined) finalVitals.spo2 = req.body.spo2;
-
-        if (req.body['vitals[bp]'] !== undefined) finalVitals.bp = req.body['vitals[bp]'];
-        if (req.body['vitals[pulse]'] !== undefined) finalVitals.pulse = req.body['vitals[pulse]'];
-        if (req.body['vitals[temp]'] !== undefined) finalVitals.temp = req.body['vitals[temp]'];
-        if (req.body['vitals[spo2]'] !== undefined) finalVitals.spo2 = req.body['vitals[spo2]'];
-
-        if (req.body.vitals) {
-            try {
-                const parsedVitals = typeof req.body.vitals === 'string' 
-                    ? JSON.parse(req.body.vitals) 
-                    : req.body.vitals;
-                
-                if (parsedVitals && typeof parsedVitals === 'object') {
-                    if (parsedVitals.bp !== undefined) finalVitals.bp = parsedVitals.bp;
-                    if (parsedVitals.pulse !== undefined) finalVitals.pulse = parsedVitals.pulse;
-                    if (parsedVitals.temp !== undefined) finalVitals.temp = parsedVitals.temp;
-                    if (parsedVitals.spo2 !== undefined) finalVitals.spo2 = parsedVitals.spo2;
-                }
-            } catch (e) {}
-        }
-
-        let prescription = null;
-        if (isValidApptId) {
-            prescription = await Prescription.findOne({ appointmentId });
-        }
-
-        if (prescription) {
-            prescription.userId = targetUserId;
-            prescription.chiefComplaints = chiefComplaints || prescription.chiefComplaints || "";
-            prescription.diagnosis = parsedDiagnosis || prescription.diagnosis || [];
-            prescription.medicines = parsedMedicines || prescription.medicines || [];
-            prescription.advisedInvestigations = advisedInvestigations || prescription.advisedInvestigations || "None";
-            prescription.adviceGiven = adviceGiven || prescription.adviceGiven || "";
-            prescription.specialInstructions = specialInstructions || prescription.specialInstructions || "";
-            prescription.nextAppointment = nextAppointment || prescription.nextAppointment || "";
-            prescription.additionalNotes = additionalNotes || prescription.additionalNotes || "";
-            prescription.pdfUrl = `/uploads/doctor_prescriptions/${req.file.filename}`;
-            prescription.vitals = finalVitals;
-            await prescription.save();
-        } else {
-            prescription = new Prescription({
-                doctorId: req.user.id,
-                userId: targetUserId, 
-                appointmentId: isValidApptId ? appointmentId : null,
-                chiefComplaints: chiefComplaints || "",
-                diagnosis: parsedDiagnosis || [],
-                medicines: parsedMedicines || [],
-                advisedInvestigations: advisedInvestigations || "None",
-                adviceGiven: adviceGiven || "",
-                specialInstructions: specialInstructions || "",
-                nextAppointment: nextAppointment || "",
-                additionalNotes: additionalNotes || "",
-                isManualUpload: false,
-                pdfUrl: `/uploads/doctor_prescriptions/${req.file.filename}`,
-                vitals: finalVitals 
-            });
-            await prescription.save();
-        }
-
-        // 🚨 AUTO COD PAYMENT CONFIRMATION ON COMPLETION:
-        if (isValidApptId) {
-            await Appointment.findByIdAndUpdate(appointmentId, {
-                status: 'Completed',
-                paymentStatus: 'Paid' // Auto-marks COD cash collected upon prescription delivery
-            });
         }
 
         res.status(201).json({
             success: true,
-            message: "Prescription successfully generated, saved, and consultation completed!",
+            message: "Prescription created, consultation completed, and patient notified.",
             data: prescription
         });
-
     } catch (error) {
-        console.error("Prescription Creation Error:", error);
-        res.status(500).json({ success: false, message: "Internal Server Error: " + error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

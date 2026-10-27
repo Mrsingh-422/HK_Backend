@@ -1758,302 +1758,235 @@ const uploadPrescriptionFlow = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// @desc    Get User Lab Bookings History with Full Breakdown & Status Badges
+// @desc    Get Logged-in User Lab Bookings (Preserves active view when sample is in transit to lab)
 // @route   GET /user/labs/my-bookings
 // @access  Private (User)
 const getMyBookings = async (req, res) => {
     try {
-        const userId = req.user?.id || req.user?._id;
-        const { status, page = 1, limit = 10 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const userId = req.user.id;
+        const { tab = 'Active' } = req.query;
 
         let query = { userId };
-        if (status && status !== 'All') {
-            query.status = status;
+
+        // 🚨 BUG FIX: Include both new statuses in Active bookings tab
+        if (tab === 'Active' || tab === 'Upcoming') {
+            query.status = { 
+                $in: [
+                    'Pending', 
+                    'Confirmed', 
+                    'Phlebotomist Assigned', 
+                    'Arrived', 
+                    'Sample Collected', 
+                    'Sample on the way to lab', 
+                    'Sample Delivered to Lab', 
+                    'Sample Deposited', 
+                    'Testing', 
+                    'Report Generated'
+                ] 
+            };
+        } else if (tab === 'History' || tab === 'Completed') {
+            query.status = { $in: ['Completed', 'Cancelled', 'No-Show'] };
         }
 
-        const totalBookings = await LabBooking.countDocuments(query);
         const bookings = await LabBooking.find(query)
-            .populate('labId', 'name address phone city profileImage rating')
-            .populate('phlebotomistId', 'name phone vehicleNumber profilePic vehicleType')
-            .populate('items.tests.testId', 'testName sampleType mainCategory')
-            .populate('items.packages.packageId', 'packageName sampleTypes mainCategory')
+            .populate('labId', 'name city profileImage phone')
+            .populate('phlebotomistId', 'name phone vehicleNumber')
             .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
             .lean();
-
-        const formattedBookings = bookings.map(booking => {
-            const isExpress = Number(booking.billSummary?.rapidDeliveryCharge || 0) > 0;
-            const isHomeCollection = booking.collectionType === 'Home Collection';
-
-            return {
-                _id: booking._id,
-                bookingId: booking.bookingId,
-                status: booking.status,
-                paymentStatus: booking.paymentStatus,
-                paymentMethod: booking.paymentMethod || 'Online',
-                isCod: (booking.paymentMethod === 'COD'),
-                orderType: booking.bookingType || 'Direct',
-                createdAt: booking.createdAt,
-                formattedDate: moment(booking.createdAt).format('DD MMM YYYY, hh:mm A'),
-
-                // 1. Service & Collection Mode Details
-                collectionType: booking.collectionType,
-                deliveryMode: {
-                    type: isHomeCollection ? (isExpress ? 'EXPRESS_HOME' : 'STANDARD_HOME') : (isExpress ? 'EXPRESS_WALKIN' : 'STANDARD_WALKIN'),
-                    label: isHomeCollection ? (isExpress ? 'Home Collection (Fast Report)' : 'Home Collection') : (isExpress ? 'Visit Lab (Fast Report)' : 'Visit Lab (Walk-in)'),
-                    isExpressReporting: isExpress,
-                    fastReportCharge: booking.billSummary?.rapidDeliveryCharge || 0,
-                    homeCollectionCharge: booking.billSummary?.homeVisitCharge || 0
-                },
-
-                // 2. Scheduled Timings
-                schedule: {
-                    date: booking.appointmentDate ? moment(booking.appointmentDate).format('YYYY-MM-DD') : null,
-                    formattedDate: booking.appointmentDate ? moment(booking.appointmentDate).format('DD MMM YYYY') : null,
-                    timeSlot: booking.appointmentTime || "Standard Slot"
-                },
-
-                // 3. Complete Bill Breakdown (Exact Multiplier & Charges Matching Screenshot)
-                billSummary: {
-                    baseTestsTotal: Number(booking.billSummary?.itemTotal || 0),
-                    patientMultiplier: booking.patients?.length || 1,
-                    multipliedTotal: Number(booking.billSummary?.itemTotal || 0),
-                    homeSampleCollectionCharge: Number(booking.billSummary?.homeVisitCharge || 0),
-                    fastReportCharge: Number(booking.billSummary?.rapidDeliveryCharge || 0),
-                    couponDiscount: Number(booking.billSummary?.couponDiscount || 0),
-                    totalAmount: Number(booking.billSummary?.totalAmount || 0)
-                },
-
-                // 4. Lab Details
-                lab: {
-                    id: booking.labId?._id || null,
-                    name: booking.labId?.name || "Diagnostic Lab",
-                    address: booking.labId?.address || "",
-                    city: booking.labId?.city || "",
-                    phone: booking.labId?.phone || "",
-                    image: booking.labId?.profileImage || null,
-                    rating: booking.labId?.rating || 4.8
-                },
-
-                // 5. Phlebotomist Details (if assigned)
-                phlebotomist: booking.phlebotomistId ? {
-                    id: booking.phlebotomistId._id,
-                    name: booking.phlebotomistId.name,
-                    phone: booking.phlebotomistId.phone,
-                    vehicleNumber: booking.phlebotomistId.vehicleNumber,
-                    profilePic: booking.phlebotomistId.profilePic
-                } : null,
-
-                pickupOtp: booking.tracking?.otp || null,
-                reportFile: booking.reportFile || null,
-                patientReports: booking.patientReports || [],
-                patients: booking.patients || [],
-                items: booking.items || {},
-                deliveryAddress: booking.address || null
-            };
-        });
 
         res.status(200).json({
             success: true,
-            totalBookings,
-            totalPages: Math.ceil(totalBookings / parseInt(limit)),
-            currentPage: parseInt(page),
-            data: formattedBookings
+            count: bookings.length,
+            tab,
+            data: bookings
         });
-
     } catch (error) {
-        console.error("getMyBookings Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal Server Error in lab bookings history." });
+        console.error("Get My Bookings Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// @desc    Get Detailed Live Tracking Timeline & Diagnostic Report for Lab Order
+// @desc    Get Detailed Tracking Lifecycle for Lab Booking (Screenshots 9-Step Home vs Walk-In Aligned)
 // @route   GET /user/labs/details/:id/track
 // @access  Private (User)
 const getBookingDetails = async (req, res) => {
     try {
         const { id } = req.params;
-        const userId = req.user?.id || req.user?._id;
+        const userId = req.user.id;
 
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
-            userId,
-            $or: [
-                { _id: isObjectId ? new mongoose.Types.ObjectId(id) : new mongoose.Types.ObjectId() },
-                { bookingId: String(id).trim() }
-            ]
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() }),
+            userId
         };
 
         const booking = await LabBooking.findOne(query)
-            .populate('labId', 'name address phone city profileImage rating location')
-            .populate('phlebotomistId', 'name phone vehicleNumber profilePic vehicleType location')
-            .populate('items.tests.testId', 'testName sampleType mainCategory')
-            .populate('items.packages.packageId', 'packageName sampleTypes mainCategory')
+            .populate('labId', 'name address phone city profileImage location')
+            .populate('phlebotomistId', 'name phone profilePic vehicleNumber vehicleType location')
+            .populate('items.tests.testId', 'testName sampleType')
+            .populate('items.packages.packageId', 'packageName')
             .lean();
 
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        const isExpress = Number(booking.billSummary?.rapidDeliveryCharge || 0) > 0;
-        const isHome = booking.collectionType === 'Home Collection';
+        const isHomeCollection = booking.collectionType !== 'Visit Lab';
 
-        // 5-Step Diagnostic Tracking Timeline
-        const trackingTimeline = [
-            {
-                step: 1,
-                title: "Booking Confirmed",
-                description: `Order placed via ${booking.paymentMethod || 'Online'}`,
-                time: booking.createdAt,
-                isCompleted: true,
-                isCurrent: booking.status === 'Confirmed'
-            },
-            {
-                step: 2,
-                title: isHome ? "Phlebotomist Assigned" : "Lab Desk Ready",
-                description: booking.phlebotomistId ? `Phlebotomist ${booking.phlebotomistId.name} assigned` : "Awaiting sample arrival",
-                time: booking.startedAt || null,
-                isCompleted: ['Phlebotomist Assigned', 'Sample Collected', 'Sample Deposited', 'Testing', 'Report Generated', 'Completed'].includes(booking.status),
-                isCurrent: booking.status === 'Phlebotomist Assigned'
-            },
-            {
-                step: 3,
-                title: "Sample Collected",
-                description: isHome ? "Blood/urine sample collected at doorstep" : "Sample submitted at lab counter",
-                time: booking.collectedAt || null,
-                isCompleted: ['Sample Collected', 'Sample Deposited', 'Testing', 'Report Generated', 'Completed'].includes(booking.status),
-                isCurrent: booking.status === 'Sample Collected'
-            },
-            {
-                step: 4,
-                title: isExpress ? "Fast Express Testing (In Progress)" : "Testing in Progress",
-                description: "Sample undergoing automated clinical analyzer testing",
-                time: booking.depositedAt || null,
-                isCompleted: ['Testing', 'Report Generated', 'Completed'].includes(booking.status),
-                isCurrent: ['Sample Deposited', 'Testing'].includes(booking.status)
-            },
-            {
-                step: 5,
-                title: "Digital Report Ready",
-                description: "Pathologist verified report generated",
-                time: booking.status === 'Completed' ? booking.updatedAt : null,
-                isCompleted: ['Report Generated', 'Completed'].includes(booking.status),
-                isCurrent: ['Report Generated', 'Completed'].includes(booking.status)
-            }
-        ];
+        // 9-Tier Hierarchy for Home Collection
+        const homeHierarchy = {
+            'Confirmed': 1,
+            'Phlebotomist Assigned': 2,
+            'Arrived': 3,
+            'Sample Collected': 4,
+            'Sample on the way to lab': 5,
+            'Sample Delivered to Lab': 6,
+            'Sample Deposited': 6,
+            'Testing': 7,
+            'Report Generated': 8,
+            'Completed': 9
+        };
+
+        // 5-Tier Hierarchy for Walk-In (Patient directly visits lab center)
+        const walkInHierarchy = {
+            'Confirmed': 1,
+            'Sample Collected': 2,
+            'Sample Delivered to Lab': 2,
+            'Testing': 3,
+            'Report Generated': 4,
+            'Completed': 5
+        };
+
+        const currentStepWeight = isHomeCollection 
+            ? (homeHierarchy[booking.status] || 1)
+            : (walkInHierarchy[booking.status] || 1);
+
+        let stepsDefinition = [];
+
+        if (isHomeCollection) {
+            // 🚨 EXACT 9 STEPS FOR HOME COLLECTION (Screenshot Matching)
+            stepsDefinition = [
+                { title: "Order Confirmed", key: "Confirmed", step: 1, timestamp: booking.createdAt },
+                { title: "Phlebotomist Assigned", key: "Phlebotomist Assigned", step: 2, timestamp: booking.phlebotomistId ? booking.updatedAt : null },
+                { title: "Arrived at Location", key: "Arrived", step: 3, timestamp: booking.arrivedAt || null },
+                { title: "Sample Collected", key: "Sample Collected", step: 4, timestamp: booking.collectedAt || null },
+                { title: "Sample on the way to lab", key: "Sample on the way to lab", step: 5, timestamp: booking.sampleTransitStartedAt || null },
+                { title: "Sample Delivered to Lab", key: "Sample Delivered to Lab", step: 6, timestamp: booking.sampleDeliveredToLabAt || booking.depositedAt || null },
+                { title: "Testing in Progress", key: "Testing", step: 7, timestamp: booking.status === 'Testing' ? booking.updatedAt : null },
+                { title: "Report Generated", key: "Report Generated", step: 8, timestamp: booking.status === 'Report Generated' ? booking.updatedAt : null },
+                { title: "Completed", key: "Completed", step: 9, timestamp: booking.status === 'Completed' ? booking.updatedAt : null }
+            ];
+        } else {
+            // Simplified 5 Steps for Direct Lab Center Walk-In
+            stepsDefinition = [
+                { title: "Booking Confirmed", key: "Confirmed", step: 1, timestamp: booking.createdAt },
+                { title: "Sample Given at Lab", key: "Sample Delivered to Lab", step: 2, timestamp: booking.sampleDeliveredToLabAt || booking.collectedAt || null },
+                { title: "Testing in Progress", key: "Testing", step: 3, timestamp: booking.status === 'Testing' ? booking.updatedAt : null },
+                { title: "Report Generated", key: "Report Generated", step: 4, timestamp: booking.status === 'Report Generated' ? booking.updatedAt : null },
+                { title: "Report Ready & Completed", key: "Completed", step: 5, timestamp: booking.status === 'Completed' ? booking.updatedAt : null }
+            ];
+        }
+
+        const lifecycleProgress = stepsDefinition.map(s => ({
+            ...s,
+            isCompleted: currentStepWeight >= s.step,
+            isCurrent: currentStepWeight === s.step
+        }));
 
         res.status(200).json({
             success: true,
+            message: "Lab tracking details fetched successfully.",
             data: {
-                _id: booking._id,
                 bookingId: booking.bookingId,
-                status: booking.status,
-                paymentStatus: booking.paymentStatus,
-                paymentMethod: booking.paymentMethod || 'Online',
-                isCod: (booking.paymentMethod === 'COD'),
+                mongoId: booking._id,
+                currentStatus: booking.status,
                 collectionType: booking.collectionType,
-                isExpressReporting: isExpress,
-
-                // Schedule
-                schedule: {
-                    date: booking.appointmentDate ? moment(booking.appointmentDate).format('YYYY-MM-DD') : null,
-                    formattedDate: booking.appointmentDate ? moment(booking.appointmentDate).format('DD MMM YYYY') : null,
-                    timeSlot: booking.appointmentTime || "Standard Slot"
-                },
-
-                // Bill Summary
-                billSummary: {
-                    baseTestsTotal: Number(booking.billSummary?.itemTotal || 0),
-                    patientMultiplier: booking.patients?.length || 1,
-                    multipliedTotal: Number(booking.billSummary?.itemTotal || 0),
-                    homeSampleCollectionCharge: Number(booking.billSummary?.homeVisitCharge || 0),
-                    fastReportCharge: Number(booking.billSummary?.rapidDeliveryCharge || 0),
-                    couponDiscount: Number(booking.billSummary?.couponDiscount || 0),
-                    totalAmount: Number(booking.billSummary?.totalAmount || 0)
-                },
-
-                // Lab Info
-                lab: {
-                    id: booking.labId?._id || null,
-                    name: booking.labId?.name || "Diagnostic Lab",
-                    address: booking.labId?.address || "",
-                    city: booking.labId?.city || "",
-                    phone: booking.labId?.phone || "",
-                    image: booking.labId?.profileImage || null,
-                    rating: booking.labId?.rating || 4.8,
-                    location: booking.labId?.location || { lat: 0, lng: 0 }
-                },
-
-                // Assigned Phlebotomist
-                phlebotomist: booking.phlebotomistId ? {
-                    id: booking.phlebotomistId._id,
-                    name: booking.phlebotomistId.name,
-                    phone: booking.phlebotomistId.phone,
-                    vehicleNumber: booking.phlebotomistId.vehicleNumber,
-                    profilePic: booking.phlebotomistId.profilePic,
-                    currentLocation: booking.phlebotomistId.location || { lat: 0, lng: 0 }
-                } : null,
-
-                pickupOtp: booking.tracking?.otp || null,
+                isHomeCollection,
+                stepNumber: currentStepWeight,
+                totalSteps: stepsDefinition.length,
+                labDepositName: booking.labDepositName || null,
                 reportFile: booking.reportFile || null,
-                patientReports: booking.patientReports || [],
+                otp: booking.tracking?.otp || null,
+                phlebotomist: booking.phlebotomistId || null,
+                lab: booking.labId || null,
                 patients: booking.patients || [],
-                items: booking.items || {},
-                deliveryAddress: booking.address || null,
-                trackingTimeline
+                address: booking.address,
+                billSummary: booking.billSummary,
+                lifecycleProgress // 👈 Returns 9 steps for Home Collection & 5 steps for Walk-In
             }
         });
 
     } catch (error) {
-        console.error("getBookingDetails Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal Server Error in tracking lab booking." });
+        console.error("Get Lab Booking Tracking Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
-// 8. CANCEL BOOKING (User Side)
+
+// @desc    Cancel Lab Booking by Patient (Blocks cancellation after blood sample is drawn)
+// @route   PUT /user/labs/cancel/:id
+// @access  Private (User)
 const cancelBooking = async (req, res) => {
     try {
+        const { id } = req.params;
         const { reason } = req.body;
-        const booking = await LabBooking.findOne({ _id: req.params.id, userId: req.user.id });
+        const userId = req.user.id;
 
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() }),
+            userId
+        };
 
-        const terminalStates = ['Testing', 'Report Generated', 'Completed', 'Cancelled', 'No-Show'];
-        if (terminalStates.includes(booking.status)) {
-            return res.status(400).json({ success: false, message: "Cannot cancel booking in its current state." });
+        const booking = await LabBooking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 🚨 DYNAMIC POLICY EVALUATION (Checks if phlebotomist has started the trip)
-        const policyResult = await processCancellationRefund(booking, 'Lab');
+        // 🚨 BUSINESS LOGIC GUARD: Cannot cancel after sample is already collected or delivered to lab!
+        const postCollectionStatuses = [
+            'Sample Collected', 
+            'Sample on the way to lab', 
+            'Sample Delivered to Lab', 
+            'Sample Deposited', 
+            'Testing', 
+            'Report Generated', 
+            'Completed'
+        ];
+
+        if (postCollectionStatuses.includes(booking.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cancellation Denied: Your blood/diagnostic sample has already been collected (Current Status: '${booking.status}'). The diagnostic procedure cannot be cancelled.`
+            });
+        }
+
+        if (booking.status === 'Cancelled' || booking.status === 'No-Show') {
+            return res.status(400).json({ success: false, message: `Booking is already in '${booking.status}' state.` });
+        }
+
+        // Release Phlebotomist if assigned
+        if (booking.phlebotomistId) {
+            await Driver.findByIdAndUpdate(booking.phlebotomistId, { $set: { status: 'Available', isOnline: true } });
+        }
 
         booking.status = 'Cancelled';
-        booking.cancelReason = reason || "Cancelled by User";
+        booking.cancelReason = reason || "Cancelled by patient before sample collection.";
         
-        if (!booking.billSummary) booking.billSummary = {};
-        booking.billSummary.cancellationFeeApplied = policyResult.cancellationFee;
-        booking.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        // Payout refund queue
+        if (booking.paymentStatus === 'Paid') {
+            booking.paymentStatus = 'Refund-Initiated';
+        }
 
         await booking.save();
 
-        // Subscription benefit refund check
-        if (booking.collectionType === 'Home Collection' && booking.billSummary?.homeVisitCharge === 0) {
-            await refundBenefitCount(booking.userId, 'freeLabDeliveriesCount');
-        }
-
-        res.json({ 
-            success: true, 
-            message: policyResult.cancellationFee > 0
-                ? `Booking cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
-                : "Booking cancelled successfully. No charges applied.",
-            data: {
-                cancellationFee: policyResult.cancellationFee,
-                refundAmount: policyResult.refundAmount,
-                booking
-            }
+        res.status(200).json({
+            success: true,
+            message: "Lab booking cancelled successfully before sample collection. Refund initiated if paid online.",
+            data: booking
         });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Cancel Booking Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

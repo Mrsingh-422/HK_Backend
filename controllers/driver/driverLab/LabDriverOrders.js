@@ -194,7 +194,9 @@ const toggleDriverStatus = async (req, res) => {
 // 2. WORKFLOW & DIAGNOSTIC MANAGEMENT
 // ==========================================
 
-// Get Lab Phlebotomist Dashboard Overview (Figma Screen 2, 3 Map Card)
+// @desc    Get Lab Phlebotomist Dashboard Overview (Counts In-Transit & Collection Tasks)
+// @route   GET /driver/lab/dashboard
+// @access  Private (Driver)
 const getLabDashboard = async (req, res) => {
     try {
         const driverId = req.user.id;
@@ -202,13 +204,20 @@ const getLabDashboard = async (req, res) => {
         const driver = await Driver.findById(driverId);
         if (!driver) return res.status(404).json({ success: false, message: "Phlebotomist account not found" });
 
-        // Count active collections
+        // 🚨 BUG FIX: Include both 'Sample Collected' and 'Sample on the way to lab' in active tasks
         const activeCount = await LabBooking.countDocuments({
             phlebotomistId: driverId,
-            status: { $in: ['Phlebotomist Assigned', 'Sample Collected'] }
+            status: { 
+                $in: [
+                    'Phlebotomist Assigned', 
+                    'Arrived', 
+                    'Sample Collected', 
+                    'Sample on the way to lab' 
+                ] 
+            }
         });
 
-        res.json({
+        res.status(200).json({
             success: true,
             data: {
                 driver: {
@@ -222,34 +231,57 @@ const getLabDashboard = async (req, res) => {
             }
         });
     } catch (error) {
+        console.error("Get Lab Dashboard Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// Get All Lab Assigned Orders (Upgraded with dynamic status-filtering tabs)
-// endpoint: GET /driver/lab/orders/list?tab=Active
+// @desc    Get All Lab Assigned Orders (Maintains visibility during sample transit & deposit)
+// @route   GET /driver/lab/orders/list?tab=Active
+// @access  Private (Driver)
 const getDriverOrders = async (req, res) => {
     try {
         const phlebotomistId = req.user.id;
-        const { tab } = req.query; // Expects: 'Active' | 'Complete' | 'Cancelled' | undefined (All)
+        const { tab } = req.query; // 'Active' | 'Complete' | 'Cancelled'
         
         let query = { phlebotomistId };
 
-        // Figma tab level filters application
+        // 🚨 BUG FIX: Correctly map both new statuses into the respective tabs
         if (tab === 'Active') {
-            query.status = { $in: ['Phlebotomist Assigned', 'Sample Collected', 'Arrived'] };
+            query.status = { 
+                $in: [
+                    'Phlebotomist Assigned', 
+                    'Arrived', 
+                    'Sample Collected', 
+                    'Sample on the way to lab' 
+                ] 
+            };
         } else if (tab === 'Complete') {
-            query.status = { $in: ['Sample Deposited', 'Completed'] };
+            query.status = { 
+                $in: [
+                    'Sample Delivered to Lab', 
+                    'Sample Deposited', 
+                    'Testing', 
+                    'Report Generated', 
+                    'Completed' 
+                ] 
+            };
         } else if (tab === 'Cancelled') {
-            query.status = 'Cancelled';
+            query.status = { $in: ['Cancelled', 'No-Show'] };
         }
 
         const orders = await LabBooking.find(query)
-            .select('bookingId status collectionType address appointmentDate appointmentTime totalPrice billSummary createdAt')
-            .sort({ createdAt: -1 });
+            .select('bookingId status collectionType address appointmentDate appointmentTime totalPrice billSummary createdAt sampleTransitStartedAt sampleDeliveredToLabAt')
+            .sort({ createdAt: -1 })
+            .lean();
 
-        res.json({ success: true, count: orders.length, data: orders });
+        res.status(200).json({ 
+            success: true, 
+            count: orders.length, 
+            data: orders 
+        });
     } catch (error) { 
+        console.error("Get Driver Orders Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -427,31 +459,136 @@ const verifySampleCollection = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+// @desc    Phlebotomist starts journey from patient location to lab with collected samples
+// @route   PATCH /driver/lab/orders/transit-to-lab/:orderId
+// @access  Private (Driver)
+const startSampleTransitToLab = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const driverId = req.user.id;
 
-// Delivered Sample to Lab (Figma Screen 6 & 12)
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            ...(isObjectId ? { _id: orderId } : { bookingId: String(orderId).trim() }),
+            phlebotomistId: driverId
+        };
+
+        const order = await LabBooking.findOne(query)
+            .populate('userId', 'name phone fcmToken')
+            .populate('labId', 'name');
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Active booking order not found for this phlebotomist." });
+        }
+
+        if (order.status !== 'Sample Collected') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot start transit to lab. Current status is '${order.status}'. Please collect sample first.` 
+            });
+        }
+
+        // Update status to 'Sample on the way to lab'
+        order.status = 'Sample on the way to lab';
+        order.sampleTransitStartedAt = new Date();
+        await order.save();
+
+        const driverName = req.user?.name || "Phlebotomist";
+
+        // Notify Patient
+        if (order.userId) {
+            try {
+                await sendPushNotification(
+                    order.userId._id,
+                    'user',
+                    "🧪 Sample On The Way To Lab",
+                    `Phlebotomist ${driverName} is now carrying your collected diagnostic sample to ${order.labId?.name || 'the testing laboratory'}.`,
+                    {
+                        type: 'LAB_SAMPLE_IN_TRANSIT',
+                        serviceType: 'Lab',
+                        bookingId: String(order.bookingId),
+                        id: String(order._id),
+                        status: 'Sample on the way to lab',
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Sample Transit Push Error:", e.message);
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Sample is now on the way to the laboratory.", 
+            data: order 
+        });
+    } catch (error) {
+        console.error("Start Sample Transit Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// @desc    Phlebotomist deposits sample at lab reception & releases driver status to Available
+// @route   POST /driver/lab/orders/deliver-lab/:orderId
+// @access  Private (Driver)
 const deliverSampleToLab = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { labDepositName } = req.body; 
         const driverId = req.user.id;
 
-        const order = await LabBooking.findById(orderId);
-        if (!order) return res.status(404).json({ message: "Order not found" });
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            ...(isObjectId ? { _id: orderId } : { bookingId: String(orderId).trim() }),
+            phlebotomistId: driverId
+        };
 
-        if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
-            return res.status(403).json({ message: "Unauthorized" });
-        }
+        const order = await LabBooking.findOne(query)
+            .populate('userId', 'name phone fcmToken')
+            .populate('labId', 'name');
 
-        order.status = 'Sample Deposited';
-        order.labDepositName = labDepositName || "HK Lab";
+        if (!order) return res.status(404).json({ success: false, message: "Order not found or unauthorized." });
+
+        // Update status to 'Sample Delivered to Lab'
+        order.status = 'Sample Delivered to Lab';
+        order.labDepositName = labDepositName || order.labId?.name || "Lab Sample Processing Center";
         order.depositedAt = new Date();
+        order.sampleDeliveredToLabAt = new Date();
         await order.save();
 
         // Release Phlebotomist Driver back to Available
-        await Driver.findByIdAndUpdate(driverId, { status: 'Available' });
+        await Driver.findByIdAndUpdate(driverId, { $set: { status: 'Available', isOnline: true } });
 
-        res.json({ success: true, message: "Sample delivered to lab successfully. You are now Available!", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // Notify Patient
+        if (order.userId) {
+            try {
+                await sendPushNotification(
+                    order.userId._id,
+                    'user',
+                    "🏥 Sample Delivered to Lab",
+                    `Your diagnostic sample has been safely delivered to ${order.labDepositName}. Testing will begin shortly.`,
+                    {
+                        type: 'LAB_SAMPLE_DELIVERED',
+                        serviceType: 'Lab',
+                        bookingId: String(order.bookingId),
+                        id: String(order._id),
+                        status: 'Sample Delivered to Lab',
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Sample Delivered Push Error:", e.message);
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Sample delivered to lab successfully. Phlebotomist is now Available!", 
+            data: order 
+        });
+    } catch (error) { 
+        console.error("Deliver Sample To Lab Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // @desc    Create Fresh Diagnostic Booking from Patient's House (Links real Patient User ID)
@@ -621,7 +758,7 @@ const getAdminContact = async (req, res) => {
     });
 };
 
-// @desc    Reassign Lab Order due to Driver Emergency (Safe array tracking & Vendor alert)
+// @desc    Reassign Lab Order due to Driver Emergency (Blocks if blood sample is already in driver possession)
 // @route   POST /driver/lab/orders/reassign-emergency
 // @access  Private (Driver)
 const reassignLabOrderDueToEmergency = async (req, res) => {
@@ -629,12 +766,23 @@ const reassignLabOrderDueToEmergency = async (req, res) => {
         const { bookingId, reason } = req.body;
         const driverId = req.user.id;
 
-        const driver = await Driver.findById(driverId);
-        const order = await LabBooking.findById(bookingId);
-        if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            ...(isObjectId ? { _id: bookingId } : { bookingId: String(bookingId).trim() }),
+            phlebotomistId: driverId
+        };
 
-        if (!order.phlebotomistId || order.phlebotomistId.toString() !== driverId) {
-            return res.status(403).json({ success: false, message: "Unauthorized operation." });
+        const order = await LabBooking.findOne(query);
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order not found or unauthorized operation." });
+        }
+
+        // 🚨 SECURITY GUARD: Prevent driver from abandoning an order once physical blood sample is drawn!
+        if (order.status === 'Sample Collected' || order.status === 'Sample on the way to lab') {
+            return res.status(400).json({
+                success: false,
+                message: "Security Block: Patient sample has already been collected and is in your possession. You cannot drop this duty. Please deposit the sample at the laboratory or contact your lab supervisor immediately."
+            });
         }
 
         const labId = order.labId;
@@ -649,48 +797,62 @@ const reassignLabOrderDueToEmergency = async (req, res) => {
         order.rejectedBy.push(driverId);
         await order.save();
 
-        await Driver.findByIdAndUpdate(driverId, { status: 'Available', isOnline: true });
+        await Driver.findByIdAndUpdate(driverId, { $set: { status: 'Available', isOnline: true } });
 
-        // Alert Lab Vendor
+        // Alert Lab Vendor to reassign another staff
         if (labId) {
-            await sendPushNotification(
-                labId,
-                'lab',
-                "⚠️ Phlebotomist Emergency Reported!",
-                `Phlebotomist ${driver?.name || ''} dropped Order #${order.bookingId} due to emergency: "${reason || 'N/A'}". Please re-assign another staff immediately.`,
-                { orderId: order._id.toString(), type: 'driver_emergency_dropped' }
-            );
+            try {
+                await sendPushNotification(
+                    labId,
+                    'lab',
+                    "⚠️ Phlebotomist Emergency Reported!",
+                    `Phlebotomist reported emergency for Order #${order.bookingId}: "${reason || 'Emergency'}". Order returned to pool for reassignment.`,
+                    { orderId: order._id.toString(), type: 'driver_emergency_dropped' }
+                );
+            } catch (e) {}
         }
 
-        res.status(200).json({ success: true, message: "Lab collection duty released and Vendor notified.", data: order });
+        res.status(200).json({ 
+            success: true, 
+            message: "Lab collection duty released and Lab Vendor notified.", 
+            data: order 
+        });
     } catch (error) { 
         console.error("Reassign Lab Order Emergency Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// ==========================================
-// 4. MISSING HISTORY & LEGAL APIs
-// ==========================================
-
-// Get Phlebotomist Service History
+// @desc    Get Phlebotomist Service History (Includes Sample Delivered to Lab orders)
+// @route   GET /driver/lab/orders/history
+// @access  Private (Driver)
 const getDriverHistory = async (req, res) => {
     try {
         const phlebotomistId = req.user.id;
 
+        // 🚨 BUG FIX: Include 'Sample Delivered to Lab' and in-lab statuses in history
         const bookings = await LabBooking.find({
             phlebotomistId,
-            status: { $in: ['Sample Deposited', 'Completed', 'Cancelled'] }
+            status: { 
+                $in: [
+                    'Sample Delivered to Lab', 
+                    'Sample Deposited', 
+                    'Testing', 
+                    'Report Generated', 
+                    'Completed', 
+                    'Cancelled', 
+                    'No-Show'
+                ] 
+            }
         })
         .populate('userId', 'name phone')
-        .sort({ updatedAt: -1 });
+        .sort({ updatedAt: -1 })
+        .lean();
 
-        const formattedHistory = bookings.map(b => {
-            const bObj = b.toObject();
-            
+        const formattedHistory = bookings.map(bObj => {
             const formattedDate = bObj.appointmentDate 
                 ? moment(bObj.appointmentDate).format('DD-MMMM-YYYY') 
-                : "";
+                : moment(bObj.createdAt).format('DD-MMMM-YYYY');
 
             return {
                 bookingId: bObj._id,
@@ -698,23 +860,25 @@ const getDriverHistory = async (req, res) => {
                 patientName: bObj.patients && bObj.patients.length > 0 ? bObj.patients[0].name : "Self",
                 mobileNo: bObj.address ? bObj.address.phone : (bObj.userId ? bObj.userId.phone : ""),
                 location: bObj.address 
-                    ? `${bObj.address.houseNo}, ${bObj.address.city}, ${bObj.address.pincode}` 
+                    ? `${bObj.address.houseNo || ''}, ${bObj.address.city || ''}, ${bObj.address.pincode || ''}`.replace(/^, |, $/g, '') 
                     : "N/A",
                 date: formattedDate,
                 time: bObj.appointmentTime || "",
                 status: bObj.status,
-                totalPrice: bObj.totalPrice || 0,
-                cancelReason: bObj.cancelReason || bObj.noShowComments || null
+                totalPrice: bObj.totalPrice || bObj.billSummary?.totalAmount || 0,
+                cancelReason: bObj.cancelReason || bObj.noShowComments || null,
+                deliveredAt: bObj.sampleDeliveredToLabAt || bObj.depositedAt || null
             };
         });
 
-        res.json({
+        res.status(200).json({
             success: true,
             totalOrders: formattedHistory.length, 
             data: formattedHistory
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Get Driver History Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1018,7 +1182,7 @@ module.exports = {
     startDelivery,
     arriveAtLocation,
     verifySampleCollection,
-    deliverSampleToLab,
+    startSampleTransitToLab,deliverSampleToLab,
     reportNoResponse,
     createBookingAtHome,
     addFamilyToBooking,

@@ -13,75 +13,131 @@ const { deleteFile } = require('../../../utils/fileHandler');
 const NoShowConfig = require('../../../models/NoShowConfig');
 
 
-// 1. GET DASHBOARD STATS (Updated with Priority Count)
+// @desc    Get Lab Provider Dashboard Stats (Includes in-transit & delivered sample counters)
+// @route   GET /provider/labs/dashboard
+// @access  Private (Lab)
 const getLabStats = async (req, res) => {
     try {
         const labId = req.user.id;
 
-        const [requests, priorityRequests, accepted, completed] = await Promise.all([
-            LabBooking.countDocuments({ labId, status: 'Pending' }),
-            // Count of pending bookings that have a rapid/priority delivery charge
+        const [
+            totalOrders,
+            pendingOrders,
+            inTransitSamples,
+            inLabTesting,
+            completedOrders,
+            revenueData
+        ] = await Promise.all([
+            LabBooking.countDocuments({ labId }),
+            LabBooking.countDocuments({ labId, status: { $in: ['Pending', 'Confirmed'] } }),
+            
+            // 🚨 BUG FIX: Accurately count samples currently on the way to lab
             LabBooking.countDocuments({ 
                 labId, 
-                status: 'Pending', 
-                'billSummary.rapidDeliveryCharge': { $gt: 0 } 
+                status: { $in: ['Sample Collected', 'Sample on the way to lab'] } 
             }),
-            LabBooking.countDocuments({ labId, status: 'Confirmed' }),
-            LabBooking.countDocuments({ labId, status: 'Completed' })
+
+            // 🚨 BUG FIX: Accurately count samples delivered at lab & under testing
+            LabBooking.countDocuments({ 
+                labId, 
+                status: { $in: ['Sample Delivered to Lab', 'Sample Deposited', 'Testing', 'Report Generated'] } 
+            }),
+
+            LabBooking.countDocuments({ labId, status: 'Completed' }),
+
+            LabBooking.aggregate([
+                { $match: { labId: new mongoose.Types.ObjectId(labId), status: 'Completed' } },
+                { $group: { _id: null, total: { $sum: "$totalPrice" } } }
+            ])
         ]);
-        
-        const wallet = await Wallet.findOne({ vendorId: labId });
-        res.json({ 
-            success: true, 
-            data: { 
-                requests, 
-                priorityRequests, // For UI Priority Tab Badge
-                accepted, 
-                completed, 
-                todayEarnings: wallet?.balance || 0 
-            } 
+
+        const totalRevenue = revenueData.length > 0 ? revenueData[0].total : 0;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                totalOrders,
+                pendingOrders,
+                inTransitSamples,    // 👈 Samples currently on the way
+                inLabTesting,        // 👈 Samples received at lab & testing
+                completedOrders,
+                totalRevenue
+            }
         });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Get Lab Stats Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 2. GET ORDER LIST (With Filter & Priority Logic)
-// endpoint: GET /api/provider/labs/orders
+// @desc    Get Lab Orders with Status Filters (Preserves visibility in transit & in lab)
+// @route   GET /provider/labs/orders
+// @access  Private (Lab)
 const getOrders = async (req, res) => {
     try {
-        const { status, isPriority } = req.query;
-        let query = { labId: req.user.id };
-        
-        // 1. Status Filter
-        if (status) query.status = status;
+        const labId = req.user.id;
+        const { status, tab, priority, page = 1, limit = 20 } = req.query;
 
-        // 2. Priority / Rapid Delivery Filter
-        if (isPriority === 'true') {
-            // Bookings that have rapid delivery charges applied (> 0)
-            query['billSummary.rapidDeliveryCharge'] = { $gt: 0 };
-        } else if (isPriority === 'false') {
-            // Bookings that are normal/regular delivery (charge is 0)
-            query['billSummary.rapidDeliveryCharge'] = 0;
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
+
+        let query = { labId };
+
+        // 🚨 BUG FIX: Map both new statuses into the vendor Active / Testing tabs
+        if (tab === 'Active' || tab === 'In-Progress') {
+            query.status = { 
+                $in: [
+                    'Confirmed', 
+                    'Phlebotomist Assigned', 
+                    'Arrived', 
+                    'Sample Collected', 
+                    'Sample on the way to lab', 
+                    'Sample Delivered to Lab', 
+                    'Sample Deposited', 
+                    'Testing', 
+                    'Report Generated'
+                ] 
+            };
+        } else if (tab === 'In-Lab') {
+            // Samples that arrived at lab and are ready for analyzer
+            query.status = { $in: ['Sample Delivered to Lab', 'Sample Deposited', 'Testing', 'Report Generated'] };
+        } else if (tab === 'Completed') {
+            query.status = 'Completed';
+        } else if (tab === 'Cancelled') {
+            query.status = { $in: ['Cancelled', 'No-Show'] };
+        } else if (status && status !== 'All') {
+            query.status = status;
         }
 
-        const orders = await LabBooking.find(query)
-            .populate('userId', 'name phone address')
-            .populate('phlebotomistId', 'name phone')
-            .populate({
-                path: 'items.packages.packageId',
-                select: 'packageName tests', // Select package fields
-                populate: {
-                    path: 'tests', // Populate nested MasterLabTest array
-                    model: 'MasterLabTest',
-                    select: 'testName' // Select only testName field
-                }
-            })
-            .sort({ createdAt: -1 });
+        if (priority === 'Rapid') {
+            query['billSummary.rapidDeliveryCharge'] = { $gt: 0 };
+        }
 
-        res.json({ success: true, count: orders.length, data: orders });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        const [total, orders] = await Promise.all([
+            LabBooking.countDocuments(query),
+            LabBooking.find(query)
+                .populate('userId', 'name phone email profilePic')
+                .populate('phlebotomistId', 'name phone vehicleNumber vehicleType status location')
+                .populate('items.tests.testId', 'testName sampleType discountPrice amount')
+                .populate('items.packages.packageId', 'packageName offerPrice mrp')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        res.status(200).json({
+            success: true,
+            total,
+            count: orders.length,
+            currentPage: pageNum,
+            totalPages: Math.ceil(total / limitNum),
+            data: orders
+        });
+    } catch (error) {
+        console.error("Get Lab Orders Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -168,98 +224,156 @@ const assignStaff = async (req, res) => {
     }
 };
 
-// 5. UPDATE PROGRESS (Sample Collected -> Testing -> Report Generated)
+// @desc    Lab Provider updates test progress status ('Sample Delivered to Lab', 'Testing', 'Report Generated')
+// @route   PATCH /provider/labs/update-progress/:orderId
+// @access  Private (Lab)
 const updateProgressStatus = async (req, res) => {
     try {
-        const { status } = req.body; 
-        const validStatuses = ['Sample Collected', 'Testing', 'Report Generated'];
-        
-        if (!validStatuses.includes(status)) return res.status(400).json({ message: "Invalid status" });
+        const { orderId } = req.params;
+        const { status } = req.body;
+        const labId = req.user.id;
 
-        const order = await LabBooking.findOneAndUpdate(
-            { _id: req.params.orderId, labId: req.user.id },
-            { status },
-            { new: true }
-        );
-        res.json({ success: true, message: "Status updated", data: order });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        const validStatuses = [
+            'Sample on the way to lab',
+            'Sample Delivered to Lab',
+            'Sample Deposited',
+            'Testing',
+            'Report Generated',
+            'Completed'
+        ];
+
+        if (!status || !validStatuses.includes(status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Invalid status. Allowed values: ${validStatuses.join(', ')}` 
+            });
+        }
+
+        const isObjectId = mongoose.Types.ObjectId.isValid(orderId);
+        const query = {
+            labId,
+            ...(isObjectId ? { _id: orderId } : { bookingId: orderId })
+        };
+
+        const booking = await LabBooking.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found or unauthorized." });
+        }
+
+        booking.status = status;
+        if (status === 'Sample Delivered to Lab') {
+            booking.sampleDeliveredToLabAt = new Date();
+        }
+        await booking.save();
+
+        const labName = req.user?.name || "Diagnostic Lab";
+
+        // Patient Notification
+        if (booking.userId) {
+            try {
+                let title = `🔬 Lab Testing Update: ${booking.bookingId}`;
+                let message = `Your sample status is now: ${status}`;
+
+                if (status === 'Testing') {
+                    title = `🧪 Testing in Progress: ${booking.bookingId}`;
+                    message = `${labName} has started processing and analyzing your test samples.`;
+                } else if (status === 'Report Generated') {
+                    title = `📄 Report Ready: ${booking.bookingId}`;
+                    message = `Diagnostic findings for ${booking.bookingId} have been recorded. Final report uploading shortly.`;
+                }
+
+                await sendPushNotification(
+                    booking.userId._id,
+                    'user',
+                    title,
+                    message,
+                    {
+                        type: 'LAB_PROGRESS_UPDATE',
+                        serviceType: 'Lab',
+                        bookingId: String(booking.bookingId),
+                        status: String(status),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Lab Progress Push Error:", e.message);
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: `Booking progress updated to '${status}'.`, 
+            data: booking 
+        });
+
+    } catch (error) {
+        console.error("Update Progress Status Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 6. UPLOAD REPORT & COMPLETE (Clean Web-URL & Multi-Patient Fallback)
-// endpoint: POST /provider/labs/upload-report/:orderId
+// @desc    Upload final Lab Report PDF & notify patient immediately with direct view link
+// @route   POST /provider/labs/upload-report/:orderId
+// @access  Private (Lab)
 const uploadReport = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { patientId } = req.body;
         const labId = req.user.id;
 
-        if (!req.file) {
-            return res.status(400).json({ success: false, message: "PDF report file is required." });
+        if (!req.files || !req.files['labReport'] || req.files['labReport'].length === 0) {
+            return res.status(400).json({ success: false, message: "Please upload the medical report PDF." });
         }
 
-        // Clean relative web-accessible URL path
-        let cleanPath = req.file.path.replace(/\\/g, '/');
-        if (cleanPath.startsWith('public/')) {
-            cleanPath = cleanPath.replace('public/', '/');
-        } else if (!cleanPath.startsWith('/')) {
-            cleanPath = '/' + cleanPath;
-        }
+        const reportFilePath = `/uploads/user_reports/${req.files['labReport'][0].filename}`;
 
-        const booking = await LabBooking.findOne({ _id: orderId, labId });
+        const booking = await LabBooking.findOne({ 
+            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { bookingId: orderId }],
+            labId 
+        }).populate('userId', 'name phone fcmToken');
+
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking record not found or unauthorized." });
+            return res.status(404).json({ success: false, message: "Lab booking not found or unauthorized." });
         }
 
-        // Target patient identification
-        let targetPatient = null;
-        if (patientId) {
-            targetPatient = booking.patients.find(p => 
-                String(p.patientId) === String(patientId) || 
-                String(p._id) === String(patientId) ||
-                (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
-            );
-        }
-        if (!targetPatient && booking.patients && booking.patients.length > 0) {
-            targetPatient = booking.patients[0];
-        }
-
-        const resolvedPatientId = targetPatient ? (targetPatient.patientId || targetPatient._id || "Self") : "Self";
-        const resolvedPatientName = targetPatient ? targetPatient.name : "Patient";
-
-        if (!booking.patientReports) booking.patientReports = [];
-        
-        // Remove duplicate entry for this patient if re-uploaded
-        booking.patientReports = booking.patientReports.filter(r => String(r.patientId) !== String(resolvedPatientId));
-
-        booking.patientReports.push({
-            patientId: resolvedPatientId,
-            patientName: resolvedPatientName,
-            reportFile: cleanPath
-        });
-
-        // Set status to Completed if all patient reports are uploaded
-        const allCompleted = booking.patients.every(p => {
-            const tId = p.patientId || p._id || "Self";
-            return booking.patientReports.some(r => String(r.patientId) === String(tId));
-        });
-
-        booking.status = allCompleted ? 'Completed' : 'Testing';
-        booking.reportFile = cleanPath; // Fallback primary report link
-
-        booking.markModified('patientReports');
+        booking.reportFile = reportFilePath;
+        booking.status = 'Completed';
         await booking.save();
 
-        res.json({ 
-            success: true, 
-            message: `Report uploaded successfully for ${resolvedPatientName}!`, 
-            reportUrl: cleanPath,
-            data: booking 
+        const labName = req.user?.name || "Diagnostic Lab";
+
+        // 🚨 PATIENT ALERT: Instant push notification & in-app inbox record for report ready
+        if (booking.userId) {
+            try {
+                await sendPushNotification(
+                    booking.userId._id,
+                    'user',
+                    `📑 Lab Report Ready: ${booking.bookingId}`,
+                    `Your diagnostic report from ${labName} is ready to view and download. Tap here to view results.`,
+                    {
+                        type: 'LAB_REPORT_COMPLETED',
+                        serviceType: 'Lab',
+                        bookingId: String(booking.bookingId),
+                        id: String(booking._id),
+                        reportUrl: String(reportFilePath),
+                        vendorName: String(labName),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (notifErr) {
+                console.error("Lab Report Ready Notification Error:", notifErr.message);
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Report uploaded successfully and patient notified.",
+            reportUrl: reportFilePath,
+            data: booking
         });
-    } catch (error) { 
-        console.error("uploadReport Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+
+    } catch (error) {
+        console.error("Upload Lab Report Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -464,86 +578,69 @@ const getReportData = async (req, res) => {
 };
 
 
-// 8. UPLOAD CLIENT GENERATED PDF (Safe from EXDEV cross-device link issues)
-// endpoint: POST /provider/labs/upload-client-pdf/:orderId
+// @desc    Upload client-side compiled PDF report & notify patient with download link
+// @route   POST /provider/labs/upload-client-pdf/:orderId
+// @access  Private (Lab)
 const uploadClientGeneratedPDF = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { patientId } = req.body;
+        const labId = req.user.id;
 
         if (!req.file) {
-            return res.status(400).json({ success: false, message: "Please upload the compiled PDF file." });
+            return res.status(400).json({ success: false, message: "No PDF report file provided." });
         }
 
-        const booking = await LabBooking.findById(orderId);
+        const reportFilePath = `/uploads/user_reports/${req.file.filename}`;
+
+        const isObjectId = mongoose.Types.ObjectId.isValid(orderId);
+        const query = {
+            labId,
+            ...(isObjectId ? { _id: orderId } : { bookingId: orderId })
+        };
+
+        const booking = await LabBooking.findOne(query).populate('userId', 'name phone fcmToken');
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking not found." });
+            return res.status(404).json({ success: false, message: "Lab booking not found or unauthorized." });
         }
 
-        // Identify Target Patient
-        let patient = null;
-        if (patientId && patientId !== "undefined" && patientId !== "null") {
-            patient = booking.patients.find(p => 
-                String(p.patientId) === String(patientId) || 
-                String(p._id) === String(patientId) ||
-                (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
-            );
-        }
-        if (!patient && booking.patients && booking.patients.length > 0) {
-            patient = booking.patients[0];
-        }
-        if (!patient) {
-            patient = { name: "Patient", age: 30, gender: "Female" };
-        }
+        booking.reportFile = reportFilePath;
+        booking.status = 'Completed';
+        await booking.save();
 
-        const cleanPatientName = String(patient.name).trim().replace(/\s+/g, '_');
-        const reportFileName = `report-${booking.bookingId}-${cleanPatientName}.pdf`;
-        const destPath = path.join(process.cwd(), 'public', 'uploads', 'user_reports', reportFileName);
+        const labName = req.user?.name || "Diagnostic Lab";
 
-        // Safe file move supporting container volumes (EXDEV fallback)
-        try {
-            fs.renameSync(req.file.path, destPath);
-        } catch (renameErr) {
-            if (renameErr.code === 'EXDEV') {
-                fs.copyFileSync(req.file.path, destPath);
-                fs.unlinkSync(req.file.path);
-            } else {
-                throw renameErr;
+        // 🚨 PATIENT ALERT: Instant push notification for completed smart report
+        if (booking.userId) {
+            try {
+                await sendPushNotification(
+                    booking.userId._id,
+                    'user',
+                    `📑 Smart Report Ready: ${booking.bookingId}`,
+                    `Your comprehensive Smart Health Report from ${labName} is ready. Tap to view and download.`,
+                    {
+                        type: 'LAB_REPORT_COMPLETED',
+                        serviceType: 'Lab',
+                        bookingId: String(booking.bookingId),
+                        id: String(booking._id),
+                        reportUrl: String(reportFilePath),
+                        vendorName: String(labName),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (notifErr) {
+                console.error("Smart Report Notification Error:", notifErr.message);
             }
         }
 
-        if (!booking.patientReports) booking.patientReports = [];
-        booking.patientReports = booking.patientReports.filter(r => String(r.patientId) !== String(patient.patientId || patient._id || "Self"));
-
-        const finalReportFile = `/uploads/user_reports/${reportFileName}`;
-
-        booking.patientReports.push({
-            patientId: patient.patientId || patient._id || "Self",
-            patientName: patient.name,
-            reportFile: finalReportFile
-        });
-
-        // Check if all patients have completed reports
-        const allCompleted = booking.patients.every(p => {
-            const targetId = p.patientId || p._id || "Self";
-            return booking.patientReports.some(r => String(r.patientId) === String(targetId));
-        });
-
-        booking.status = allCompleted ? 'Completed' : 'Testing';
-        booking.reportFile = finalReportFile;
-        
-        booking.markModified('patientReports');
-        await booking.save();
-
-        res.json({
+        res.status(200).json({
             success: true,
-            message: `Client PDF report for ${patient.name} (${patient.gender}) successfully saved!`,
-            reportUrl: finalReportFile,
+            message: "Smart Report PDF uploaded successfully and patient notified.",
+            reportUrl: reportFilePath,
             data: booking
         });
 
     } catch (error) {
-        console.error("uploadClientGeneratedPDF Error:", error);
+        console.error("Upload Client PDF Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -682,43 +779,61 @@ const getReportTemplatesForBooking = async (req, res) => {
     }
 };
 
-// 4. SAVE DRAFT RESULTS (Partitioned by Patient ID & Gender Snapshot)
-// endpoint: POST /provider/labs/save-draft/:orderId
+// @desc    Lab Technician saves observed test values draft in LIMS console
+// @route   POST /provider/labs/save-draft/:orderId
+// @access  Private (Lab)
 const saveDraftResults = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { testValues, patientId, gender } = req.body;
+        const { testValues, patientId } = req.body;
+        const labId = req.user.id;
 
-        if (!testValues || !patientId) {
-            return res.status(400).json({ success: false, message: "Both 'testValues' and 'patientId' are required." });
+        const isObjectId = mongoose.Types.ObjectId.isValid(orderId);
+        const query = {
+            labId,
+            ...(isObjectId ? { _id: orderId } : { bookingId: orderId })
+        };
+
+        const booking = await LabBooking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found or unauthorized." });
         }
 
-        const booking = await LabBooking.findById(orderId);
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
+        // 🚨 BUG FIX: Allow drafting as soon as sample is delivered to lab or in testing
+        const allowedDraftStatuses = [
+            'Sample Delivered to Lab',
+            'Sample Deposited',
+            'Testing',
+            'Report Generated'
+        ];
 
-        if (!booking.testResults || typeof booking.testResults !== 'object') {
+        // If sample has reached lab, auto-transition to 'Testing' on first draft input
+        if (booking.status === 'Sample Delivered to Lab' || booking.status === 'Sample Deposited') {
+            booking.status = 'Testing';
+        } else if (!allowedDraftStatuses.includes(booking.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot enter test results. Sample must be delivered to lab first (Current Status: '${booking.status}').` 
+            });
+        }
+
+        if (!booking.testResults) {
             booking.testResults = {};
         }
 
-        // Save progress partitioned by patientId with gender snapshot
-        booking.testResults[patientId] = {
-            genderApplied: gender || 'Both',
-            savedAt: new Date(),
-            values: testValues
-        };
-
+        const targetPatientKey = patientId || "default";
+        booking.testResults[targetPatientKey] = testValues;
         booking.markModified('testResults');
-        booking.status = 'Testing';
-
         await booking.save();
 
-        res.json({ 
-            success: true, 
-            message: "Draft saved for this patient successfully.", 
-            data: booking.testResults[patientId] 
+        res.status(200).json({
+            success: true,
+            message: "Test results draft saved successfully in LIMS. Status updated to Testing.",
+            status: booking.status,
+            data: booking.testResults[targetPatientKey]
         });
     } catch (error) {
-        console.error("saveDraftResults Error:", error.message);
+        console.error("Save Draft Results Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -930,39 +1045,71 @@ const startLabPrescriptionReview = async (req, res) => {
     }
 };
 
-// @desc    Lab generates verified bill for prescription & sends detailed notification to user
+// @desc    Lab generates verified bill for prescription (Supports both custom requestId and MongoDB _id)
 // @route   POST /provider/labs/prescription-request/review/:requestId
-// @access  Private (Lab)
+// @access  Private (Lab Provider)
 const submitLabReviewBill = async (req, res) => {
     try {
         const { requestId } = req.params;
         const labId = req.user.id;
         const { items, deliveryCharge } = req.body;
 
-        const request = await LabPrescriptionRequest.findOne({ requestId, labId });
-        if (!request) {
-            return res.status(404).json({
-                success: false,
-                message: "Review request not found or unauthorized to bill this prescription."
+        if (!requestId || String(requestId).trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Prescription requestId parameter is required in URL." 
             });
         }
 
-        if (request.status !== 'Pending Review' && request.status !== 'Reviewing') {
+        const cleanRequestId = String(requestId).trim();
+        const isObjectId = mongoose.isValidObjectId(cleanRequestId);
+
+        // 🚨 DUAL LOOKUP FIX: Searches by both MongoDB _id and custom requestId string
+        const requestQuery = {
+            labId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanRequestId) }] : []),
+                { requestId: cleanRequestId }
+            ]
+        };
+
+        const request = await LabPrescriptionRequest.findOne(requestQuery);
+        if (!request) {
+            return res.status(404).json({
+                success: false,
+                message: `Prescription request '${cleanRequestId}' not found or you are not authorized to bill it.`
+            });
+        }
+
+        // Status Guard
+        if (request.status === 'Paid') {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot generate bill. This lab prescription request has already been paid."
+            });
+        }
+
+        if (['Rejected', 'Cancelled', 'Expired'].includes(request.status)) {
             return res.status(400).json({
                 success: false,
                 message: `Cannot generate bill. Current status is already '${request.status}'.`
             });
         }
 
+        // Multi-key fallback for frontend payload
+        const rawItems = items || req.body.tests || req.body.requestedTests;
         let parsedItems = [];
-        if (typeof items === 'string') {
-            try { parsedItems = JSON.parse(items); } catch(e) { parsedItems = []; }
-        } else if (Array.isArray(items)) {
-            parsedItems = items;
+        if (typeof rawItems === 'string') {
+            try { parsedItems = JSON.parse(rawItems); } catch(e) { parsedItems = []; }
+        } else if (Array.isArray(rawItems)) {
+            parsedItems = rawItems;
         }
 
-        if (parsedItems.length === 0) {
-            return res.status(400).json({ success: false, message: "Please provide valid test items for the bill." });
+        if (!parsedItems || parsedItems.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please provide valid test items in 'items' array with at least one test." 
+            });
         }
 
         let itemTotal = 0;
@@ -975,7 +1122,7 @@ const submitLabReviewBill = async (req, res) => {
             itemTotal += subtotal;
 
             verifiedItems.push({
-                name: item.name,
+                name: item.name || "Diagnostic Test",
                 mrp: Number(item.mrp || price),
                 pricePerUnit: price,
                 quantity: qty,
@@ -994,14 +1141,11 @@ const submitLabReviewBill = async (req, res) => {
         request.status = 'Bill Generated';
         await request.save();
 
-        // Fetch Lab details for notification
-        const lab = await Lab.findById(labId).select('name');
-        const labName = lab?.name || "Diagnostic Lab";
-
+        const labName = req.user?.name || "Diagnostic Lab";
         const testNames = verifiedItems.map(i => i.name).slice(0, 3).join(', ');
         const testsSummary = verifiedItems.length > 3 ? `${testNames} +${verifiedItems.length - 3} more` : testNames;
 
-        // 🔔 Alert patient with complete details for direct payment routing
+        // 🔔 Patient Notification
         if (request.userId) {
             try {
                 await sendPushNotification(
@@ -1029,7 +1173,7 @@ const submitLabReviewBill = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: "Lab bill generated successfully and detailed notification sent to patient.",
+            message: "Lab bill generated successfully and notification dispatched to patient.",
             data: request
         });
 
@@ -1311,198 +1455,74 @@ const reassignDriverStaff = async (req, res) => {
 // GET LIVE TRACKING DETAILS FOR MODAL POPUP
 // Endpoint: GET /provider/labs/booking-tracking/:orderId
 
+// @desc    Get Lab Booking Tracking Details for Provider Modal (9 Steps Lifecycle)
+// @route   GET /provider/labs/booking-tracking/:orderId
+// @access  Private (Lab)
 const getBookingTrackingDetails = async (req, res) => {
-
     try {
-
         const { orderId } = req.params;
-
         const labId = req.user.id;
- 
-        // Fetch booking and populate user and driver details
 
-        const booking = await LabBooking.findOne({ _id: orderId, labId })
-
-            .populate('userId', 'name phone email profilePic')
-
-            .populate('phlebotomistId', 'name phone profilePic status');
- 
-        if (!booking) {
-
-            return res.status(404).json({ 
-
-                success: false, 
-
-                message: "Lab booking not found." 
-
-            });
-
-        }
- 
-        // Address string compile karein (Figma ui representation ke liye)
-
-        const addr = booking.address;
-
-        const formattedAddress = addr 
-
-            ? `${addr.houseNo ? addr.houseNo + ', ' : ''}${addr.sector ? addr.sector + ', ' : ''}${addr.landmark ? addr.landmark + ', ' : ''}${addr.city || ''}, ${addr.state || ''} - ${addr.pincode || ''}`
-
-            : "Address Details Not Found";
- 
-        // Patient details determine karein
-
-        // Pehle patients array se main primary details nikalein
-
-        const primaryPatientName = booking.patients?.[0]?.name || booking.userId?.name || "Patient";
-
-        const primaryPatientPhone = booking.address?.phone || booking.userId?.phone || "N/A";
- 
-        // Live Tracking Stubs (ETA/Distance dynamic placeholders)
-
-        // Note: Real routing algorithms na hone par standard fallback values render karein
-
-        const liveTrackingStats = {
-
-            distance: booking.startedAt && !booking.arrivedAt ? "3.2 km" : "0.0 km",
-
-            eta: booking.startedAt && !booking.arrivedAt ? "25 mins" : "0 mins"
-
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            labId,
+            ...(isObjectId ? { _id: orderId } : { bookingId: orderId })
         };
- 
-        // Timeline Builder Array
 
-        const timeline = [
+        const booking = await LabBooking.findOne(query)
+            .populate('userId', 'name phone email profilePic')
+            .populate('phlebotomistId', 'name phone vehicleNumber status location profilePic')
+            .lean();
 
-            {
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found." });
+        }
 
-                step: "Booking Assigned",
+        const statusHierarchy = {
+            'Confirmed': 1,
+            'Phlebotomist Assigned': 2,
+            'Arrived': 3,
+            'Sample Collected': 4,
+            'Sample on the way to lab': 5,
+            'Sample In-Transit': 5,
+            'Sample Delivered to Lab': 6,
+            'Sample Deposited': 6,
+            'Testing': 7,
+            'Report Generated': 8,
+            'Completed': 9
+        };
 
-                completed: !!booking.phlebotomistId,
+        const currentStep = statusHierarchy[booking.status] || 1;
 
-                timestamp: booking.phlebotomistId ? booking.updatedAt : null,
-
-                description: "Staff allocation recorded."
-
-            },
-
-            {
-
-                step: "On the Way",
-
-                completed: !!booking.startedAt,
-
-                timestamp: booking.startedAt,
-
-                description: "Phlebotomist is in-transit to patient location."
-
-            },
-
-            {
-
-                step: "Arrived at Location",
-
-                completed: !!booking.arrivedAt,
-
-                timestamp: booking.arrivedAt,
-
-                description: "Field phlebotomist arrived at destination."
-
-            },
-
-            {
-
-                step: "Sample Collected",
-
-                completed: !!booking.collectedAt,
-
-                timestamp: booking.collectedAt,
-
-                description: "Diagnostics samples collected successfully."
-
-            },
-
-            {
-
-                step: "Sample Deposited",
-
-                completed: !!booking.depositedAt,
-
-                timestamp: booking.depositedAt,
-
-                description: "Samples deposited at processing lab hub."
-
-            }
-
-        ];
- 
-        // Output Structure matches the popup exactly
+        const steps = [
+            { title: "Order Confirmed", step: 1, key: "Confirmed" },
+            { title: "Phlebotomist Assigned", step: 2, key: "Phlebotomist Assigned" },
+            { title: "Arrived at Location", step: 3, key: "Arrived" },
+            { title: "Sample Collected", step: 4, key: "Sample Collected" },
+            { title: "Sample on the way to lab", step: 5, key: "Sample on the way to lab" },
+            { title: "Sample Delivered to Lab", step: 6, key: "Sample Delivered to Lab" },
+            { title: "Testing in Progress", step: 7, key: "Testing" },
+            { title: "Report Generated", step: 8, key: "Report Generated" },
+            { title: "Completed", step: 9, key: "Completed" }
+        ].map(s => ({
+            ...s,
+            isCompleted: currentStep >= s.step,
+            isCurrent: currentStep === s.step
+        }));
 
         res.status(200).json({
-
             success: true,
-
             data: {
-
-                orderId: booking.bookingId,
-
-                status: booking.status,
-
-                bookingType: booking.bookingType,
-
-                collectionType: booking.collectionType,
-
-                amount: booking.billSummary?.totalAmount || 0,
-
-                // Dispatched Field Nurse equivalent
-
-                phlebotomist: booking.phlebotomistId ? {
-
-                    id: booking.phlebotomistId._id,
-
-                    name: booking.phlebotomistId.name,
-
-                    phone: booking.phlebotomistId.phone,
-
-                    profilePic: booking.phlebotomistId.profilePic || null,
-
-                    status: booking.phlebotomistId.status || "Busy"
-
-                } : null,
- 
-                // Live Tracking Distance & Duration Card
-
-                liveTracking: liveTrackingStats,
- 
-                // Patient Details Section
-
-                patientDetails: {
-
-                    name: primaryPatientName,
-
-                    phone: primaryPatientPhone,
-
-                    address: formattedAddress,
-
-                    patientsCount: booking.patients?.length || 1
-
-                },
- 
-                // Service Timeline Tracker Card
-
-                timeline: timeline
-
+                ...booking,
+                currentStep,
+                totalSteps: 9,
+                lifecycleProgress: steps
             }
-
         });
- 
     } catch (error) {
-
-        console.error("Error in getBookingTrackingDetails:", error.message);
-
+        console.error("Get Booking Tracking Error:", error);
         res.status(500).json({ success: false, message: error.message });
-
     }
-
 };
 
 // GET SINGLE PHLEBOTOMIST DETAIL WITH ACTIVE PATIENT INFO

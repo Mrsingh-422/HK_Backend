@@ -182,29 +182,95 @@ const getAvailableDrivers = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. MANUAL ASSIGN DRIVER
-// Endpoint: POST /provider/pharmacy/orders/assign-manual
+// @desc    Assign Delivery Driver to Order & send immediate alert to Driver phone
+// @route   POST /provider/pharmacy/orders/assign-manual
+// @access  Private (Pharmacy)
 const assignDriverManual = async (req, res) => {
     try {
         const { orderId, driverId } = req.body;
+        const pharmacyId = req.user.id;
         
-        const driver = await Driver.findById(driverId);
+        const driver = await Driver.findOne({ _id: driverId, vendorId: pharmacyId });
         if (!driver || driver.status !== 'Available') {
-            return res.status(400).json({ message: "Driver is no longer available" });
+            return res.status(400).json({ success: false, message: "Selected driver is no longer available or not found." });
         }
 
-        const order = await PharmacyBooking.findByIdAndUpdate(orderId, {
-            driverId,
-            deliveryStatus: 'Assigned',
-            status: 'Shipped', // Jab driver assign ho jaye toh status Shipped kar sakte hain
-            assignedAt: new Date()
-        }, { new: true });
+        const isObjectId = mongoose.Types.ObjectId.isValid(orderId);
+        const query = isObjectId ? { _id: orderId } : { orderId };
+
+        const order = await PharmacyBooking.findOneAndUpdate(
+            query, 
+            {
+                $set: {
+                    driverId: driver._id,
+                    deliveryStatus: 'Assigned',
+                    status: 'Shipped',
+                    assignedAt: new Date()
+                }
+            }, 
+            { new: true }
+        ).populate('userId', 'name phone fcmToken');
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order not found." });
+        }
 
         // Driver ko Busy mark karein
-        await Driver.findByIdAndUpdate(driverId, { status: 'Busy' });
+        await Driver.findByIdAndUpdate(driver._id, { $set: { status: 'Busy' } });
 
-        res.json({ success: true, message: "Driver assigned successfully", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const pharmacyName = req.user?.name || "Pharmacy Store";
+
+        // 🚨 1. DRIVER PUSH NOTIFICATION: Alert Driver phone with address
+        try {
+            await sendPushNotification(
+                driver._id,
+                'driver',
+                "📦 New Delivery Task Assigned!",
+                `You have been assigned to deliver medicine Order #${order.orderId}. Pickup from ${pharmacyName}.`,
+                {
+                    type: 'NEW_DELIVERY_TASK',
+                    orderId: String(order.orderId),
+                    id: String(order._id),
+                    click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                }
+            );
+        } catch (dNotifErr) {
+            console.error("Driver Task Notification Error:", dNotifErr.message);
+        }
+
+        // 🚨 2. PATIENT ALERT: Notify patient that delivery partner is assigned
+        if (order.userId) {
+            try {
+                await sendPushNotification(
+                    order.userId._id,
+                    'user',
+                    `🛵 Delivery Partner Assigned: ${order.orderId}`,
+                    `Delivery partner ${driver.name} has been assigned to bring your medicines from ${pharmacyName}.`,
+                    {
+                        type: 'DRIVER_ASSIGNED',
+                        serviceType: 'Pharmacy',
+                        orderId: String(order.orderId),
+                        id: String(order._id),
+                        driverName: String(driver.name),
+                        driverPhone: String(driver.phone),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (uNotifErr) {
+                console.error("User Driver Assigned Notification Error:", uNotifErr.message);
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Driver assigned successfully and real-time alerts dispatched.", 
+            data: order 
+        });
+
+    } catch (error) { 
+        console.error("Assign Driver Manual Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 4. AUTO-ASSIGN LOGIC (Background Process)
@@ -308,60 +374,78 @@ const reassignDriverManual = async (req, res) => {
     }
 };
 
-// UPDATE ORDER STATUS (e.g. Packed, Shipped, Delivered, Cancelled)
-// Endpoint: PATCH /provider/pharmacy/orders/status/:orderId
+// @desc    Update Pharmacy Order Status (Packed, Shipped, Delivered) & notify patient live
+// @route   PATCH /provider/pharmacy/orders/status/:orderId
+// @access  Private (Pharmacy)
 const updateOrderStatus = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { status, deliveryStatus } = req.body;
         const pharmacyId = req.user.id;
 
-        // 🔍 DEBUG LOG: API triggers parameters printing
-        console.log(`\x1b[36m[DEBUG] updateOrderStatus: Deployed for orderId: "${orderId}", status: "${status}", deliveryStatus: "${deliveryStatus}"\x1b[0m`);
-
-        // Coordinate dynamic checks
         const isObjectId = mongoose.Types.ObjectId.isValid(orderId.trim());
-        const query = { pharmacyId };
+        const query = { 
+            pharmacyId,
+            ...(isObjectId ? { _id: orderId.trim() } : { orderId: orderId.trim() })
+        };
 
-        if (isObjectId) {
-            query._id = orderId.trim();
-        } else {
-            query.orderId = orderId.trim();
-        }
-
-        const order = await PharmacyBooking.findOne(query);
+        const order = await PharmacyBooking.findOne(query).populate('userId', 'name phone fcmToken');
         if (!order) {
-            console.warn(`\x1b[33m[DEBUG] updateOrderStatus: Order not found in DB with query:`, query, `\x1b[0m`);
-            return res.status(400).json({ 
+            return res.status(404).json({ 
                 success: false, 
-                message: `Business Error: Order not found or unauthorized to update status for order: '${orderId}'` 
+                message: `Order not found or unauthorized to update: '${orderId}'` 
             });
         }
 
-        // Apply fields dynamically if present in request body
         if (status) order.status = status;
         if (deliveryStatus) order.deliveryStatus = deliveryStatus;
-
-        // Save order changes
         await order.save();
-        console.log(`\x1b[32m[DEBUG] updateOrderStatus: Order status successfully saved to DB.\x1b[0m`);
 
-        res.json({
+        const pharmacyName = req.user?.name || "Pharmacy Store";
+
+        // 🚨 PATIENT ALERT: Real-time order progress updates (Packed / Dispatched)
+        if (order.userId && (status || deliveryStatus)) {
+            try {
+                let notifTitle = `📦 Medicine Order Update: ${order.orderId}`;
+                let notifBody = `Your order from ${pharmacyName} is now marked as ${status || deliveryStatus}.`;
+
+                if (status === 'Packed') {
+                    notifTitle = `💊 Medicines Packed & Ready: ${order.orderId}`;
+                    notifBody = `${pharmacyName} has packed your medicines. Waiting for courier pickup.`;
+                } else if (status === 'Shipped' || deliveryStatus === 'OutForDelivery') {
+                    notifTitle = `🚚 Order Out for Delivery: ${order.orderId}`;
+                    notifBody = `Your medicine parcel from ${pharmacyName} is out for delivery. Keep OTP handy.`;
+                }
+
+                await sendPushNotification(
+                    order.userId._id,
+                    'user',
+                    notifTitle,
+                    notifBody,
+                    {
+                        type: 'PHARMACY_ORDER_STATUS_UPDATE',
+                        serviceType: 'Pharmacy',
+                        orderId: String(order.orderId),
+                        id: String(order._id),
+                        status: String(order.status),
+                        deliveryStatus: String(order.deliveryStatus),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (notifErr) {
+                console.error("Order Status Notification Error:", notifErr.message);
+            }
+        }
+
+        res.status(200).json({
             success: true,
-            message: `Order status successfully updated to '${order.status}'`,
+            message: `Order status successfully updated to '${order.status}' and user notified.`,
             data: order
         });
+
     } catch (error) {
-        // 🚨 CRITICAL: Print exact error stack trace to your backend terminal
-        console.error("\x1b[31m[CRITICAL] updateOrderStatus Error Details:\x1b[0m", error);
-        
-        // If validation fails (e.g. invalid enum value), return 400 Bad Request
-        const statusCode = error.name === 'ValidationError' ? 400 : 500;
-        res.status(statusCode).json({ 
-            success: false, 
-            errorName: error.name,
-            message: error.message 
-        });
+        console.error("Update Order Status Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

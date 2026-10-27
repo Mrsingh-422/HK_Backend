@@ -17,7 +17,7 @@ const {
     startDelivery,
     arriveAtLocation,
     verifySampleCollection,
-    deliverSampleToLab,
+    startSampleTransitToLab,deliverSampleToLab,
     reportNoResponse,
     createBookingAtHome,
     addFamilyToBooking,
@@ -62,6 +62,7 @@ router.post('/orders/respond/:orderId', protect('driver'), respondToOrder);
 router.patch('/orders/start/:orderId', protect('driver'), startDelivery); 
 router.patch('/orders/arrive/:orderId', protect('driver'), arriveAtLocation); 
 router.post('/orders/verify-otp', protect('driver'), verifySampleCollection); 
+router.patch('/orders/transit-to-lab/:orderId', protect('driver'), startSampleTransitToLab);
 router.post('/orders/deliver-lab/:orderId', protect('driver'), deliverSampleToLab);
 
 router.post('/orders/no-response/:orderId', protect('driver'), reportNoResponse); 

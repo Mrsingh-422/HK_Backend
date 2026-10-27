@@ -2727,183 +2727,113 @@ const getOrderHistory = async (req, res) => {
 const trackOrder = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const userId = req.user?.id || req.user?._id;
+        const userId = req.user.id;
 
-        const isObjectId = mongoose.isValidObjectId(orderId);
-        const query = {
-            userId,
+        if (!orderId || String(orderId).trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Order ID parameter is required." 
+            });
+        }
+
+        const cleanOrderId = String(orderId).trim();
+        const isObjectId = mongoose.isValidObjectId(cleanOrderId);
+
+        // 1. Search in PharmacyBooking (Supports both MongoDB _id & custom orderId string)
+        const bookingQuery = {
             $or: [
-                { _id: isObjectId ? new mongoose.Types.ObjectId(orderId) : new mongoose.Types.ObjectId() },
-                { orderId: String(orderId).trim() }
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanOrderId) }] : []),
+                { orderId: cleanOrderId }
             ]
         };
 
-        const order = await PharmacyBooking.findOne(query)
-            .populate('pharmacyId', 'name address phone city profileImage rating location')
-            .populate('driverId', 'name phone vehicleNumber profilePic vehicleType location')
-            .populate('items.medicineId', 'name packaging image_url manufacturers salt_composition')
+        const order = await PharmacyBooking.findOne(bookingQuery)
+            .populate('pharmacyId', 'name address phone city location profileImage')
+            .populate('driverId', 'name phone profilePic vehicleNumber vehicleType location')
+            .populate('items.medicineId', 'name manufacturers packaging image_url mrp')
             .populate('items.comboOfferId', 'campaignDisplayName buyQty getFreeQty')
             .lean();
 
-        if (!order) {
-            return res.status(404).json({ success: false, message: "Order not found." });
+        // 2. If found in active PharmacyBooking collection -> Return Live Tracking Payload
+        if (order) {
+            // Security Check: Ensure order belongs to logged-in user
+            if (String(order.userId) !== String(userId)) {
+                return res.status(403).json({ 
+                    success: false, 
+                    message: "Access Denied: You are not authorized to track this order." 
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                orderType: 'StandardBooking',
+                data: {
+                    _id: order._id,
+                    orderId: order.orderId,
+                    status: order.status,
+                    deliveryStatus: order.deliveryStatus,
+                    collectionType: order.collectionType,
+                    paymentMethod: order.paymentMethod,
+                    paymentStatus: order.paymentStatus,
+                    deliveryOTP: order.deliveryOTP || null,
+                    address: order.address,
+                    pharmacy: order.pharmacyId,
+                    driver: order.driverId ? {
+                        name: order.driverId.name,
+                        phone: order.driverId.phone,
+                        vehicleNumber: order.driverId.vehicleNumber,
+                        vehicleType: order.driverId.vehicleType,
+                        profilePic: order.driverId.profilePic,
+                        location: order.driverId.location || null
+                    } : null,
+                    items: order.items,
+                    billSummary: order.billSummary,
+                    startedAt: order.startedAt || null,
+                    arrivedAt: order.arrivedAt || null,
+                    deliveredAt: order.deliveredAt || null,
+                    createdAt: order.createdAt
+                }
+            });
         }
 
-        const isRapid = order.isRapid === true;
-        const hasSlot = Boolean(
-            order.appointmentTime && 
-            !['Immediate', 'Immediate (1 Hour Express)', 'Immediate (1 Hour)', 'Standard Delivery', 'Standard Delivery (3 Hours)', 'undefined', 'null'].includes(order.appointmentTime) &&
-            order.appointmentTime.trim() !== ''
-        );
-        const hasPremiumSlot = Number(order.billSummary?.slotCharge || 0) > 0;
+        // 3. Fallback: Check if this ID belongs to a pending Prescription Request (Phase 1)
+        const rxQuery = {
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanOrderId) }] : []),
+                { requestId: cleanOrderId }
+            ]
+        };
 
-        let deliveryModeLabel = "Standard Delivery (3 Hours)";
-        let deliveryModeType = "STANDARD";
+        const rxRequest = await PharmacyPrescriptionRequest.findOne(rxQuery)
+            .populate('pharmacyId', 'name address phone city profileImage')
+            .lean();
 
-        if (order.collectionType === 'Self Pickup') {
-            deliveryModeLabel = "Self Pickup";
-            deliveryModeType = "PICKUP";
-        } else if (isRapid) {
-            deliveryModeLabel = "Express 1-Hour Delivery";
-            deliveryModeType = "EXPRESS";
-        } else if (hasSlot || hasPremiumSlot) {
-            deliveryModeLabel = hasPremiumSlot ? `Scheduled Premium Slot (${order.appointmentTime})` : `Scheduled Slot (${order.appointmentTime})`;
-            deliveryModeType = "SLOT";
+        if (rxRequest) {
+            return res.status(200).json({
+                success: true,
+                orderType: 'PrescriptionInquiry',
+                message: "This is a pre-payment prescription inquiry. Please complete bill payment to activate live tracking.",
+                data: {
+                    _id: rxRequest._id,
+                    requestId: rxRequest.requestId,
+                    status: rxRequest.status,
+                    pharmacy: rxRequest.pharmacyId,
+                    verifiedBill: rxRequest.verifiedBill || null,
+                    createdAt: rxRequest.createdAt,
+                    paymentRequired: rxRequest.status === 'Bill Generated'
+                }
+            });
         }
 
-        // Live Dynamic Status Timeline
-        const trackingTimeline = [
-            {
-                step: 1,
-                title: "Order Placed",
-                description: `Order placed via ${order.paymentMethod || 'COD'}`,
-                time: order.createdAt,
-                isCompleted: true,
-                isCurrent: order.status === 'Placed'
-            },
-            {
-                step: 2,
-                title: "Packed by Pharmacy",
-                description: "Medicines verified and packed in tamper-proof bag",
-                time: ['Packed', 'Shipped', 'Delivered'].includes(order.status) ? order.updatedAt : null,
-                isCompleted: ['Packed', 'Shipped', 'Delivered'].includes(order.status),
-                isCurrent: order.status === 'Packed'
-            },
-            {
-                step: 3,
-                title: isRapid ? "Express 1-Hour Delivery On The Way" : (hasSlot ? `Out for Delivery (${order.appointmentTime})` : "Out for Delivery"),
-                description: order.driverId ? `Delivery partner ${order.driverId.name} is on the way` : "Delivery partner assigning",
-                time: order.startedAt || null,
-                isCompleted: ['Delivered'].includes(order.status) || order.deliveryStatus === 'Delivered',
-                isCurrent: ['OutForDelivery', 'ReachedLocation'].includes(order.deliveryStatus) || (order.status === 'Shipped' && order.deliveryStatus !== 'Delivered')
-            },
-            {
-                step: 4,
-                title: "Delivered",
-                description: "Handed over to customer",
-                time: order.deliveredAt || null,
-                isCompleted: order.status === 'Delivered',
-                isCurrent: order.status === 'Delivered'
-            }
-        ];
-
-        res.status(200).json({
-            success: true,
-            data: {
-                _id: order._id,
-                orderId: order.orderId,
-                status: order.status,
-                deliveryStatus: order.deliveryStatus,
-                orderType: order.orderType || 'General',
-                createdAt: order.createdAt,
-                formattedDate: moment(order.createdAt).format('DD MMM YYYY, hh:mm A'),
-
-                // Delivery Mode Metadata
-                deliveryMode: {
-                    type: deliveryModeType,
-                    label: deliveryModeLabel,
-                    isRapid: isRapid,
-                    rapidCharge: order.billSummary?.rapidDeliveryCharge || 0,
-                    isSlotDelivery: hasSlot || hasPremiumSlot,
-                    isPremiumSlot: hasPremiumSlot,
-                    slotCharge: order.billSummary?.slotCharge || 0
-                },
-
-                // Slot Schedule Details
-                slotSchedule: {
-                    date: order.appointmentDate ? moment(order.appointmentDate).format('YYYY-MM-DD') : null,
-                    formattedDate: order.appointmentDate ? moment(order.appointmentDate).format('DD MMM YYYY') : null,
-                    timeSlot: order.appointmentTime || (isRapid ? "Immediate (1 Hour Express)" : "Standard Delivery (3 Hours)"),
-                    isCustomTime: hasSlot
-                },
-
-                // Payment Info
-                paymentInfo: {
-                    method: order.paymentMethod || 'COD',
-                    status: order.paymentStatus || 'Pending',
-                    isCod: (order.paymentMethod === 'COD'),
-                    transactionId: order.paymentDetails?.razorpayPaymentId || order.transactionId || null
-                },
-
-                // Bill Breakdown
-                billSummary: {
-                    itemTotal: Number(order.billSummary?.itemTotal || 0),
-                    originalItemTotal: Number(order.billSummary?.originalItemTotal || order.billSummary?.itemTotal || 0),
-                    comboSavings: Number(order.billSummary?.comboSavings || 0),
-                    couponDiscount: Number(order.billSummary?.couponDiscount || 0),
-                    deliveryCharge: Number(order.billSummary?.deliveryCharge || 0),
-                    rapidDeliveryCharge: Number(order.billSummary?.rapidDeliveryCharge || 0),
-                    slotCharge: Number(order.billSummary?.slotCharge || 0),
-                    totalAmount: Number(order.billSummary?.totalAmount || 0)
-                },
-
-                // Store Details
-                pharmacy: {
-                    id: order.pharmacyId?._id || null,
-                    name: order.pharmacyId?.name || "Pharmacy Partner",
-                    address: order.pharmacyId?.address || "",
-                    city: order.pharmacyId?.city || "",
-                    phone: order.pharmacyId?.phone || "",
-                    image: order.pharmacyId?.profileImage || null,
-                    rating: order.pharmacyId?.rating || 4.5,
-                    location: order.pharmacyId?.location || { lat: 0, lng: 0 }
-                },
-
-                // Assigned Driver Details
-                deliveryPartner: order.driverId ? {
-                    id: order.driverId._id,
-                    name: order.driverId.name,
-                    phone: order.driverId.phone,
-                    vehicleNumber: order.driverId.vehicleNumber,
-                    vehicleType: order.driverId.vehicleType,
-                    profilePic: order.driverId.profilePic,
-                    currentLocation: order.driverId.location || { lat: 0, lng: 0 }
-                } : null,
-
-                deliveryOTP: order.deliveryOTP || null,
-                deliveryAddress: order.address,
-                items: (order.items || []).map(item => ({
-                    medicineId: item.medicineId?._id || item.medicineId,
-                    name: item.name || item.medicineId?.name,
-                    image: item.medicineId?.image_url?.[0] || null,
-                    packaging: item.medicineId?.packaging || "10 tablets",
-                    price: Number(item.price || 0),
-                    mrp: Number(item.mrp || item.price || 0),
-                    quantity: Number(item.quantity || 1),
-                    duration: item.duration || "Full Course",
-                    isComboApplied: item.isComboApplied || false,
-                    freeQuantity: Number(item.freeQuantity || 0),
-                    isReturnAllowed: item.isReturnAllowed || false,
-                    isReplacementAllowed: item.isReplacementAllowed || false
-                })),
-                trackingTimeline,
-                returnDetails: order.returnDetails || null
-            }
+        // 4. Truly Not Found
+        return res.status(404).json({ 
+            success: false, 
+            message: `No pharmacy order or prescription request found matching ID: '${cleanOrderId}'` 
         });
 
     } catch (error) {
-        console.error("trackOrder Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal Server Error in order tracking." });
+        console.error("Track Order Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

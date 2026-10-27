@@ -553,56 +553,53 @@ const rejectBookingWithReason = async (req, res) => {
 };
 
 
-// @desc    Field Staff starts transit to Patient Location (Status: 'On-The-Way')
+// @desc    Nurse staff starts travel towards patient location & dispatches live tracking alert
 // @route   PATCH /driver/nurse/orders/start-journey/:bookingId
 // @access  Private (Driver)
 const startServiceJourney = async (req, res) => {
     try {
         const { bookingId } = req.params;
-        const staffId = req.user.id;
+        const driverId = req.user.id;
 
-        const isObjectId = mongoose.isValidObjectId(bookingId);
-        const query = isObjectId 
-            ? { _id: bookingId } 
-            : { bookingId: String(bookingId).trim() };
-
-        const booking = await NurseBooking.findOne(query).populate('userId', 'fcmToken name phone');
+        const booking = await NurseBooking.findById(bookingId).populate('userId', 'name phone fcmToken');
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking record not found." });
+            return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        if (booking.assignedStaffId && String(booking.assignedStaffId) !== String(staffId)) {
-            return res.status(403).json({ success: false, message: "Unauthorized: You are not assigned to this booking." });
+        if (!booking.assignedStaffId || booking.assignedStaffId.toString() !== driverId.toString()) {
+            return res.status(403).json({ success: false, message: "Unauthorized. You are not assigned to this booking." });
         }
 
         booking.status = 'On-The-Way';
         booking.startedAt = new Date();
         await booking.save();
 
-        // Ensure driver status is Busy
-        await Driver.findByIdAndUpdate(staffId, { $set: { status: 'Busy', isOnline: true } });
+        const staffName = req.user?.name || "Nurse Staff";
 
-        // Alert Patient that nurse is on the way
+        // 🚨 PATIENT ALERT: Nurse on the way notification
         if (booking.userId) {
             try {
                 await sendPushNotification(
                     booking.userId._id,
                     'user',
-                    "Nurse is On The Way! 🛵",
-                    `Nurse ${req.user.name || ''} has started transit to your location.`,
-                    { bookingId: booking._id.toString(), type: 'nurse_on_the_way' }
+                    "🚗 Nurse Staff On The Way!",
+                    `Nurse ${staffName} has started the journey to your home. Please keep OTP handy for service start.`,
+                    {
+                        type: 'NURSE_ON_THE_WAY',
+                        serviceType: 'Nurse',
+                        bookingId: String(booking.bookingId || booking._id),
+                        id: String(booking._id),
+                        staffName: String(staffName),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
                 );
-            } catch (e) {}
+            } catch (e) {
+                console.error("Nurse Journey Start Push Error:", e.message);
+            }
         }
 
-        res.status(200).json({
-            success: true,
-            message: "Journey started. Status updated to 'On-The-Way'.",
-            data: booking
-        });
-
+        res.json({ success: true, message: "Journey started and patient notified.", data: booking });
     } catch (error) {
-        console.error("Start Journey Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

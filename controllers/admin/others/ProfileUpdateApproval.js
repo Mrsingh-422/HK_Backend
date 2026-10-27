@@ -13,6 +13,8 @@ const Driver = require('../../../models/Driver');
 const PoliceHQ = require('../../../models/PoliceHQ');
 const FireHQ = require('../../../models/FireHQ');
 
+const { sendPushNotification } = require('../../../utils/notification');
+
 const modelMap = {
     'Hospital': Hospital,
     'Doctor': Doctor,
@@ -108,8 +110,9 @@ const getProfileUpdateRequestDetails = async (req, res) => {
     }
 };
 
-// 3. POST: Process Profile Update Request (Approve/Reject with Deep Cleanup)
-// Endpoint: POST /api/admin/profile-update/:requestId/action
+// @desc    Process vendor staged profile update request (Approve/Reject) & dispatch alert
+// @route   POST /api/admin/profile-update/:requestId/action
+// @access  Private (Admin)
 const handleProfileUpdateAction = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -133,7 +136,6 @@ const handleProfileUpdateAction = async (req, res) => {
         const updated = request.updatedFields || {};
 
         if (action === 'Approve') {
-            // 🚨 1. CLEANUP OLD REPLACED FILES ON DISK
             if (currentProfile) {
                 if (updated.profileImage && currentProfile.profileImage) {
                     deleteFile(currentProfile.profileImage);
@@ -149,18 +151,16 @@ const handleProfileUpdateAction = async (req, res) => {
                 }
             }
 
-            // 🚨 2. MERGE STAGED FIELDS DIRECTLY TO PRIMARY VENDOR DOCUMENT
             await TargetModel.findByIdAndUpdate(
                 request.vendorId,
                 { $set: updated },
-                { new: true, runValidators: false } // Safe update
+                { new: true, runValidators: false }
             );
 
             request.status = 'Approved';
             request.rejectionReason = null;
 
         } else if (action === 'Reject') {
-            // 🚨 3. CLEANUP NEW UNAPPROVED REJECTED FILES FROM DISK
             if (updated.profileImage) deleteFile(updated.profileImage);
             if (updated['documents.signatureImage']) deleteFile(updated['documents.signatureImage']);
             if (updated['documents.drugLicenses']) cleanNestedFiles(updated['documents.drugLicenses']);
@@ -174,6 +174,30 @@ const handleProfileUpdateAction = async (req, res) => {
 
         request.adminId = req.user.id;
         await request.save();
+
+        // 🚨 VENDOR PUSH NOTIFICATION: Alert vendor about profile update status
+        const vendorRole = String(request.vendorModel).toLowerCase();
+        try {
+            const notifTitle = action === 'Approve' ? "✅ Profile Changes Approved" : "❌ Profile Update Declined";
+            const notifBody = action === 'Approve' 
+                ? "Your requested profile details have been verified and applied successfully."
+                : `Your profile update was declined. Reason: "${request.rejectionReason}".`;
+
+            await sendPushNotification(
+                request.vendorId,
+                vendorRole,
+                notifTitle,
+                notifBody,
+                {
+                    type: action === 'Approve' ? 'PROFILE_UPDATE_APPROVED' : 'PROFILE_UPDATE_REJECTED',
+                    vendorModel: String(request.vendorModel),
+                    requestId: String(request._id),
+                    click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                }
+            );
+        } catch (notifErr) {
+            console.error("Profile Update Notification Error:", notifErr.message);
+        }
 
         res.json({
             success: true,

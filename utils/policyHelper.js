@@ -12,9 +12,16 @@ const UserSubscription = require('../models/UserSubscription'); // 👈 Imported
 const hasDriverStarted = (booking, vendorType) => {
     switch (vendorType) {
         case 'Lab':
-            return !!booking.startedAt || ['Sample Collected', 'Sample Deposited', 'Testing', 'Report Generated', 'Completed'].includes(booking.status);
+            return !!booking.startedAt || [
+                'Sample Collected', 
+                'Sample on the way to lab', 
+                'Sample Delivered to Lab', 
+                'Sample Deposited', 
+                'Testing', 
+                'Report Generated', 
+                'Completed'
+            ].includes(booking.status);
         case 'Nurse':
-            // 🚨 PRECISE CHECK: Only penalize if staff is physically On-The-Way, Arrived, or Service-Started
             return ['On-The-Way', 'Arrived', 'Service-Started', 'Completed'].includes(booking.status);
         case 'Ambulance':
         case 'Ambulance-Accident':

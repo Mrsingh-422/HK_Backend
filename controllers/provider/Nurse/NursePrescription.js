@@ -1,5 +1,7 @@
 const NursingPrescriptionRequest = require('../../../models/NursingPrescriptionRequest');
 const NurseBooking = require('../../../models/NurseBooking');
+const Nurse = require('../../../models/Nurse');
+const mongoose = require('mongoose');
 const moment = require('moment');
 const { sendPushNotification } = require('../../../utils/notification'); 
 
@@ -59,51 +61,97 @@ const getIncomingPrescriptionRequests = async (req, res) => {
     }
 };
 
-// @desc    Submit Proposal / Generate Prescription Bill for Patient (With Instant Patient Alert)
+// @desc    Submit Proposal / Generate Prescription Bill for Patient (Crash-Proof with Dynamic Key Fallback)
 // @route   POST /provider/nurse/prescription/respond
 // @access  Private (Nurse Bureau)
 const submitProposal = async (req, res) => {
     try {
-        const nurseId = req.user.id;
-        let { requestId, servicesPricing, consumablesUsed, taxAmount } = req.body;
+        const nurseId = req.user.id || req.user._id;
+        let { requestId, id, _id, servicesPricing, consumablesUsed, taxAmount } = req.body;
 
-        if (typeof servicesPricing === 'string') {
-            try { servicesPricing = JSON.parse(servicesPricing); } catch (e) {}
-        }
-        if (typeof consumablesUsed === 'string') {
-            try { consumablesUsed = JSON.parse(consumablesUsed); } catch (e) {}
-        }
+        // 1. Resolve Request ID safely (Accepts 'requestId', 'id', or '_id' from frontend)
+        const targetRequestId = String(requestId || id || _id || "").trim();
 
-        if (!requestId || !servicesPricing || !Array.isArray(servicesPricing) || servicesPricing.length === 0) {
+        if (!targetRequestId || !mongoose.isValidObjectId(targetRequestId)) {
             return res.status(400).json({ 
                 success: false, 
-                message: "requestId and a valid non-empty servicesPricing array are required." 
+                message: "A valid 24-character hexadecimal MongoDB ID is required for 'requestId'." 
             });
         }
 
-        const request = await NursingPrescriptionRequest.findById(requestId);
+        // 2. Safe Parser for servicesPricing (Handles Array, stringified JSON, or single Object)
+        let parsedServices = [];
+        if (typeof servicesPricing === 'string') {
+            try { parsedServices = JSON.parse(servicesPricing); } catch (e) { parsedServices = []; }
+        } else if (Array.isArray(servicesPricing)) {
+            parsedServices = servicesPricing;
+        } else if (servicesPricing && typeof servicesPricing === 'object') {
+            parsedServices = [servicesPricing];
+        }
+
+        if (parsedServices.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "servicesPricing array is required with at least one service item." 
+            });
+        }
+
+        // 3. Safe Parser for consumablesUsed
+        let parsedConsumables = [];
+        if (typeof consumablesUsed === 'string') {
+            try { parsedConsumables = JSON.parse(consumablesUsed); } catch (e) { parsedConsumables = []; }
+        } else if (Array.isArray(consumablesUsed)) {
+            parsedConsumables = consumablesUsed;
+        }
+
+        // 4. Fetch the target prescription request
+        const request = await NursingPrescriptionRequest.findById(targetRequestId);
         if (!request) {
-            return res.status(404).json({ success: false, message: "Prescription request not found." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Prescription request not found." 
+            });
         }
 
         if (request.status !== 'Broadcasted' || new Date() > request.expiresAt) {
-            return res.status(400).json({ success: false, message: "This prescription inquiry has expired or is no longer active." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "This prescription inquiry has expired or is no longer active." 
+            });
         }
 
-        const alreadySubmitted = request.proposals.some(p => p.nurseId.toString() === nurseId.toString());
+        // 5. Null-safe duplicate proposal check
+        const alreadySubmitted = Array.isArray(request.proposals) && request.proposals.some(p => 
+            p && p.nurseId && String(p.nurseId) === String(nurseId)
+        );
+
         if (alreadySubmitted) {
-            return res.status(400).json({ success: false, message: "You have already submitted a proposal for this request." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "You have already submitted a proposal for this prescription request." 
+            });
         }
 
-        const baseServicePrice = servicesPricing.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
-        const consumableTotal = (consumablesUsed || []).reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+        // 6. Clean calculation of totals
+        const baseServicePrice = parsedServices.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+        const consumableTotal = parsedConsumables.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
         const tax = Number(taxAmount || 0);
         const totalPrice = baseServicePrice + consumableTotal + tax;
 
+        const formattedServices = parsedServices.map(s => ({
+            title: String(s.title || "Nursing Service"),
+            price: Number(s.price || 0)
+        }));
+
+        const formattedConsumables = parsedConsumables.map(c => ({
+            name: String(c.name || c.itemName || "Consumable"),
+            price: Number(c.price || 0)
+        }));
+
         const proposal = {
             nurseId,
-            servicesPricing,
-            consumablesUsed: consumablesUsed || [],
+            servicesPricing: formattedServices,
+            consumablesUsed: formattedConsumables,
             priceBreakdown: {
                 baseServicePrice,
                 consumableTotal,
@@ -114,23 +162,30 @@ const submitProposal = async (req, res) => {
             submittedAt: new Date()
         };
 
+        if (!Array.isArray(request.proposals)) {
+            request.proposals = [];
+        }
         request.proposals.push(proposal);
 
-        const candidateIndex = request.candidateNurses.findIndex(cn => cn.nurseId.toString() === nurseId.toString());
-        if (candidateIndex > -1) {
-            request.candidateNurses[candidateIndex].status = 'Submitted';
+        // 7. Null-safe candidate status update
+        if (Array.isArray(request.candidateNurses)) {
+            const candidateIndex = request.candidateNurses.findIndex(cn => 
+                cn && cn.nurseId && String(cn.nurseId) === String(nurseId)
+            );
+            if (candidateIndex > -1) {
+                request.candidateNurses[candidateIndex].status = 'Submitted';
+            }
         }
 
         await request.save();
 
-        // Fetch Nurse Bureau Details for notification
-        const nurse = await Nurse.findById(nurseId).select('name');
-        const nurseName = nurse?.name || "Nursing Care Bureau";
+        // 8. In-memory Nurse Bureau Name resolution (Fast & zero DB overhead)
+        const nurseName = req.user?.name || "Nursing Care Bureau";
 
-        const serviceNames = servicesPricing.map(s => s.title).slice(0, 3).join(', ');
-        const servicesSummary = servicesPricing.length > 3 ? `${serviceNames} +${servicesPricing.length - 3} more` : serviceNames;
+        const serviceNames = formattedServices.map(s => s.title).slice(0, 3).join(', ');
+        const servicesSummary = formattedServices.length > 3 ? `${serviceNames} +${formattedServices.length - 3} more` : serviceNames;
 
-        // 🔔 Alert patient with complete details for direct payment routing
+        // 9. Fail-safe Patient Notification Dispatch
         if (request.userId) {
             try {
                 await sendPushNotification(
@@ -145,28 +200,28 @@ const submitProposal = async (req, res) => {
                         proposalId: String(proposal._id || ""),
                         totalAmount: String(totalPrice),
                         vendorName: String(nurseName),
-                        itemCount: String(servicesPricing.length),
+                        itemCount: String(formattedServices.length),
                         itemsSummary: String(servicesSummary),
                         paymentRoute: '/nurse/prescription-bill',
                         click_action: 'FLUTTER_NOTIFICATION_CLICK'
                     }
                 );
-            } catch (e) {
-                console.error("Nurse Bill Notification Error:", e.message);
+            } catch (notifErr) {
+                console.error("Nurse Bill Notification Non-Blocking Error:", notifErr.message);
             }
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             message: "Proposal bill submitted successfully to patient.",
             data: proposal
         });
 
     } catch (error) {
-        console.error("Submit Proposal Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Submit Proposal Critical Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
-};
+};  
 
 
 const declinePrescriptionRequest = async (req, res) => {

@@ -127,41 +127,140 @@ const addToInventory = async (req, res) => {
     }
 };
 
+// @desc    Update Medicine Inventory Item (Price, Stock, Expiry, Batch, HSN, Return & Replace Toggles)
+// @route   PUT /provider/pharmacy/inventory/update/:id
+// @access  Private (Pharmacy)
 const updateInventoryItem = async (req, res) => {
     try {
-        const { vendor_price, stock_quantity, manufacturing_date, hsn_number, batch_number, expiry_date, mrp, isReturnAllowed, isReplacementAllowed } = req.body;
+        const { id } = req.params;
         const pharmacyId = req.user.id;
+        const { 
+            vendor_price, 
+            stock_quantity, 
+            manufacturing_date, 
+            hsn_number, 
+            batch_number, 
+            expiry_date, 
+            mrp 
+        } = req.body;
 
-        const existingItem = await MedicineInventory.findOne({ _id: req.params.id, pharmacyId });
-        if (!existingItem) {
-            return res.status(404).json({ success: false, message: "Medicine not found in your inventory or unauthorized." });
+        if (!id || !mongoose.isValidObjectId(id)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "A valid 24-character hexadecimal MongoDB ID is required." 
+            });
         }
 
+        // 1. Dual Lookup: Search by inventory _id OR medicineId to prevent 404 on frontend ID mismatch
+        const query = {
+            pharmacyId,
+            $or: [
+                { _id: new mongoose.Types.ObjectId(id) },
+                { medicineId: new mongoose.Types.ObjectId(id) }
+            ]
+        };
+
+        const existingItem = await MedicineInventory.findOne(query);
+        if (!existingItem) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Medicine item not found in your inventory or unauthorized access." 
+            });
+        }
+
+        // 2. Safe Boolean Parser Helper (Handles true/false, "true"/"false", 1/0, "1"/"0", "on"/"off")
+        const parseBooleanSafe = (val) => {
+            if (val === undefined || val === null) return undefined;
+            if (typeof val === 'boolean') return val;
+            if (typeof val === 'number') return val === 1;
+            if (typeof val === 'string') {
+                const clean = val.trim().toLowerCase();
+                if (['true', '1', 'yes', 'on'].includes(clean)) return true;
+                if (['false', '0', 'no', 'off', ''].includes(clean)) return false;
+            }
+            return Boolean(val);
+        };
+
         const updateData = {};
-        if (mrp !== undefined) updateData.mrp = Number(mrp);
-        if (vendor_price !== undefined) updateData.vendor_price = Number(vendor_price);
-        if (stock_quantity !== undefined) {
-            const qty = Number(stock_quantity);
+
+        // 3. Update Pricing, Stock, Batch and Dates
+        if (mrp !== undefined && !isNaN(Number(mrp))) {
+            updateData.mrp = Number(mrp);
+        }
+
+        if (vendor_price !== undefined && !isNaN(Number(vendor_price))) {
+            updateData.vendor_price = Number(vendor_price);
+        }
+
+        if (stock_quantity !== undefined && !isNaN(Number(stock_quantity))) {
+            const qty = Math.max(0, Number(stock_quantity));
             updateData.stock_quantity = qty;
             updateData.is_available = qty > 0; 
         }
-        if (manufacturing_date !== undefined) updateData.manufacturing_date = manufacturing_date ? new Date(manufacturing_date) : null;
-        if (hsn_number !== undefined) updateData.hsn_number = hsn_number ? hsn_number.trim() : null;
-        if (batch_number !== undefined) updateData.batch_number = batch_number.trim();
-        if (expiry_date !== undefined) updateData.expiry_date = expiry_date ? new Date(expiry_date) : null;
-        
-        // 🚨 Update return/replace toggles
-        if (isReturnAllowed !== undefined) updateData.isReturnAllowed = Boolean(isReturnAllowed === true || isReturnAllowed === 'true');
-        if (isReplacementAllowed !== undefined) updateData.isReplacementAllowed = Boolean(isReplacementAllowed === true || isReplacementAllowed === 'true');
 
+        if (manufacturing_date !== undefined) {
+            updateData.manufacturing_date = manufacturing_date ? new Date(manufacturing_date) : null;
+        }
+
+        if (expiry_date !== undefined) {
+            updateData.expiry_date = expiry_date ? new Date(expiry_date) : null;
+        }
+
+        if (batch_number !== undefined && String(batch_number).trim() !== "") {
+            updateData.batch_number = String(batch_number).trim();
+        }
+
+        if (hsn_number !== undefined) {
+            updateData.hsn_number = hsn_number ? String(hsn_number).trim() : null;
+        }
+
+        // 4. Multi-Key Fallback & Robust Boolean Parsing for Return Toggle
+        const rawReturn = req.body.isReturnAllowed !== undefined 
+            ? req.body.isReturnAllowed 
+            : (req.body.isReturnable !== undefined 
+                ? req.body.isReturnable 
+                : (req.body.returnAllowed !== undefined 
+                    ? req.body.returnAllowed 
+                    : (req.body.isReturn !== undefined 
+                        ? req.body.isReturn 
+                        : req.body.return_allowed)));
+
+        const parsedReturn = parseBooleanSafe(rawReturn);
+        if (parsedReturn !== undefined) {
+            updateData.isReturnAllowed = parsedReturn;
+        }
+
+        // 5. Multi-Key Fallback & Robust Boolean Parsing for Replacement Toggle
+        const rawReplacement = req.body.isReplacementAllowed !== undefined 
+            ? req.body.isReplacementAllowed 
+            : (req.body.isReplaceable !== undefined 
+                ? req.body.isReplaceable 
+                : (req.body.replacementAllowed !== undefined 
+                    ? req.body.replacementAllowed 
+                    : (req.body.isReplacement !== undefined 
+                        ? req.body.isReplacement 
+                        : req.body.replacement_allowed)));
+
+        const parsedReplacement = parseBooleanSafe(rawReplacement);
+        if (parsedReplacement !== undefined) {
+            updateData.isReplacementAllowed = parsedReplacement;
+        }
+
+        // 6. Execute atomic update and populate medicineId for frontend state consistency
         const updated = await MedicineInventory.findOneAndUpdate(
-            { _id: req.params.id, pharmacyId },
-            updateData,
+            { _id: existingItem._id, pharmacyId },
+            { $set: updateData },
             { new: true, runValidators: true }
-        );
+        ).populate('medicineId', 'name manufacturers packaging image_url salt_composition mrp');
 
-        res.status(200).json({ success: true, message: "Item updated successfully", data: updated });
+        res.status(200).json({ 
+            success: true, 
+            message: "Medicine inventory and return/replacement settings updated successfully.", 
+            data: updated 
+        });
+
     } catch (error) {
+        console.error("Update Inventory Item Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

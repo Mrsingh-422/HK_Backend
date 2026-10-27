@@ -32,7 +32,9 @@ const getPendingWithdrawals = async (req, res) => {
     }
 };
 
-// 4. APPROVE WITHDRAWAL (With Exact Transaction Match)
+// @desc    Approve Withdrawal Request & notify vendor with Bank UTR reference
+// @route   PATCH /api/admin/wallet/approve-withdrawal/:requestId
+// @access  Private (Admin)
 const approveWithdrawal = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -52,7 +54,7 @@ const approveWithdrawal = async (req, res) => {
         request.approvedAt = new Date();
         await request.save();
 
-        // 🚨 EXACT TRANSACTION LOOKUP FIX:
+        // Exact Transaction Lookup and Hold Release
         const wallet = await Wallet.findOne({ vendorId: request.vendorId, vendorModel: request.vendorModel });
         if (wallet && wallet.transactions) {
             const holdTx = wallet.transactions.slice().reverse().find(t => 
@@ -67,13 +69,41 @@ const approveWithdrawal = async (req, res) => {
             await wallet.save();
         }
 
-        res.json({ success: true, message: "Withdrawal approved successfully.", data: request });
+        // 🚨 VENDOR PUSH NOTIFICATION: Alert Doctor/Lab/Pharmacy/Nurse of successful bank deposit
+        const targetType = String(request.vendorModel).toLowerCase(); // 'doctor', 'lab', 'pharmacy', 'nurse', 'hospital', 'ambulance'
+        try {
+            await sendPushNotification(
+                request.vendorId,
+                targetType,
+                `💰 Withdrawal Approved: ₹${request.amount}`,
+                `Your payout of ₹${request.amount} has been successfully transferred to your bank account (UTR Ref: ${transactionReference}).`,
+                {
+                    type: 'WITHDRAWAL_APPROVED',
+                    amount: String(request.amount),
+                    utr: String(transactionReference),
+                    requestId: String(request._id),
+                    click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                }
+            );
+        } catch (notifErr) {
+            console.error("Withdrawal Approval Notification Error:", notifErr.message);
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Withdrawal approved successfully and vendor notified.", 
+            data: request 
+        });
+
     } catch (error) {
+        console.error("Approve Withdrawal Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 3. REJECT WITHDRAWAL (Refunds the locked balance back to vendor)
+// @desc    Reject Withdrawal Request & refund held balance back to vendor with alert
+// @route   PATCH /api/admin/wallet/reject-withdrawal/:requestId
+// @access  Private (Admin)
 const rejectWithdrawal = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -89,20 +119,47 @@ const rejectWithdrawal = async (req, res) => {
         request.rejectedAt = new Date();
         await request.save();
 
-        // 🚨 Refund safety mechanism
+        // Refund safety mechanism: Return held funds to balance
         const wallet = await Wallet.findOne({ vendorId: request.vendorId, vendorModel: request.vendorModel });
         if (wallet) {
-            wallet.balance += request.amount; // Refund held amount
+            wallet.balance += request.amount;
             wallet.transactions.push({
                 type: 'Credit',
                 amount: request.amount,
-                remark: `Withdrawal Declined Refund (Reason: ${request.rejectionReason})`
+                remark: `Withdrawal Declined Refund (Reason: ${request.rejectionReason})`,
+                date: new Date()
             });
             await wallet.save();
         }
 
-        res.json({ success: true, message: "Withdrawal request rejected. Balance refunded to vendor wallet.", data: request });
+        // 🚨 VENDOR PUSH NOTIFICATION: Alert vendor of declined withdrawal
+        const targetType = String(request.vendorModel).toLowerCase();
+        try {
+            await sendPushNotification(
+                request.vendorId,
+                targetType,
+                `❌ Withdrawal Request Declined`,
+                `Your withdrawal of ₹${request.amount} was rejected. Reason: "${request.rejectionReason}". Funds refunded to your wallet.`,
+                {
+                    type: 'WITHDRAWAL_REJECTED',
+                    amount: String(request.amount),
+                    reason: String(request.rejectionReason),
+                    requestId: String(request._id),
+                    click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                }
+            );
+        } catch (notifErr) {
+            console.error("Withdrawal Rejection Notification Error:", notifErr.message);
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Withdrawal request rejected. Balance refunded to vendor wallet and alert sent.", 
+            data: request 
+        });
+
     } catch (error) {
+        console.error("Reject Withdrawal Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
