@@ -52,8 +52,8 @@ router.get('/track-drivers', protect('pharmacy'), trackPharmacyDrivers);
 router.get('/invoice/:orderId', protect('pharmacy'), getPharmacyOrderInvoiceDetails);
 
 // order return and refund flow
-router.put('/orders/return-action/:orderId', protect('pharmacy'), handleReturnRequestAction);
-router.post('/orders/return/assign-driver', protect('pharmacy'), approveReturnAndAssignDriver);
-router.post('/orders/return/reject', protect('pharmacy'), rejectReturnRequest);
-router.post('/orders/return/confirm-store-receipt', protect('pharmacy'), confirmStoreReturnReceipt); 
+router.put('/return-action/:orderId', protect('pharmacy'), handleReturnRequestAction);
+router.post('/return/assign-driver', protect('pharmacy'), approveReturnAndAssignDriver);
+router.post('/return/reject', protect('pharmacy'), rejectReturnRequest);
+router.post('/return/confirm-store-receipt', protect('pharmacy'), confirmStoreReturnReceipt); 
 module.exports = router;

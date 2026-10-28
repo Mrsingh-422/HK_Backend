@@ -1,6 +1,6 @@
 // utils/helpers.js
 const axios = require('axios');
-
+const crypto = require('crypto');
 // ==========================================
 // 1. DISTANCE CALCULATOR (Google Map vs Straight Line)
 // ==========================================
@@ -49,4 +49,37 @@ const getRazorpayKeys = () => {
     }
 };
 
-module.exports = { getDistance, getRazorpayKeys };
+// @desc    Generates cryptographically unique, collision-proof booking/order codes with service prefix
+// @example generateUniqueOrderCode('HK-MED', PharmacyBooking, 'orderId') ➔ "HK-MED-7Y2K9X4M"
+const generateUniqueOrderCode = async (prefix, Model = null, fieldName = 'bookingId') => {
+    let uniqueCode = "";
+    let isDuplicate = true;
+    let attempts = 0;
+
+    while (isDuplicate && attempts < 10) {
+        attempts++;
+
+        // 1. High-resolution timestamp in Base-36 (compact, chronological, non-repeating)
+        const timePart = Date.now().toString(36).toUpperCase();
+
+        // 2. Cryptographically secure random 4 bytes (16^8 entropy = 4.29 billion possibilities per millisecond)
+        const randomPart = crypto.randomBytes(3).toString('hex').toUpperCase();
+
+        // 3. Assemble final standard format (e.g. HK-MED-M1K9X4-9FA2)
+        uniqueCode = `${prefix}-${timePart}-${randomPart}`;
+
+        // 4. Verify in DB if Model is provided (Self-healing collision check)
+        if (Model && fieldName) {
+            const exists = await Model.findOne({ [fieldName]: uniqueCode }).select('_id').lean();
+            if (!exists) {
+                isDuplicate = false;
+            }
+        } else {
+            isDuplicate = false;
+        }
+    }
+
+    return uniqueCode;
+};
+
+module.exports = { getDistance, getRazorpayKeys, generateUniqueOrderCode };

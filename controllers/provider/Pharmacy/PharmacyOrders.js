@@ -189,14 +189,34 @@ const assignDriverManual = async (req, res) => {
     try {
         const { orderId, driverId } = req.body;
         const pharmacyId = req.user.id;
-        
-        const driver = await Driver.findOne({ _id: driverId, vendorId: pharmacyId });
-        if (!driver || driver.status !== 'Available') {
-            return res.status(400).json({ success: false, message: "Selected driver is no longer available or not found." });
+
+        if (!orderId || !driverId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Both orderId and driverId are required." 
+            });
         }
 
-        const isObjectId = mongoose.Types.ObjectId.isValid(orderId);
-        const query = isObjectId ? { _id: orderId } : { orderId };
+        // 1. Verify Driver belongs to this Pharmacy and is currently Available
+        const driver = await Driver.findOne({ _id: driverId, vendorId: pharmacyId });
+        if (!driver || driver.status !== 'Available' || driver.isActive === false) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Selected driver is no longer available or not found." 
+            });
+        }
+
+        // 2. Dual Lookup: Support both MongoDB ObjectId and custom orderId string
+        const cleanOrderId = String(orderId).trim();
+        const isObjectId = mongoose.Types.ObjectId.isValid(cleanOrderId);
+
+        const query = {
+            pharmacyId, // 👈 Security Guard: Ensures order belongs to this logged-in pharmacy
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanOrderId) }] : []),
+                { orderId: cleanOrderId }
+            ]
+        };
 
         const order = await PharmacyBooking.findOneAndUpdate(
             query, 
@@ -212,15 +232,18 @@ const assignDriverManual = async (req, res) => {
         ).populate('userId', 'name phone fcmToken');
 
         if (!order) {
-            return res.status(404).json({ success: false, message: "Order not found." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Order not found or unauthorized to assign." 
+            });
         }
 
-        // Driver ko Busy mark karein
+        // 3. Mark Driver as Busy immediately
         await Driver.findByIdAndUpdate(driver._id, { $set: { status: 'Busy' } });
 
         const pharmacyName = req.user?.name || "Pharmacy Store";
 
-        // 🚨 1. DRIVER PUSH NOTIFICATION: Alert Driver phone with address
+        // 4. Alert Driver Phone via FCM Push
         try {
             await sendPushNotification(
                 driver._id,
@@ -235,10 +258,10 @@ const assignDriverManual = async (req, res) => {
                 }
             );
         } catch (dNotifErr) {
-            console.error("Driver Task Notification Error:", dNotifErr.message);
+            console.error("Driver Task Push Error:", dNotifErr.message);
         }
 
-        // 🚨 2. PATIENT ALERT: Notify patient that delivery partner is assigned
+        // 5. Alert Patient that Driver is assigned
         if (order.userId) {
             try {
                 await sendPushNotification(
@@ -257,7 +280,7 @@ const assignDriverManual = async (req, res) => {
                     }
                 );
             } catch (uNotifErr) {
-                console.error("User Driver Assigned Notification Error:", uNotifErr.message);
+                console.error("User Driver Assigned Push Error:", uNotifErr.message);
             }
         }
 
@@ -936,38 +959,69 @@ const getPharmacyOrderInvoiceDetails = async (req, res) => {
 // =====================================================================================
 // ================ pharmacy returns and replacements ====================================
 // =====================================================================================
-// REVIEW RETURN / REPLACEMENT REQUEST (Pharmacist Action)
-// Endpoint: PUT /provider/pharmacy/orders/return-action/:orderId
+// @desc    Pharmacist reviews return/replacement request (Approve or Reject without auto-assigning driver)
+// @route   PUT /provider/pharmacy/orders/return-action/:orderId
+// @access  Private (Pharmacy)
 const handleReturnRequestAction = async (req, res) => {
     try {
-        const { orderId } = req.params;
+        const orderId = req.params.orderId || req.body.orderId;
         const { action, rejectionReason } = req.body; // action: 'Approved' | 'Rejected'
         const pharmacyId = req.user.id;
 
-        const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
-            pharmacyId
-        });
-
-        if (!order || !order.returnDetails || order.returnDetails.status !== 'Requested') {
-            return res.status(400).json({ success: false, message: "No active pending return request found for this order." });
+        if (!orderId) {
+            return res.status(400).json({ success: false, message: "Order ID is required." });
         }
 
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(orderId) }] : []),
+                { orderId: String(orderId).trim() }
+            ]
+        };
+
+        const order = await PharmacyBooking.findOne(query);
+        if (!order || !order.returnDetails || order.returnDetails.status !== 'Requested') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "No active pending return request found for this order." 
+            });
+        }
+
+        // ==========================================
+        // 1. APPROVE RETURN REQUEST
+        // ==========================================
         if (action === 'Approved') {
-            // 🛡️ DOUBLE RESTOCK FIX: Stock is NOT added here! It is only added when physical parcel is verified at store in 'confirmStoreReturnReceipt'
             order.returnDetails.status = 'Approved';
+            order.returnDetails.pickupStatus = 'PendingAssignment';
             order.returnDetails.resolvedAt = new Date();
-            order.status = order.returnDetails.requestType === 'Return' ? 'Cancelled' : 'Shipped';
-            order.paymentStatus = order.returnDetails.requestType === 'Return' ? 'Refund-Initiated' : order.paymentStatus;
+            
+            // Do NOT touch deliveryStatus to prevent auto-assignment cron trigger!
             await order.save();
 
-            return res.json({
+            // Fetch active and available drivers of this pharmacy for manual selection dropdown
+            const availableDrivers = await Driver.find({
+                vendorId: pharmacyId,
+                vendorType: 'Pharmacy',
+                status: 'Available',
+                isActive: true
+            }).select('name phone profilePic vehicleNumber vehicleType');
+
+            return res.status(200).json({
                 success: true,
-                message: `Return request approved. Assign a driver to pick up the package from customer.`,
-                data: order.returnDetails
+                message: "Return request approved. Please manually select a delivery driver for pickup.",
+                data: {
+                    orderId: order.orderId,
+                    returnDetails: order.returnDetails,
+                    availableDrivers // 👈 Frontend uses this array to populate manual selection modal
+                }
             });
-        } 
-        
+        }
+
+        // ==========================================
+        // 2. REJECT RETURN REQUEST
+        // ==========================================
         if (action === 'Rejected') {
             if (!rejectionReason || rejectionReason.trim() === "") {
                 return res.status(400).json({ success: false, message: "Rejection reason is required." });
@@ -978,104 +1032,228 @@ const handleReturnRequestAction = async (req, res) => {
             order.returnDetails.resolvedAt = new Date();
             await order.save();
 
-            return res.json({
+            const pharmacyName = req.user?.name || "Pharmacy Store";
+
+            // Notify Customer that return was declined
+            if (order.userId) {
+                try {
+                    await sendPushNotification(
+                        order.userId,
+                        'user',
+                        `❌ Return Request Rejected (${order.orderId})`,
+                        `Your return request for Order #${order.orderId} was rejected by ${pharmacyName}. Reason: "${order.returnDetails.rejectionReason}".`,
+                        {
+                            type: 'RETURN_REQUEST_REJECTED',
+                            serviceType: 'Pharmacy',
+                            orderId: String(order.orderId),
+                            id: String(order._id),
+                            click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                        }
+                    );
+                } catch (e) {
+                    console.error("Return Reject Push Notification Error:", e.message);
+                }
+            }
+
+            return res.status(200).json({
                 success: true,
-                message: "Return request rejected.",
+                message: "Return request rejected and patient notified.",
                 data: order.returnDetails
             });
         }
 
-        return res.status(400).json({ success: false, message: "Invalid action. Choose 'Approved' or 'Rejected'." });
+        return res.status(400).json({ 
+            success: false, 
+            message: "Invalid action. Allowed values are 'Approved' or 'Rejected'." 
+        });
 
     } catch (error) {
+        console.error("handleReturnRequestAction Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 1. APPROVE RETURN & ASSIGN PICKUP DRIVER (In One Step)
-// Endpoint: POST /provider/pharmacy/orders/return/assign-driver
+// @desc    Pharmacist manually selects and assigns a delivery driver for return pickup
+// @route   POST /provider/pharmacy/orders/return/assign-driver
+// @access  Private (Pharmacy)
 const approveReturnAndAssignDriver = async (req, res) => {
     try {
-        const { orderId, driverId } = req.body;
+        const orderId = req.body.orderId || req.params.orderId;
+        const { driverId } = req.body;
         const pharmacyId = req.user.id;
 
-        const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
-            pharmacyId
+        if (!orderId) {
+            return res.status(400).json({ success: false, message: "Order ID is required." });
+        }
+
+        // 🚨 STRICT MANUAL SELECTION CHECK: Block if driverId is missing or empty
+        if (!driverId || String(driverId).trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Manual driver selection is required. Please pick a driver from the available drivers list." 
+            });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(orderId) }] : []),
+                { orderId: String(orderId).trim() }
+            ]
+        };
+
+        const order = await PharmacyBooking.findOne(query);
+        if (!order || !order.returnDetails) {
+            return res.status(404).json({ success: false, message: "Order not found or no return request exists." });
+        }
+
+        // Allow assignment if return status is either 'Requested' or already 'Approved'
+        const allowedStatuses = ['Requested', 'Approved'];
+        if (!allowedStatuses.includes(order.returnDetails.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot assign driver. Return status is currently '${order.returnDetails.status}'.` 
+            });
+        }
+
+        if (order.returnDetails.pickupStatus === 'PickedUp' || order.returnDetails.pickupStatus === 'DeliveredToStore') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cannot reassign driver. Return parcel has already been picked up from customer." 
+            });
+        }
+
+        // 1. Verify Driver exists, belongs to this pharmacy, and is available
+        const driver = await Driver.findOne({
+            _id: driverId,
+            vendorId: pharmacyId,
+            vendorType: 'Pharmacy'
         });
 
-        if (!order || !order.returnDetails || order.returnDetails.status !== 'Requested') {
-            return res.status(400).json({ success: false, message: "No active pending return request found." });
+        if (!driver || driver.status !== 'Available' || driver.isActive === false) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Selected driver is either offline, busy, or does not belong to your pharmacy store." 
+            });
         }
 
-        const driver = await Driver.findById(driverId);
-        if (!driver || driver.status !== 'Available') {
-            return res.status(400).json({ success: false, message: "Selected driver is not available." });
+        // Release previous pickup driver if reassigning
+        if (order.returnDetails.pickupDriverId && String(order.returnDetails.pickupDriverId) !== String(driverId)) {
+            await Driver.findByIdAndUpdate(order.returnDetails.pickupDriverId, { $set: { status: 'Available' } });
         }
 
+        // 2. Generate 4-Digit Return OTP for doorstep handover verification
         const generatedReturnOTP = Math.floor(1000 + Math.random() * 9000).toString();
 
         order.returnDetails.status = 'Approved';
-        order.returnDetails.pickupDriverId = driverId;
+        order.returnDetails.pickupDriverId = driver._id;
         order.returnDetails.pickupStatus = 'Assigned';
         order.returnDetails.returnOTP = generatedReturnOTP;
         order.returnDetails.resolvedAt = new Date();
         await order.save();
 
-        await Driver.findByIdAndUpdate(driverId, { status: 'Busy' });
+        // 3. Mark selected driver as Busy
+        await Driver.findByIdAndUpdate(driver._id, { $set: { status: 'Busy' } });
 
-        // 🚨 1. Notify Driver
-        await sendPushNotification(
-            driverId,
-            'driver',
-            "New Return Pickup Task Assigned!",
-            `You have been assigned to pick up return package for Order #${order.orderId}.`,
-            { orderId: order._id.toString(), type: 'return_pickup_task' }
-        );
+        const pharmacyName = req.user?.name || "Pharmacy Store";
 
-        // 🚨 2. Notify Patient with Return OTP
-        await sendPushNotification(
-            order.userId,
-            'user',
-            "Return Request Approved!",
-            `Your return request is approved. Pickup driver ${driver.name} is on the way. Share OTP ${generatedReturnOTP} upon collection.`,
-            { orderId: order._id.toString(), returnOTP: generatedReturnOTP, type: 'return_approved' }
-        );
+        // 🚨 4. DRIVER PUSH NOTIFICATION: Alert Driver of Return Pickup Task
+        try {
+            await sendPushNotification(
+                driver._id,
+                'driver',
+                "📦 New Return Pickup Task Assigned!",
+                `You have been assigned to pick up return parcel for Order #${order.orderId}. Customer: ${order.address?.name || 'Customer'}.`,
+                {
+                    type: 'RETURN_PICKUP_TASK',
+                    orderId: String(order.orderId),
+                    id: String(order._id),
+                    click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                }
+            );
+        } catch (dErr) {
+            console.error("Driver Return Task Push Error:", dErr.message);
+        }
 
-        res.json({
+        // 🚨 5. PATIENT ALERT: Notify patient with Pickup Driver details and OTP
+        if (order.userId) {
+            try {
+                await sendPushNotification(
+                    order.userId,
+                    'user',
+                    "📦 Return Pickup Driver Assigned!",
+                    `Pickup driver ${driver.name} has been assigned for Order #${order.orderId}. Share OTP: ${generatedReturnOTP} when the driver arrives.`,
+                    {
+                        type: 'RETURN_DRIVER_ASSIGNED',
+                        serviceType: 'Pharmacy',
+                        orderId: String(order.orderId),
+                        returnOTP: String(generatedReturnOTP),
+                        driverName: String(driver.name),
+                        driverPhone: String(driver.phone),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (uErr) {
+                console.error("User Return Driver Push Error:", uErr.message);
+            }
+        }
+
+        res.status(200).json({
             success: true,
-            message: "Return request approved, pickup driver assigned, and OTP sent to customer!",
+            message: `Driver ${driver.name} manually assigned for return pickup successfully!`,
             data: {
                 orderId: order.orderId,
                 returnStatus: order.returnDetails.status,
                 pickupStatus: order.returnDetails.pickupStatus,
-                assignedDriver: { id: driver._id, name: driver.name, phone: driver.phone }
+                returnOTP: order.returnDetails.returnOTP,
+                assignedDriver: {
+                    id: driver._id,
+                    name: driver.name,
+                    phone: driver.phone,
+                    vehicleNumber: driver.vehicleNumber
+                }
             }
         });
 
     } catch (error) {
+        console.error("approveReturnAndAssignDriver Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 2. REJECT RETURN REQUEST
-// Endpoint: POST /provider/pharmacy/orders/return/reject
+// @desc    Pharmacist rejects customer return request with explanation
+// @route   POST /provider/pharmacy/orders/return/reject
+// @access  Private (Pharmacy)
 const rejectReturnRequest = async (req, res) => {
     try {
-        const { orderId, rejectionReason } = req.body;
+        const orderId = req.body.orderId || req.params.orderId;
+        const { rejectionReason } = req.body;
         const pharmacyId = req.user.id;
+
+        if (!orderId) {
+            return res.status(400).json({ success: false, message: "Order ID is required." });
+        }
 
         if (!rejectionReason || rejectionReason.trim() === "") {
             return res.status(400).json({ success: false, message: "Rejection reason is required." });
         }
 
-        const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
-            pharmacyId
-        });
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(orderId) }] : []),
+                { orderId: String(orderId).trim() }
+            ]
+        };
 
+        const order = await PharmacyBooking.findOne(query);
         if (!order || !order.returnDetails || order.returnDetails.status !== 'Requested') {
-            return res.status(400).json({ success: false, message: "No active pending return request found." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "No active pending return request found for this order." 
+            });
         }
 
         order.returnDetails.status = 'Rejected';
@@ -1083,37 +1261,74 @@ const rejectReturnRequest = async (req, res) => {
         order.returnDetails.resolvedAt = new Date();
         await order.save();
 
-        res.json({
+        const pharmacyName = req.user?.name || "Pharmacy Store";
+
+        // Notify patient
+        if (order.userId) {
+            try {
+                await sendPushNotification(
+                    order.userId,
+                    'user',
+                    `❌ Return Request Declined (${order.orderId})`,
+                    `Your return request for Order #${order.orderId} was declined by ${pharmacyName}. Reason: "${order.returnDetails.rejectionReason}".`,
+                    {
+                        type: 'RETURN_REQUEST_REJECTED',
+                        serviceType: 'Pharmacy',
+                        orderId: String(order.orderId),
+                        id: String(order._id),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Reject Return Push Error:", e.message);
+            }
+        }
+
+        res.status(200).json({
             success: true,
-            message: "Return request rejected.",
+            message: "Return request rejected and customer notified.",
             data: order.returnDetails
         });
+
     } catch (error) {
+        console.error("rejectReturnRequest Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// FINAL PHARMACIST STORE VERIFICATION & RESTOCK ACTION
-// endpoint: POST /provider/pharmacy/orders/return/confirm-store-receipt
+// @desc    Pharmacist confirms physical receipt of returned parcel at store counter & completes restock/replacement
+// @route   POST /provider/pharmacy/orders/return/confirm-store-receipt
+// @access  Private (Pharmacy)
 const confirmStoreReturnReceipt = async (req, res) => {
     try {
-        const { orderId, decision, remarks, rejectionReason } = req.body; 
+        const orderId = req.body.orderId || req.params.orderId;
+        const { decision, remarks, rejectionReason } = req.body; 
         const pharmacyId = req.user.id;
 
-        const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
-            pharmacyId
-        });
+        if (!orderId) {
+            return res.status(400).json({ success: false, message: "Order ID is required." });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(orderId) }] : []),
+                { orderId: String(orderId).trim() }
+            ]
+        };
+
+        const order = await PharmacyBooking.findOne(query);
 
         if (!order || !order.returnDetails || order.returnDetails.status !== 'CollectedByDriver') {
             return res.status(400).json({ 
                 success: false, 
-                message: "Order parcel must be physically collected by driver before final store verification." 
+                message: "Order parcel must be physically collected by driver from customer before final store receipt verification." 
             });
         }
 
         // =========================================================================
-        // CASE 1: RETURN APPROVED (Restores stock & queues Admin Refund)
+        // CASE 1: RETURN APPROVED & RESTOCKED (Restores stock & triggers refund)
         // =========================================================================
         if (decision === 'Approve_And_Restock') {
             for (const item of order.items) {
@@ -1133,56 +1348,55 @@ const confirmStoreReturnReceipt = async (req, res) => {
             order.returnDetails.storeReceivedAt = new Date();
             order.status = 'Cancelled';
             
-            // Queue for Admin Razorpay Payout
+            // Queue for Refund
             order.paymentStatus = order.paymentMethod === 'Online' ? 'Refund-Initiated' : 'Refunded';
             await order.save();
 
             // Notify Customer
-            try {
-                await sendPushNotification(
-                    order.userId,
-                    'user',
-                    "Return Verified & Refund Processed!",
-                    `Your return for Order #${order.orderId} was verified at store. Refund of ₹${order.billSummary.totalAmount} has been initiated.`,
-                    { orderId: order._id.toString(), type: 'return_completed' }
-                );
-            } catch (e) {}
+            if (order.userId) {
+                try {
+                    await sendPushNotification(
+                        order.userId,
+                        'user',
+                        "✅ Return Verified & Refund Processed!",
+                        `Your return for Order #${order.orderId} was verified at the store. Refund of ₹${order.billSummary.totalAmount} has been processed.`,
+                        { orderId: order._id.toString(), type: 'return_completed' }
+                    );
+                } catch (e) {}
+            }
 
-            return res.json({
+            return res.status(200).json({
                 success: true,
-                message: "Return confirmed! Stock restored to inventory and refund sent to Admin queue.",
+                message: "Return confirmed! Medicine stock restored to inventory and refund initiated.",
                 data: order
             });
         }
 
         // =========================================================================
-        // CASE 2: REPLACEMENT APPROVED (Deducts fresh stock & generates new Delivery OTP)
+        // CASE 2: REPLACEMENT APPROVED (Atomic stock check & fresh Delivery OTP)
         // =========================================================================
         if (decision === 'Approve_And_Replace') {
+            // Atomic stock availability check
             for (const item of order.items) {
                 if (!item.medicineId) continue;
-                const inv = await MedicineInventory.findOne({ 
-                    pharmacyId, 
-                    medicineId: item.medicineId,
-                    is_available: true,
-                    stock_quantity: { $gte: Number(item.quantity || 1) }
-                });
+                const reqQty = Number(item.quantity || 1);
 
-                if (!inv) {
+                const updatedInv = await MedicineInventory.findOneAndUpdate(
+                    { 
+                        pharmacyId, 
+                        medicineId: item.medicineId,
+                        stock_quantity: { $gte: reqQty }
+                    },
+                    { $inc: { stock_quantity: -reqQty } },
+                    { new: true }
+                );
+
+                if (!updatedInv) {
                     return res.status(400).json({
                         success: false,
-                        message: `Cannot process Replacement: '${item.name}' is OUT OF STOCK. Please choose 'Approve_And_Restock' (Return & Refund) instead.`
+                        message: `Cannot process Replacement: '${item.name}' is out of stock. Please choose 'Approve_And_Restock' (Return & Refund) instead.`
                     });
                 }
-            }
-
-            // Deduct replacement stock atomically
-            for (const item of order.items) {
-                if (!item.medicineId) continue;
-                await MedicineInventory.findOneAndUpdate(
-                    { pharmacyId, medicineId: item.medicineId },
-                    { $inc: { stock_quantity: -Number(item.quantity || 1) } }
-                );
             }
 
             const freshDeliveryOTP = Math.floor(1000 + Math.random() * 9000).toString();
@@ -1192,26 +1406,29 @@ const confirmStoreReturnReceipt = async (req, res) => {
             order.returnDetails.vendorVerificationNote = remarks || "Replacement product packed and ready for dispatch.";
             order.returnDetails.storeReceivedAt = new Date();
             
+            // Re-arm order for courier dispatch
             order.status = 'Packed'; 
             order.deliveryStatus = 'PendingAssignment';
             order.deliveryOTP = freshDeliveryOTP;
-            order.driverId = null; 
+            order.driverId = null; // Clear old driver so pharmacist manually assigns new delivery boy
             await order.save();
 
             // Notify Customer
-            try {
-                await sendPushNotification(
-                    order.userId,
-                    'user',
-                    "Replacement Dispatched!",
-                    `Fresh replacement package packed for Order #${order.orderId}. Delivery OTP: ${freshDeliveryOTP}.`,
-                    { orderId: order._id.toString(), otp: freshDeliveryOTP, type: 'replacement_packed' }
-                );
-            } catch (e) {}
+            if (order.userId) {
+                try {
+                    await sendPushNotification(
+                        order.userId,
+                        'user',
+                        "📦 Replacement Package Dispatched!",
+                        `Fresh replacement package packed for Order #${order.orderId}. New Delivery OTP is ${freshDeliveryOTP}.`,
+                        { orderId: order._id.toString(), otp: freshDeliveryOTP, type: 'replacement_packed' }
+                    );
+                } catch (e) {}
+            }
 
-            return res.json({
+            return res.status(200).json({
                 success: true,
-                message: "Replacement confirmed & stock deducted! Fresh Delivery OTP generated. Please assign a driver.",
+                message: "Replacement confirmed! Stock deducted and fresh Delivery OTP generated. Please assign a delivery boy.",
                 data: {
                     orderId: order.orderId,
                     status: order.status,
@@ -1222,29 +1439,41 @@ const confirmStoreReturnReceipt = async (req, res) => {
         }
 
         // =========================================================================
-        // CASE 3: STORE REJECTION (Damaged / Tampered product)
+        // CASE 3: STORE REJECTION (Package was opened, tampered, or wrong medicine)
         // =========================================================================
         if (decision === 'Reject_Damaged') {
-            if (!rejectionReason) {
+            if (!rejectionReason || rejectionReason.trim() === "") {
                 return res.status(400).json({ success: false, message: "Rejection reason is required." });
             }
 
             order.returnDetails.status = 'Rejected';
-            order.returnDetails.rejectionReason = rejectionReason;
+            order.returnDetails.rejectionReason = rejectionReason.trim();
             order.returnDetails.storeReceivedAt = new Date();
             await order.save();
 
-            return res.json({
+            if (order.userId) {
+                try {
+                    await sendPushNotification(
+                        order.userId,
+                        'user',
+                        `❌ Return Rejected at Store Desk (${order.orderId})`,
+                        `Returned parcel for Order #${order.orderId} was rejected during physical inspection. Reason: "${order.returnDetails.rejectionReason}".`,
+                        { orderId: order._id.toString(), type: 'return_rejected_store' }
+                    );
+                } catch (e) {}
+            }
+
+            return res.status(200).json({
                 success: true,
-                message: "Return parcel rejected at store desk.",
-                data: order
+                message: "Returned parcel rejected at store counter.",
+                data: order.returnDetails
             });
         }
 
         return res.status(400).json({ success: false, message: "Invalid decision option." });
 
     } catch (error) {
-        console.error("Confirm Store Return Receipt Error:", error);
+        console.error("confirmStoreReturnReceipt Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

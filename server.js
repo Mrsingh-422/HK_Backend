@@ -124,32 +124,32 @@ app.use(morgan('[:local-date] [IP: :real-ip] [User: :user-name] :method :url :st
 // =============================================================================
 // 🔴 CENTRALIZED GLOBAL ERROR HANDLING & CONSOLE LOGGER MIDDLEWARE
 // =============================================================================
-app.use((err, req, res, next) => {
-    const localDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-    const clientIp = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const userName = (req.user && req.user.name) || (req.doctor && req.doctor.name) || 'Guest';
+// app.use((err, req, res, next) => {
+//     const localDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+//     const clientIp = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+//     const userName = (req.user && req.user.name) || (req.doctor && req.doctor.name) || 'Guest';
 
-    console.error(`\n🚨 [API EXCEPTION TRIGGERED] =============================================`);
-    console.error(`⏰ Timestamp     : [${localDate}]`);
-    console.error(`🔌 Client IP     : [${clientIp}]`);
-    console.error(`👤 Authenticated : [${userName}]`);
-    console.error(`🛣️  Route Details : ${req.method} ${req.originalUrl}`);
-    console.error(`📦 Request Body  :`, JSON.stringify(req.body, null, 2));
-    console.error(`💬 Error Message : ${err.message}`);
+//     console.error(`\n🚨 [API EXCEPTION TRIGGERED] =============================================`);
+//     console.error(`⏰ Timestamp     : [${localDate}]`);
+//     console.error(`🔌 Client IP     : [${clientIp}]`);
+//     console.error(`👤 Authenticated : [${userName}]`);
+//     console.error(`🛣️  Route Details : ${req.method} ${req.originalUrl}`);
+//     console.error(`📦 Request Body  :`, JSON.stringify(req.body, null, 2));
+//     console.error(`💬 Error Message : ${err.message}`);
     
-    if (err.stack) {
-        console.error(`\n📂 Full Stack Trace:\n${err.stack}`);
-    }
-    console.error(`=========================================================================\n`);
+//     if (err.stack) {
+//         console.error(`\n📂 Full Stack Trace:\n${err.stack}`);
+//     }
+//     console.error(`=========================================================================\n`);
 
-    const statusCode = err.status || 500;
+//     const statusCode = err.status || 500;
     
-    res.status(statusCode).json({
-        success: false,
-        message: err.message || "Internal Server Error",
-        error_stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
-});
+//     res.status(statusCode).json({
+//         success: false,
+//         message: err.message || "Internal Server Error",
+//         error_stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+//     });
+// });
 // =============================================================================
 // 🔴 CENTRALIZED GLOBAL ERROR HANDLING & CONSOLE LOGGER MIDDLEWARE
 // =============================================================================
@@ -495,6 +495,43 @@ const getLocalIpAddress = () => {
     }
     return 'localhost';
 };
+
+
+// =============================================================================
+// 🔴 CENTRALIZED GLOBAL ERROR HANDLING MIDDLEWARE (MUST BE AFTER ALL ROUTES)
+// =============================================================================
+app.use((err, req, res, next) => {
+    const multer = require('multer');
+    
+    // 1. Handle Multer Field Name Mismatches Cleanly
+    if (err instanceof multer.MulterError) {
+        console.error("\x1b[31m[MULTER ERROR DETAILS]\x1b[0m", err.message);
+        return res.status(400).json({ 
+            success: false, 
+            errorType: "MULTER_FIELD_MISMATCH",
+            message: `Upload Error: The file field '${err.field}' is unexpected. Please check multipart keys.`,
+            badField: err.field
+        });
+    }
+
+    // 2. Log API Stack Trace in Development
+    const localDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    console.error(`\n🚨 [API EXCEPTION TRIGGERED: ${localDate}] -----------------`);
+    console.error(`Route: ${req.method} ${req.originalUrl}`);
+    console.error(`Message: ${err.message}`);
+    if (err.stack) console.error(err.stack);
+    console.error(`-----------------------------------------------------------\n`);
+
+    const statusCode = err.status || 500;
+    res.status(statusCode).json({
+        success: false,
+        message: err.message || "Internal Server Error",
+        error_stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+});
+// =============================================================================
+// 🔴 CENTRALIZED GLOBAL ERROR HANDLING MIDDLEWARE (MUST BE AFTER ALL ROUTES
+// =============================================================================)
  
 const PORT = process.env.PORT;
 

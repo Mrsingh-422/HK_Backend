@@ -4257,98 +4257,164 @@ const getSimilarInStockMedicines = async (req, res) => {
     }
 };
 
-// returnReplacement: 'Return' | 'Replacement'
-// SUBMIT RETURN / REPLACEMENT REQUEST (User App)
-// Endpoint: POST /user/pharmacy/orders/return-request/:orderId
+// @desc    Customer submits Return or Replacement request for delivered pharmacy order
+// @route   POST /user/pharmacy/orders/return-request/:orderId
+// @access  Private (User)
 const requestPharmacyOrderReturn = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { requestType, reason, userComments } = req.body; 
         const userId = req.user.id;
+        const { requestType, reason, userComments } = req.body;
 
-        const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
-            userId
-        });
-
-        if (!order) return res.status(404).json({ success: false, message: "Order not found." });
-
-        if (order.status !== 'Delivered' && order.deliveryStatus !== 'Delivered') {
-            return res.status(400).json({ success: false, message: "Only delivered orders are eligible for return/replacement." });
-        }
-
-        let eligibleSubtotal = 0;
-        const eligibleItems = order.items.filter(item => {
-            const isEligible = requestType === 'Return' ? item.isReturnAllowed : item.isReplacementAllowed;
-            if (isEligible) {
-                eligibleSubtotal += (Number(item.price || 0) * Number(item.quantity || 1));
-            }
-            return isEligible;
-        });
-
-        if (eligibleItems.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: `Store Policy Blocked: None of the items in this order are eligible for ${requestType ? requestType.toLowerCase() : 'return'}.`
-            });
-        }
-
-        let config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
-        if (!config) config = { returnWindowDays: 3, isReturnEnabled: true, isReplacementEnabled: true };
-
-        const deliveryDate = order.deliveredAt || order.updatedAt || order.createdAt;
-        const daysPassed = moment().diff(moment(deliveryDate), 'days');
-
-        if (daysPassed > config.returnWindowDays) {
+        if (!orderId || String(orderId).trim() === "") {
             return res.status(400).json({ 
                 success: false, 
-                message: `Return window expired: Requests were only allowed within ${config.returnWindowDays} days.` 
+                message: "Order ID parameter is required." 
             });
         }
 
-        if (order.returnDetails && order.returnDetails.status === 'Requested') {
-            return res.status(400).json({ success: false, message: "A return request is already pending for this order." });
+        // 1. Dual Lookup: Support both MongoDB _id and custom orderId string
+        const cleanOrderId = String(orderId).trim();
+        const isObjectId = mongoose.isValidObjectId(cleanOrderId);
+
+        const query = {
+            userId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanOrderId) }] : []),
+                { orderId: cleanOrderId }
+            ]
+        };
+
+        const order = await PharmacyBooking.findOne(query);
+        if (!order) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Order not found or you are not authorized to return this order." 
+            });
         }
 
-        let uploadedProofs = [];
-        if (req.files) {
-            if (Array.isArray(req.files)) {
-                uploadedProofs = req.files.map(f => f.path.replace(/\\/g, "/"));
-            } else if (req.files.proofImages) {
-                uploadedProofs = req.files.proofImages.map(f => f.path.replace(/\\/g, "/"));
-            }
+        // 2. Delivery Status Check: Cannot return an undelivered order
+        if (order.status !== 'Delivered') {
+            return res.status(400).json({ 
+                success: false, 
+                errorType: "ORDER_NOT_DELIVERED",
+                message: `Return request blocked. Order is currently in '${order.status}' state. Return can only be requested after delivery.` 
+            });
         }
 
+        // 3. Duplicate Return Check
+        if (order.returnDetails && order.returnDetails.status && order.returnDetails.status !== 'None') {
+            return res.status(400).json({ 
+                success: false, 
+                errorType: "RETURN_ALREADY_EXISTS",
+                message: `A return/replacement request has already been placed for this order (Current Status: '${order.returnDetails.status}').` 
+            });
+        }
+
+        // 4. Request Type Validation & Auto-Casing (Handles 'return' -> 'Return')
+        let cleanType = null;
+        if (requestType) {
+            const formatted = String(requestType).trim().toLowerCase();
+            if (formatted === 'return') cleanType = 'Return';
+            else if (formatted === 'replacement') cleanType = 'Replacement';
+        }
+
+        if (!cleanType) {
+            return res.status(400).json({ 
+                success: false, 
+                errorType: "INVALID_REQUEST_TYPE",
+                message: "Invalid 'requestType'. Allowed values are 'Return' or 'Replacement'." 
+            });
+        }
+
+        // 5. Reason Validation
+        if (!reason || String(reason).trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                errorType: "MISSING_REASON",
+                message: "Please select or provide a valid reason for return/replacement." 
+            });
+        }
+
+        // 6. Return Window Check (Default: 3 days from delivery date)
+        const config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
+        const allowedDays = config?.returnWindowDays || 3;
+        const deliveryDate = order.deliveredAt || order.updatedAt || order.createdAt;
+
+        const returnDeadline = moment(deliveryDate).add(allowedDays, 'days');
+        if (moment().isAfter(returnDeadline)) {
+            return res.status(400).json({ 
+                success: false, 
+                errorType: "RETURN_WINDOW_EXPIRED",
+                message: `The ${allowedDays}-day return window for this order has expired.` 
+            });
+        }
+
+        // 7. Check if items in order are non-returnable
+        const hasReturnableItem = order.items.some(i => i.isReturnAllowed === true || i.isReplacementAllowed === true);
+        if (order.items.length > 0 && !hasReturnableItem && config && config.isReturnEnabled === false) {
+            return res.status(400).json({
+                success: false,
+                errorType: "NON_RETURNABLE_PRODUCT",
+                message: "The items in this order are marked as non-returnable as per pharmacy policy."
+            });
+        }
+
+        // 8. Capture Proof Images from Multer (Field name: proofImages)
+        let proofPhotoPaths = [];
+        if (req.files && req.files['proofImages']) {
+            proofPhotoPaths = req.files['proofImages'].map(f => `/uploads/pharmacy_prescriptions/${f.filename}`);
+        } else if (req.file) {
+            proofPhotoPaths.push(`/uploads/pharmacy_prescriptions/${req.file.filename}`);
+        }
+
+        // 9. Update returnDetails in Database
         order.returnDetails = {
-            requestType: requestType || 'Return',
-            reason: reason || "Product issue",
-            userComments: userComments || "",
-            proofImages: uploadedProofs,
+            requestType: cleanType,
+            reason: String(reason).trim(),
+            userComments: userComments ? String(userComments).trim() : "",
+            proofImages: proofPhotoPaths,
             status: 'Requested',
+            pickupStatus: 'PendingAssignment',
             requestedAt: new Date(),
-            rejectionReason: null,
-            refundAmount: Number(eligibleSubtotal.toFixed(2))
+            refundAmount: cleanType === 'Return' ? (order.billSummary?.totalAmount || 0) : 0
         };
 
         await order.save();
 
-        // 🛡️ VENDOR NOTIFICATION: Alert Pharmacy Desk about new Return Request
-        await notifyAdminsAndVendor(
-            order.pharmacyId,
-            'pharmacy',
-            `🔄 New ${requestType || 'Return'} Request Received!`,
-            `Customer requested ${requestType || 'Return'} for Order #${order.orderId}. Reason: ${reason || 'Product issue'}.`,
-            { orderId: order._id.toString(), type: 'pharmacy_return_request' }
-        );
+        // 10. Alert Pharmacy Store of incoming return request
+        if (order.pharmacyId) {
+            try {
+                await sendPushNotification(
+                    order.pharmacyId,
+                    'pharmacy',
+                    `⚠️ New ${cleanType} Request: ${order.orderId}`,
+                    `Customer requested ${cleanType} for Order #${order.orderId}. Reason: "${order.returnDetails.reason}". Please review and assign pickup.`,
+                    {
+                        type: 'RETURN_REQUEST_RECEIVED',
+                        serviceType: 'Pharmacy',
+                        orderId: String(order.orderId),
+                        id: String(order._id),
+                        requestType: String(cleanType),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Pharmacy Return Notification Error:", e.message);
+            }
+        }
 
-        res.json({
+        res.status(200).json({
             success: true,
-            message: `${requestType || 'Return'} request submitted successfully! Pharmacist will review.`,
-            data: order.returnDetails
+            message: `${cleanType} request submitted successfully. The pharmacy will review and arrange pickup.`,
+            data: {
+                orderId: order.orderId,
+                returnDetails: order.returnDetails
+            }
         });
 
     } catch (error) {
-        console.error("requestPharmacyOrderReturn Error:", error);
+        console.error("Request Pharmacy Return Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
