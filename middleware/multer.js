@@ -2,6 +2,7 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { hasAwsCredentials, s3Client } = require('../config/s3');
 
 const { backupUploadedFilesToMongo } = require('./storageSync'); // Import the backup function
 

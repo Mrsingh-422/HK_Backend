@@ -14,7 +14,7 @@ const getModelByType = (type) => {
     return map[type];
 };
 
-// @desc    Add Review for Doctor / Hospital / Lab / Pharmacy / Nurse / Ambulance / Driver
+// @desc    Submit review for Doctor/Hospital/Lab/Pharmacy/Nurse/Ambulance (Resolves string order IDs safely)
 // @route   POST /api/user/review/add
 // @access  Private (User)
 const addReview = async (req, res) => {
@@ -25,25 +25,56 @@ const addReview = async (req, res) => {
             return res.status(400).json({ success: false, message: "targetId, targetType, and rating are required." });
         }
 
-        // 1. Create Review
+        if (!mongoose.isValidObjectId(targetId)) {
+            return res.status(400).json({ success: false, message: "Invalid targetId format." });
+        }
+
+        // 🚨 BUG FIX: Resolve orderId whether sent as MongoDB ObjectId OR string custom booking ID
+        let resolvedOrderMongoId = null;
+
+        if (orderId) {
+            if (mongoose.isValidObjectId(orderId)) {
+                resolvedOrderMongoId = new mongoose.Types.ObjectId(orderId);
+            } else {
+                const cleanId = String(orderId).trim();
+                // Resolve from respective collection
+                if (targetType === 'Doctor' || targetType === 'Hospital') {
+                    const b = await Appointment.findOne({ bookingId: cleanId }).select('_id');
+                    if (b) resolvedOrderMongoId = b._id;
+                } else if (targetType === 'Lab') {
+                    const b = await LabBooking.findOne({ bookingId: cleanId }).select('_id');
+                    if (b) resolvedOrderMongoId = b._id;
+                } else if (targetType === 'Pharmacy') {
+                    const b = await PharmacyBooking.findOne({ orderId: cleanId }).select('_id');
+                    if (b) resolvedOrderMongoId = b._id;
+                } else if (targetType === 'Nurse') {
+                    const b = await NurseBooking.findOne({ bookingId: cleanId }).select('_id');
+                    if (b) resolvedOrderMongoId = b._id;
+                } else if (targetType === 'Ambulance') {
+                    const b = await AmbulanceBooking.findOne({ bookingId: cleanId }).select('_id');
+                    if (b) resolvedOrderMongoId = b._id;
+                }
+            }
+        }
+
+        // 1. Create Review Document safely
         const review = await Review.create({
             userId: req.user.id,
-            userName: req.user.name,
-            targetId,
+            userName: req.user.name || "Verified Patient",
+            targetId: new mongoose.Types.ObjectId(targetId),
             targetType,
-            orderId,
-            rating: Number(rating),
-            comment: comment || ""
+            orderId: resolvedOrderMongoId || undefined,
+            rating: Math.min(5, Math.max(1, Number(rating))),
+            comment: comment ? String(comment).trim() : ""
         });
 
-        // 2. Update Vendor's Average Rating
+        // 2. Recalculate Vendor Average Rating
         const Model = getModelByType(targetType);
         if (Model) {
             const allReviews = await Review.find({ targetId });
             const avgRating = allReviews.reduce((acc, item) => item.rating + acc, 0) / allReviews.length;
             const formattedAvg = parseFloat(avgRating.toFixed(1));
 
-            // Set both rating and averageRating to support Doctor schema (averageRating) and Vendor schemas (rating)
             await Model.findByIdAndUpdate(targetId, {
                 $set: {
                     rating: formattedAvg,
@@ -53,7 +84,12 @@ const addReview = async (req, res) => {
             });
         }
 
-        res.status(201).json({ success: true, message: "Review submitted and ratings updated successfully.", data: review });
+        res.status(201).json({ 
+            success: true, 
+            message: "Review submitted and rating updated successfully.", 
+            data: review 
+        });
+
     } catch (error) { 
         console.error("Add Review Error:", error);
         res.status(500).json({ success: false, message: error.message }); 

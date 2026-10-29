@@ -104,8 +104,9 @@ const getPharmacyDashboardStats = async (req, res) => {
 };
 
 
-// Endpoint: GET /provider/pharmacy/orders/list
-// Endpoint: GET /provider/pharmacy/orders/list?returnStatus=Requested
+// @desc    Get Pharmacy Orders with Status & Return Filters (Strict return status isolation)
+// @route   GET /provider/pharmacy/orders/list
+// @access  Private (Pharmacy)
 const getPharmacyOrders = async (req, res) => {
     try {
         const { orderType, status, isPriority, returnStatus } = req.query; 
@@ -120,13 +121,15 @@ const getPharmacyOrders = async (req, res) => {
             query['billSummary.rapidDeliveryCharge'] = 0;
         }
 
-        // 🚨 1. NEW: RETURN / REPLACEMENT FILTER
-        // returnStatus = 'Requested' (Pending returns), 'Approved', 'Rejected', ya 'All'
+        // 🚨 BUG FIX: Filter strictly isolates returns without matching undefined legacy documents
         if (returnStatus) {
             if (returnStatus === 'All') {
-                query['returnDetails.status'] = { $ne: 'None' }; // Sabhi return wale orders
+                query['returnDetails.status'] = { 
+                    $exists: true, 
+                    $nin: ['None', null, ''] 
+                };
             } else {
-                query['returnDetails.status'] = returnStatus; // e.g. 'Requested'
+                query['returnDetails.status'] = returnStatus; // e.g. 'Requested', 'Approved'
             }
         }
 
@@ -145,25 +148,25 @@ const getPharmacyOrders = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        // Add root-level helper flags for frontend badge rendering
         const enrichedOrders = orders.map(order => {
-            const hasComboApplied = order.items.some(item => item.isComboApplied === true);
+            const hasComboApplied = Array.isArray(order.items) && order.items.some(item => item.isComboApplied === true);
             const isReturnRequested = order.returnDetails && order.returnDetails.status === 'Requested';
             
             return {
                 ...order,
                 hasComboApplied,
-                isReturnRequested // 👈 Helper: True if pending return action required
+                isReturnRequested
             };
         });
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             count: enrichedOrders.length,
             data: enrichedOrders 
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Get Pharmacy Orders Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

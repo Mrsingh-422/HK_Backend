@@ -4,7 +4,7 @@ const Medicine = require('../../../models/Medicine');
 const PharmacyComboOffer = require('../../../models/PharmacyComboOffer');
 const mongoose = require('mongoose');
 
-// 🔒 Anti-Crash Regex Sanitizer
+// Anti-Crash Regex Sanitizer (Ensure this is at the top)
 const escapeRegex = (string) => {
     return string.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 };
@@ -45,7 +45,9 @@ const getMedicineInventory = async (req, res) => {
     }
 };
 
-// 2. SEARCH MEDICINES (Anti-Crash Regex Added)
+// @desc    Search Medicines for User App (Sanitized against special regex characters)
+// @route   POST /user/medicine/search
+// @access  Public
 const searchMedicinesUser = async (req, res) => {
     try {
         const { query, category, page = 1 } = req.body;
@@ -53,21 +55,32 @@ const searchMedicinesUser = async (req, res) => {
         const skip = (page - 1) * limit;
 
         let filter = {};
+        
+        // 1. Sanitize text search query
         if (query && query.trim().length > 0) {
-            const safeRegex = new RegExp(escapeRegex(query.trim()), 'i');
+            const safeQueryRegex = new RegExp(escapeRegex(query.trim()), 'i');
             filter.$or = [
-                { name: safeRegex },
-                { salt_composition: safeRegex }
+                { name: safeQueryRegex },
+                { salt_composition: safeQueryRegex }
             ];
         }
-        if (category && category !== 'All') filter.bread_crumb = new RegExp(`^${category}`, 'i');
+
+        // 🚨 BUG FIX: Sanitize category string so '&', '(', ')' don't crash regex engine
+        if (category && category !== 'All' && String(category).trim() !== "") {
+            const safeCategory = escapeRegex(String(category).trim());
+            filter.bread_crumb = new RegExp(`^${safeCategory}`, 'i');
+        }
 
         const medicines = await Medicine.find(filter).skip(skip).limit(limit).lean();
 
         const dataWithOffers = await Promise.all(medicines.map(async (med) => {
-            const bestOffer = await MedicineInventory.findOne({ medicineId: med._id, is_available: true, stock_quantity: { $gt: 0 } })
-                .sort({ vendor_price: 1 })
-                .populate('pharmacyId', 'name rating');
+            const bestOffer = await MedicineInventory.findOne({ 
+                medicineId: med._id, 
+                is_available: true, 
+                stock_quantity: { $gt: 0 } 
+            })
+            .sort({ vendor_price: 1 })
+            .populate('pharmacyId', 'name rating');
             
             const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
             const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(med.mrp || 0);
@@ -89,9 +102,10 @@ const searchMedicinesUser = async (req, res) => {
             };
         }));
 
-        res.json({ success: true, data: dataWithOffers });
+        res.status(200).json({ success: true, count: dataWithOffers.length, data: dataWithOffers });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("Search Medicines User Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

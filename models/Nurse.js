@@ -76,7 +76,7 @@ const nurseSchema = new mongoose.Schema({
 
 
 }, { timestamps: true });
-nurseSchema.index({ location: "2dsphere" });
+// nurseSchema.index({ location: "2dsphere" });
 
 
 module.exports = mongoose.model('Nurse', nurseSchema);

@@ -222,38 +222,79 @@ const addToLabCart = async (req, res) => {
 };
 
 
-// @desc    Update Lab Cart Item Quantity (Null-Safe)
+// @desc    Universal Cart Item Quantity Modifier (Automatically handles both Lab & Pharmacy items)
 // @route   PUT /user/cart/quantity
 // @access  Private (User)
 const updateCartQuantity = async (req, res) => {
     try {
-        const { itemId, action } = req.body;
-        const cart = await Cart.findOne({ userId: req.user.id });
-        
-        if (!cart || !cart.labCart || !Array.isArray(cart.labCart.items)) {
-            return res.status(404).json({ success: false, message: "Cart not found or empty." });
+        const { itemId, medicineId, action } = req.body;
+        const targetId = String(itemId || medicineId || "").trim();
+
+        if (!targetId || !['inc', 'dec'].includes(action)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "itemId (or medicineId) and action ('inc' or 'dec') are required." 
+            });
         }
 
-        const itemIndex = cart.labCart.items.findIndex(i => i.itemId.toString() === itemId);
-        if (itemIndex > -1) {
-            if (action === 'inc') cart.labCart.items[itemIndex].quantity += 1;
-            else cart.labCart.items[itemIndex].quantity -= 1;
+        const cart = await Cart.findOne({ userId: req.user.id });
+        if (!cart) {
+            return res.status(404).json({ success: false, message: "Cart not found." });
+        }
 
-            if (cart.labCart.items[itemIndex].quantity <= 0) {
-                cart.labCart.items.splice(itemIndex, 1);
+        let updatedContext = null;
+
+        // 1. Check if item exists in Lab Cart
+        if (cart.labCart && Array.isArray(cart.labCart.items)) {
+            const labIdx = cart.labCart.items.findIndex(i => String(i.itemId) === targetId);
+            if (labIdx > -1) {
+                updatedContext = 'Lab';
+                if (action === 'inc') cart.labCart.items[labIdx].quantity += 1;
+                else cart.labCart.items[labIdx].quantity -= 1;
+
+                if (cart.labCart.items[labIdx].quantity <= 0) {
+                    cart.labCart.items.splice(labIdx, 1);
+                }
+
+                if (cart.labCart.items.length === 0) {
+                    cart.labCart.categoryType = null;
+                    cart.labCart.labId = null;
+                    cart.labCart.selectedPatients = [];
+                }
+                await recalculateLabCartCategory(cart);
             }
         }
 
-        if (cart.labCart.items.length === 0) {
-            cart.labCart.categoryType = null;
-            cart.labCart.labId = null;
-            cart.labCart.selectedPatients = [];
+        // 2. 🚨 BUG FIX: Check if item exists in Pharmacy Cart
+        if (!updatedContext && cart.pharmacyCart && Array.isArray(cart.pharmacyCart.items)) {
+            const pharmaIdx = cart.pharmacyCart.items.findIndex(i => String(i.medicineId) === targetId);
+            if (pharmaIdx > -1) {
+                updatedContext = 'Pharmacy';
+                if (action === 'inc') cart.pharmacyCart.items[pharmaIdx].quantity += 1;
+                else cart.pharmacyCart.items[pharmaIdx].quantity -= 1;
+
+                if (cart.pharmacyCart.items[pharmaIdx].quantity <= 0) {
+                    cart.pharmacyCart.items.splice(pharmaIdx, 1);
+                }
+
+                if (cart.pharmacyCart.items.length === 0) {
+                    cart.pharmacyCart.pharmacyId = null;
+                }
+            }
         }
 
-        await recalculateLabCartCategory(cart); 
+        if (!updatedContext) {
+            return res.status(404).json({ success: false, message: "Item not found in your cart." });
+        }
 
         await cart.save();
-        res.status(200).json({ success: true, data: cart });
+
+        res.status(200).json({ 
+            success: true, 
+            message: `${updatedContext} item quantity updated successfully.`,
+            data: cart 
+        });
+
     } catch (error) { 
         console.error("Update Cart Quantity Error:", error);
         res.status(500).json({ success: false, message: error.message }); 

@@ -16,9 +16,19 @@ const { serveAndSyncFiles } = require('./middleware/storageSync');
 
 
 ///////// For bypassing the Windows DNS bug //////////
-const dns = require('node:dns/promises'); // For bypassing the Windows DNS bug
-dns.setServers(["1.1.1.1", "8.8.8.8"]); // Forces Node to bypass the Windows DNS bug
+// const dns = require('node:dns/promises'); // For bypassing the Windows DNS bug
+// dns.setServers(["1.1.1.1", "8.8.8.8"]); // Forces Node to bypass the Windows DNS bug
  ////////////////// end bypassing DNS bug //////////////////////////////////
+
+ ///////// For bypassing the Windows DNS bug (Only on Local Windows) //////////
+if (process.platform === 'win32' && process.env.NODE_ENV !== 'production') {
+    const dns = require('node:dns/promises');
+    dns.setServers(["1.1.1.1", "8.8.8.8"]);
+    console.log("🛠️ [DEV]: Windows local DNS active.");
+}
+////////////////// end bypassing DNS bug /////////////////////////////////
+
+
 
 
 // Config
@@ -256,24 +266,24 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 
 
 
-
-app.use((err, req, res, next) => {
-    const multer = require('multer');
-    if (err instanceof multer.MulterError) {
-        // 🚨 This will print the exact incorrect field name sent by the frontend in your terminal!
-        console.error("\x1b[31m[MULTER ERROR DETAILS]\x1b[0m");
-        console.error(`Incorrect Field Name Sent: "${err.field}"`);
-        console.error(`Error Message: ${err.message}`);
+// shift to bottom
+// app.use((err, req, res, next) => {
+//     const multer = require('multer');
+//     if (err instanceof multer.MulterError) {
+//         // 🚨 This will print the exact incorrect field name sent by the frontend in your terminal!
+//         console.error("\x1b[31m[MULTER ERROR DETAILS]\x1b[0m");
+//         console.error(`Incorrect Field Name Sent: "${err.field}"`);
+//         console.error(`Error Message: ${err.message}`);
         
-        return res.status(400).json({ 
-            success: false, 
-            errorType: "MULTER_FIELD_MISMATCH",
-            message: `Multer Error: The field name "${err.field}" is unexpected. Please check frontend key names.`,
-            badField: err.field
-        });
-    }
-    next(err);
-});
+//         return res.status(400).json({ 
+//             success: false, 
+//             errorType: "MULTER_FIELD_MISMATCH",
+//             message: `Multer Error: The field name "${err.field}" is unexpected. Please check frontend key names.`,
+//             badField: err.field
+//         });
+//     }
+//     next(err);
+// });
 
 const { checkMaintenanceMode } = require('./middleware/maintenanceMiddleware');
 app.use(checkMaintenanceMode); // Maintenance Mode Middleware
@@ -497,6 +507,25 @@ const getLocalIpAddress = () => {
 };
 
 
+// shifted from top to bottom
+app.use((err, req, res, next) => {
+    const multer = require('multer');
+    if (err instanceof multer.MulterError) {
+        // 🚨 This will print the exact incorrect field name sent by the frontend in your terminal!
+        console.error("\x1b[31m[MULTER ERROR DETAILS]\x1b[0m");
+        console.error(`Incorrect Field Name Sent: "${err.field}"`);
+        console.error(`Error Message: ${err.message}`);
+        
+        return res.status(400).json({ 
+            success: false, 
+            errorType: "MULTER_FIELD_MISMATCH",
+            message: `Multer Error: The field name "${err.field}" is unexpected. Please check frontend key names.`,
+            badField: err.field
+        });
+    }
+    next(err);
+});
+
 // =============================================================================
 // 🔴 CENTRALIZED GLOBAL ERROR HANDLING MIDDLEWARE (MUST BE AFTER ALL ROUTES)
 // =============================================================================
@@ -533,7 +562,7 @@ app.use((err, req, res, next) => {
 // 🔴 CENTRALIZED GLOBAL ERROR HANDLING MIDDLEWARE (MUST BE AFTER ALL ROUTES
 // =============================================================================)
  
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 5002;
 
 
 server.listen(PORT, '0.0.0.0', () => {

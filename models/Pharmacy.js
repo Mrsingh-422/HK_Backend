@@ -82,7 +82,7 @@ const pharmacySchema = new mongoose.Schema({
 
 
 }, { timestamps: true });
-pharmacySchema.index({ location: "2dsphere" });
+// pharmacySchema.index({ location: "2dsphere" });
 
 
 module.exports = mongoose.model('Pharmacy', pharmacySchema);
