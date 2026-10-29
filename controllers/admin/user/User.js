@@ -19,11 +19,13 @@ const transformUserData = (user) => ({
     profilePic: user.profilePic // Added as per your request
 });
 
-// 1. GET ALL USERS (With Pagination - 50 per page)
+// @desc    Get All Users for Admin with Accurate Active / Banned Flag
+// @route   GET /admin/users/list
+// @access  Private (Admin)
 const getAllUsersAdmin = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 50;
+        const limit = parseInt(req.query.limit) || 50;
         const skip = (page - 1) * limit;
 
         const totalUsers = await User.countDocuments({ role: 'user' });
@@ -31,12 +33,23 @@ const getAllUsersAdmin = async (req, res) => {
         const users = await User.find({ role: 'user' })
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
-        // Sirf wahi keys bhej rahe hain jo aapne di hain
-        const formattedData = users.map(transformUserData);
+        // 🚨 BUG FIX: Resolved duplicate 'active' key. Accurately reflects ban & deactivation.
+        const formattedData = users.map(user => ({
+            id: user._id,
+            name: user.name || "",
+            email: user.email || "",
+            number: user.phone || "",
+            active: user.isActive !== false && user.isBanned !== true, // 👈 Accurately false if banned or deactivated
+            isBanned: user.isBanned === true,
+            profileStatus: user.profileStatus || 'Approved',
+            profilePic: user.profilePic || null,
+            createdAt: user.createdAt
+        }));
 
-        res.json({
+        res.status(200).json({
             success: true,
             total: totalUsers,
             page,
@@ -44,7 +57,7 @@ const getAllUsersAdmin = async (req, res) => {
             data: formattedData
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

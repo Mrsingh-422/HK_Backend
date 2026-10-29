@@ -13,30 +13,50 @@ const getAbdmToken = async () => {
     } catch (err) { throw new Error("ABDM Session Failed"); }
 };
 
-// --- STEP 3: Generate Aadhaar OTP (Step 1 & 2 are UI selection) ---
+// @desc    Generate Aadhaar OTP for ABHA Card Registration (Crash-proof validation)
+// @route   POST /api/user/abha/step3-generate-otp
+// @access  Private (User)
 const generateAadhaarOtp = async (req, res) => {
     try {
         const { aadhaarNumber, consent } = req.body;
-        if (!consent) return res.status(400).json({ message: "Consent is required" });
-        if (aadhaarNumber.length !== 12) return res.status(400).json({ message: "Invalid Aadhaar Number" });
+
+        if (!consent || consent === false || consent === 'false') {
+            return res.status(400).json({ success: false, message: "User consent is required to proceed with ABHA creation." });
+        }
+
+        // 🚨 BUG FIX: Sanitize input to clean 12-digit string to prevent .length TypeError
+        const cleanAadhaar = aadhaarNumber ? String(aadhaarNumber).replace(/\D/g, "") : "";
+
+        if (cleanAadhaar.length !== 12) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid Aadhaar Number. Please provide a valid 12-digit number." 
+            });
+        }
 
         if (process.env.NODE_ENV === 'development') {
             const mockTxnId = "TXN_" + Math.random().toString(36).substr(2, 9);
-            await User.findByIdAndUpdate(req.user.id, { "abhaDetails.txnId": mockTxnId });
-            return res.json({ success: true, message: "[DEV] OTP sent (Use 123456)", txnId: mockTxnId });
+            await User.findByIdAndUpdate(req.user.id, { $set: { "abhaDetails.txnId": mockTxnId } });
+            return res.status(200).json({ success: true, message: "[DEV] OTP sent (Use 123456)", txnId: mockTxnId });
         }
 
         const token = await getAbdmToken();
-        const response = await axios.post('https://healthidsbx.abdm.gov.in/api/v1/registration/aadhaar/generateOtp', 
-            { aadhaar: aadhaarNumber }, 
+        const response = await axios.post(
+            'https://healthidsbx.abdm.gov.in/api/v1/registration/aadhaar/generateOtp', 
+            { aadhaar: cleanAadhaar }, 
             { headers: { 'Authorization': `Bearer ${token}` } }
         );
 
         const txnId = response.data.txnId;
-        await User.findByIdAndUpdate(req.user.id, { "abhaDetails.txnId": txnId });
-        res.json({ success: true, txnId });
+        await User.findByIdAndUpdate(req.user.id, { $set: { "abhaDetails.txnId": txnId } });
+        
+        res.status(200).json({ success: true, txnId });
     } catch (error) {
-        res.status(500).json({ message: error.response?.data?.message || "Failed to trigger OTP" });
+        console.error("Generate Aadhaar OTP Error:", error);
+        res.status(500).json({ 
+            success: false, 
+            message: error.response?.data?.message || "Failed to trigger Aadhaar OTP. Please try again." 
+        });
     }
 };
 

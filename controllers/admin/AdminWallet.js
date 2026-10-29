@@ -15,6 +15,7 @@ const LabBooking = require('../../models/LabBooking');
 const PharmacyBooking = require('../../models/PharmacyBooking');
 const NurseBooking = require('../../models/NurseBooking');
 const AmbulanceBooking = require('../../models/AmbulanceBooking');
+const { sendPushNotification } = require('../../utils/notification');
 
 // 1. GET ALL PENDING WITHDRAWALS (Admin dashboard lists all doctors, labs, nurses requests) - [1.2.2]
 const getPendingWithdrawals = async (req, res) => {
@@ -164,20 +165,21 @@ const rejectWithdrawal = async (req, res) => {
     }
 };
 
-// PATCH /api/admin/wallet/verify-bank/:vendorModel/:vendorId
-// Replace this complete function inside controllers/admin/AdminWallet.js
+// @desc    Admin verifies or un-verifies vendor bank account & dispatches notification
+// @route   PATCH /api/admin/wallet/verify-bank/:vendorModel/:vendorId
+// @access  Private (Admin)
 const verifyVendorBankDetails = async (req, res) => {
     try {
         const { vendorModel, vendorId } = req.params;
-        const { isVerified } = req.body; // Expects true or false
+        const { isVerified, rejectionReason } = req.body; 
 
         if (typeof isVerified === 'undefined') {
             return res.status(400).json({ success: false, message: "isVerified state (true/false) is required." });
         }
 
+        const targetVerifiedState = (isVerified === true || isVerified === 'true' || isVerified === 1 || isVerified === '1');
+
         let VendorModel;
-        
-        // Polymorphic Dynamic Model Selection [1]
         switch (vendorModel) {
             case 'Doctor': VendorModel = Doctor; break;
             case 'Hospital': VendorModel = Hospital; break;
@@ -189,10 +191,13 @@ const verifyVendorBankDetails = async (req, res) => {
                 return res.status(400).json({ success: false, message: "Invalid vendor model type." });
         }
 
-        // Update isVerified directly inside vendor's own schema profile document [1]
         const vendor = await VendorModel.findByIdAndUpdate(
             vendorId,
-            { $set: { "bankDetails.isVerified": isVerified } },
+            { 
+                $set: { 
+                    "bankDetails.isVerified": targetVerifiedState 
+                } 
+            },
             { new: true }
         ).select('-password');
 
@@ -200,13 +205,38 @@ const verifyVendorBankDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Vendor profile not found." });
         }
 
-        res.json({
+        // 🚨 VENDOR PUSH NOTIFICATION: Alert vendor regarding bank verification status
+        const targetType = String(vendorModel).toLowerCase();
+        try {
+            const notifTitle = targetVerifiedState ? "🏦 Bank Details Verified!" : "⚠️ Bank Details Verification Failed";
+            const notifBody = targetVerifiedState 
+                ? "Your bank account has been verified by Admin. Payouts and withdrawal requests are now unlocked."
+                : `Your bank verification was declined. Reason: "${rejectionReason || 'Account details mismatch'}". Please update your bank info.`;
+
+            await sendPushNotification(
+                vendor._id,
+                targetType,
+                notifTitle,
+                notifBody,
+                {
+                    type: targetVerifiedState ? 'BANK_VERIFIED' : 'BANK_REJECTED',
+                    vendorModel: String(vendorModel),
+                    isVerified: String(targetVerifiedState),
+                    click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                }
+            );
+        } catch (notifErr) {
+            console.error("Bank Verification Notification Error:", notifErr.message);
+        }
+
+        res.status(200).json({
             success: true,
-            message: `Bank details for ${vendor.name} (${vendorModel}) marked as ${isVerified ? 'Verified' : 'Unverified'}.`,
+            message: `Bank details for ${vendor.name} (${vendorModel}) marked as ${targetVerifiedState ? 'Verified' : 'Unverified'} and vendor alerted.`,
             data: vendor.bankDetails
         });
 
     } catch (error) {
+        console.error("Verify Vendor Bank Details Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -62,7 +62,8 @@ issueSchema.pre('save', async function() {
             this.issueNumber = (lastIssue && lastIssue.issueNumber) ? lastIssue.issueNumber + 1 : 1;
         }
         if (!this.ticketId) {
-            this.ticketId = `HK-ISS-${Date.now().toString().slice(-6)}`;
+            const randomSalt = Math.floor(100 + Math.random() * 900);
+            this.ticketId = `HK-ISS-${Date.now().toString().slice(-5)}${randomSalt}`;
         }
     }
 });

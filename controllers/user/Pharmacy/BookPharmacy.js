@@ -4419,46 +4419,77 @@ const requestPharmacyOrderReturn = async (req, res) => {
     }
 };
 
-// CANCEL RETURN REQUEST (By Patient before driver collection)
-// Endpoint: POST /user/pharmacy/orders/return-request/cancel/:orderId
+// @desc    Customer cancels active return/replacement request (Releases assigned pickup driver & notifies store)
+// @route   POST /user/pharmacy/orders/return-request/cancel/:orderId
+// @access  Private (User)
 const cancelReturnRequestByCustomer = async (req, res) => {
     try {
         const { orderId } = req.params;
         const userId = req.user.id;
 
-        const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
-            userId
-        });
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            userId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(orderId) }] : []),
+                { orderId: String(orderId).trim() }
+            ]
+        };
 
+        const order = await PharmacyBooking.findOne(query);
         if (!order || !order.returnDetails || order.returnDetails.status === 'None') {
-            return res.status(400).json({ success: false, message: "No active return request found on this order." });
+            return res.status(404).json({ success: false, message: "No active return request found for this order." });
         }
 
-        // Agar driver already pickup kar chuka hai toh cancel nahi ho sakta
-        if (order.returnDetails.pickupStatus === 'PickedUp' || order.returnDetails.status === 'CollectedByDriver') {
-            return res.status(400).json({ success: false, message: "Cannot cancel: Package has already been collected by driver." });
+        // Block cancellation if driver already picked up the medicine from patient
+        if (order.returnDetails.pickupStatus === 'PickedUp' || order.returnDetails.pickupStatus === 'DeliveredToStore') {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot cancel return: The delivery partner has already collected the package from your doorstep."
+            });
         }
 
-        // Free assigned driver if any
-        if (order.returnDetails.pickupDriverId) {
-            await Driver.findByIdAndUpdate(order.returnDetails.pickupDriverId, { status: 'Available' });
+        const assignedDriverId = order.returnDetails.pickupDriverId;
+
+        // 🚨 DRIVER RELEASE: Set driver back to Available so they can take new tasks
+        if (assignedDriverId) {
+            await Driver.findByIdAndUpdate(assignedDriverId, { $set: { status: 'Available', isOnline: true } });
+
+            try {
+                await sendPushNotification(
+                    assignedDriverId,
+                    'driver',
+                    "🚫 Return Pickup Task Cancelled",
+                    `Customer has cancelled the return request for Order #${order.orderId}. Your task is released.`,
+                    {
+                        type: 'RETURN_TASK_CANCELLED',
+                        orderId: String(order.orderId),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (dErr) {
+                console.error("Driver Return Cancel Notification Error:", dErr.message);
+            }
         }
 
+        // Reset return status
         order.returnDetails.status = 'None';
-        order.returnDetails.pickupStatus = 'PendingAssignment';
+        order.returnDetails.pickupStatus = 'Cancelled';
         order.returnDetails.pickupDriverId = null;
         order.returnDetails.returnOTP = null;
-        order.returnDetails.rejectionReason = "Return request cancelled by customer.";
         await order.save();
 
-        res.json({
+        res.status(200).json({
             success: true,
-            message: "Return request cancelled successfully. Your order remains Delivered.",
-            data: order
+            message: "Return request cancelled successfully. Courier task released.",
+            data: {
+                orderId: order.orderId,
+                returnStatus: order.returnDetails.status
+            }
         });
 
     } catch (error) {
+        console.error("Cancel Return Request Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

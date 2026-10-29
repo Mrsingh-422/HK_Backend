@@ -345,16 +345,64 @@ const doctorCancelAppointment = async (req, res) => {
     }
 };
 
+// @desc    Doctor starts travel for Home Visit Consultation & sends start OTP to patient
+// @route   PATCH /doctor/appointments/start-visit/:id
+// @access  Private (Doctor)
 const startVisit = async (req, res) => {
     try {
-        const otp = Math.floor(1000 + Math.random() * 9000).toString();
-        const appointment = await Appointment.findOneAndUpdate(
-            { _id: req.params.id, doctorId: req.user.id, bookingType: 'Appointment' },
-            { status: 'In-Progress', 'tracking.otp': otp, 'tracking.eta': 'Direct' },
-            { new: true }
-        );
-        res.json({ success: true, message: "Visit started.", otp, data: appointment });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const appointment = await Appointment.findOne({ 
+            _id: req.params.id, 
+            doctorId: req.user.id 
+        }).populate('userId', 'name phone fcmToken');
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment not found or unauthorized." });
+        }
+
+        const generatedVisitOtp = Math.floor(1000 + Math.random() * 9000).toString();
+
+        appointment.status = 'In-Progress';
+        if (!appointment.tracking) appointment.tracking = {};
+        appointment.tracking.status = 'Doctor On The Way';
+        appointment.tracking.rideStartTime = new Date();
+        appointment.tracking.otp = generatedVisitOtp;
+        await appointment.save();
+
+        const doctorName = req.user?.name || "Doctor";
+
+        // 🚨 PATIENT ALERT: Doctor on the way with verification OTP
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    "🚗 Doctor is On The Way!",
+                    `Dr. ${doctorName} has started traveling to your home. Share Visit OTP: ${generatedVisitOtp} upon arrival.`,
+                    {
+                        type: 'DOCTOR_ON_THE_WAY',
+                        serviceType: 'Doctor',
+                        appointmentId: String(appointment._id),
+                        visitOtp: String(generatedVisitOtp),
+                        doctorName: String(doctorName),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Doctor Start Visit Push Error:", e.message);
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Visit started and patient alerted with Visit OTP.",
+            visitOtp: generatedVisitOtp,
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Start Visit Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 const getMyConsultationFees = async (req, res) => {

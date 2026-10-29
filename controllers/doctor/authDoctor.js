@@ -321,9 +321,9 @@ const loginDoctor = async (req, res) => {
     }
 };
 
-// ==========================================
-// 4. TOGGLE ONLINE STATUS
-// ==========================================
+// @desc    Toggle Doctor Online/Offline Status (Safe String-to-Boolean Parser)
+// @route   PATCH /api/auth/doctor/status/toggle
+// @access  Private (Doctor)
 const toggleDoctorOnlineStatus = async (req, res) => {
     try {
         const { isOnline } = req.body;
@@ -333,15 +333,22 @@ const toggleDoctorOnlineStatus = async (req, res) => {
             return res.status(400).json({ success: false, message: "isOnline status value is required." });
         }
 
+        // 🚨 BUG FIX: String "false" ko properly false evaluate karein
+        const targetOnlineState = (isOnline === true || isOnline === 'true' || isOnline === 1 || isOnline === '1');
+
         const updatedDoctor = await Doctor.findByIdAndUpdate(
             doctorId,
-            { $set: { isOnline: Boolean(isOnline) } },
+            { $set: { isOnline: targetOnlineState } },
             { new: true }
         ).select('-password');
 
-        res.json({
+        if (!updatedDoctor) {
+            return res.status(404).json({ success: false, message: "Doctor profile not found." });
+        }
+
+        res.status(200).json({
             success: true,
-            message: `Your status has been updated to ${isOnline ? 'Online' : 'Offline'}.`,
+            message: `Your status has been updated to ${targetOnlineState ? 'Online' : 'Offline'}.`,
             isOnline: updatedDoctor.isOnline
         });
     } catch (error) {

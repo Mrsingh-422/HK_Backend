@@ -145,55 +145,75 @@ const getPeriodInsights = async (req, res) => {
     }
 };
 
-// D. GET CALENDAR DAY HIGHLIGHTS (Screenshot 2: Month cell marking engine)
+// @desc    Get Calendar Day Highlights (Crash-Proof against zero/NaN cycle length infinite loops)
+// @route   GET /user/doctor/menstrual/calendar
+// @access  Private (User)
 const getCalendarHighlights = async (req, res) => {
     try {
-        const { month } = req.query; // Expects format: "YYYY-MM" (e.g. "2025-05")
+        const { month } = req.query; // Expects format: "YYYY-MM" (e.g. "2026-05")
         const tracker = await MenstrualTracker.findOne({ userId: req.user.id });
         
         if (!tracker || !month) {
-            return res.json({ success: true, recordedPeriodDays: [], predictedPeriodDays: [] });
+            return res.status(200).json({ success: true, recordedPeriodDays: [], predictedPeriodDays: [] });
         }
 
         const requestedMonth = moment(month, 'YYYY-MM');
+        if (!requestedMonth.isValid()) {
+            return res.status(400).json({ success: false, message: "Invalid month format. Expected 'YYYY-MM'." });
+        }
+
         const recordedPeriodDays = [];
         const predictedPeriodDays = [];
 
-        // 1. LOGGED/ACTUAL DAYS GENERATION (Pink Dots for actual logs)
-        tracker.periods.forEach(p => {
-            const daysRange = getDatesInRange(p.startDate, p.endDate);
-            daysRange.forEach(dateStr => {
-                if (dateStr.startsWith(month)) {
-                    recordedPeriodDays.push(dateStr);
-                }
-            });
-        });
-
-        // 2. PREDICTED DAYS GENERATION (Forward projections recursively)
-        let currentProjectionStart = moment(tracker.lastPeriodDate);
-        const projectionLimit = moment(requestedMonth).endOf('month').add(3, 'months'); // Safe boundary
-
-        while (currentProjectionStart.isBefore(projectionLimit)) {
-            currentProjectionStart.add(tracker.cycleLength, 'days');
-            const predictedEnd = moment(currentProjectionStart).add(tracker.periodDuration - 1, 'days');
-
-            const predictedRange = getDatesInRange(currentProjectionStart, predictedEnd);
-            predictedRange.forEach(dateStr => {
-                if (dateStr.startsWith(month)) {
-                    predictedPeriodDays.push(dateStr);
+        // 1. Logged / Actual Days Generation
+        if (Array.isArray(tracker.periods)) {
+            tracker.periods.forEach(p => {
+                if (p.startDate && p.endDate) {
+                    const daysRange = getDatesInRange(p.startDate, p.endDate);
+                    daysRange.forEach(dateStr => {
+                        if (dateStr.startsWith(month)) {
+                            recordedPeriodDays.push(dateStr);
+                        }
+                    });
                 }
             });
         }
 
-        // Response formatting for direct Flutter UI coloring mapping
-        res.json({
+        // 2. Predicted Days Generation with Loop Safety
+        if (tracker.lastPeriodDate) {
+            let currentProjectionStart = moment(tracker.lastPeriodDate);
+            const projectionLimit = moment(requestedMonth).endOf('month').add(3, 'months');
+
+            // 🚨 CRITICAL FIX: Enforce minimum 20 days cycle to prevent infinite while-loop freezing
+            const safeCycleLength = Math.max(20, Number(tracker.cycleLength) || 28);
+            const safeDuration = Math.max(1, Math.min(10, Number(tracker.periodDuration) || 5));
+
+            let loopCounter = 0;
+            const MAX_ITERATIONS = 36; // Hard boundary: 3 years max projection
+
+            while (currentProjectionStart.isBefore(projectionLimit) && loopCounter < MAX_ITERATIONS) {
+                currentProjectionStart.add(safeCycleLength, 'days');
+                const predictedEnd = moment(currentProjectionStart).add(safeDuration - 1, 'days');
+
+                const predictedRange = getDatesInRange(currentProjectionStart, predictedEnd);
+                predictedRange.forEach(dateStr => {
+                    if (dateStr.startsWith(month)) {
+                        predictedPeriodDays.push(dateStr);
+                    }
+                });
+                loopCounter++;
+            }
+        }
+
+        res.status(200).json({
             success: true,
             month,
-            recordedPeriodDays, // Real bleeding days
-            predictedPeriodDays // Future projections days
+            recordedPeriodDays,
+            predictedPeriodDays
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Get Calendar Highlights Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

@@ -7,7 +7,9 @@ const { getMessaging } = require('firebase-admin/messaging');
 const mongoose = require('mongoose');
 const moment = require('moment');
 
-// 1. Doctor triggers call
+// @desc    Doctor initiates WebRTC Video/Audio Call & sends high-priority incoming call notification
+// @route   POST /doctor/video-call/initiate
+// @access  Private (Doctor)
 const initiateVideoCall = async (req, res) => {
     try {
         const { appointmentId, callId, callerName, callType = 'video' } = req.body;
@@ -37,8 +39,8 @@ const initiateVideoCall = async (req, res) => {
         let callData = await Call.findOne({ callId });
 
         if (callData) {
-            callData.status = 'initiated'; // Resets state
-            callData.startedAt = new Date(); // Start logging initiation time
+            callData.status = 'initiated';
+            callData.startedAt = new Date();
             callData.endedAt = null;
             callData.callerName = callerName;
             callData.callType = callType;
@@ -55,31 +57,46 @@ const initiateVideoCall = async (req, res) => {
                 callerName,
                 callType,
                 status: 'initiated',
-                startedAt: new Date() // Start tracking instantly for missed call calculation
+                startedAt: new Date()
             });
         }
 
         let notificationSent = false;
         let warningMessage = null;
 
+        // 🚨 BUG FIX: Added 'callType' in FCM payload for seamless Audio/Video mode switching
         if (patient.fcmToken) {
             try {
                 const message = {
                     token: patient.fcmToken,
                     data: {
                         type: 'VIDEO_CALL_INCOMING',
+                        callType: String(callType), // 👈 Added: 'video' or 'audio'
                         appointmentId: String(appointmentId),
                         receiverId: String(patient._id),
                         callerName: String(callerName),
-                        callId: String(callId)
+                        callId: String(callId),
+                        doctorSpeciality: String(req.user?.speciality || "Specialist"),
+                        click_action: "FLUTTER_NOTIFICATION_CLICK"
                     },
-                    android: { priority: 'high', ttl: 0 },
-                    apns: { payload: { aps: { contentAvailable: true } } }
+                    android: { 
+                        priority: 'high', 
+                        ttl: 0,
+                        notification: {
+                            sound: "default",
+                            channelId: "high_importance_channel"
+                        }
+                    },
+                    apns: { 
+                        headers: { "apns-priority": "10" },
+                        payload: { aps: { contentAvailable: true, sound: "default" } } 
+                    }
                 };
 
                 await getMessaging().send(message); 
                 notificationSent = true;
             } catch (fcmError) {
+                console.error("FCM Call Notification Error:", fcmError.message);
                 warningMessage = "Call room registered, but FCM push notification failed.";
             }
         } else {
