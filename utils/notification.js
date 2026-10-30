@@ -13,16 +13,17 @@ const Nurse = require('../models/Nurse');
 const Pharmacy = require('../models/Pharmacy');
 const Driver = require('../models/Driver'); // 👈 Imported Driver Model
 const UserNotification = require('../models/UserNotification'); // 👈 Imported UserNotification Model
+const DriverNotification = require('../models/DriverNotification');
 const { getMessaging } = require('firebase-admin/messaging'); // 👈 Modular import
 
-// @desc    Dispatches FCM push notification (High Priority) & logs persistent UserNotification in MongoDB
+// @desc    Dispatches FCM push notification & persists UserNotification + DriverNotification in MongoDB
 const sendPushNotification = async (targetId, targetType, title, body, data = {}) => {
     try {
         if (!targetId || !targetType) return;
 
         const cleanTargetId = targetId?._id ? targetId._id : targetId;
 
-        // 1. Always save in MongoDB UserNotification inbox if recipient is a patient/user
+        // 1. Save in MongoDB UserNotification inbox if recipient is user
         if (targetType === 'user') {
             try {
                 await UserNotification.create({
@@ -33,9 +34,22 @@ const sendPushNotification = async (targetId, targetType, title, body, data = {}
                     serviceType: data.serviceType || 'General',
                     data: data || {}
                 });
-                console.log(`📥 [In-App Notification Saved] for User: ${cleanTargetId}`);
             } catch (dbErr) {
                 console.error("❌ Error saving UserNotification to MongoDB:", dbErr.message);
+            }
+        }
+
+        // 🚨 2. PERSISTENCE FIX: Save in MongoDB DriverNotification inbox if recipient is driver
+        if (targetType === 'driver') {
+            try {
+                await DriverNotification.create({
+                    driverId: cleanTargetId,
+                    title: String(title),
+                    message: String(body),
+                    type: data.type === 'RETURN_PICKUP_TASK' ? 'Return Pickup Task' : 'New Task Assigned'
+                });
+            } catch (dbDriverErr) {
+                console.error("❌ Error saving DriverNotification to MongoDB:", dbDriverErr.message);
             }
         }
 
@@ -101,24 +115,14 @@ const sendPushNotification = async (targetId, targetType, title, body, data = {}
                     }
                 },
                 apns: {
-                    headers: {
-                        "apns-priority": "10"
-                    },
-                    payload: {
-                        aps: {
-                            sound: "default",
-                            badge: 1,
-                            contentAvailable: true
-                        }
-                    }
+                    headers: { "apns-priority": "10" },
+                    payload: { aps: { sound: "default", badge: 1, contentAvailable: true } }
                 },
                 token: deviceToken
             };
 
             await getMessaging().send(message);
             console.log(`✅ FCM Push dispatched to ${targetType} ID: ${cleanTargetId}`);
-        } else {
-            console.log(`ℹ️ [FCM Skipped]: User ${cleanTargetId} has no fcmToken registered on device.`);
         }
     } catch (error) {
         console.error("❌ FCM Push Error:", error.message);

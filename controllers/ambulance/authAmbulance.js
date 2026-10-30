@@ -1,11 +1,13 @@
 // controllers/ambulance/authAmbulance.js
 const Ambulance = require('../../models/Ambulance');
 const Availability = require('../../models/Availability');
+const Booking = require('../../models/AmbulanceBooking');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest'); // For handling profile update requests
 const { deleteFile } = require('../../utils/fileHandler');
 const { sendEmailOTP } = require('../../utils/emailService');
+const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
 
 // Helper: Generate Token (Dev: 100 years, Prod: 30 days)
 const generateToken = (id, role) => {
@@ -213,6 +215,9 @@ const completeAmbulanceProfile = async (req, res) => {
 };
 
 
+// @desc    Ambulance Driver toggles Online/Offline availability (Cleaned top-level imports)
+// @route   PATCH /api/auth/ambulance/status/toggle
+// @access  Private (Ambulance)
 const toggleDriverAvailability = async (req, res) => {
     try {
         const { available } = req.body; 
@@ -223,9 +228,7 @@ const toggleDriverAvailability = async (req, res) => {
 
         const isTargetAvailable = Boolean(available === true || available === 'true');
 
-        // 🚀 SYNC FIX: Prevent driver from marking themselves available while actively driving a patient
         if (isTargetAvailable) {
-            const Booking = require('../../models/AmbulanceBooking');
             const activeTrip = await Booking.findOne({
                 ambulanceId: req.user.id,
                 status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
@@ -252,14 +255,14 @@ const toggleDriverAvailability = async (req, res) => {
 
         if (!ambulance) return res.status(404).json({ success: false, message: "Driver profile not found." });
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: `Driver status updated to ${isTargetAvailable ? 'Online' : 'Offline'}`, 
             available: ambulance.availableForEmergency,
             isOnline: ambulance.isOnline
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

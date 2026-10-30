@@ -3,6 +3,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs'); // Used to verify account password for PIN resets
 const HealthLocker = require('../../../models/HealthLocker');
 const User = require('../../../models/User');
+const mongoose = require('mongoose');
 
 // --- HELPER FUNCTIONS FOR DELETION ---
 
@@ -182,12 +183,24 @@ const uploadFile = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
+// @desc    Get Locker Folders & Files (Crash-Proof against parentId='null' string from frontend)
+// @route   GET /api/user/locker/content
+// @access  Private (User)
 const getLockerContent = async (req, res) => {
     try {
         const { parentId } = req.query;
+
+        // 🚨 CAST ERROR FIX: Treat "null", "undefined", or empty strings as actual database null
+        let cleanParentId = null;
+        if (parentId && parentId !== 'null' && parentId !== 'undefined' && String(parentId).trim() !== '') {
+            if (mongoose.isValidObjectId(parentId.trim())) {
+                cleanParentId = new mongoose.Types.ObjectId(parentId.trim());
+            }
+        }
+
         const query = { 
             userId: req.user.id, 
-            parentId: parentId || null 
+            parentId: cleanParentId 
         };
 
         const items = await HealthLocker.find(query).sort({ type: 1, createdAt: -1 });
@@ -200,22 +213,23 @@ const getLockerContent = async (req, res) => {
             return item;
         }));
 
-        // Breadcrumbs optimization: Ek additional check current directory name fetch karne ke liye
         let currentFolder = null;
-        if (parentId) {
-            const folderMeta = await HealthLocker.findOne({ _id: parentId, userId: req.user.id, type: 'folder' }).select('name');
+        if (cleanParentId) {
+            const folderMeta = await HealthLocker.findOne({ _id: cleanParentId, userId: req.user.id, type: 'folder' }).select('name');
             if (folderMeta) {
                 currentFolder = { id: folderMeta._id, name: folderMeta.name };
             }
         }
 
-        // Response formatting keeps standard 'data' array but appends optional folder tracking metadata
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             data: formattedItems,
-            currentFolder // Non-breaking additive field
+            currentFolder
         });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) { 
+        console.error("Get Locker Content Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 const renameItem = async (req, res) => {

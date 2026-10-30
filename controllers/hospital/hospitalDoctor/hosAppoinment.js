@@ -340,14 +340,13 @@ const getHospitalStats = async (req, res) => {
     }
 };
 
-// @desc    Hospital Reception Desk Marks OPD Fees as Paid (Safe normalization of payment keys)
+// @desc    Hospital Reception Desk Marks OPD Fees as Paid (Normalizes UPI, Cash, Card to valid schema enums)
 // @route   PATCH /hospital/doctor/appointments/collect-payment/:id
 // @access  Private (Hospital Admin)
 const collectHospitalOpdCounterPayment = async (req, res) => {
     try {
         const { id } = req.params;
         const hospitalId = req.user.id;
-        // Accept either paymentMode or paymentMethod from frontend safely
         const rawPaymentMode = req.body.paymentMode || req.body.paymentMethod || 'Cash';
         const { remarks, transactionReference } = req.body;
 
@@ -367,8 +366,14 @@ const collectHospitalOpdCounterPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Payment for this appointment is already marked as Paid." });
         }
 
-        // Standardize payment method capitalization
-        const cleanPaymentMode = String(rawPaymentMode).charAt(0).toUpperCase() + String(rawPaymentMode).slice(1).toLowerCase();
+        // 🚨 ENUM NORMALIZATION FIX: Map 'upi' -> 'UPI', 'cod' -> 'COD', etc. to match Appointment schema enum
+        const modeInput = String(rawPaymentMode).trim().toUpperCase();
+        let cleanPaymentMode = 'Cash';
+        if (modeInput === 'UPI') cleanPaymentMode = 'UPI';
+        else if (modeInput === 'CARD') cleanPaymentMode = 'Card';
+        else if (modeInput === 'ONLINE') cleanPaymentMode = 'Online';
+        else if (modeInput === 'COD') cleanPaymentMode = 'COD';
+        else if (modeInput === 'NETBANKING') cleanPaymentMode = 'Netbanking';
 
         appointment.paymentStatus = 'Paid';
         appointment.paymentMethod = cleanPaymentMode;
@@ -385,7 +390,6 @@ const collectHospitalOpdCounterPayment = async (req, res) => {
 
         await appointment.save();
 
-        // Notify Doctor in cabin that patient has paid at counter and is in the waiting queue
         if (appointment.doctorId) {
             try {
                 await sendPushNotification(
@@ -464,7 +468,7 @@ const recordOpdPatientVitals = async (req, res) => {
     }
 };
 
-// @desc    Hospital Reception Desk Collects Admission Deposit (Cash/Card/UPI) & Locks Bed Permanently
+// @desc    Hospital Reception Desk Collects Admission Deposit (Safe Enum Parsing)
 // @route   PATCH /hospital/doctor/appointments/admission/collect-payment/:id
 // @access  Private (Hospital Admin / Reception)
 const collectAdmissionCounterPayment = async (req, res) => {
@@ -477,7 +481,7 @@ const collectAdmissionCounterPayment = async (req, res) => {
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
             hospitalId,
-            bookingType: 'Admission', // Strictly operates on Bed Admission bookings
+            bookingType: 'Admission',
             ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
         };
 
@@ -527,13 +531,19 @@ const collectAdmissionCounterPayment = async (req, res) => {
             await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
         }
 
-        // 3. Mark Payment Captured
-        const cleanPaymentMode = String(rawPaymentMode).charAt(0).toUpperCase() + String(rawPaymentMode).slice(1).toLowerCase();
+        // 🚨 ENUM NORMALIZATION FIX
+        const modeInput = String(rawPaymentMode).trim().toUpperCase();
+        let cleanPaymentMode = 'Cash';
+        if (modeInput === 'UPI') cleanPaymentMode = 'UPI';
+        else if (modeInput === 'CARD') cleanPaymentMode = 'Card';
+        else if (modeInput === 'ONLINE') cleanPaymentMode = 'Online';
+        else if (modeInput === 'COD') cleanPaymentMode = 'COD';
+        else if (modeInput === 'NETBANKING') cleanPaymentMode = 'Netbanking';
 
         appointment.paymentStatus = 'Paid';
         appointment.paymentMethod = cleanPaymentMode;
-        appointment.status = 'In-Progress'; // Patient is now actively admitted
-        appointment.admissionHoldExpiresAt = null; // Clear hold timer
+        appointment.status = 'In-Progress';
+        appointment.admissionHoldExpiresAt = null;
 
         appointment.paymentDetails = {
             method: cleanPaymentMode,
@@ -547,7 +557,7 @@ const collectAdmissionCounterPayment = async (req, res) => {
 
         await appointment.save();
 
-        // 4. Alert Patient
+        // 3. Alert Patient
         if (appointment.userId) {
             try {
                 await sendPushNotification(

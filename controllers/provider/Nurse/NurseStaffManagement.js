@@ -2,6 +2,7 @@
 const NurseBooking = require('../../../models/NurseBooking');
 const Driver = require('../../../models/Driver');
 const { sendPushNotification } = require('../../../utils/notification');
+const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 
 // 1. GET AVAILABLE STAFF FOR ASSIGNMENT
 // Endpoint: GET /provider/nurse/management/available-staff
@@ -95,7 +96,13 @@ const updateServiceProgress = async (req, res) => {
             return res.status(400).json({ success: false, message: "Valid progress status is required." });
         }
 
-        const booking = await NurseBooking.findOne({ _id: bookingId, nurseId: nurseBureauId });
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            nurseId: nurseBureauId,
+            ...(isObjectId ? { _id: bookingId } : { bookingId: String(bookingId).trim() })
+        };
+
+        const booking = await NurseBooking.findOne(query);
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking not found or access denied." });
         }
@@ -129,9 +136,13 @@ const updateServiceProgress = async (req, res) => {
                 booking.paymentStatus = 'Refund-Initiated';
             }
 
-            // Rollback subscription benefits if applied
-            if (booking.subscriptionDetails?.isSubscriptionApplied) {
-                await refundBenefitCount(booking.userId, 'freeNurseVisitsCount');
+            // 🚨 SAFE ROLLBACK: Using top-level imported refundBenefitCount
+            if (booking.subscriptionDetails?.isSubscriptionApplied && booking.userId) {
+                try {
+                    await refundBenefitCount(booking.userId, 'freeNurseVisitsCount');
+                } catch (subErr) {
+                    console.error("Subscription benefit refund error:", subErr.message);
+                }
             }
         }
 
