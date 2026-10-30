@@ -1,11 +1,13 @@
 // controllers/hospital/authHospital.js
 const Hospital = require('../../models/Hospital');
 const Ward = require('../../models/Ward');
+const Bed = require('../../models/Bed');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper');
 const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
+const { syncHospitalWardAndBedCapacity } = require('../../utils/helpers');
 
 const generateToken = (id, role = 'hospital') => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
@@ -339,16 +341,22 @@ const updateHospitalProfile = async (req, res) => {
 // @access  Private (Hospital)
 const getMyHospitalProfile = async (req, res) => {
     try {
-        const hospital = await Hospital.findById(req.user.id).select('-password').lean();
+        const hospitalId = req.user.id;
+        const hospital = await Hospital.findById(hospitalId).select('-password').lean();
         if (!hospital) {
             return res.status(404).json({ success: false, message: "Hospital profile not found." });
         }
 
-        const wards = await Ward.find({ hospitalId: req.user.id }).lean();
+        // Synchronize bed counts before fetching
+        await syncHospitalWardAndBedCapacity(hospitalId);
+
+        const wards = await Ward.find({ hospitalId, isActive: true }).lean();
+        const allBeds = await Bed.find({ hospitalId }).lean();
         
-        // Dynamic capacity calculation
-        const totalBeds = wards.reduce((sum, w) => sum + (w.totalBeds || 0), 0);
-        const allocated = wards.reduce((sum, w) => sum + ((w.totalBeds || 0) - (w.availableBeds || 0)), 0);
+        // Exact real-time capacity calculation
+        const totalBeds = allBeds.length;
+        const availableBeds = allBeds.filter(b => b.status === 'Available').length;
+        const allocatedBeds = totalBeds - availableBeds;
 
         res.status(200).json({
             success: true,
@@ -360,8 +368,8 @@ const getMyHospitalProfile = async (req, res) => {
                 },
                 capacity: {
                     total: totalBeds,
-                    allocated: allocated,
-                    remaining: Math.max(0, totalBeds - allocated)
+                    allocated: allocatedBeds,
+                    remaining: availableBeds
                 },
                 wards
             }

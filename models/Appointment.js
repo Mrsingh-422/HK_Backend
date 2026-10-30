@@ -125,8 +125,9 @@ const appointmentSchema = new mongoose.Schema({
     wardName: { type: String },
     bedNumber: { type: String },
     specialServices: [{
-        serviceName: String,
-        price: Number
+        serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'HospitalService', default: null },
+        serviceName: { type: String, default: "" },
+        price: { type: Number, default: 0 }
     }],
 
     // For Hospital Admissions

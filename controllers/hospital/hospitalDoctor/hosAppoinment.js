@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 const moment = require('moment'); // Top-level import added for date filtering
 const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper'); // Top-level import added
 const { sendPushNotification } = require('../../../utils/notification'); // Top-level import added
+const { syncHospitalWardAndBedCapacity } = require('../../../utils/helpers'); // Top-level import added
 
 // @desc    Get All Hospital Bookings with OPD / IPD / Triage Filters & Smart Sorting
 // @route   GET /hospital/doctor/appointments/all-bookings
@@ -206,7 +207,7 @@ const approveHospitalBooking = async (req, res) => {
     }
 };
 
-// @desc    Hospital Rejects / Cancels Booking (Fix: Prevents Ward availableBeds corruption on unconfirmed hold cancellation)
+// @desc    Hospital Rejects / Cancels Booking (Auto-syncs Ward and Bed availability)
 // @route   PATCH /hospital/doctor/appointments/reject/:id
 // @access  Private (Hospital Admin)
 const rejectHospitalBooking = async (req, res) => {
@@ -253,18 +254,11 @@ const rejectHospitalBooking = async (req, res) => {
             cancelledAt: new Date()
         };
 
-        // IPD Bed Release - Only increment availableBeds if bed was physically Occupied (prevents overcounting)
-        if (!isOPD && appointment.bedId) {
-            const bed = await Bed.findById(appointment.bedId);
-            if (bed) {
-                const wasOccupied = bed.status === 'Occupied';
-                bed.status = 'Available';
-                await bed.save();
-                
-                if (wasOccupied && bed.wardId) {
-                    await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
-                }
-            }
+        const targetBedId = appointment.bedId;
+
+        // Release Bed
+        if (!isOPD && targetBedId) {
+            await Bed.findByIdAndUpdate(targetBedId, { $set: { status: 'Available' } });
         }
 
         // Rollback Subscription Benefit if applied
@@ -282,6 +276,9 @@ const rejectHospitalBooking = async (req, res) => {
         }
 
         await appointment.save();
+
+        // 🚨 Re-sync hospital capacity immediately
+        await syncHospitalWardAndBedCapacity(hospitalId);
 
         if (appointment.userId) {
             try {

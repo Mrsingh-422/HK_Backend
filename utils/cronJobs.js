@@ -7,6 +7,7 @@ const Appointment = require('../models/Appointment');
 const Bed = require('../models/Bed');
 const { sendPushNotification } = require('./notification');
 const moment = require('moment');
+const { syncHospitalWardAndBedCapacity } = require('./helpers');
 
 // @desc    Initialize Background Schedulers (Nursing Expiry, Subscription Expiry, Bed Hold Auto-Release & Lab Prescription Expiry)
 const initCronJobs = () => {
@@ -51,6 +52,8 @@ const initCronJobs = () => {
                 bedId: { $ne: null }
             });
 
+            const touchedHospitals = new Set();
+
             for (let adm of expiredAdmissions) {
                 await Bed.findByIdAndUpdate(adm.bedId, { $set: { status: 'Available' } });
                 adm.admissionHoldExpiresAt = null;
@@ -60,6 +63,10 @@ const initCronJobs = () => {
                     cancelledAt: now
                 };
                 await adm.save();
+
+                if (adm.hospitalId) {
+                    touchedHospitals.add(String(adm.hospitalId));
+                }
 
                 // Alert Patient that hold expired
                 if (adm.userId) {
@@ -75,10 +82,14 @@ const initCronJobs = () => {
                 }
                 console.log(`\x1b[31m[Auto-Release]: Bed ${adm.bedNumber} released. Admission #${adm.bookingId} cancelled.\x1b[0m`);
             }
+
+            // Sync all affected hospitals
+            for (let hospId of touchedHospitals) {
+                await syncHospitalWardAndBedCapacity(hospId);
+            }
         } catch (error) {
             console.error("[Bed Release Cron Error]:", error);
-        }
-    });
+        }});
 
     // 4. Daily 1:00 AM Cron: Auto-Expire Stale Lab Prescription Requests whose appointmentDate has passed (NEW)
     cron.schedule('0 1 * * *', async () => {

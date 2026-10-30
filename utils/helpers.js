@@ -1,6 +1,10 @@
 // utils/helpers.js
 const axios = require('axios');
 const crypto = require('crypto');
+const Bed = require('../models/Bed');
+const Ward = require('../models/Ward');
+const Appointment = require('../models/Appointment');
+
 // ==========================================
 // 1. DISTANCE CALCULATOR (Google Map vs Straight Line)
 // ==========================================
@@ -82,4 +86,93 @@ const generateUniqueOrderCode = async (prefix, Model = null, fieldName = 'bookin
     return uniqueCode;
 };
 
-module.exports = { getDistance, getRazorpayKeys, generateUniqueOrderCode };
+
+// @desc    Self-healing helper to synchronize Bed real-time status and Ward availableBeds counts
+const syncHospitalWardAndBedCapacity = async (hospitalId, wardId = null) => {
+    try {
+        const now = new Date();
+
+        // 1. Auto-release any expired 30-minute holds
+        const expiredAdmissions = await Appointment.find({
+            hospitalId,
+            bookingType: 'Admission',
+            status: 'Hospital-Pending',
+            paymentStatus: 'Pending',
+            admissionHoldExpiresAt: { $lt: now, $ne: null },
+            bedId: { $ne: null }
+        });
+
+        for (let adm of expiredAdmissions) {
+            await Bed.findByIdAndUpdate(adm.bedId, { $set: { status: 'Available' } });
+            adm.admissionHoldExpiresAt = null;
+            adm.status = 'Cancelled-By-Hospital';
+            adm.cancellationDetails = {
+                reason: "Automated: 30-Minute admission deposit window expired. Bed released.",
+                cancelledAt: now
+            };
+            await adm.save();
+        }
+
+        // 2. Fetch target wards
+        const wardQuery = { hospitalId };
+        if (wardId) wardQuery._id = wardId;
+        const wards = await Ward.find(wardQuery);
+
+        for (let ward of wards) {
+            const beds = await Bed.find({ wardId: ward._id });
+            const totalCount = beds.length;
+            let availableCount = 0;
+
+            for (let bed of beds) {
+                // If hospital manually put bed in maintenance, keep it
+                if (bed.status === 'Maintenance') {
+                    continue;
+                }
+
+                // Check active IPD admission currently admitted
+                const activeAdmission = await Appointment.findOne({
+                    bedId: bed._id,
+                    bookingType: 'Admission',
+                    status: { $in: ['In-Progress', 'Discharge-Pending'] }
+                });
+
+                // Check active 30-minute hold or confirmed booking for today
+                const activeHoldOrBooking = await Appointment.findOne({
+                    bedId: bed._id,
+                    bookingType: 'Admission',
+                    $or: [
+                        { status: 'Hospital-Pending', admissionHoldExpiresAt: { $gt: now } },
+                        { status: 'Confirmed', startDate: { $lte: now }, endDate: { $gte: now } }
+                    ]
+                });
+
+                if (activeAdmission) {
+                    if (bed.status !== 'Occupied') {
+                        bed.status = 'Occupied';
+                        await bed.save();
+                    }
+                } else if (activeHoldOrBooking) {
+                    if (bed.status !== 'Reserved') {
+                        bed.status = 'Reserved';
+                        await bed.save();
+                    }
+                } else {
+                    if (bed.status !== 'Available') {
+                        bed.status = 'Available';
+                        await bed.save();
+                    }
+                    availableCount++;
+                }
+            }
+
+            // Sync denormalized counters
+            ward.totalBeds = totalCount;
+            ward.availableBeds = availableCount;
+            await ward.save();
+        }
+    } catch (error) {
+        console.error("syncHospitalWardAndBedCapacity Error:", error);
+    }
+};
+
+module.exports = { getDistance, getRazorpayKeys, generateUniqueOrderCode, syncHospitalWardAndBedCapacity };
