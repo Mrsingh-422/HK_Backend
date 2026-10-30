@@ -205,7 +205,7 @@ const getWards = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// @desc    Get Real-Time Bed Grid for Ward (Live Status)
+// @desc    Get Real-Time Bed Grid for Ward (Instant Lean Fetch)
 // @route   GET /user/hospital/bed-grid/:wardId
 // @access  Public
 const getBedGrid = async (req, res) => {
@@ -216,17 +216,19 @@ const getBedGrid = async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid wardId format." });
         }
 
-        const ward = await Ward.findById(wardId);
+        const [ward, beds] = await Promise.all([
+            Ward.findById(wardId).select('name type totalBeds availableBeds').lean(),
+            Bed.find({ wardId })
+                .select('_id bedNumber pricePerDay isVentilatorAvailable status')
+                .sort({ bedNumber: 1 })
+                .lean()
+        ]);
+
         if (!ward) {
             return res.status(404).json({ success: false, message: "Ward not found." });
         }
 
-        // Sync first
-        await syncHospitalWardAndBedCapacity(ward.hospitalId, ward._id);
-
-        const beds = await Bed.find({ wardId }).sort({ bedNumber: 1 }).lean();
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             wardName: ward.name,
             wardType: ward.type,
@@ -234,9 +236,10 @@ const getBedGrid = async (req, res) => {
             availableBeds: beds.filter(b => b.status === 'Available').length,
             data: beds
         });
+
     } catch (error) {
-        console.error("Get Bed Grid Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Fast Get Bed Grid Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -430,124 +433,91 @@ const validateHospitalCoupon = async (req, res) => {
 
 
 
-// @desc    Check Bed Availability for Specific Date Range (Accurate Conflict & Overlap Check)
+// @desc    Check Bed Availability for Specific Date Range (Ultra-Fast 2-Query In-Memory Matching)
 // @route   POST /user/hospital/check-availability
 // @access  Public
 const getAvailableBedsForRange = async (req, res) => {
     try {
         const { hospitalId, wardId, startDate, endDate } = req.body;
 
-        // 1. Validate required fields
         if (!hospitalId || !wardId || !startDate || !endDate) {
             return res.status(400).json({
                 success: false,
-                message: "hospitalId, wardId, startDate, and endDate are all required in request body."
+                message: "hospitalId, wardId, startDate, and endDate are all required."
             });
         }
 
-        if (!mongoose.isValidObjectId(hospitalId) || !mongoose.isValidObjectId(wardId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid hospitalId or wardId format."
-            });
-        }
-
-        // 2. Strict Date Boundary Normalization
         const startMoment = moment(startDate).startOf('day');
         const endMoment = moment(endDate).endOf('day');
 
-        if (!startMoment.isValid() || !endMoment.isValid()) {
+        if (!startMoment.isValid() || !endMoment.isValid() || endMoment.isBefore(startMoment)) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid date format. Expected 'YYYY-MM-DD' or valid ISO string."
-            });
-        }
-
-        if (endMoment.isBefore(startMoment)) {
-            return res.status(400).json({
-                success: false,
-                message: "endDate cannot be before startDate."
+                message: "Invalid dates. endDate must be on or after startDate."
             });
         }
 
         const now = new Date();
+        const hospObjId = new mongoose.Types.ObjectId(hospitalId);
+        const wardObjId = new mongoose.Types.ObjectId(wardId);
 
-        // 3. Auto-release any expired 30-minute holds before checking
-        await syncHospitalWardAndBedCapacity(hospitalId, wardId);
+        // 1. Parallel Fetch: Beds + Conflicting Appointments in parallel (Zero waiting)
+        const [allBeds, conflictingAppointments] = await Promise.all([
+            Bed.find({ wardId: wardObjId, hospitalId: hospObjId })
+                .select('_id bedNumber pricePerDay isVentilatorAvailable status')
+                .sort({ bedNumber: 1 })
+                .lean(),
 
-        // 4. Fetch all beds configured in this ward
-        const allBeds = await Bed.find({ wardId, hospitalId }).sort({ bedNumber: 1 }).lean();
+            Appointment.find({
+                hospitalId: hospObjId,
+                wardId: wardObjId,
+                bookingType: 'Admission',
+                status: { $in: ['In-Progress', 'Discharge-Pending', 'Confirmed', 'Hospital-Pending'] },
+                $or: [
+                    {
+                        status: { $in: ['In-Progress', 'Discharge-Pending', 'Confirmed'] },
+                        startDate: { $lte: endMoment.toDate() },
+                        endDate: { $gte: startMoment.toDate() }
+                    },
+                    {
+                        status: 'Hospital-Pending',
+                        admissionHoldExpiresAt: { $gt: now },
+                        startDate: { $lte: endMoment.toDate() },
+                        endDate: { $gte: startMoment.toDate() }
+                    }
+                ]
+            }).select('bedId status').lean()
+        ]);
 
         if (allBeds.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "No beds found in the selected ward."
-            });
+            return res.status(404).json({ success: false, message: "No beds found in this ward." });
         }
 
-        // 5. Query conflicting appointments for the date range
-        // Mathematical Overlap condition:
-        // (appt.startDate <= requestedEnd) AND (appt.endDate >= requestedStart)
-        const conflictingAppointments = await Appointment.find({
-            hospitalId,
-            bedId: { $ne: null },
-            bookingType: 'Admission',
-            // Active booking statuses that lock a bed
-            status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending'] },
-            $or: [
-                // Case A: Currently physically admitted or active confirmed booking overlapping dates
-                {
-                    status: { $in: ['In-Progress', 'Discharge-Pending', 'Confirmed'] },
-                    startDate: { $lte: endMoment.toDate() },
-                    endDate: { $gte: startMoment.toDate() }
-                },
-                // Case B: Active 30-minute hold that has NOT expired yet
-                {
-                    status: 'Hospital-Pending',
-                    admissionHoldExpiresAt: { $gt: now },
-                    startDate: { $lte: endMoment.toDate() },
-                    endDate: { $gte: startMoment.toDate() }
-                }
-            ]
-        }).select('bedId status admissionHoldExpiresAt startDate endDate').lean();
-
-        // 6. Map conflicting bed IDs to String Set for O(1) comparison (fixes ObjectId reference bug)
+        // 2. In-Memory Map (O(1) instant lookup)
         const conflictMap = new Map();
-        conflictingAppointments.forEach(appt => {
-            if (appt.bedId) {
-                const bIdStr = String(appt.bedId);
-                conflictMap.set(bIdStr, appt.status);
-            }
+        conflictingAppointments.forEach(a => {
+            if (a.bedId) conflictMap.set(String(a.bedId), a.status);
         });
 
-        // 7. Calculate real-time status for each bed in the requested date range
-        const computedBedGrid = allBeds.map(bed => {
-            const bedIdStr = String(bed._id);
+        const isQueryingToday = startMoment.isSameOrBefore(moment().endOf('day'));
+
+        // 3. Instant compute array
+        let availableCount = 0;
+        const computedGrid = allBeds.map(bed => {
+            const bIdStr = String(bed._id);
             let finalStatus = 'Available';
 
-            // Priority 1: Physical Maintenance set by hospital admin
             if (bed.status === 'Maintenance') {
                 finalStatus = 'Maintenance';
-            }
-            // Priority 2: Conflicting appointment in the requested date window
-            else if (conflictMap.has(bedIdStr)) {
-                const apptStatus = conflictMap.get(bedIdStr);
-                // Currently admitted patient = Occupied, Hold or Confirmed = Reserved
-                if (apptStatus === 'In-Progress' || apptStatus === 'Discharge-Pending') {
-                    finalStatus = 'Occupied';
-                } else {
-                    finalStatus = 'Reserved';
-                }
-            }
-            // Priority 3: Fallback check if hospital counter marked bed Occupied today
-            else if (bed.status === 'Occupied') {
-                // If requested range includes today and bed is physically occupied right now
-                if (startMoment.isSameOrBefore(moment().endOf('day'))) {
-                    finalStatus = 'Occupied';
-                }
+            } else if (conflictMap.has(bIdStr)) {
+                const s = conflictMap.get(bIdStr);
+                finalStatus = (s === 'In-Progress' || s === 'Discharge-Pending') ? 'Occupied' : 'Reserved';
+            } else if (bed.status === 'Occupied' && isQueryingToday) {
+                finalStatus = 'Occupied';
             }
 
-            const isAvailableForBooking = finalStatus === 'Available';
+            const isAvailable = finalStatus === 'Available';
+            if (isAvailable) availableCount++;
 
             return {
                 _id: bed._id,
@@ -555,12 +525,9 @@ const getAvailableBedsForRange = async (req, res) => {
                 pricePerDay: bed.pricePerDay,
                 isVentilatorAvailable: Boolean(bed.isVentilatorAvailable),
                 status: finalStatus,
-                isAvailable: isAvailableForBooking
+                isAvailable
             };
         });
-
-        const totalBedsCount = computedBedGrid.length;
-        const availableCount = computedBedGrid.filter(b => b.isAvailable).length;
 
         return res.status(200).json({
             success: true,
@@ -569,17 +536,14 @@ const getAvailableBedsForRange = async (req, res) => {
                 startDate: startMoment.format('YYYY-MM-DD'),
                 endDate: endMoment.format('YYYY-MM-DD')
             },
-            totalBeds: totalBedsCount,
+            totalBeds: computedGrid.length,
             availableBedsCount: availableCount,
-            data: computedBedGrid
+            data: computedGrid
         });
 
     } catch (error) {
-        console.error("Check Bed Availability Error:", error);
-        return res.status(500).json({
-            success: false,
-            message: "Internal server error checking bed availability: " + error.message
-        });
+        console.error("Fast Check Bed Availability Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

@@ -280,7 +280,7 @@ const createWardUnit = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// @desc    Get All Beds in a Specific Ward with Real-Time Total Counts & Inpatient Metadata
+// @desc    Get All Beds in a Ward with Inpatient Metadata (Optimized 2-Query Bulk Populate)
 // @route   GET /hospital/panel/ward/:wardId/beds
 // @access  Private (Hospital Admin)
 const getBedsInWard = async (req, res) => {
@@ -292,62 +292,76 @@ const getBedsInWard = async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid wardId format." });
         }
 
-        // 1. Sync holds and statuses
-        await syncHospitalWardAndBedCapacity(hospitalId, wardId);
+        const wardObjId = new mongoose.Types.ObjectId(wardId);
+        const hospObjId = new mongoose.Types.ObjectId(hospitalId);
 
-        const ward = await Ward.findOne({ _id: wardId, hospitalId });
+        // 1. Fetch Ward & Beds in parallel
+        const [ward, beds] = await Promise.all([
+            Ward.findOne({ _id: wardObjId, hospitalId: hospObjId }).select('name type totalBeds availableBeds').lean(),
+            Bed.find({ wardId: wardObjId, hospitalId: hospObjId }).sort({ bedNumber: 1 }).lean()
+        ]);
+
         if (!ward) {
             return res.status(404).json({ success: false, message: "Ward not found in this hospital." });
         }
 
-        const beds = await Bed.find({ wardId, hospitalId }).sort({ bedNumber: 1 }).lean();
+        // 2. Identify occupied or reserved beds
+        const busyBedIds = beds
+            .filter(b => b.status === 'Occupied' || b.status === 'Reserved')
+            .map(b => b._id);
+
+        // 3. FAST BULK POPULATE: 1 single query for ALL inpatients in this ward
+        const activeAppointments = busyBedIds.length > 0 ? await Appointment.find({
+            hospitalId: hospObjId,
+            bedId: { $in: busyBedIds },
+            bookingType: 'Admission',
+            status: { $in: ['In-Progress', 'Discharge-Pending', 'Hospital-Pending', 'Confirmed'] }
+        })
+        .populate('userId', 'name phone profilePic')
+        .populate('doctorId', 'name speciality')
+        .select('bookingId bedId wardName bedNumber status startDate endDate triageLevel patients admissionHoldExpiresAt')
+        .lean() : [];
+
+        // 4. In-Memory Map (Instant O(1) correlation)
+        const apptMap = new Map();
         const now = new Date();
 
-        const totalBeds = beds.length;
-        const availableBeds = beds.filter(b => b.status === 'Available').length;
-        const occupiedBeds = beds.filter(b => b.status === 'Occupied').length;
-        const reservedBeds = beds.filter(b => b.status === 'Reserved').length;
-        const maintenanceBeds = beds.filter(b => b.status === 'Maintenance').length;
-
-        // 2. Attach patient metadata to occupied/reserved beds
-        const enrichedBeds = await Promise.all(beds.map(async (bed) => {
-            let activePatient = null;
-
-            if (bed.status === 'Occupied' || bed.status === 'Reserved') {
-                const appt = await Appointment.findOne({
-                    bedId: bed._id,
-                    bookingType: 'Admission',
-                    status: { $in: ['In-Progress', 'Discharge-Pending', 'Hospital-Pending', 'Confirmed'] }
-                })
-                .populate('userId', 'name phone profilePic')
-                .populate('doctorId', 'name speciality')
-                .select('bookingId bedId wardName bedNumber status startDate endDate triageLevel patients admissionHoldExpiresAt')
-                .lean();
-
-                if (appt) {
-                    const isHold = Boolean(appt.admissionHoldExpiresAt && new Date(appt.admissionHoldExpiresAt) > now);
-                    let daysStayed = 1;
-                    if (appt.startDate) {
-                        daysStayed = Math.max(1, moment().diff(moment(appt.startDate), 'days') + 1);
-                    }
-
-                    activePatient = {
-                        appointmentId: appt._id,
-                        bookingId: appt.bookingId,
-                        patientName: appt.patients?.[0]?.patientName || appt.userId?.name || "Patient",
-                        patientPhone: appt.userId?.phone || "N/A",
-                        admittedDate: appt.startDate,
-                        targetDischargeDate: appt.endDate,
-                        daysStayed,
-                        doctorName: appt.doctorId?.name || "Doctor",
-                        doctorSpeciality: appt.doctorId?.speciality || "",
-                        status: isHold ? 'Hold-Reserved' : appt.status,
-                        triageLevel: appt.triageLevel || 'Routine',
-                        isHold,
-                        holdExpiresAt: isHold ? appt.admissionHoldExpiresAt : null
-                    };
-                }
+        activeAppointments.forEach(appt => {
+            const isHold = Boolean(appt.admissionHoldExpiresAt && new Date(appt.admissionHoldExpiresAt) > now);
+            let daysStayed = 1;
+            if (appt.startDate) {
+                daysStayed = Math.max(1, moment().diff(moment(appt.startDate), 'days') + 1);
             }
+
+            apptMap.set(String(appt.bedId), {
+                appointmentId: appt._id,
+                bookingId: appt.bookingId,
+                patientName: appt.patients?.[0]?.patientName || appt.userId?.name || "Patient",
+                patientPhone: appt.userId?.phone || "N/A",
+                admittedDate: appt.startDate,
+                targetDischargeDate: appt.endDate,
+                daysStayed,
+                doctorName: appt.doctorId?.name || "Doctor",
+                doctorSpeciality: appt.doctorId?.speciality || "",
+                status: isHold ? 'Hold-Reserved' : appt.status,
+                triageLevel: appt.triageLevel || 'Routine',
+                isHold,
+                holdExpiresAt: isHold ? appt.admissionHoldExpiresAt : null
+            });
+        });
+
+        // 5. Assemble response
+        let availableCount = 0;
+        let occupiedCount = 0;
+        let reservedCount = 0;
+        let maintenanceCount = 0;
+
+        const enrichedBeds = beds.map(bed => {
+            const bIdStr = String(bed._id);
+            if (bed.status === 'Available') availableCount++;
+            else if (bed.status === 'Occupied') occupiedCount++;
+            else if (bed.status === 'Reserved') reservedCount++;
+            else if (bed.status === 'Maintenance') maintenanceCount++;
 
             return {
                 _id: bed._id,
@@ -355,30 +369,30 @@ const getBedsInWard = async (req, res) => {
                 pricePerDay: bed.pricePerDay,
                 isVentilatorAvailable: Boolean(bed.isVentilatorAvailable),
                 status: bed.status,
-                activePatient
+                activePatient: apptMap.get(bIdStr) || null
             };
-        }));
+        });
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            totalBeds,
-            availableBeds,
-            occupiedBeds,
-            reservedBeds,
-            maintenanceBeds,
+            totalBeds: beds.length,
+            availableBeds: availableCount,
+            occupiedBeds: occupiedCount,
+            reservedBeds: reservedCount,
+            maintenanceBeds: maintenanceCount,
             ward: {
                 _id: ward._id,
                 name: ward.name,
                 type: ward.type,
-                totalBeds,
-                availableBeds
+                totalBeds: beds.length,
+                availableBeds: availableCount
             },
             data: enrichedBeds
         });
 
     } catch (error) {
-        console.error("Get Beds in Ward Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Fast Get Beds in Ward Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 const updateBedDetails = async (req, res) => {

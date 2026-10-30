@@ -300,5 +300,8 @@ const appointmentSchema = new mongoose.Schema({
 
 
 }, { timestamps: true });
+appointmentSchema.index({ hospitalId: 1, bookingType: 1, status: 1 });
+appointmentSchema.index({ bedId: 1, status: 1 });
+appointmentSchema.index({ bedId: 1, startDate: 1, endDate: 1 });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);
