@@ -189,6 +189,7 @@ const adminGetHospitalBookings = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 const toggleStatusActiveInactive = async (req, res) => {
     try {
         const { hospitalId } = req.params;

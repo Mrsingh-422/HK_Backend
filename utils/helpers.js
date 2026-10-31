@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const Bed = require('../models/Bed');
 const Ward = require('../models/Ward');
 const Appointment = require('../models/Appointment');
+const mongoose = require('mongoose');
 
 // ==========================================
 // 1. DISTANCE CALCULATOR (Google Map vs Straight Line)
