@@ -1333,73 +1333,183 @@ const deleteWard = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// @desc    Get All Hospital Bookings with Dynamic bookingType filter ('OPD' vs 'Admission')
+// @desc    Get All Hospital IPD Admissions (With Selected Doctor, Special Services & Bed Details)
 // @route   GET /hospital/panel/admissions/all
 // @access  Private (Hospital Admin)
 const getAllHospitalAdmissions = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { bookingType, status, search, page = 1, limit = 20 } = req.query;
+        const { status, triageLevel, search, page = 1, limit = 20, startDate, endDate } = req.query;
 
-        let query = { hospitalId };
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 20);
+        const skip = (pageNum - 1) * limitNum;
 
-        // Support filtering by 'OPD', 'Admission', or 'All'
-        if (bookingType && bookingType !== 'All') {
-            query.bookingType = bookingType;
-        }
+        // Auto-sync holds before querying
+        await syncHospitalWardAndBedCapacity(hospitalId);
+
+        let query = {
+            hospitalId,
+            bookingType: 'Admission'
+        };
 
         if (status && status !== 'All') {
             query.status = status;
         }
 
+        if (triageLevel && triageLevel !== 'All') {
+            query.triageLevel = triageLevel;
+        }
+
+        if (startDate && endDate) {
+            query.startDate = {
+                $gte: moment(startDate).startOf('day').toDate(),
+                $lte: moment(endDate).endOf('day').toDate()
+            };
+        }
+
         if (search && search.trim() !== '') {
+            const cleanSearch = search.trim();
             query.$or = [
-                { bookingId: { $regex: search.trim(), $options: 'i' } },
-                { 'patients.patientName': { $regex: search.trim(), $options: 'i' } },
-                { 'address.phone': { $regex: search.trim(), $options: 'i' } }
+                { bookingId: { $regex: cleanSearch, $options: 'i' } },
+                { 'patients.patientName': { $regex: cleanSearch, $options: 'i' } },
+                { bedNumber: { $regex: cleanSearch, $options: 'i' } },
+                { wardName: { $regex: cleanSearch, $options: 'i' } }
             ];
         }
 
-        const pageNum = parseInt(page) || 1;
-        const limitNum = parseInt(limit) || 20;
-        const skip = (pageNum - 1) * limitNum;
+        const totalRecords = await Appointment.countDocuments(query);
 
-        const total = await Appointment.countDocuments(query);
-
-        const list = await Appointment.find(query)
-            .populate('userId', 'name phone email profilePic age gender')
-            .populate('doctorId', 'name speciality department fees')
+        // Fetch admissions with deep population of Doctor, Special Services, Bed, and Ambulance
+        const admissions = await Appointment.find(query)
+            .populate('userId', 'name phone email profilePic gender dob age')
+            .populate('doctorId', 'name speciality department profileImage qualification phone fees')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay status',
+                select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .sort({ tokenNumber: 1, createdAt: -1 })
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverInfo')
+            .populate('specialServices.serviceId', 'serviceName price image description')
+            .populate('opdAppointmentId', 'bookingId tokenNumber opdRoomNumber')
+            .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum)
             .lean();
 
-        const enrichedList = list.map(item => ({
-            ...item,
-            isOpd: item.bookingType === 'OPD',
-            isIpd: item.bookingType === 'Admission',
-            displaySubtitle: item.bookingType === 'OPD' 
-                ? `OPD Token #${item.tokenNumber || 'N/A'} - Dr. ${item.doctorId?.name || 'Doctor'}`
-                : `Bed: ${item.bedNumber || 'Unassigned'} (${item.wardName || 'Ward'})`
-        }));
+        const formattedData = admissions.map(item => {
+            const primaryPatient = (Array.isArray(item.patients) && item.patients.length > 0)
+                ? item.patients[0]
+                : { patientName: item.userId?.name || "Patient", patientAge: "N/A", gender: "N/A", relation: "Self" };
 
-        res.status(200).json({
+            // 🚨 RESOLVE & FORMAT SPECIAL SERVICES SELECTED AT BOOKING
+            const formattedServices = (item.specialServices || []).map(srv => ({
+                serviceId: srv.serviceId?._id || srv.serviceId || null,
+                serviceName: srv.serviceId?.serviceName || srv.serviceName || "Special Service",
+                price: Number(srv.price || srv.serviceId?.price || 0),
+                image: srv.serviceId?.image || null,
+                description: srv.serviceId?.description || ""
+            }));
+
+            const totalSpecialServicesCharges = formattedServices.reduce((sum, s) => sum + s.price, 0);
+
+            // Compute stay duration
+            let stayDays = Number(item.stayDuration || 1);
+            if (item.startDate && item.endDate) {
+                stayDays = Math.max(1, moment(item.endDate).diff(moment(item.startDate), 'days') + 1);
+            }
+
+            return {
+                _id: item._id,
+                bookingId: item.bookingId,
+                status: item.status,
+                triageLevel: item.triageLevel || 'Routine',
+                bookingReason: item.bookingReason || "Hospital In-Patient Admission",
+                startDate: item.startDate,
+                endDate: item.endDate,
+                stayDurationDays: stayDays,
+
+                // Primary Patient Details
+                patient: {
+                    name: primaryPatient.patientName,
+                    age: primaryPatient.patientAge,
+                    gender: primaryPatient.gender,
+                    relation: primaryPatient.relation,
+                    phone: item.address?.phone || item.userId?.phone || "N/A",
+                    bloodGroup: primaryPatient.bloodGroup || item.userId?.bloodGroup || null
+                },
+                allPatients: item.patients || [],
+
+                // 🩺 SELECTED DOCTOR DETAILS (From Booking)
+                doctor: item.doctorId ? {
+                    _id: item.doctorId._id,
+                    name: item.doctorId.name,
+                    speciality: item.doctorId.speciality,
+                    department: item.doctorId.department?.roomNumber || "Cabin",
+                    qualification: item.doctorId.qualification || "",
+                    phone: item.doctorId.phone || "",
+                    profileImage: item.doctorId.profileImage || null
+                } : null,
+                doctorDisplayName: item.doctorId ? `Dr. ${item.doctorId.name} (${item.doctorId.speciality})` : "Unassigned",
+
+                // 🛎️ SELECTED SPECIAL SERVICES (From Booking)
+                specialServices: formattedServices,
+                totalSpecialServicesCharges,
+                hasSpecialServices: formattedServices.length > 0,
+
+                // 🛏️ BED & WARD DETAILS
+                bed: {
+                    bedId: item.bedId?._id || null,
+                    bedNumber: item.bedNumber || item.bedId?.bedNumber || "Unassigned",
+                    wardName: item.wardName || item.bedId?.wardId?.name || "General Ward",
+                    wardType: item.bedId?.wardId?.type || "Ward",
+                    pricePerDay: Number(item.bedId?.pricePerDay || 0),
+                    isVentilatorAvailable: Boolean(item.bedId?.isVentilatorAvailable)
+                },
+
+                // 🚑 AMBULANCE ARRIVAL DETAILS (If transferred or accidental)
+                ambulance: item.ambulanceId ? {
+                    _id: item.ambulanceId._id,
+                    name: item.ambulanceId.name,
+                    vehicleNumber: item.ambulanceId.vehicleNumber,
+                    vehicleType: item.ambulanceId.vehicleType,
+                    phone: item.ambulanceId.phone
+                } : null,
+
+                // Financials & Payment
+                pricingBreakdown: item.pricingBreakdown || {},
+                totalAmount: Number(item.totalAmount || 0),
+                paymentMethod: item.paymentMethod || 'COD',
+                paymentStatus: item.paymentStatus || 'Pending',
+
+                // Insurance Status
+                hasInsurance: Boolean(item.insuranceDetails?.hasInsurance),
+                insuranceApprovalStatus: item.insuranceDetails?.approvalStatus || 'None',
+
+                // 30-Minute Hold Window Metadata
+                admissionHoldExpiresAt: item.admissionHoldExpiresAt,
+                isHoldActive: Boolean(item.admissionHoldExpiresAt && new Date(item.admissionHoldExpiresAt) > new Date()),
+
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt
+            };
+        });
+
+        return res.status(200).json({
             success: true,
-            total,
-            count: enrichedList.length,
-            totalPages: Math.ceil(total / limitNum),
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
-            data: enrichedList
+            count: formattedData.length,
+            data: formattedData
         });
 
     } catch (error) {
-        console.error("Get All Hospital Bookings Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Get All Hospital Admissions Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch admissions list: " + error.message
+        });
     }
 };
 
@@ -2282,7 +2392,7 @@ const emergencyDischarge = async (req, res) => {
     }
 };
 
-// @desc    Get Detailed Case Info for Hospital Admin (Handles OPD Tokens and IPD Admissions)
+// @desc    Get Single Admission Super Details (With Doctor, Services, Clinical Logs & Bedside Team)
 // @route   GET /hospital/panel/admissions/details/:id
 // @access  Private (Hospital Admin)
 const getHospitalCaseDetails = async (req, res) => {
@@ -2297,64 +2407,58 @@ const getHospitalCaseDetails = async (req, res) => {
         };
 
         const appointment = await Appointment.findOne(query)
-            .populate('userId', 'name phone email profilePic age gender bloodGroup')
-            .populate('doctorId', 'name speciality qualification profileImage fees department')
-            .populate('ambulanceId', 'name vehicleNumber phone vehicleType')
+            .populate('userId', 'name email phone profilePic gender dob age bloodGroup userAddress')
+            .populate('doctorId', 'name email phone speciality qualification profileImage department fees languages')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage')
+            .populate('ambulanceId', 'name phone vehicleNumber vehicleType driverInfo')
+            .populate('specialServices.serviceId', 'serviceName price image description')
+            .populate('bedsideCareTeam.doctorId', 'name speciality department profileImage phone')
+            .populate('clinicalLogs.doctorId', 'name speciality')
+            .populate('activeMedications.addedBy', 'name speciality')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality')
+            .populate('treatmentHistory.toDoctorId', 'name speciality')
             .lean();
 
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Hospital booking record not found." });
+            return res.status(404).json({ success: false, message: "Admission record not found." });
         }
 
-        const isOpd = appointment.bookingType === 'OPD';
+        // Format Special Services cleanly
+        const formattedSpecialServices = (appointment.specialServices || []).map(srv => ({
+            serviceId: srv.serviceId?._id || srv.serviceId || null,
+            serviceName: srv.serviceId?.serviceName || srv.serviceName || "Special Service",
+            price: Number(srv.price || srv.serviceId?.price || 0),
+            image: srv.serviceId?.image || null,
+            description: srv.serviceId?.description || ""
+        }));
 
-        // Fetch Digital Prescription if issued
-        const prescriptions = await Prescription.find({ appointmentId: appointment._id }).lean();
+        const totalSpecialServicesCharges = formattedSpecialServices.reduce((sum, s) => sum + s.price, 0);
 
-        const primaryPatient = (Array.isArray(appointment.patients) && appointment.patients.length > 0)
-            ? appointment.patients[0]
-            : { patientName: appointment.userId?.name || "Patient", patientAge: 30, gender: "Male" };
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             data: {
                 ...appointment,
-                isOpd,
-                isIpd: !isOpd,
-                patientSummary: {
-                    name: primaryPatient.patientName,
-                    age: primaryPatient.patientAge,
-                    gender: primaryPatient.gender,
-                    bloodGroup: primaryPatient.bloodGroup || appointment.userId?.bloodGroup || "N/A",
-                    phone: appointment.userId?.phone || "N/A"
-                },
-                opdInfo: isOpd ? {
-                    tokenNumber: appointment.tokenNumber,
-                    opdRoomNumber: appointment.opdRoomNumber || appointment.doctorId?.department?.roomNumber || "Cabin 1",
-                    appointmentTime: appointment.appointmentTime,
-                    appointmentDate: moment(appointment.appointmentDate).format('YYYY-MM-DD'),
-                    consultationFee: appointment.pricingBreakdown?.baseFee || 500
+                doctor: appointment.doctorId ? {
+                    _id: appointment.doctorId._id,
+                    name: appointment.doctorId.name,
+                    speciality: appointment.doctorId.speciality,
+                    department: appointment.doctorId.department?.roomNumber || "Cabin",
+                    qualification: appointment.doctorId.qualification || "",
+                    phone: appointment.doctorId.phone || "",
+                    profileImage: appointment.doctorId.profileImage || null
                 } : null,
-                ipdInfo: !isOpd ? {
-                    wardName: appointment.wardName,
-                    bedNumber: appointment.bedNumber,
-                    startDate: appointment.startDate,
-                    endDate: appointment.endDate,
-                    stayDuration: appointment.stayDuration
-                } : null,
-                prescriptions: prescriptions || []
+                specialServices: formattedSpecialServices,
+                totalSpecialServicesCharges
             }
         });
 
     } catch (error) {
         console.error("Get Hospital Case Details Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

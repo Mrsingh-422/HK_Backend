@@ -274,12 +274,12 @@ const getRequestProposals = async (req, res) => {
     }
 };
 
-// @desc    Accept a Prescription Proposal and Generate Booking with Razorpay Order
+// @desc    Accept a Prescription Proposal and Generate Booking with Visit Schedule & Razorpay Order
 // @route   POST /user/nurse/prescription/accept
 // @access  Private (User)
 const acceptProposalAndBook = async (req, res) => {
     try {
-        const { requestId, proposalId } = req.body;
+        const { requestId, proposalId, startDate, startTime } = req.body;
         const userId = req.user.id;
 
         // 1. Validation Checks
@@ -308,11 +308,16 @@ const acceptProposalAndBook = async (req, res) => {
         // 2. Generate Razorpay Order
         const rzpOrder = await createRazorpayOrder(finalPrice, `rx_receipt_${bId}`);
 
-        // 3. Generate Service & Completion OTPs for Prescription Flow
+        // 3. Generate Service & Completion OTPs
         const dynamicServiceOTP = Math.floor(1000 + Math.random() * 9000).toString();
         const dynamicCompletionOTP = Math.floor(1000 + Math.random() * 9000).toString();
 
         const addr = request.location?.address || {};
+
+        // 🚨 FIX: Establish valid visit schedule so Nurse staff knows when to arrive
+        const scheduledStartDate = startDate ? moment(startDate).toDate() : new Date();
+        const scheduledStartTime = startTime ? String(startTime).trim() : "10:00 AM";
+
         const booking = await NurseBooking.create({
             userId,
             nurseId: selectedProposal.nurseId,
@@ -320,10 +325,17 @@ const acceptProposalAndBook = async (req, res) => {
             bookingType: 'Prescription',
             prescriptionRequestId: requestId,
             serviceDetails: {
-                title: `Prescription Care Service`,
+                title: "Prescription Care Service",
                 type: "Prescription Request",
                 duration: "As prescribed",
                 basePrice: selectedProposal.priceBreakdown.baseServicePrice
+            },
+            // Schedule attached so bureau and staff can see arrival date/time
+            schedule: {
+                startDate: scheduledStartDate,
+                endDate: scheduledStartDate,
+                startTime: scheduledStartTime,
+                duration: "One day One Time"
             },
             priceBreakdown: {
                 baseServicePrice: selectedProposal.priceBreakdown.baseServicePrice,
@@ -338,7 +350,7 @@ const acceptProposalAndBook = async (req, res) => {
                 fasterServiceCharge: 0,
                 couponDiscount: 0
             },
-            totalPrice: finalPrice, // 👈 Saved at root level
+            totalPrice: finalPrice,
             address: {
                 name: addr.name || req.user.name || "Patient",
                 phone: addr.phone || req.user.phone || "",
@@ -350,8 +362,8 @@ const acceptProposalAndBook = async (req, res) => {
                 addressType: addr.addressType || "Home"
             },
             assessmentLocation: 'At Home',
-            serviceOTP: dynamicServiceOTP,       // 👈 Generated for Start Check-in
-            completionOTP: dynamicCompletionOTP, // 👈 Generated for End Check-in
+            serviceOTP: dynamicServiceOTP,
+            completionOTP: dynamicCompletionOTP,
             paymentMethod: 'Online',
             status: 'Pending',
             paymentStatus: 'Pending',
@@ -368,7 +380,9 @@ const acceptProposalAndBook = async (req, res) => {
             appointmentId: booking._id,
             bookingId: bId,
             requestId: request._id,
-            proposalId: selectedProposal._id
+            proposalId: selectedProposal._id,
+            scheduledDate: scheduledStartDate,
+            scheduledTime: scheduledStartTime
         });
 
     } catch (error) {

@@ -5,14 +5,16 @@ const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed');
 const Doctor = require('../../../models/Doctor');
 const User = require('../../../models/User'); 
-const Coupon = require('../../../models/Coupon'); // Top-level import added
+const Coupon = require('../../../models/Coupon');
+const HospitalService = require('../../../models/HospitalService');
+const Ambulance = require('../../../models/Ambulance'); 
 const mongoose = require('mongoose');
-const moment = require('moment'); // Top-level import added for date filtering
-const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper'); // Top-level import added
-const { sendPushNotification } = require('../../../utils/notification'); // Top-level import added
-const { syncHospitalWardAndBedCapacity } = require('../../../utils/helpers'); // Top-level import added
+const moment = require('moment');
+const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { sendPushNotification } = require('../../../utils/notification');
+const { syncHospitalWardAndBedCapacity } = require('../../../utils/helpers');
 
-// @desc    Get All Hospital Bookings with OPD / IPD / Triage Filters & Smart Sorting
+// @desc    Get All Hospital Bookings with OPD / IPD, Doctor, Special Services & Ambulance
 // @route   GET /hospital/doctor/appointments/all-bookings
 // @access  Private (Hospital)
 const getHospitalAllBookings = async (req, res) => {
@@ -26,7 +28,6 @@ const getHospitalAllBookings = async (req, res) => {
         if (bookingType && bookingType !== 'All') query.bookingType = bookingType;
         if (triageLevel && triageLevel !== 'All') query.triageLevel = triageLevel;
 
-        // Safely parse date boundaries
         if (date && date.trim() !== '') {
             query.appointmentDate = {
                 $gte: moment(date).startOf('day').toDate(),
@@ -44,17 +45,19 @@ const getHospitalAllBookings = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const total = await Appointment.countDocuments(query);
 
-        // Smart sorting: OPD queues sort strictly ascending by tokenNumber, while general lists sort by newest
         const sortCriteria = (bookingType === 'OPD') ? { tokenNumber: 1, createdAt: -1 } : { createdAt: -1 };
 
+        // 🚨 Populated Doctor, Special Services, Ambulance & Bed Details
         const appointments = await Appointment.find(query)
-            .populate('doctorId', 'name speciality profileImage fees department')
+            .populate('doctorId', 'name speciality profileImage fees department qualification phone')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay',
+                select: 'bedNumber pricePerDay isVentilatorAvailable status',
                 populate: { path: 'wardId', select: 'name type' } 
             })
             .populate('userId', 'name phone email profilePic age gender')
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
+            .populate('specialServices.serviceId', 'serviceName price image description')
             .populate({
                 path: 'bedsideCareTeam.doctorId',
                 select: 'name speciality profileImage dutyStatus'
@@ -64,16 +67,34 @@ const getHospitalAllBookings = async (req, res) => {
             .limit(parseInt(limit))
             .lean();
 
-        const formatted = appointments.map(a => ({
-            ...a,
-            isOpd: a.bookingType === 'OPD',
-            isIpd: a.bookingType === 'Admission',
-            displaySubtitle: a.bookingType === 'OPD' 
-                ? `OPD Token #${a.tokenNumber || 'N/A'} - Dr. ${a.doctorId?.name || 'Doctor'}`
-                : `Bed: ${a.bedNumber || 'Unassigned'} (${a.wardName || 'Ward'})`
-        }));
+        const formatted = appointments.map(a => {
+            const formattedServices = (a.specialServices || []).map(srv => ({
+                serviceId: srv.serviceId?._id || srv.serviceId || null,
+                serviceName: srv.serviceId?.serviceName || srv.serviceName || "Special Service",
+                price: Number(srv.price || srv.serviceId?.price || 0),
+                image: srv.serviceId?.image || null
+            }));
 
-        res.status(200).json({ 
+            return {
+                ...a,
+                isOpd: a.bookingType === 'OPD',
+                isIpd: a.bookingType === 'Admission',
+                doctor: a.doctorId ? {
+                    _id: a.doctorId._id,
+                    name: a.doctorId.name,
+                    speciality: a.doctorId.speciality,
+                    department: a.doctorId.department?.roomNumber || "Cabin",
+                    profileImage: a.doctorId.profileImage || null
+                } : null,
+                specialServices: formattedServices,
+                totalSpecialServicesCharges: formattedServices.reduce((sum, s) => sum + s.price, 0),
+                displaySubtitle: a.bookingType === 'OPD' 
+                    ? `OPD Token #${a.tokenNumber || 'N/A'} - Dr. ${a.doctorId?.name || 'Doctor'}`
+                    : `Bed: ${a.bedNumber || 'Unassigned'} (${a.wardName || 'Ward'})`
+            };
+        });
+
+        return res.status(200).json({ 
             success: true, 
             total, 
             count: formatted.length, 
@@ -86,7 +107,8 @@ const getHospitalAllBookings = async (req, res) => {
             data: formatted 
         });
     } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        console.error("Get Hospital All Bookings Error:", error);
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

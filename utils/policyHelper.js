@@ -42,22 +42,28 @@ const hasDriverStarted = (booking, vendorType) => {
     }
 };
 
-/**
- * Calculates final cancellation deductions and driver compensations dynamically
- */
+// @desc    Calculates cancellation deductions and vendor compensations dynamically across all services
 const processCancellationRefund = async (booking, vendorType) => {
     const isAccidental = (booking.serviceType === 'Accident emergency' || vendorType === 'Ambulance-Accident');
-    const totalPaid = booking.totalAmount || 
-                      booking.billSummary?.totalAmount || 
-                      booking.priceBreakdown?.totalPrice || 
-                      booking.pricing?.total || 
-                      0;
+    const totalPaid = Number(
+        booking.totalAmount || 
+        booking.billSummary?.totalAmount || 
+        booking.priceBreakdown?.totalPrice || 
+        booking.pricing?.total || 
+        0
+    );
     
     let cancellationFee = 0; 
     let driverCompensation = 0;
     const started = hasDriverStarted(booking, vendorType);
 
-    if (started) {
+    // 🚨 FIX: Determine if cancellation policy should apply
+    // For logistics (Ambulance, Lab Home Collection, Pharmacy, Nurse) -> check if driver started
+    // For in-clinic / hospital visits (Doctor, Hospital Bed) -> apply policy directly from Admin config
+    const isStationaryService = ['Doctor', 'Hospital'].includes(vendorType);
+    const shouldEnforcePolicy = started || isStationaryService;
+
+    if (shouldEnforcePolicy) {
         let config = await CancellationConfig.findOne({ vendorType, isActive: true });
         if (!config && String(vendorType).startsWith('Ambulance')) {
             config = await CancellationConfig.findOne({ vendorType: 'Ambulance', isActive: true });
@@ -68,7 +74,7 @@ const processCancellationRefund = async (booking, vendorType) => {
                 const baseValuation = isAccidental ? (booking.pricing?.originalAmbulanceCharge || 2000) : totalPaid;
                 cancellationFee = Math.round((baseValuation * config.chargeValue) / 100);
             } else {
-                cancellationFee = config.chargeValue;
+                cancellationFee = Math.min(config.chargeValue, totalPaid);
             }
         }
 

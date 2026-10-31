@@ -1806,7 +1806,7 @@ const getMyBookings = async (req, res) => {
     }
 };
 
-// @desc    Get Detailed Tracking Lifecycle for Lab Booking (Screenshots 9-Step Home vs Walk-In Aligned)
+// @desc    Get Lab Booking Full Tracking & Multi-Patient Reports for Patient App
 // @route   GET /user/labs/details/:id/track
 // @access  Private (User)
 const getBookingDetails = async (req, res) => {
@@ -1816,109 +1816,50 @@ const getBookingDetails = async (req, res) => {
 
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
-            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() }),
-            userId
+            userId,
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
         };
 
         const booking = await LabBooking.findOne(query)
-            .populate('labId', 'name address phone city profileImage location')
-            .populate('phlebotomistId', 'name phone profilePic vehicleNumber vehicleType location')
-            .populate('items.tests.testId', 'testName sampleType')
-            .populate('items.packages.packageId', 'packageName')
+            .populate('labId', 'name address city phone profileImage location')
+            .populate('phlebotomistId', 'name phone vehicleNumber profilePic status location')
+            .populate('items.tests.testId', 'testName mainCategory sampleType reportTime')
+            .populate('items.packages.packageId', 'packageName mainCategory sampleTypes reportTime')
             .lean();
 
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        const isHomeCollection = booking.collectionType !== 'Visit Lab';
+        // 🚨 MULTI-PATIENT REPORTS STRUCTURE FOR FRONTEND CARDS
+        // Maps each patient to their specific report if available
+        const patientsWithReports = (booking.patients || []).map(p => {
+            const matchedReport = (booking.patientReports || []).find(pr => String(pr.patientId) === String(p.patientId));
+            return {
+                patientId: p.patientId,
+                name: p.name,
+                age: p.age,
+                gender: p.gender,
+                relation: p.relation,
+                hasReport: Boolean(matchedReport?.reportFile || p.medicalReport),
+                reportUrl: matchedReport?.reportFile || p.medicalReport || null
+            };
+        });
 
-        // 9-Tier Hierarchy for Home Collection
-        const homeHierarchy = {
-            'Confirmed': 1,
-            'Phlebotomist Assigned': 2,
-            'Arrived': 3,
-            'Sample Collected': 4,
-            'Sample on the way to lab': 5,
-            'Sample Delivered to Lab': 6,
-            'Sample Deposited': 6,
-            'Testing': 7,
-            'Report Generated': 8,
-            'Completed': 9
-        };
-
-        // 5-Tier Hierarchy for Walk-In (Patient directly visits lab center)
-        const walkInHierarchy = {
-            'Confirmed': 1,
-            'Sample Collected': 2,
-            'Sample Delivered to Lab': 2,
-            'Testing': 3,
-            'Report Generated': 4,
-            'Completed': 5
-        };
-
-        const currentStepWeight = isHomeCollection 
-            ? (homeHierarchy[booking.status] || 1)
-            : (walkInHierarchy[booking.status] || 1);
-
-        let stepsDefinition = [];
-
-        if (isHomeCollection) {
-            // 🚨 EXACT 9 STEPS FOR HOME COLLECTION (Screenshot Matching)
-            stepsDefinition = [
-                { title: "Order Confirmed", key: "Confirmed", step: 1, timestamp: booking.createdAt },
-                { title: "Phlebotomist Assigned", key: "Phlebotomist Assigned", step: 2, timestamp: booking.phlebotomistId ? booking.updatedAt : null },
-                { title: "Arrived at Location", key: "Arrived", step: 3, timestamp: booking.arrivedAt || null },
-                { title: "Sample Collected", key: "Sample Collected", step: 4, timestamp: booking.collectedAt || null },
-                { title: "Sample on the way to lab", key: "Sample on the way to lab", step: 5, timestamp: booking.sampleTransitStartedAt || null },
-                { title: "Sample Delivered to Lab", key: "Sample Delivered to Lab", step: 6, timestamp: booking.sampleDeliveredToLabAt || booking.depositedAt || null },
-                { title: "Testing in Progress", key: "Testing", step: 7, timestamp: booking.status === 'Testing' ? booking.updatedAt : null },
-                { title: "Report Generated", key: "Report Generated", step: 8, timestamp: booking.status === 'Report Generated' ? booking.updatedAt : null },
-                { title: "Completed", key: "Completed", step: 9, timestamp: booking.status === 'Completed' ? booking.updatedAt : null }
-            ];
-        } else {
-            // Simplified 5 Steps for Direct Lab Center Walk-In
-            stepsDefinition = [
-                { title: "Booking Confirmed", key: "Confirmed", step: 1, timestamp: booking.createdAt },
-                { title: "Sample Given at Lab", key: "Sample Delivered to Lab", step: 2, timestamp: booking.sampleDeliveredToLabAt || booking.collectedAt || null },
-                { title: "Testing in Progress", key: "Testing", step: 3, timestamp: booking.status === 'Testing' ? booking.updatedAt : null },
-                { title: "Report Generated", key: "Report Generated", step: 4, timestamp: booking.status === 'Report Generated' ? booking.updatedAt : null },
-                { title: "Report Ready & Completed", key: "Completed", step: 5, timestamp: booking.status === 'Completed' ? booking.updatedAt : null }
-            ];
-        }
-
-        const lifecycleProgress = stepsDefinition.map(s => ({
-            ...s,
-            isCompleted: currentStepWeight >= s.step,
-            isCurrent: currentStepWeight === s.step
-        }));
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: "Lab tracking details fetched successfully.",
             data: {
-                bookingId: booking.bookingId,
-                mongoId: booking._id,
-                currentStatus: booking.status,
-                collectionType: booking.collectionType,
-                isHomeCollection,
-                stepNumber: currentStepWeight,
-                totalSteps: stepsDefinition.length,
-                labDepositName: booking.labDepositName || null,
-                reportFile: booking.reportFile || null,
-                otp: booking.tracking?.otp || null,
-                phlebotomist: booking.phlebotomistId || null,
-                lab: booking.labId || null,
-                patients: booking.patients || [],
-                address: booking.address,
-                billSummary: booking.billSummary,
-                lifecycleProgress // 👈 Returns 9 steps for Home Collection & 5 steps for Walk-In
+                ...booking,
+                reportFile: booking.reportFile, // Overall / Latest report PDF
+                patientReports: booking.patientReports || [], // Dedicated array
+                patientsWithReports, // 👈 Clean list for UI buttons: Download per patient
+                isAllReportsUploaded: booking.status === 'Completed'
             }
         });
 
     } catch (error) {
-        console.error("Get Lab Booking Tracking Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Get Lab Booking Details Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

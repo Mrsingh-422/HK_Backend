@@ -8,18 +8,24 @@ const { calculateAdminCommission } = require('../../utils/policyHelper');
 
 
 // Calculate Doctor Balances (Fix: Both COD & Counter Cash correctly deduct platform commission instead of double crediting)
+// @desc    Calculate Doctor Balances (Filters out hospital bookings to prevent double-payout)
 const calculateVendorBalances = async (vendorId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const doctorObjId = new mongoose.Types.ObjectId(vendorId);
 
+    // 🚨 FIX: Only include private clinic/consultation appointments (hospitalId must be null)
     const [completedAppointments, compensatedAppointments] = await Promise.all([
         Appointment.find({
             doctorId: doctorObjId,
+            hospitalId: null, // 👈 Strictly exclude Hospital OPD/IPD revenue
+            bookingType: 'Appointment',
             status: 'Completed'
         }).select('totalAmount pricingBreakdown paymentMethod paymentStatus subscriptionDetails updatedAt').lean(),
 
         Appointment.find({
             doctorId: doctorObjId,
+            hospitalId: null, // 👈 Strictly exclude Hospital OPD/IPD penalties
+            bookingType: 'Appointment',
             status: { $in: ['Cancelled-By-User', 'No-Show'] },
             $or: [
                 { 'pricingBreakdown.cancellationFeeApplied': { $gt: 0 } },
@@ -47,17 +53,16 @@ const calculateVendorBalances = async (vendorId) => {
 
         let effectiveVendorCredit = 0;
 
-        // Both Cash collected at doctor's clinic desk and COD mean doctor physically collected cash
         const isCashOrCod = appt.paymentMethod === 'COD' || 
                             appt.paymentMethod === 'Cash' || 
                             String(appt.paymentMethod).toUpperCase() === 'CASH' ||
                             String(appt.paymentMethod).toUpperCase() === 'COD';
 
         if (isCashOrCod) {
-            // Deduct Admin platform commission from digital wallet
+            // Deduct platform commission because doctor physically collected cash
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online gateway; credit net amount after commission to digital wallet
+            // Online payment; credit net earnings to virtual wallet
             effectiveVendorCredit = netVendorAmount;
         }
 
@@ -113,6 +118,7 @@ const calculateVendorBalances = async (vendorId) => {
         }
     };
 };
+
 // 1. GET DOCTOR EARNING STATS
 const getDoctorWalletStats = async (req, res) => {
     try {

@@ -1,17 +1,26 @@
 const Availability = require('../../models/Availability');
 const { generateTimeSlots } = require('../../utils/timeSlotHelper');
 
-// 1. SET/UPDATE DOCTOR SLOTS
-// Doctors usually use slotDuration (e.g., 15 or 30 mins per patient)
+// @desc    Set/Update Independent Doctor Availability Slots (Blocks hospital-doctor override)
+// @route   POST /doctor/availability/set
+// @access  Private (Doctor)
 const setDoctorSlots = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        const role = req.user.role; // Should be 'Doctor'
+        const role = req.user.role;
 
-        // Validation: Start time must be before end time
+        // 🚨 FIX: Hospital doctors must be configured by Hospital Admin only
+        if (role === 'hospital-doctor') {
+            return res.status(403).json({
+                success: false,
+                isHospitalDoctor: true,
+                message: "Access Denied: As a Hospital Doctor, your OPD cabin timings and fee are configured directly by the Hospital Management."
+            });
+        }
+
         if (req.body.startTime && req.body.endTime) {
             if (req.body.startTime >= req.body.endTime) {
-                return res.status(400).json({ message: "Start time must be before End time" });
+                return res.status(400).json({ success: false, message: "Start time must be before End time." });
             }
         }
 
@@ -21,15 +30,15 @@ const setDoctorSlots = async (req, res) => {
                 $set: { 
                     ...req.body, 
                     vendorId: doctorId, 
-                    vendorType: 'Doctor' // Hardcoded for Doctor flow
+                    vendorType: 'Doctor'
                 } 
             }, 
             { upsert: true, new: true }
         );
 
-        res.json({ success: true, message: "Doctor availability saved", data: slots });
+        return res.status(200).json({ success: true, message: "Doctor availability saved successfully.", data: slots });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

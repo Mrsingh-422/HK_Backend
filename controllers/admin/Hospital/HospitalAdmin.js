@@ -1,7 +1,10 @@
 // controllers/admin/Hospital/HospitalAdmin.js
-const BedRescheduleLimit = require("../../../models/BedRescheduleLimit"); // 👈 Import Global Limit Model
+const BedRescheduleLimit = require("../../../models/BedRescheduleLimit");
 const Appointment = require("../../../models/Appointment");
 const Hospital = require("../../../models/Hospital");
+const HospitalService = require("../../../models/HospitalService");
+const Ambulance = require("../../../models/Ambulance");  
+const mongoose = require("mongoose");
 
 // 1. UPDATE GLOBAL LIMIT (patch API)
 const updateHospitalRescheduleLimit = async (req, res) => {
@@ -84,7 +87,7 @@ const adminGetApprovedHospitals = async (req, res) => {
     }
 };
 
-// @desc    Admin: Get Hospital Bookings (Includes OPD/IPD indicators, token numbers & Insurance details)
+// @desc    Admin: Get Hospital Bookings (With Doctor, Bed, Special Services & Insurance)
 // @route   GET /admin/hospital/appointments
 // @access  Private (Admin)
 const adminGetHospitalBookings = async (req, res) => {
@@ -123,34 +126,54 @@ const adminGetHospitalBookings = async (req, res) => {
 
         const totalCount = await Appointment.countDocuments(query);
 
+        // 🚨 Populated Doctor, Special Services, Ambulance & Bed
         const data = await Appointment.find(query)
             .populate('userId', 'name phone email')
             .populate('hospitalId', 'name address hospitalImage city isInsuranceAccepted')
-            .populate('doctorId', 'name speciality profileImage department fees')
+            .populate('doctorId', 'name speciality profileImage department fees qualification phone')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
                 populate: { path: 'wardId', select: 'name type' }
             })
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
+            .populate('specialServices.serviceId', 'serviceName price image description')
             .sort(bookingType === 'OPD' ? { tokenNumber: 1, createdAt: -1 } : { createdAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean();
 
-        const formatted = data.map(item => ({
-            ...item,
-            isOpd: item.bookingType === 'OPD',
-            isIpd: item.bookingType === 'Admission',
-            displaySubtitle: item.bookingType === 'OPD' 
-                ? `OPD Token #${item.tokenNumber || '1'} - Dr. ${item.doctorId?.name || 'Doctor'}`
-                : `Bed: ${item.bedNumber || 'Unassigned'} (${item.wardName || 'Ward'})`,
-            hasInsurance: Boolean(item.insuranceDetails?.hasInsurance),
-            insuranceClaimStatus: item.insuranceDetails?.hasInsurance 
-                ? (item.insuranceDetails?.approvalStatus || 'Pending') 
-                : 'Self-Pay (No Insurance)'
-        }));
+        const formatted = data.map(item => {
+            const formattedServices = (item.specialServices || []).map(srv => ({
+                serviceId: srv.serviceId?._id || srv.serviceId || null,
+                serviceName: srv.serviceId?.serviceName || srv.serviceName || "Special Service",
+                price: Number(srv.price || srv.serviceId?.price || 0)
+            }));
 
-        res.status(200).json({ 
+            return {
+                ...item,
+                isOpd: item.bookingType === 'OPD',
+                isIpd: item.bookingType === 'Admission',
+                doctor: item.doctorId ? {
+                    _id: item.doctorId._id,
+                    name: item.doctorId.name,
+                    speciality: item.doctorId.speciality,
+                    department: item.doctorId.department?.roomNumber || "Cabin",
+                    profileImage: item.doctorId.profileImage || null
+                } : null,
+                specialServices: formattedServices,
+                totalSpecialServicesCharges: formattedServices.reduce((sum, s) => sum + s.price, 0),
+                displaySubtitle: item.bookingType === 'OPD' 
+                    ? `OPD Token #${item.tokenNumber || '1'} - Dr. ${item.doctorId?.name || 'Doctor'}`
+                    : `Bed: ${item.bedNumber || 'Unassigned'} (${item.wardName || 'Ward'})`,
+                hasInsurance: Boolean(item.insuranceDetails?.hasInsurance),
+                insuranceClaimStatus: item.insuranceDetails?.hasInsurance 
+                    ? (item.insuranceDetails?.approvalStatus || 'Pending') 
+                    : 'Self-Pay (No Insurance)'
+            };
+        });
+
+        return res.status(200).json({ 
             success: true, 
             count: formatted.length, 
             pagination: {
@@ -163,7 +186,7 @@ const adminGetHospitalBookings = async (req, res) => {
         });
     } catch (error) { 
         console.error("Admin Get Hospital Bookings Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 const toggleStatusActiveInactive = async (req, res) => {

@@ -312,68 +312,99 @@ const updateProgressStatus = async (req, res) => {
     }
 };
 
-// @desc    Upload final Lab Report PDF & notify patient immediately with direct view link
+// @desc    Upload Diagnostic Report PDF for Specific Patient (Multi-Patient Safe)
 // @route   POST /provider/labs/upload-report/:orderId
 // @access  Private (Lab)
 const uploadReport = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const { patientId } = req.body; // Target patient identifier (e.g. 'Self' or family member ID)
         const labId = req.user.id;
 
-        if (!req.files || !req.files['labReport'] || req.files['labReport'].length === 0) {
-            return res.status(400).json({ success: false, message: "Please upload the medical report PDF." });
+        if (!req.file && (!req.files || req.files.length === 0)) {
+            return res.status(400).json({ success: false, message: "Please upload a valid report PDF/image file." });
         }
 
-        const reportFilePath = `/uploads/user_reports/${req.files['labReport'][0].filename}`;
+        const uploadedFilePath = req.file ? req.file.path.replace(/\\/g, "/") : req.files[0].path.replace(/\\/g, "/");
 
-        const booking = await LabBooking.findOne({ 
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { bookingId: orderId }],
-            labId 
-        }).populate('userId', 'name phone fcmToken');
-
+        const booking = await LabBooking.findOne({ _id: orderId, labId });
         if (!booking) {
             return res.status(404).json({ success: false, message: "Lab booking not found or unauthorized." });
         }
 
-        booking.reportFile = reportFilePath;
-        booking.status = 'Completed';
-        await booking.save();
+        const targetPatientId = patientId ? String(patientId).trim() : (booking.patients[0]?.patientId || "Self");
 
-        const labName = req.user?.name || "Diagnostic Lab";
+        // 1. Update individual patient subdocument report
+        const patientIndex = booking.patients.findIndex(p => String(p.patientId) === targetPatientId);
+        let targetPatientName = "Patient";
 
-        // 🚨 PATIENT ALERT: Instant push notification & in-app inbox record for report ready
-        if (booking.userId) {
-            try {
-                await sendPushNotification(
-                    booking.userId._id,
-                    'user',
-                    `📑 Lab Report Ready: ${booking.bookingId}`,
-                    `Your diagnostic report from ${labName} is ready to view and download. Tap here to view results.`,
-                    {
-                        type: 'LAB_REPORT_COMPLETED',
-                        serviceType: 'Lab',
-                        bookingId: String(booking.bookingId),
-                        id: String(booking._id),
-                        reportUrl: String(reportFilePath),
-                        vendorName: String(labName),
-                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
-                    }
-                );
-            } catch (notifErr) {
-                console.error("Lab Report Ready Notification Error:", notifErr.message);
-            }
+        if (patientIndex > -1) {
+            booking.patients[patientIndex].medicalReport = uploadedFilePath;
+            targetPatientName = booking.patients[patientIndex].name;
         }
 
-        res.status(200).json({
+        // 2. Push or Update inside patientReports array
+        if (!Array.isArray(booking.patientReports)) {
+            booking.patientReports = [];
+        }
+
+        const reportEntryIndex = booking.patientReports.findIndex(pr => String(pr.patientId) === targetPatientId);
+        if (reportEntryIndex > -1) {
+            booking.patientReports[reportEntryIndex].reportFile = uploadedFilePath;
+            booking.patientReports[reportEntryIndex].patientName = targetPatientName;
+        } else {
+            booking.patientReports.push({
+                patientId: targetPatientId,
+                patientName: targetPatientName,
+                reportFile: uploadedFilePath
+            });
+        }
+
+        // Backward compatibility fallback for single report view
+        booking.reportFile = uploadedFilePath;
+
+        // 3. Strict Check: Are all patients' reports uploaded?
+        const totalPatientsCount = booking.patients.length;
+        const reportsCount = booking.patientReports.length;
+
+        if (reportsCount >= totalPatientsCount) {
+            booking.status = 'Completed'; // All reports delivered!
+        } else {
+            booking.status = 'Report Generated'; // Partial reports uploaded, wait for remaining
+        }
+
+        await booking.save();
+
+        // 4. Notify Patient App
+        if (booking.userId) {
+            try {
+                const isAllDone = booking.status === 'Completed';
+                const notifTitle = isAllDone ? "🎉 Diagnostic Reports Ready!" : "📄 New Test Report Uploaded";
+                const notifMsg = isAllDone 
+                    ? `All test reports for Booking #${booking.bookingId} have been uploaded and finalized.`
+                    : `Report for ${targetPatientName} has been uploaded. Other reports are in progress.`;
+
+                await sendPushNotification(
+                    booking.userId,
+                    'user',
+                    notifTitle,
+                    notifMsg,
+                    { bookingId: booking._id.toString(), type: 'lab_report_uploaded' }
+                );
+            } catch (e) {}
+        }
+
+        return res.status(200).json({
             success: true,
-            message: "Report uploaded successfully and patient notified.",
-            reportUrl: reportFilePath,
+            message: `Report for ${targetPatientName} uploaded successfully. (${reportsCount}/${totalPatientsCount} completed)`,
+            bookingStatus: booking.status,
+            patientReports: booking.patientReports,
             data: booking
         });
 
     } catch (error) {
         console.error("Upload Lab Report Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -578,70 +609,88 @@ const getReportData = async (req, res) => {
 };
 
 
-// @desc    Upload client-side compiled PDF report & notify patient with download link
+// @desc    Upload Compiled Client-Side Smart Report PDF (Multi-Patient Safe)
 // @route   POST /provider/labs/upload-client-pdf/:orderId
 // @access  Private (Lab)
 const uploadClientGeneratedPDF = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const { patientId } = req.body;
         const labId = req.user.id;
 
         if (!req.file) {
-            return res.status(400).json({ success: false, message: "No PDF report file provided." });
+            return res.status(400).json({ success: false, message: "PDF reportFile is required." });
         }
 
-        const reportFilePath = `/uploads/user_reports/${req.file.filename}`;
+        const cleanPdfPath = req.file.path.replace(/\\/g, "/");
 
-        const isObjectId = mongoose.Types.ObjectId.isValid(orderId);
-        const query = {
-            labId,
-            ...(isObjectId ? { _id: orderId } : { bookingId: orderId })
-        };
-
-        const booking = await LabBooking.findOne(query).populate('userId', 'name phone fcmToken');
+        const booking = await LabBooking.findOne({ _id: orderId, labId });
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Lab booking not found or unauthorized." });
+            return res.status(404).json({ success: false, message: "Booking not found or unauthorized access." });
         }
 
-        booking.reportFile = reportFilePath;
-        booking.status = 'Completed';
+        const targetPatientId = patientId ? String(patientId).trim() : (booking.patients[0]?.patientId || "Self");
+
+        const patientIndex = booking.patients.findIndex(p => String(p.patientId) === targetPatientId);
+        let targetPatientName = "Patient";
+
+        if (patientIndex > -1) {
+            booking.patients[patientIndex].medicalReport = cleanPdfPath;
+            targetPatientName = booking.patients[patientIndex].name;
+        }
+
+        if (!Array.isArray(booking.patientReports)) {
+            booking.patientReports = [];
+        }
+
+        const reportEntryIndex = booking.patientReports.findIndex(pr => String(pr.patientId) === targetPatientId);
+        if (reportEntryIndex > -1) {
+            booking.patientReports[reportEntryIndex].reportFile = cleanPdfPath;
+            booking.patientReports[reportEntryIndex].patientName = targetPatientName;
+        } else {
+            booking.patientReports.push({
+                patientId: targetPatientId,
+                patientName: targetPatientName,
+                reportFile: cleanPdfPath
+            });
+        }
+
+        booking.reportFile = cleanPdfPath;
+
+        const totalPatientsCount = booking.patients.length;
+        const reportsCount = booking.patientReports.length;
+
+        if (reportsCount >= totalPatientsCount) {
+            booking.status = 'Completed';
+        } else {
+            booking.status = 'Report Generated';
+        }
+
         await booking.save();
 
-        const labName = req.user?.name || "Diagnostic Lab";
-
-        // 🚨 PATIENT ALERT: Instant push notification for completed smart report
         if (booking.userId) {
             try {
                 await sendPushNotification(
-                    booking.userId._id,
+                    booking.userId,
                     'user',
-                    `📑 Smart Report Ready: ${booking.bookingId}`,
-                    `Your comprehensive Smart Health Report from ${labName} is ready. Tap to view and download.`,
-                    {
-                        type: 'LAB_REPORT_COMPLETED',
-                        serviceType: 'Lab',
-                        bookingId: String(booking.bookingId),
-                        id: String(booking._id),
-                        reportUrl: String(reportFilePath),
-                        vendorName: String(labName),
-                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
-                    }
+                    "📄 Smart Report Compiled!",
+                    `Diagnostic Smart Report for ${targetPatientName} has been compiled and is ready to view.`,
+                    { bookingId: booking._id.toString(), type: 'lab_report_uploaded' }
                 );
-            } catch (notifErr) {
-                console.error("Smart Report Notification Error:", notifErr.message);
-            }
+            } catch (e) {}
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: "Smart Report PDF uploaded successfully and patient notified.",
-            reportUrl: reportFilePath,
-            data: booking
+            message: `Smart Report for ${targetPatientName} compiled successfully!`,
+            reportUrl: cleanPdfPath,
+            bookingStatus: booking.status,
+            patientReports: booking.patientReports
         });
 
     } catch (error) {
         console.error("Upload Client PDF Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

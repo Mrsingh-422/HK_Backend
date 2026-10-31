@@ -10,6 +10,7 @@ const { getDistance } = require('../../../utils/helpers');
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const MedicineInventory = require('../../../models/MedicineInventory');
 const Medicine = require('../../../models/Medicine');
+const PharmacyComboOffer = require('../../../models/PharmacyComboOffer');
 const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Coupon = require('../../../models/Coupon');
@@ -17,11 +18,34 @@ const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelp
 const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest');
 
 
+// @desc    Universal Bill Calculator with Proper BOGO Promo Evaluation & Subscription Free Delivery
 const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid, vendorType, userId = null) => {
     let itemTotal = 0;
     
+    // 🚨 FIX: Pharmacy BOGO calculations honored during bill creation
     if (vendorType === 'Pharmacy') {
-        items.forEach(item => { itemTotal += (Number(item.price || 0) * Number(item.quantity || 1)); });
+        for (const item of items) {
+            const orderedQty = Number(item.quantity || 1);
+            const unitPrice = Number(item.price || 0);
+
+            if (item.isComboApplied === true && item.comboOfferId) {
+                const promo = await PharmacyComboOffer.findById(item.comboOfferId).lean();
+                if (promo && promo.isActive) {
+                    const X = promo.buyQty || 2;
+                    const Y = promo.getFreeQty || 1;
+                    const bundleSize = X + Y;
+
+                    const fullBundles = Math.floor(orderedQty / bundleSize);
+                    const remainingUnits = orderedQty % bundleSize;
+                    const chargeableQty = (fullBundles * X) + Math.min(remainingUnits, X);
+                    itemTotal += (unitPrice * chargeableQty);
+                } else {
+                    itemTotal += (unitPrice * orderedQty);
+                }
+            } else {
+                itemTotal += (unitPrice * orderedQty);
+            }
+        }
     } else {
         items.forEach(item => { itemTotal += (Number(item.price || 0) * (Number(patientsCount) || 1)); });
     }
@@ -63,7 +87,7 @@ const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid
     let couponDiscount = 0;
     let couponId = null;
     if (couponCode) {
-        const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
+        const coupon = await Coupon.findOne({ couponName: String(couponCode).toUpperCase(), isActive: true });
         if (coupon && itemTotal >= coupon.minOrderAmount) {
             if (coupon.vendorId?.toString() === vendorId.toString() || coupon.vendorType === 'All' || coupon.vendorType === vendorType) {
                 couponDiscount = Math.min((itemTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
@@ -75,13 +99,13 @@ const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid
     const totalAmount = Math.max(0, (itemTotal - couponDiscount) + finalDeliveryCharge + rapidCharge);
 
     return { 
-        itemTotal, 
-        couponDiscount, 
+        itemTotal: Math.round(itemTotal), 
+        couponDiscount: Math.round(couponDiscount), 
         couponId, 
         deliveryCharge: finalDeliveryCharge, 
         originalDeliveryCharge: standardDeliveryCharge,
         rapidDeliveryCharge: rapidCharge, 
-        totalAmount,
+        totalAmount: Math.round(totalAmount),
         deliverySubscriptionBenefit
     };
 };

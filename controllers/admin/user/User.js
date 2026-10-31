@@ -19,35 +19,44 @@ const transformUserData = (user) => ({
     profilePic: user.profilePic // Added as per your request
 });
 
-// @desc    Get All Users for Admin with Accurate Active / Banned Flag
+// @desc    Get All Users for Admin with Accurate Active / Banned / Profile Status
 // @route   GET /admin/users/list
 // @access  Private (Admin)
 const getAllUsersAdmin = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 50;
+        const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
 
         const totalUsers = await User.countDocuments({ role: 'user' });
         
         const users = await User.find({ role: 'user' })
+            .select('name email phone isActive isBanned profileStatus profilePic createdAt')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean();
 
-        // 🚨 BUG FIX: Resolved duplicate 'active' key. Accurately reflects ban & deactivation.
-        const formattedData = users.map(user => ({
-            id: user._id,
-            name: user.name || "",
-            email: user.email || "",
-            number: user.phone || "",
-            active: user.isActive !== false && user.isBanned !== true, // 👈 Accurately false if banned or deactivated
-            isBanned: user.isBanned === true,
-            profileStatus: user.profileStatus || 'Approved',
-            profilePic: user.profilePic || null,
-            createdAt: user.createdAt
-        }));
+        // 🚨 FIX: Removed duplicate key 'active'. Returns distinct operational flags
+        const formattedData = users.map(user => {
+            const isDeactivated = user.isActive === false;
+            const isBanned = user.isBanned === true;
+            const isApproved = user.profileStatus === 'Approved';
+
+            return {
+                id: user._id,
+                name: user.name || "User",
+                email: user.email || "N/A",
+                number: user.phone || "N/A",
+                active: !isDeactivated && !isBanned, // 👈 True only if neither deactivated nor banned
+                isActive: user.isActive !== false,
+                isBanned: isBanned,
+                isApproved: isApproved,
+                profileStatus: user.profileStatus || 'Approved',
+                profilePic: user.profilePic || null,
+                createdAt: user.createdAt
+            };
+        });
 
         res.status(200).json({
             success: true,
@@ -57,6 +66,7 @@ const getAllUsersAdmin = async (req, res) => {
             data: formattedData
         });
     } catch (error) {
+        console.error("Get All Users Admin Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

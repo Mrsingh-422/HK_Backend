@@ -7,12 +7,12 @@ const moment = require('moment');
 const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
-// Calculate Ambulance Balances (Fix: Cash & COD rides correctly deduct platform commission instead of double crediting)
+// @desc    Calculate Ambulance Balances (Includes Completed Trips, Compensations & Breakdown Payouts)
 const calculateAmbulanceBalances = async (ambulanceId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const ambulanceObjId = new mongoose.Types.ObjectId(ambulanceId);
 
-    const [allCompletedTrips, compensatedTrips] = await Promise.all([
+    const [allCompletedTrips, compensatedTrips, walletDoc] = await Promise.all([
         Booking.find({
             ambulanceId: ambulanceObjId,
             status: 'Delivered'
@@ -25,7 +25,9 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
                 { 'pricing.cancellationFeeApplied': { $gt: 0 } },
                 { 'pricing.noShowFeeApplied': { $gt: 0 } }
             ]
-        }).select('serviceType pricing paymentMethod updatedAt').lean()
+        }).select('serviceType pricing paymentMethod updatedAt').lean(),
+
+        Wallet.findOne({ vendorId: ambulanceObjId, vendorModel: 'Ambulance' }).lean()
     ]);
 
     let grossEarnings = 0;
@@ -34,6 +36,7 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
+    // 1. Process Completed Trips
     for (let trip of allCompletedTrips) {
         let vendorSubtype = 'Ambulance-Medical';
         if (trip.serviceType === 'Accident emergency') vendorSubtype = 'Ambulance-Accident';
@@ -58,13 +61,10 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
                             String(trip.paymentMethod).toUpperCase() === 'COD';
 
         if (trip.isFreeCase === true || trip.serviceType === 'Accident emergency') {
-            // Free emergency SOS rides are subsidized by platform
             effectiveVendorCredit = netVendorAmount;
         } else if (isCashOrCod) {
-            // Driver collected physical cash directly from patient; deduct platform commission
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online Razorpay gateway ride; credit net amount after commission to digital wallet
             effectiveVendorCredit = netVendorAmount;
         }
 
@@ -77,6 +77,7 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
         }
     }
 
+    // 2. Process Cancellation & No-Show Compensations
     for (let compTrip of compensatedTrips) {
         const compFee = Number(compTrip.pricing?.noShowFeeApplied || compTrip.pricing?.cancellationFeeApplied || 0);
         if (compFee > 0) {
@@ -85,6 +86,24 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
                 clearedEarnings += compFee;
             } else {
                 pendingEarnings += compFee;
+            }
+        }
+    }
+
+    // 🚨 3. FIX: Include Manual / Breakdown Credits from Wallet Transactions
+    if (walletDoc && Array.isArray(walletDoc.transactions)) {
+        const manualCredits = walletDoc.transactions.filter(t => 
+            t.type === 'Credit' && 
+            t.remark && 
+            (t.remark.includes('Breakdown') || t.remark.includes('Compensation'))
+        );
+
+        for (let mTx of manualCredits) {
+            totalEarnings += Number(mTx.amount || 0);
+            if (new Date(mTx.date) <= sevenDaysAgo) {
+                clearedEarnings += Number(mTx.amount || 0);
+            } else {
+                pendingEarnings += Number(mTx.amount || 0);
             }
         }
     }

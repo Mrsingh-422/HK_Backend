@@ -548,162 +548,127 @@ const getAvailableBedsForRange = async (req, res) => {
 };
 
 // for conditional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
-// @desc    Calculate Clean IPD Checkout Summary (Bed Fee + Multi-Format Special Services - Coupon)
+// @desc    Calculate IPD Admission Checkout Bill Summary (Resolves Special Services & Stay Duration)
 // @route   POST /user/hospital/checkout-summary
 // @access  Private (User)
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
-        const userId = req.user.id;
-        const { hospitalId, bedId, startDate, endDate, triageLevel = 'Routine', couponCode } = req.body;
-
-        // Support all possible frontend keys
-        const rawSpecialServices = req.body.specialServices || req.body['specialServices[]'] || req.body.selectedServices || req.body.services;
+        let { hospitalId, bedId, startDate, endDate, specialServices, couponCode } = req.body;
 
         if (!hospitalId || !bedId || !startDate || !endDate) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "hospitalId, bedId, startDate (YYYY-MM-DD), and endDate (YYYY-MM-DD) are required." 
+            return res.status(400).json({
+                success: false,
+                message: "hospitalId, bedId, startDate, and endDate are required."
             });
         }
 
-        const startMoment = moment(startDate, "YYYY-MM-DD").startOf('day');
-        const endMoment = moment(endDate, "YYYY-MM-DD").startOf('day');
+        const startMoment = moment(startDate).startOf('day');
+        const endMoment = moment(endDate).endOf('day');
 
         if (!startMoment.isValid() || !endMoment.isValid() || endMoment.isBefore(startMoment)) {
-            return res.status(400).json({ success: false, message: "Invalid date range. End date must be on or after start date." });
+            return res.status(400).json({
+                success: false,
+                message: "Invalid dates. endDate must be on or after startDate."
+            });
         }
 
-        let stayDays = endMoment.diff(startMoment, 'days');
-        if (stayDays <= 0) stayDays = 1;
+        const stayDays = Math.max(1, endMoment.diff(startMoment, 'days') + 1);
 
-        // 1. Fetch Bed Details
-        const bed = await Bed.findOne({ _id: bedId, hospitalId }).populate('wardId', 'name type');
-        if (!bed) {
+        const targetBed = await Bed.findOne({ _id: bedId, hospitalId }).populate('wardId').lean();
+        if (!targetBed) {
             return res.status(404).json({ success: false, message: "Selected bed not found in this hospital." });
         }
 
-        const baseBedPrice = Number(bed.pricePerDay || 1000) * stayDays;
+        const bedRate = Number(targetBed.pricePerDay || 1000);
+        const baseStayFee = bedRate * stayDays;
 
-        // 2. 🛡️ UNIVERSAL SPECIAL SERVICES PARSER (Handles IDs, Objects, Names & Arrays)
-        let verifiedSpecialServicesList = [];
+        // 🚨 RESOLVE SPECIAL SERVICES SAFELY (Handles String IDs, Arrays, or Objects)
+        let resolvedServicesList = [];
         let specialServicesTotal = 0;
 
-        if (rawSpecialServices) {
-            let itemsToParse = [];
-            if (typeof rawSpecialServices === 'string') {
-                try {
-                    const parsed = JSON.parse(rawSpecialServices);
-                    itemsToParse = Array.isArray(parsed) ? parsed : [parsed];
-                } catch(e) {
-                    itemsToParse = rawSpecialServices.split(',').map(s => s.trim());
+        if (specialServices) {
+            let parsed = specialServices;
+            if (typeof specialServices === 'string') {
+                try { parsed = JSON.parse(specialServices); } catch (e) { parsed = [specialServices.trim()]; }
+            }
+            if (!Array.isArray(parsed)) parsed = [parsed];
+
+            const serviceIdsToQuery = [];
+            for (const item of parsed) {
+                if (typeof item === 'string' && mongoose.isValidObjectId(item.trim())) {
+                    serviceIdsToQuery.push(new mongoose.Types.ObjectId(item.trim()));
+                } else if (item && typeof item === 'object') {
+                    const rawId = item.serviceId || item._id || item.id;
+                    if (rawId && mongoose.isValidObjectId(String(rawId).trim()) && !item.serviceName) {
+                        serviceIdsToQuery.push(new mongoose.Types.ObjectId(String(rawId).trim()));
+                    } else if (item.serviceName) {
+                        resolvedServicesList.push({
+                            serviceName: String(item.serviceName).trim(),
+                            price: Number(item.price || 0)
+                        });
+                        specialServicesTotal += Number(item.price || 0);
+                    }
                 }
-            } else if (Array.isArray(rawSpecialServices)) {
-                itemsToParse = rawSpecialServices;
             }
 
-            const cleanIds = [];
-            const cleanNames = [];
-
-            itemsToParse.forEach(item => {
-                if (!item) return;
-                if (typeof item === 'string') {
-                    if (mongoose.isValidObjectId(item.trim())) {
-                        cleanIds.push(item.trim());
-                    } else {
-                        cleanNames.push(item.trim());
-                    }
-                } else if (typeof item === 'object') {
-                    const candidateId = item._id || item.serviceId || item.id;
-                    if (candidateId && mongoose.isValidObjectId(candidateId)) {
-                        cleanIds.push(String(candidateId).trim());
-                    } else if (item.serviceName || item.name) {
-                        cleanNames.push(String(item.serviceName || item.name).trim());
-                    }
-                }
-            });
-
-            const orConditions = [];
-            if (cleanIds.length > 0) orConditions.push({ _id: { $in: [...new Set(cleanIds)] } });
-            if (cleanNames.length > 0) orConditions.push({ serviceName: { $in: [...new Set(cleanNames)] } });
-
-            if (orConditions.length > 0) {
-                const dbServices = await HospitalService.find({
-                    hospitalId,
-                    $or: orConditions
-                }).lean();
-
-                const seenServiceIds = new Set();
+            if (serviceIdsToQuery.length > 0) {
+                const dbServices = await HospitalService.find({ _id: { $in: serviceIdsToQuery } }).lean();
                 dbServices.forEach(srv => {
-                    const srvIdStr = srv._id.toString();
-                    if (!seenServiceIds.has(srvIdStr)) {
-                        seenServiceIds.add(srvIdStr);
-                        const price = Number(srv.price || 0);
-                        specialServicesTotal += price;
-                        verifiedSpecialServicesList.push({
-                            serviceId: srv._id,
-                            serviceName: srv.serviceName,
-                            price: price,
-                            description: srv.description || ""
-                        });
-                    }
+                    resolvedServicesList.push({
+                        serviceId: srv._id,
+                        serviceName: srv.serviceName,
+                        price: Number(srv.price || 0)
+                    });
+                    specialServicesTotal += Number(srv.price || 0);
                 });
             }
         }
 
-        // Subtotal = Pure Bed Price + Verified Special Services (No hidden charges)
-        const subtotal = baseBedPrice + specialServicesTotal;
-
-        // 3. Coupon Calculation
+        // Coupon calculation
         let couponDiscount = 0;
-        let appliedCouponData = null;
-
-        if (couponCode && String(couponCode).trim() !== '') {
+        let appliedCoupon = null;
+        if (couponCode) {
+            const cleanCode = String(couponCode).trim().toUpperCase();
             const coupon = await Coupon.findOne({
-                couponName: String(couponCode).trim().toUpperCase(),
+                couponName: cleanCode,
+                vendorType: { $in: ['Hospital', 'All'] },
                 isActive: true,
                 expiryDate: { $gte: new Date() }
             });
 
-            if (coupon && subtotal >= (coupon.minOrderAmount || 0)) {
-                if (coupon.vendorId?.toString() === hospitalId.toString() || coupon.vendorType === 'Hospital' || coupon.vendorType === 'All') {
-                    couponDiscount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount || 9999);
-                    appliedCouponData = {
-                        couponId: coupon._id,
-                        couponCode: coupon.couponName,
-                        discountPercentage: coupon.discountPercentage,
-                        discountAmount: couponDiscount
-                    };
-                }
+            if (coupon && baseStayFee >= (coupon.minOrderAmount || 0)) {
+                couponDiscount = Math.min((baseStayFee * coupon.discountPercentage) / 100, coupon.maxDiscount || Infinity);
+                appliedCoupon = {
+                    couponId: coupon._id,
+                    couponCode: coupon.couponName,
+                    discountAmount: couponDiscount
+                };
             }
         }
 
-        const totalPayable = Math.max(0, Math.round(subtotal - couponDiscount));
+        const subtotal = baseStayFee + specialServicesTotal;
+        const totalPayable = Math.max(0, subtotal - couponDiscount);
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: "IPD Checkout summary calculated successfully.",
             data: {
-                hospitalId,
-                bedId: bed._id,
-                bedNumber: bed.bedNumber,
-                wardName: bed.wardId?.name || "General Ward",
-                wardType: bed.wardId?.type || "Ward",
+                wardName: targetBed.wardId?.name || "Ward",
+                bedNumber: targetBed.bedNumber,
+                pricePerDay: bedRate,
                 days: stayDays,
-                baseFee: baseBedPrice,
-                pricePerDay: bed.pricePerDay,
-                triageLevel: triageLevel,
-                serviceCharge: specialServicesTotal,
-                specialServicesBreakdown: verifiedSpecialServicesList,
+                baseFee: baseStayFee,
+                specialServicesCharges: specialServicesTotal,
+                specialServices: resolvedServicesList,
                 subtotal: subtotal,
                 discount: couponDiscount,
-                appliedCoupon: appliedCouponData,
+                appliedCoupon,
                 totalPayable: totalPayable
             }
         });
 
     } catch (error) {
         console.error("Get Hospital Checkout Summary Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1195,125 +1160,93 @@ const verifyHospitalPayment = async (req, res) => {
 };
 
 
-// @desc    Cancel Hospital Booking by User (Handles both OPD Consultation and IPD Admission Cancellations)
+// @desc    Cancel Bed Admission by Patient (Enforces Cancellation Policy & Releases Bed Capacity)
 // @route   PATCH /user/hospital/cancel/:id
 // @access  Private (User)
 const cancelBedBooking = async (req, res) => {
     try {
-        const { id } = req.params; 
-        const { reason } = req.body;
+        const appointmentId = req.params.id;
         const userId = req.user.id;
+        const { reason } = req.body;
 
-        const isObjectId = mongoose.isValidObjectId(id);
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
         const query = {
             userId,
-            $or: [
-                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(id) }] : []),
-                { bookingId: String(id).trim() }
-            ]
+            bookingType: 'Admission',
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
         };
 
-        // Allows cancelling both 'Admission' and 'OPD' booking types
-        const appt = await Appointment.findOne(query);
-        if (!appt) {
-            return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
+        const appointment = await Appointment.findOne(query);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Bed booking not found or unauthorized." });
         }
 
-        const terminalStates = ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'];
-        if (terminalStates.includes(appt.status)) {
-            return res.status(400).json({ success: false, message: `Cannot cancel booking in '${appt.status}' state.` });
+        if (['Completed', 'Cancelled-By-User', 'Cancelled-By-Hospital'].includes(appointment.status)) {
+            return res.status(400).json({ success: false, message: `Booking is already in '${appointment.status}' state.` });
         }
 
-        const isOPD = appt.bookingType === 'OPD';
-        const globalConfig = await BedRescheduleLimit.findOne();
-        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
+        // 1. Calculate cancellation refund and penalty using unified policy helper
+        const refundReport = await processCancellationRefund(appointment, 'Hospital');
+        const cancellationFee = refundReport.cancellationFee || 0;
+        const refundAmount = refundReport.refundAmount || 0;
 
-        const currentCancelCount = appt.cancellationCount || 0;
-        if (currentCancelCount >= maxLimit) {
-            return res.status(400).json({
-                success: false,
-                message: `Cancellation Blocked: Maximum cancellations limit (${maxLimit}) reached.`
-            });
+        appointment.status = 'Cancelled-By-User';
+
+        if (appointment.paymentStatus === 'Paid') {
+            appointment.paymentStatus = 'Refund-Initiated';
         }
 
-        // Process refund and fees via policy helper
-        const policyResult = await processCancellationRefund(appt, 'Hospital');
+        if (!appointment.pricingBreakdown) appointment.pricingBreakdown = {};
+        appointment.pricingBreakdown.cancellationFeeApplied = cancellationFee;
 
-        // IPD Only: Release bed if bed was reserved or occupied
-        if (!isOPD && appt.bedId) {
-            const bed = await Bed.findById(appt.bedId);
-            if (bed && (bed.status === 'Reserved' || bed.status === 'Occupied')) {
-                bed.status = 'Available';
-                await bed.save();
-                
-                await Ward.findOneAndUpdate(
-                    { name: appt.wardName, hospitalId: appt.hospitalId },
-                    { $inc: { availableBeds: 1 } }
-                );
-            }
+        appointment.cancellationDetails = {
+            cancelledBy: userId,
+            reason: reason || "Cancelled by patient from mobile app.",
+            cancelledAt: new Date(),
+            isPermanent: true,
+            refundAmountCalculated: refundAmount,
+            penaltyApplied: cancellationFee
+        };
+
+        const targetBedId = appointment.bedId;
+        const hospitalId = appointment.hospitalId;
+
+        // 2. Release Bed immediately
+        if (targetBedId) {
+            await Bed.findByIdAndUpdate(targetBedId, { $set: { status: 'Available' } });
         }
 
-        appt.status = 'Cancelled-By-User';
-        appt.cancellationCount = currentCancelCount + 1;
-        appt.cancelReason = reason || (isOPD ? "Cancelled by Patient (OPD)" : "Cancelled by Patient (IPD)");
-        
-        if (!appt.pricingBreakdown) appt.pricingBreakdown = {};
-        appt.pricingBreakdown.cancellationFeeApplied = policyResult.cancellationFee;
+        await appointment.save();
 
-        // Payment Refund Queueing
-        if (appt.paymentStatus === 'Paid' && policyResult.refundAmount > 0) {
-            appt.paymentStatus = 'Refund-Initiated';
+        // 3. Auto-sync hospital bed tallies
+        if (hospitalId) {
+            await syncHospitalWardAndBedCapacity(hospitalId);
         }
 
-        await appt.save();
-
-        // Restore subscription quota if applied
-        if (appt.subscriptionDetails?.isSubscriptionApplied) {
-            const benefitKey = isOPD ? 'freeDoctorAppointmentsCount' : 'freeHospitalStaysCount';
-            await refundBenefitCount(appt.userId, benefitKey);
-        }
-
-        // Real-Time Notification to Hospital / Doctor
-        try {
-            const notifMsg = isOPD 
-                ? `OPD Appointment #${appt.bookingId} (Token #${appt.tokenNumber || 'N/A'}) was cancelled by patient.`
-                : `IPD Admission #${appt.bookingId} for Bed ${appt.bedNumber || ''} was cancelled by patient.`;
-
-            await notifyAdminsAndVendor(
-                appt.hospitalId,
-                'hospital',
-                `Hospital Booking Cancelled (${appt.bookingType})`,
-                notifMsg,
-                { bookingId: appt._id.toString(), type: 'hospital_booking_cancelled' }
-            );
-
-            if (isOPD && appt.doctorId) {
+        // 4. Alert Hospital Reception
+        if (hospitalId) {
+            try {
                 await sendPushNotification(
-                    appt.doctorId,
-                    'doctor',
-                    "OPD Patient Cancelled",
-                    `Patient cancelled OPD token #${appt.tokenNumber || 'N/A'}.`,
-                    { bookingId: appt._id.toString(), type: 'opd_patient_cancelled' }
+                    hospitalId,
+                    'hospital',
+                    "Bed Booking Cancelled",
+                    `Booking #${appointment.bookingId} for Bed ${appointment.bedNumber} was cancelled by patient. Bed is now available.`,
+                    { appointmentId: appointment._id.toString(), type: 'admission_cancelled_by_user' }
                 );
-            }
-        } catch (e) {}
+            } catch (e) {}
+        }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: policyResult.cancellationFee > 0
-                ? `${appt.bookingType} booking cancelled. A cancellation charge of ₹${policyResult.cancellationFee} was applied.`
-                : `${appt.bookingType} booking cancelled successfully. No charges deducted.`,
-            data: {
-                bookingType: appt.bookingType,
-                cancellationFee: policyResult.cancellationFee,
-                refundAmount: policyResult.refundAmount,
-                booking: appt
-            }
+            message: `Bed admission cancelled successfully. Refund of ₹${refundAmount} initiated (Cancellation fee: ₹${cancellationFee}).`,
+            cancellationFee,
+            refundAmount,
+            data: appointment
         });
 
     } catch (error) {
-        console.error("Cancel Hospital Booking Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Cancel Bed Booking Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1795,126 +1728,119 @@ const normalizeTo24Hour = (timeStr) => {
     const m = moment(clean, ["HH:mm", "H:mm", "hh:mm A", "h:mm A", "hh:mm a", "h:mm a"]);
     return m.isValid() ? m.format("HH:mm") : clean;
 };
-// @desc    Get Doctor OPD Time Slots for Selected Date with Accurate Premium Surcharges
-// @route   GET /user/hospital/doctors/:doctorId/opd-slots
+
+// @desc    Get Hospital Doctor OPD Slots (Checks Approved Leaves & Existing Bookings)
+// @route   GET /user/hospital/doctors/:doctorId/opd-slots?date=YYYY-MM-DD
 // @access  Public
 const getHospitalDoctorOpdSlots = async (req, res) => {
     try {
         const { doctorId } = req.params;
-        const { date } = req.query; // Format: YYYY-MM-DD
+        const { date } = req.query;
 
-        if (!doctorId || !mongoose.isValidObjectId(doctorId)) {
-            return res.status(400).json({ success: false, message: "Valid Doctor ID is required." });
+        if (!doctorId || !date) {
+            return res.status(400).json({ success: false, message: "doctorId and date (YYYY-MM-DD) are required." });
         }
 
-        const selectedDate = date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
-
-        // 1. Fetch Doctor Profile
-        const doctor = await Doctor.findById(doctorId).select('name fees department slotDuration availability isActive');
-        if (!doctor || !doctor.isActive) {
-            return res.status(404).json({ success: false, message: "Doctor not found or inactive." });
+        const queryMoment = moment(date, 'YYYY-MM-DD');
+        if (!queryMoment.isValid()) {
+            return res.status(400).json({ success: false, message: "Invalid date format. Expected 'YYYY-MM-DD'." });
         }
 
-        const baseFee = Number(doctor.fees?.clinic || 500);
-        const slotDuration = Math.max(5, Number(doctor.slotDuration || 15));
+        const doctor = await Doctor.findById(doctorId).select('name department slotDuration availability leaves consultationStatus fees').lean();
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor not found." });
+        }
 
-        // 2. Fetch Doctor's Availability & Premium Slots Configuration
-        const availabilityConfig = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
+        // 🚨 1. CHECK APPROVED DOCTOR LEAVES: Block entire day if doctor is on approved leave
+        const targetDay = queryMoment.startOf('day').toDate();
+        const isOnApprovedLeave = Array.isArray(doctor.leaves) && doctor.leaves.some(l => 
+            l.status === 'Approved' &&
+            moment(targetDay).isBetween(moment(l.startDate).startOf('day'), moment(l.endDate).endOf('day'), null, '[]')
+        );
 
-        const premiumSlots = availabilityConfig?.premiumSlots || [];
-        const unavailableSlots = (availabilityConfig?.unavailableSlots || []).map(t => normalizeTo24Hour(t));
-        const offDays = availabilityConfig?.offDays || [];
-
-        const dayName = moment(selectedDate).format('dddd');
-        if (offDays.includes(dayName)) {
+        if (isOnApprovedLeave) {
             return res.status(200).json({
                 success: true,
-                isClosed: true,
-                message: `Doctor is off on ${dayName}s.`,
+                isDoctorOnLeave: true,
+                message: `Dr. ${doctor.name} is on approved leave on ${date}. No OPD slots available.`,
                 slots: []
             });
         }
 
-        // 3. Determine Operating Hours for this Day
-        const dayShort = moment(selectedDate).format('ddd'); // Mon, Tue...
-        const daySchedule = (doctor.availability || []).find(a => a.day === dayShort);
+        // 2. Check weekly schedule (e.g. Mon, Tue)
+        const dayShort = queryMoment.format('ddd'); // 'Mon', 'Tue'
+        const dayConfig = (doctor.availability || []).find(a => a.day === dayShort);
 
-        const startTimeStr = daySchedule?.startTime || availabilityConfig?.startTime || "09:00";
-        const endTimeStr = daySchedule?.endTime || availabilityConfig?.endTime || "17:00";
+        if (!dayConfig || !dayConfig.startTime || !dayConfig.endTime) {
+            return res.status(200).json({
+                success: true,
+                isClosed: true,
+                message: `Dr. ${doctor.name} does not have OPD clinic hours on ${dayShort}.`,
+                slots: []
+            });
+        }
 
-        // 4. Fetch already booked/confirmed appointments for this doctor on this day
-        const startOfDay = moment(selectedDate).startOf('day').toDate();
-        const endOfDay = moment(selectedDate).endOf('day').toDate();
+        // 3. Generate slots based on slotDuration
+        const durationMins = Number(doctor.slotDuration || 15);
+        const [startH, startM] = dayConfig.startTime.split(':').map(Number);
+        const [endH, endM] = dayConfig.endTime.split(':').map(Number);
+
+        const startTotalMins = startH * 60 + startM;
+        const endTotalMins = endH * 60 + endM;
+
+        const isToday = moment().format('YYYY-MM-DD') === date;
+        const currentMins = moment().hours() * 60 + moment().minutes();
+
+        // 4. Fetch already booked appointments for this doctor on this day
+        const startOfDay = queryMoment.clone().startOf('day').toDate();
+        const endOfDay = queryMoment.clone().endOf('day').toDate();
 
         const bookedAppointments = await Appointment.find({
             doctorId,
-            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
             bookingType: 'OPD',
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
             status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'] }
-        }).select('appointmentTime').lean();
+        }).select('appointmentTime tokenNumber').lean();
 
-        const bookedTimeSet = new Set(bookedAppointments.map(a => normalizeTo24Hour(a.appointmentTime)));
+        const bookedTimeSet = new Set(bookedAppointments.map(a => a.appointmentTime));
 
-        // 5. Generate Time Slots
         const slots = [];
-        const startMoment = moment(`${selectedDate} ${startTimeStr}`, 'YYYY-MM-DD HH:mm');
-        const endMoment = moment(`${selectedDate} ${endTimeStr}`, 'YYYY-MM-DD HH:mm');
-        const isToday = moment().format('YYYY-MM-DD') === selectedDate;
-        const now = moment();
+        for (let m = startTotalMins; m + durationMins <= endTotalMins; m += durationMins) {
+            const h = Math.floor(m / 60);
+            const min = m % 60;
+            const timeString24 = `${h.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+            const timeMoment = moment(`${date} ${timeString24}`, 'YYYY-MM-DD HH:mm');
+            const displayTime = timeMoment.format('hh:mm A');
 
-        while (startMoment.isBefore(endMoment)) {
-            const time24 = startMoment.format("HH:mm");
-            const displayTime = startMoment.format("hh:mm A");
-
-            const isPast = isToday && startMoment.isBefore(now);
-            const isManuallyBlocked = unavailableSlots.includes(time24);
-            const isAlreadyBooked = bookedTimeSet.has(time24);
-
-            const isAvailable = !isPast && !isManuallyBlocked && !isAlreadyBooked;
-
-            // Check if this slot is a configured premium slot
-            const matchedPremium = premiumSlots.find(ps => normalizeTo24Hour(ps.time) === time24);
-            const extraFee = matchedPremium ? Number(matchedPremium.extraFee || 0) : 0;
-            const isPremium = extraFee > 0;
-            const totalFee = baseFee + extraFee;
-
-            const hour = startMoment.hour();
-            let category = "Morning";
-            if (hour >= 12 && hour < 17) category = "Afternoon";
-            else if (hour >= 17) category = "Evening";
+            const isPast = isToday && m <= currentMins;
+            const isBooked = bookedTimeSet.has(timeString24) || bookedTimeSet.has(displayTime);
 
             slots.push({
-                time: time24,
+                time: timeString24,
                 displayTime,
-                category,
-                baseFee,
-                extraFee,
-                totalFee,
-                isPremium,
-                isAvailable,
-                status: !isAvailable ? (isPast ? "Past" : (isAlreadyBooked ? "Booked" : "Unavailable")) : "Available"
+                isAvailable: !isPast && !isBooked,
+                status: isPast ? 'Past' : (isBooked ? 'Booked' : 'Available')
             });
-
-            startMoment.add(slotDuration, 'minutes');
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            isClosed: false,
-            date: selectedDate,
-            doctorName: doctor.name,
+            isDoctorOnLeave: false,
+            date,
+            day: dayShort,
             roomNumber: doctor.department?.roomNumber || "Cabin 1",
-            baseFee,
-            totalSlotsCount: slots.length,
+            opdFee: doctor.fees?.clinic || 500,
+            totalSlots: slots.length,
             availableSlotsCount: slots.filter(s => s.isAvailable).length,
             slots
         });
 
     } catch (error) {
         console.error("Get Hospital Doctor OPD Slots Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 // @desc    Calculate OPD Checkout Bill Summary (Fix: Preserves Premium Slot Surcharge & Normalizes Times)
 // @route   POST /user/hospital/opd/checkout-summary
 // @access  Private (User)
@@ -2034,182 +1960,146 @@ const getHospitalOpdCheckoutSummary = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// @desc    Book Hospital OPD Appointment with Token Generation & Razorpay / Counter Cash Handling
+
+// @desc    Book Hospital OPD Consultation Appointment (Validates Leaves & Token Queue)
 // @route   POST /user/hospital/opd/book
 // @access  Private (User)
 const bookHospitalOpdAppointment = async (req, res) => {
     try {
-        const { 
-            doctorId, 
-            hospitalId, 
-            appointmentDate, 
-            appointmentTime, 
-            timeSlot, 
-            paymentMethod, 
-            patients, 
-            couponCode, 
-            symptoms,
-            bookingReason,
-            insuranceDetails 
+        const userId = req.user.id;
+        const {
+            hospitalId,
+            doctorId,
+            appointmentDate,
+            appointmentTime,
+            patients,
+            paymentMethod = 'COD',
+            bookingReason
         } = req.body;
 
-        const userId = req.user.id;
-
-        if (!doctorId || !hospitalId) {
-            return res.status(400).json({ success: false, message: "doctorId and hospitalId are required." });
-        }
-
-        // 1. Fetch Doctor
-        const doctor = await Doctor.findById(doctorId).lean();
-        if (!doctor || !doctor.isActive) {
-            return res.status(404).json({ success: false, message: "Doctor not found or inactive." });
-        }
-
-        const baseFee = Number(doctor.fees?.clinic || 500);
-
-        // 2. Resolve Chosen Time & Premium Surcharge
-        const rawTime = String(appointmentTime || timeSlot || "09:00 AM").trim();
-        const normalizedSlotTime = normalizeTo24Hour(rawTime);
-
-        let premiumSlotFee = 0;
-        if (normalizedSlotTime) {
-            const availability = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
-            if (availability && Array.isArray(availability.premiumSlots)) {
-                const matchedPremium = availability.premiumSlots.find(ps => normalizeTo24Hour(ps.time) === normalizedSlotTime);
-                if (matchedPremium) {
-                    premiumSlotFee = Math.max(0, Number(matchedPremium.extraFee || 0));
-                }
-            }
-        }
-
-        const subtotal = baseFee + premiumSlotFee;
-
-        // 3. Apply Coupon Discount if applicable
-        let discount = 0;
-        let appliedCouponDetails = null;
-
-        if (couponCode && String(couponCode).trim() !== "") {
-            const cleanCode = String(couponCode).trim().toUpperCase();
-            const coupon = await Coupon.findOne({
-                couponName: cleanCode,
-                isActive: true,
-                expiryDate: { $gte: new Date() }
+        if (!hospitalId || !doctorId || !appointmentDate || !appointmentTime) {
+            return res.status(400).json({
+                success: false,
+                message: "hospitalId, doctorId, appointmentDate, and appointmentTime are required."
             });
-
-            if (coupon && subtotal >= (coupon.minOrderAmount || 0)) {
-                discount = Math.min(Math.round((subtotal * coupon.discountPercentage) / 100), coupon.maxDiscount || subtotal);
-                appliedCouponDetails = {
-                    couponId: coupon._id,
-                    couponCode: coupon.couponName,
-                    discountValue: discount
-                };
-            }
         }
 
-        const finalTotal = Math.max(0, subtotal - discount);
+        const dateMoment = moment(appointmentDate).startOf('day');
+        if (!dateMoment.isValid()) {
+            return res.status(400).json({ success: false, message: "Invalid appointmentDate format." });
+        }
 
-        // 4. Generate Daily Token Number Atomically
-        const targetDate = appointmentDate ? moment(appointmentDate).toDate() : new Date();
-        const startOfDay = moment(targetDate).startOf('day').toDate();
-        const endOfDay = moment(targetDate).endOf('day').toDate();
+        // 1. Verify Doctor & Hospital
+        const doctor = await Doctor.findOne({ _id: doctorId, hospitalId });
+        if (!doctor || !doctor.isActive) {
+            return res.status(404).json({ success: false, message: "Doctor not found in this hospital." });
+        }
 
-        const countToday = await Appointment.countDocuments({
+        // 🚨 2. BLOCK BOOKING IF DOCTOR IS ON APPROVED LEAVE
+        const targetDay = dateMoment.toDate();
+        const isDoctorOnLeave = Array.isArray(doctor.leaves) && doctor.leaves.some(l => 
+            l.status === 'Approved' &&
+            moment(targetDay).isBetween(moment(l.startDate).startOf('day'), moment(l.endDate).endOf('day'), null, '[]')
+        );
+
+        if (isDoctorOnLeave) {
+            return res.status(400).json({
+                success: false,
+                message: `Booking failed: Dr. ${doctor.name} is on approved leave on ${moment(appointmentDate).format('YYYY-MM-DD')}.`
+            });
+        }
+
+        // 3. Prevent duplicate booking for the exact same slot
+        const startOfDay = dateMoment.clone().startOf('day').toDate();
+        const endOfDay = dateMoment.clone().endOf('day').toDate();
+
+        const slotConflict = await Appointment.findOne({
+            doctorId,
+            bookingType: 'OPD',
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+            appointmentTime: String(appointmentTime).trim(),
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'] }
+        });
+
+        if (slotConflict) {
+            return res.status(400).json({
+                success: false,
+                message: "This OPD time slot has already been booked. Please choose another slot."
+            });
+        }
+
+        // 4. Generate daily sequential token number
+        const todayTokensCount = await Appointment.countDocuments({
             hospitalId,
             doctorId,
-            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
             bookingType: 'OPD',
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
             tokenNumber: { $ne: null }
         });
-        const assignedTokenNumber = countToday + 1;
 
-        // 5. Build Patient Profile
-        const patientData = (Array.isArray(patients) && patients.length > 0) ? patients : [{
-            patientName: req.user.name || "Patient",
-            patientAge: req.user.age || 28,
-            gender: req.user.gender || "Male",
-            relation: "Self",
-            reasonForVisit: symptoms || bookingReason || "Routine OPD Consultation"
-        }];
+        const nextTokenNumber = todayTokensCount + 1;
+        const opdFee = Number(doctor.fees?.clinic || 500);
 
-        const bookingId = `HK-OPD-${Date.now().toString().slice(-6)}`;
+        const timePart = Date.now().toString(36).toUpperCase();
+        const randPart = crypto.randomBytes(2).toString('hex').toUpperCase();
+        const generatedBookingId = `HKH-OPD-${timePart}-${randPart}`;
 
-        // Normalize Payment Method
-        const cleanMethod = String(paymentMethod || 'Online').toUpperCase() === 'COD' ? 'COD' : 'Online';
+        const cleanPaymentMethod = String(paymentMethod).toUpperCase() === 'ONLINE' ? 'Online' : 'COD';
 
-        // 6. Create Appointment Document in Database
         const appointment = await Appointment.create({
             userId,
-            doctorId,
             hospitalId,
+            doctorId,
             bookingType: 'OPD',
-            tokenNumber: assignedTokenNumber,
+            bookingId: generatedBookingId,
+            tokenNumber: nextTokenNumber,
             opdRoomNumber: doctor.department?.roomNumber || "Cabin 1",
-            appointmentDate: targetDate,
-            appointmentTime: rawTime,
-            patients: patientData,
-            status: cleanMethod === 'COD' ? 'Confirmed' : 'Pending',
-            paymentMethod: cleanMethod,
-            paymentStatus: cleanMethod === 'COD' ? 'Pending' : 'Pending',
-            totalAmount: finalTotal, // 🚨 Saved with ₹800 including surcharge!
-            bookingId,
+            appointmentDate: dateMoment.toDate(),
+            appointmentTime: String(appointmentTime).trim(),
+            triageLevel: 'Routine',
+            bookingReason: bookingReason || "Hospital OPD Consultation",
+            status: 'Hospital-Pending',
+            patients: Array.isArray(patients) && patients.length > 0 ? patients : [{
+                patientName: req.user.name || "Patient",
+                patientAge: Number(req.user.age || 30),
+                gender: req.user.gender || "Male",
+                relation: "Self"
+            }],
             pricingBreakdown: {
-                baseFee: baseFee,
-                originalBaseFee: baseFee,
-                extraCharges: premiumSlotFee, // 🚨 ₹150 Surcharge Saved!
-                discountAmount: discount,
-                subtotal: subtotal,
-                totalPayable: finalTotal
+                baseFee: opdFee,
+                originalBaseFee: opdFee,
+                subtotal: opdFee
             },
-            couponDetails: appliedCouponDetails,
-            insuranceDetails: {
-                hasInsurance: Boolean(insuranceDetails?.hasInsurance),
-                companyName: insuranceDetails?.companyName || "",
-                insuranceNumber: insuranceDetails?.insuranceNumber || ""
-            }
+            totalAmount: opdFee,
+            paymentMethod: cleanPaymentMethod,
+            paymentStatus: 'Pending'
         });
 
-        // 7. If Online Payment -> Create Razorpay Order with Exact Surcharge Price
-        if (cleanMethod === 'Online' && finalTotal > 0) {
-            const rzpOrder = await createRazorpayOrder(finalTotal, `rcpt_${bookingId}`);
-            
-            appointment.paymentDetails = {
-                razorpayOrderId: rzpOrder.id,
-                amount: finalTotal,
-                currency: 'INR',
-                status: 'created'
-            };
-            await appointment.save();
+        // 5. Alert Doctor & Hospital
+        try {
+            await sendPushNotification(
+                doctorId,
+                'doctor',
+                `New OPD Token Booked (Token #${nextTokenNumber})`,
+                `Patient ${appointment.patients[0]?.patientName} booked slot for ${appointmentTime}. Room: ${appointment.opdRoomNumber}.`,
+                { appointmentId: appointment._id.toString(), tokenNumber: String(nextTokenNumber), type: 'new_opd_booking' }
+            );
+        } catch (e) {}
 
-            return res.status(201).json({
-                success: true,
-                isOnlinePayment: true,
-                message: `OPD Appointment initiated. Token #${assignedTokenNumber} reserved. Complete payment of ₹${finalTotal} to confirm.`,
-                key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
-                amount: rzpOrder.amount, // in paise: 80000 = ₹800
-                currency: "INR",
-                razorpayOrderId: rzpOrder.id,
-                appointmentId: appointment._id,
-                bookingId: appointment.bookingId,
-                tokenNumber: assignedTokenNumber,
-                totalPayable: finalTotal
-            });
-        }
-
-        // COD / Pay at Hospital Counter Flow
-        res.status(201).json({
+        return res.status(201).json({
             success: true,
-            isOnlinePayment: false,
-            message: `OPD Token #${assignedTokenNumber} confirmed successfully! Pay ₹${finalTotal} at hospital reception counter.`,
+            message: `OPD Appointment Booked! Token #${nextTokenNumber} assigned at ${appointment.opdRoomNumber}.`,
+            bookingId: generatedBookingId,
+            tokenNumber: nextTokenNumber,
+            roomNumber: appointment.opdRoomNumber,
             appointmentId: appointment._id,
-            bookingId: appointment.bookingId,
-            tokenNumber: assignedTokenNumber,
-            totalPayable: finalTotal,
+            totalAmount: opdFee,
             data: appointment
         });
 
     } catch (error) {
-        console.error("Book Hospital OPD Appointment Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Book Hospital OPD Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

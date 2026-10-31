@@ -149,7 +149,9 @@ const respondToCall = async (req, res) => {
     }
 };
 
-// --- 3. END VIDEO CALL (Handles Missed Call Timer Logs) ---
+// @desc    End Video Call & Reset Appointment State if Call was Missed/Declined
+// @route   POST /doctor/video-call/end
+// @access  Public / Private
 const endVideoCall = async (req, res) => {
     try {
         const { callId, totalDurationInSeconds } = req.body;
@@ -165,25 +167,37 @@ const endVideoCall = async (req, res) => {
 
         const now = new Date();
 
-        // 🚀 SYNC FIX: If call was never accepted by patient, log as missed call
+        // 🚨 FIX: If call was never answered, mark missed AND reset appointment status
         if (call.status === 'initiated' || call.status === 'ringing') {
             call.status = 'missed';
             call.endedAt = now;
-            call.duration = 0; // Missed call duration remains 0
+            call.duration = 0;
+
+            if (call.appointmentId) {
+                await Appointment.findByIdAndUpdate(call.appointmentId, {
+                    $set: { status: 'Confirmed' } // Revert back to Confirmed so doctor can retry call
+                });
+            }
         } else {
             call.status = 'completed';
             call.endedAt = now;
-            
+
             if (totalDurationInSeconds !== undefined) {
                 call.duration = Number(totalDurationInSeconds);
             } else if (call.startedAt) {
-                call.duration = Math.round((now - call.startedAt) / 1000); // Dynamically calculate seconds
+                call.duration = Math.round((now - call.startedAt) / 1000);
             }
         }
-        
+
         await call.save();
-        res.json({ success: true, message: `Call session successfully recorded as ${call.status}.`, data: call });
+
+        res.status(200).json({
+            success: true,
+            message: `Call session successfully recorded as ${call.status}.`,
+            data: call
+        });
     } catch (error) {
+        console.error("End Video Call Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

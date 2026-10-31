@@ -8,6 +8,7 @@ const mongoose = require('mongoose');
 const crypto = require('crypto');
 const { getDistance } = require('../../../utils/helpers');
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification');
+const { creditVendorCompensation } = require('../../../utils/policyHelper');
 
 const generateCaseRef = (type) => {
     const prefix = type === 'Accident emergency' ? 'ACC' : (type === 'Referral Ambulance' ? 'REF' : 'MED');
@@ -274,10 +275,9 @@ const adminGetActiveEmergencies = async (req, res) => {
     }
 };
 
-// ==========================================
-// 8. 🚨 ADMIN FORCE RE-ASSIGN AMBULANCE (Breakdown / Manual Override)
-// Endpoint: PATCH /admin/ambulance/reassign-booking/:bookingId
-// ==========================================
+// @desc    Admin Force Re-assigns Ambulance with Breakdown Compensation for Initial Responder
+// @route   PATCH /admin/ambulance/reassign-booking/:bookingId
+// @access  Private (Admin)
 const adminReassignAmbulance = async (req, res) => {
     try {
         const { bookingId } = req.params;
@@ -306,17 +306,30 @@ const adminReassignAmbulance = async (req, res) => {
 
         const oldAmbulanceId = booking.ambulanceId;
 
-        // 1. Release old ambulance (mark as breakdown or available)
+        // 1. Release & Compensate Old Driver if they had already started or picked up
         if (oldAmbulanceId) {
             await Ambulance.findByIdAndUpdate(oldAmbulanceId, { 
-                $set: { availableForEmergency: false, isOnline: false } // Kept offline due to breakdown
+                $set: { availableForEmergency: false, isOnline: false } // Marked offline due to mechanical breakdown
             });
+
+            // 🚨 FIX: Credit breakdown compensation to initial driver for on-scene fuel/effort
+            const hadStarted = ['Picked-Up', 'En-Route', 'Arrived'].includes(booking.status);
+            if (hadStarted) {
+                const breakdownCompensation = booking.isFreeCase ? 500 : Math.round((booking.pricing?.subtotal || 1000) * 0.4);
+                await creditVendorCompensation(
+                    oldAmbulanceId,
+                    'Ambulance',
+                    breakdownCompensation,
+                    booking.bookingId,
+                    'Breakdown Service Compensation'
+                );
+            }
 
             await sendPushNotification(
                 oldAmbulanceId,
                 'ambulance',
-                "Trip Reassigned by Admin",
-                `Booking #${booking.bookingId} has been reassigned to another driver.`,
+                "Trip Reassigned by Control Room",
+                `Booking #${booking.bookingId} has been reassigned to another driver due to vehicle breakdown.`,
                 { bookingId: booking._id.toString(), type: 'trip_reassigned' }
             );
         }
@@ -325,14 +338,13 @@ const adminReassignAmbulance = async (req, res) => {
         booking.ambulanceId = newAmbulance._id;
         booking.status = 'Confirmed';
         
-        // 6-digit dynamic pickup OTP
         const freshOtp = Math.floor(100000 + Math.random() * 900000).toString();
         booking.otp = freshOtp;
 
         booking.trackingTimeline.push({
             status: 'Reassigned by Admin',
             timestamp: new Date(),
-            note: `Admin reassigned ride to ${newAmbulance.name} (${newAmbulance.vehicleNumber}). Reason: ${reason || 'Breakdown / Fast Response'}`
+            note: `Admin reassigned ride to ${newAmbulance.name} (${newAmbulance.vehicleNumber}). Reason: ${reason || 'Breakdown / Emergency Override'}`
         });
 
         await booking.save();
@@ -366,7 +378,7 @@ const adminReassignAmbulance = async (req, res) => {
             { bookingId: booking._id.toString(), otp: freshOtp, type: 'ambulance_reassigned' }
         );
 
-        res.json({
+        return res.status(200).json({
             success: true,
             message: `Successfully reassigned booking #${booking.bookingId} to ${newAmbulance.name}.`,
             data: booking
@@ -374,7 +386,7 @@ const adminReassignAmbulance = async (req, res) => {
 
     } catch (error) {
         console.error("Admin Reassign Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

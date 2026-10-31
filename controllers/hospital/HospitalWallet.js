@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
 // 3. CALCULATE HOSPITAL BALANCES (With COD & Compensations)
+// @desc    Calculate Hospital Balances with Accurate Early Discharge & Refund Deductions
 const calculateHospitalBalances = async (hospitalId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const hospitalObjId = new mongoose.Types.ObjectId(hospitalId);
@@ -19,7 +20,7 @@ const calculateHospitalBalances = async (hospitalId) => {
 
         Appointment.find({
             hospitalId: hospitalObjId,
-            status: { $in: ['Cancelled-By-User', 'No-Show'] },
+            status: { $in: ['Cancelled-By-User', 'Cancelled-By-Hospital', 'No-Show'] },
             $or: [
                 { 'pricingBreakdown.cancellationFeeApplied': { $gt: 0 } },
                 { 'pricingBreakdown.noShowFeeApplied': { $gt: 0 } }
@@ -35,28 +36,27 @@ const calculateHospitalBalances = async (hospitalId) => {
 
     for (let appt of completedAppointments) {
         const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
-        const grossAmount = isSub 
-            ? Number(appt.pricingBreakdown?.originalBaseFee || 0) 
-            : Number(appt.totalAmount || 0);
+        
+        // 🚨 FIX: If early discharge refund happened, hospital's actual gross is totalAmount minus refund
+        const refundGiven = Number(appt.pricingBreakdown?.unusedDaysRefund || appt.pricingBreakdown?.refundDueToUser || 0);
+        const bookedGross = isSub ? Number(appt.pricingBreakdown?.originalBaseFee || 0) : Number(appt.totalAmount || 0);
+        const effectiveGross = Math.max(0, bookedGross - refundGiven);
 
-        grossEarnings += grossAmount;
+        grossEarnings += effectiveGross;
 
-        const { netVendorAmount, adminCutoff } = await calculateAdminCommission('Hospital', grossAmount);
+        const { netVendorAmount, adminCutoff } = await calculateAdminCommission('Hospital', effectiveGross);
         adminCommissionDeducted += adminCutoff;
 
         let effectiveVendorCredit = 0;
 
-        // Both Cash collected at hospital counter & COD mean hospital already has physical cash
         const isCounterCashOrCod = appt.paymentMethod === 'COD' || 
                                    appt.paymentMethod === 'Cash' || 
                                    String(appt.paymentMethod).toUpperCase() === 'CASH' ||
                                    String(appt.paymentMethod).toUpperCase() === 'COD';
 
         if (isCounterCashOrCod) {
-            // Deduct Admin platform commission from wallet
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online gateway; credit net vendor amount to wallet
             effectiveVendorCredit = netVendorAmount;
         }
 
