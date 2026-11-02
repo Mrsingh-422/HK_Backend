@@ -285,13 +285,13 @@ const submitFinalReport = async (req, res) => {
             });
         }
 
-        const updatedCase = await FireCase.findByIdAndUpdate(id, {
+       const updatedCase = await FireCase.findByIdAndUpdate(id, {
             status: 'Closed',
             resolvedAt: Date.now(),
             fireType: incidentType || 'Other',
             incidentImages: incidentImages.length > 0 ? incidentImages : existingCase.incidentImages,
             resourcesUsed: {
-                trucksCount: Number(trucksAssigned) || 0,
+                trucksAssigned: Number(trucksAssigned) || 0, // 👈 Fixed key name matching FireCase schema
                 personnelCount: Number(firefightersCount) || 0,
                 equipmentList: typeof equipmentUsed === 'string' ? equipmentUsed.split(',') : (equipmentUsed || [])
             },

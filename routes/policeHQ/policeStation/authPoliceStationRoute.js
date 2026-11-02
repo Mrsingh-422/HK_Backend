@@ -9,6 +9,6 @@ const {loginPoliceStation, updatePoliceStationProfile } = require('../../../cont
 router.post('/login', loginPoliceStation);
 
 // Profile Management
-router.put('/profile/update', protect('Police-Station'), updatePoliceStationProfile);
+router.put('/profile/update', protect('police-station'), updatePoliceStationProfile);
 
 module.exports = router;

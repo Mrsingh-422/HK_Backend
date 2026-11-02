@@ -4227,98 +4227,131 @@ const getReferralHospitals = async (req, res) => {
 const getInsurancePatientsList = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { tab = 'Insured', claimStatus, search, page = 1, limit = 20 } = req.query;
+        const { tab = 'Insured', claimStatus = 'All', search = '', page = 1, limit = 10 } = req.query;
 
         const pageNum = Math.max(1, parseInt(page) || 1);
-        const limitNum = Math.max(1, parseInt(limit) || 20);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
         const skip = (pageNum - 1) * limitNum;
 
+        const hospObjId = new mongoose.Types.ObjectId(hospitalId);
+
+        // 1. Base Query: Inpatients of this hospital in active/admission states
         let query = {
-            hospitalId,
+            hospitalId: hospObjId,
             bookingType: 'Admission',
             status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending'] }
         };
 
-        // Filter based on Insured vs Self-Pay (Uninsured)
+        // 2. Filter based on Insured vs Self-Pay
         if (tab === 'Insured') {
-            query['insuranceDetails.hasInsurance'] = true;
-            if (claimStatus && claimStatus !== 'All') {
-                query['insuranceDetails.approvalStatus'] = claimStatus; // 'Pending', 'Approved', 'Rejected'
+            query['insuranceDetails.hasInsurance'] = { $in: [true, 'true'] };
+            // If claimStatus is not 'All', filter by specific approvalStatus
+            if (claimStatus && claimStatus !== 'All' && String(claimStatus).trim() !== '') {
+                query['insuranceDetails.approvalStatus'] = String(claimStatus).trim();
             }
         } else if (tab === 'Self-Pay') {
             query.$or = [
                 { 'insuranceDetails.hasInsurance': false },
-                { 'insuranceDetails.hasInsurance': { $exists: false } }
+                { 'insuranceDetails.hasInsurance': { $exists: false } },
+                { 'insuranceDetails': { $exists: false } }
             ];
         }
 
-        if (search && search.trim() !== '') {
-            const cleanSearch = search.trim();
-            query.$or = [
-                { bookingId: { $regex: cleanSearch, $options: 'i' } },
-                { 'patients.patientName': { $regex: cleanSearch, $options: 'i' } },
-                { 'insuranceDetails.insuranceNumber': { $regex: cleanSearch, $options: 'i' } }
+        // 3. Search Filter (Safe against empty search="")
+        if (search && String(search).trim() !== '') {
+            const cleanSearch = String(search).trim();
+            const searchRegex = new RegExp(cleanSearch, 'i');
+            const searchConditions = [
+                { bookingId: searchRegex },
+                { 'patients.patientName': searchRegex },
+                { 'insuranceDetails.insuranceNumber': searchRegex }
             ];
+
+            if (query.$or) {
+                // Combine existing $or with search using $and
+                query = {
+                    $and: [
+                        { ...query },
+                        { $or: searchConditions }
+                    ]
+                };
+            } else {
+                query.$or = searchConditions;
+            }
         }
 
+        // 4. Execute parallel count and find queries (Crash-free)
         const [totalRecords, admissions] = await Promise.all([
             Appointment.countDocuments(query),
             Appointment.find(query)
                 .populate('userId', 'name phone email profilePic age gender')
-                .populate('doctorId', 'name speciality')
+                .populate('doctorId', 'name speciality department profileImage')
                 .populate({
                     path: 'bedId',
                     select: 'bedNumber pricePerDay status',
                     populate: { path: 'wardId', select: 'name type' }
                 })
-                .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
                 .sort({ 'insuranceDetails.approvalStatus': 1, createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum)
                 .lean()
         ]);
 
-        const formatted = admissions.map(item => ({
-            appointmentId: item._id,
-            bookingId: item.bookingId,
-            status: item.status,
-            admissionDate: item.startDate,
-            patient: {
-                userId: item.userId?._id,
-                name: item.patients?.[0]?.patientName || item.userId?.name || "Patient",
-                phone: item.address?.phone || item.userId?.phone || "N/A",
-                gender: item.patients?.[0]?.gender || item.userId?.gender || "N/A",
-                age: item.patients?.[0]?.patientAge || item.userId?.age || "N/A"
-            },
-            doctorName: item.doctorId ? `Dr. ${item.doctorId.name} (${item.doctorId.speciality})` : "Unassigned",
-            bedNumber: item.bedNumber || item.bedId?.bedNumber || "N/A",
-            wardName: item.wardName || item.bedId?.wardId?.name || "General Ward",
-            totalEstimatedAmount: Number(item.totalAmount || 0),
-            insurance: {
-                hasInsurance: Boolean(item.insuranceDetails?.hasInsurance),
-                insuranceNumber: item.insuranceDetails?.insuranceNumber || "N/A",
-                companyName: item.insuranceDetails?.masterInsuranceId?.insuranceName || item.insuranceDetails?.companyName || "N/A",
-                insuranceType: item.insuranceDetails?.insuranceType || "Cashless",
-                cardFrontUrl: item.insuranceDetails?.insuranceDocumentFront || null,
-                cardBackUrl: item.insuranceDetails?.insuranceDocumentBack || null,
-                approvalLetterPdf: item.insuranceDetails?.approvalLetterPdf || null,
-                approvalStatus: item.insuranceDetails?.approvalStatus || 'Pending',
-                isApproved: item.insuranceDetails?.approvalStatus === 'Approved'
-            }
-        }));
+        const formatted = admissions.map(item => {
+            const ins = item.insuranceDetails || {};
+            const primaryPatient = (Array.isArray(item.patients) && item.patients.length > 0)
+                ? item.patients[0]
+                : { patientName: item.userId?.name || "Patient", patientAge: item.userId?.age || "N/A", gender: item.userId?.gender || "N/A" };
+
+            return {
+                appointmentId: item._id,
+                bookingId: item.bookingId,
+                status: item.status,
+                admissionDate: item.startDate,
+                patient: {
+                    userId: item.userId?._id,
+                    name: primaryPatient.patientName,
+                    phone: item.address?.phone || item.userId?.phone || "N/A",
+                    gender: primaryPatient.gender,
+                    age: primaryPatient.patientAge
+                },
+                doctorName: item.doctorId ? `Dr. ${item.doctorId.name} (${item.doctorId.speciality})` : "Unassigned",
+                bedNumber: item.bedNumber || item.bedId?.bedNumber || "N/A",
+                wardName: item.wardName || item.bedId?.wardId?.name || "General Ward",
+                totalEstimatedAmount: Number(item.totalAmount || 0),
+                insurance: {
+                    hasInsurance: Boolean(ins.hasInsurance),
+                    insuranceNumber: ins.insuranceNumber || "N/A",
+                    companyName: ins.companyName || "N/A",
+                    insuranceType: ins.insuranceType || "Cashless",
+                    cardFrontUrl: ins.insuranceDocumentFront || null,
+                    cardBackUrl: ins.insuranceDocumentBack || null,
+                    approvalLetterPdf: ins.approvalLetterPdf || null,
+                    approvalStatus: ins.approvalStatus || 'Pending',
+                    isApproved: ins.approvalStatus === 'Approved',
+                    rejectionReason: ins.rejectionReason || null
+                }
+            };
+        });
 
         return res.status(200).json({
             success: true,
+            tab,
+            claimStatus,
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitNum),
             currentPage: pageNum,
+            limit: limitNum,
             count: formatted.length,
             data: formatted
         });
 
     } catch (error) {
         console.error("Get Insurance Patients List Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch insurance patients list: " + error.message
+        });
     }
 };
 

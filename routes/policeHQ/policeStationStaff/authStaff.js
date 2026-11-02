@@ -6,8 +6,8 @@ const {  loginPoliceStaff, updatePoliceStaffProfile,changePassword  } = require(
 // Base URL: /policeStationStaff/auth
 
 router.post('/login', loginPoliceStaff);
-router.put('/update', protect('Police-Station-Staff'), updatePoliceStaffProfile);
-router.put('/change-password', protect('Police-Station-Staff'), changePassword);
+router.put('/update', protect('police-staff'), updatePoliceStaffProfile);
+router.put('/change-password', protect('police-staff'), changePassword);
 
 
 module.exports = router;

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const LabTest = require('../../../models/LabTest');
 const LabPackage = require('../../../models/LabPackage');
 const MasterLabTest = require('../../../models/MasterLabTest');

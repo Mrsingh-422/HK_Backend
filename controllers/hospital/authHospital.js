@@ -275,7 +275,7 @@ const toggleHospitalOnlineStatus = async (req, res) => {
     }
 };
 
-// @desc    Update Hospital Profile (Supports isInsuranceAccepted toggle & acceptedInsurances list)
+// @desc    Update Hospital Profile (Crash-Proof acceptedInsurances Parser & Operational Sync)
 // @route   PUT /api/auth/hospital/profile/update
 // @access  Private (Hospital)
 const updateHospitalProfile = async (req, res) => {
@@ -294,15 +294,31 @@ const updateHospitalProfile = async (req, res) => {
         delete updates.licenseDocument;
         delete updates.otherDocuments;
 
-        // Parse Insurance Acceptance Fields safely
+        // 1. Parse Insurance Acceptance Toggle safely
         if (updates.isInsuranceAccepted !== undefined) {
             updates.isInsuranceAccepted = (updates.isInsuranceAccepted === 'true' || updates.isInsuranceAccepted === true);
         }
 
-        if (updates.acceptedInsurances) {
-            updates.acceptedInsurances = typeof updates.acceptedInsurances === 'string'
-                ? JSON.parse(updates.acceptedInsurances)
-                : updates.acceptedInsurances;
+        // 🚨 2. CRASH-PROOF PARSER FOR acceptedInsurances (Handles Array, JSON String, or Comma-Separated String)
+        if (updates.acceptedInsurances !== undefined) {
+            if (Array.isArray(updates.acceptedInsurances)) {
+                updates.acceptedInsurances = updates.acceptedInsurances.map(i => String(i).trim()).filter(Boolean);
+            } else if (typeof updates.acceptedInsurances === 'string') {
+                const rawStr = updates.acceptedInsurances.trim();
+                if (rawStr === '') {
+                    updates.acceptedInsurances = [];
+                } else {
+                    try {
+                        const parsed = JSON.parse(rawStr);
+                        updates.acceptedInsurances = Array.isArray(parsed) 
+                            ? parsed.map(i => String(i).trim()).filter(Boolean) 
+                            : [String(parsed).trim()];
+                    } catch (e) {
+                        // Fallback for comma-separated string: "HDFC ERGO, Star Health"
+                        updates.acceptedInsurances = rawStr.split(',').map(i => i.trim()).filter(Boolean);
+                    }
+                }
+            }
         }
 
         // Clean up previous unapproved pending request if exists
@@ -316,22 +332,22 @@ const updateHospitalProfile = async (req, res) => {
         });
 
         // Instant update for operational insurance parameters in Hospital document
-        if (updates.isInsuranceAccepted !== undefined || updates.acceptedInsurances) {
+        if (updates.isInsuranceAccepted !== undefined || updates.acceptedInsurances !== undefined) {
             const operationalUpdates = {};
             if (updates.isInsuranceAccepted !== undefined) operationalUpdates.isInsuranceAccepted = updates.isInsuranceAccepted;
-            if (updates.acceptedInsurances) operationalUpdates.acceptedInsurances = updates.acceptedInsurances;
+            if (updates.acceptedInsurances !== undefined) operationalUpdates.acceptedInsurances = updates.acceptedInsurances;
 
             await Hospital.findByIdAndUpdate(hospitalId, { $set: operationalUpdates });
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             message: "Profile and Insurance acceptance updated successfully.",
             data: request
         });
     } catch (error) {
         console.error("Update Hospital Profile Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

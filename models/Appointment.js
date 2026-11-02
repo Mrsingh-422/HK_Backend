@@ -98,6 +98,8 @@ const appointmentSchema = new mongoose.Schema({
         insuranceNumber: { type: String, default: "" },
         companyName: { type: String, default: "" },
         insuranceType: { type: String, default: "" },
+        masterInsuranceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Insurance', default: null },
+
         insuranceDocument: { type: String, default: null }, // Snapshot path of PDF or image
         insuranceDocumentFront: { type: String, default: null },
         insuranceDocumentBack: { type: String, default: null },
@@ -106,9 +108,10 @@ const appointmentSchema = new mongoose.Schema({
         // 🚀 NEW: Approval status ('Pending' until PDF is uploaded, then 'Approved')
         approvalStatus: {
             type: String,
-            enum: ['Pending', 'Approved', 'Rejected'],
+            enum: ['Pending', 'Approved', 'Rejected', 'None'],
             default: 'Pending'
-        }
+        },
+        rejectionReason: { type: String, default: null }
     },
 
     

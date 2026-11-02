@@ -1,9 +1,12 @@
 const mongoose = require('mongoose');
 
 const fireNotificationSchema = new mongoose.Schema({
-    hqId: { type: mongoose.Schema.Types.ObjectId, ref: 'FireHQ', required: true },
-    title: { type: String, required: true }, // e.g., "New Emergency Case"
-    message: { type: String }, // e.g., "Severe trauma patient arriving..."
+    hqId: { type: mongoose.Schema.Types.ObjectId, ref: 'FireHQ', default: null },
+    stationId: { type: mongoose.Schema.Types.ObjectId, ref: 'FireStation', default: null },
+    staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'FireStaff', default: null },
+    global: { type: Boolean, default: false },
+    title: { type: String, required: true },
+    message: { type: String },
     type: { 
         type: String, 
         enum: ['Emergency', 'Maintenance', 'System', 'Alert'], 
@@ -13,4 +16,4 @@ const fireNotificationSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-module.exports = mongoose.model('FireNotification', fireNotificationSchema);
+module.exports = mongoose.model('FireNotification', fireNotificationSchema);    

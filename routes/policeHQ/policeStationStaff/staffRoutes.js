@@ -1,69 +1,54 @@
+// Clean routes/policeHQ/policeStationStaff/staffRoutes.js
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { policeStaffUploads,policeEvidenceUploads } = require('../../../middleware/multer');
+const { policeStaffUploads, policeEvidenceUploads } = require('../../../middleware/multer');
 const {
     getStaffDashboard,
     getAssignedCases,
     acceptCase,
     updateProgressStep,
     uploadEvidence,
-    closeCase,
     getDetailedProfile,
     updateProfile,
     changePassword,
-    submitLeave,
-
     checkInShift,
     submitRosterRequest,
-    closeCaseWithReport,updateStaffCaseStatus ,addStaffCaseEvidence,getStaffCaseHistory,
+    closeCaseWithReport,
+    updateStaffCaseStatus,
+    addStaffCaseEvidence,
+    getStaffCaseHistory,
     getStaffNotifications,
     markAllStaffNotificationsRead,
     deleteStaffNotification
 } = require('../../../controllers/policeHQ/policeStationStaff/staffController');
 
 // Base URL: /policeStationStaff/staff
- 
-// All routes are protected for 'police-staff' role
 router.use(protect('police-staff'));
 
-// Figma Screen 37: Click Check-in button to trigger shift active duty
+/** SHIFT & ROSTER REQUEST **/
 router.post('/shift/check-in', checkInShift);
+router.post('/leave/request', policeStaffUploads, submitRosterRequest); // 👈 Handles Leave, Present & Shift Change with attachment
 
-/** LEAVE & ROSTER REQUEST **/
-// Figma Screen 41/43: Submit Present or Leave request with attachment
-router.post('/leave/request', policeStaffUploads, submitRosterRequest);
-
- 
 /** DASHBOARD & PROFILE **/
-router.get('/dashboard', getStaffDashboard); // Screen 1
-router.get('/profile-full', getDetailedProfile); // Screen 26
-router.put('/profile-update', policeStaffUploads, updateProfile); // Screen 9
-router.put('/change-password', changePassword); // Screen 8 (Modal)
- 
+router.get('/dashboard', getStaffDashboard);
+router.get('/profile-full', getDetailedProfile);
+router.put('/profile-update', policeStaffUploads, updateProfile);
+router.put('/change-password', changePassword);
+
 /** CASE MANAGEMENT **/
-router.get('/cases', getAssignedCases); // Screens 10 & 19
-router.put('/cases/accept/:id', acceptCase); // Screen 10 Accept button
-router.put('/cases/progress/:id', updateProgressStep); // Screen 19 Progress dots
-router.post('/cases/evidence/:id', policeStaffUploads, uploadEvidence); // Screen 7 Upload
-router.put('/cases/close/:id', closeCase); // Screen 19 Close button
- 
-/** LEAVE MANAGEMENT **/
-router.post('/leave/request', submitLeave); // Screen 5 & 6
-
-
-// Figma Screen 40: Close Case with remarks dropdown & final report upload
-router.put('/cases/close/:id', policeStaffUploads, closeCaseWithReport);
-// 🚨 CORRECTED: mapped with policeEvidenceUploads (Key name: 'evidenceFiles')
+router.get('/cases', getAssignedCases);
+router.get('/cases/history', getStaffCaseHistory);
+router.put('/cases/accept/:id', acceptCase);
+router.put('/cases/progress/:id', updateProgressStep);
+router.post('/cases/evidence/:id', policeStaffUploads, uploadEvidence);
+router.put('/cases/close/:id', policeStaffUploads, closeCaseWithReport); // 👈 Handles closure with final report file
 router.put('/cases/:id/update-status', policeEvidenceUploads, updateStaffCaseStatus);
 router.post('/cases/:id/add-evidence', policeEvidenceUploads, addStaffCaseEvidence);
-router.get('/cases/history', getStaffCaseHistory);
 
-
-/** NOTIFICATION SYSTEM (Figma Image 2, 3) **/
+/** NOTIFICATIONS **/
 router.get('/notifications', getStaffNotifications);
 router.put('/notifications/mark-all-read', markAllStaffNotificationsRead);
 router.delete('/notifications/:id', deleteStaffNotification);
- 
+
 module.exports = router;
- 

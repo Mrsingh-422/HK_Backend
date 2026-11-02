@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { fireStaffUploads ,fireEvidenceUploads } = require('../../../middleware/multer');
+const FireNotification = require('../../../models/FireNotification');
 const { 
     getStationDashboard, getFreshCases,getFreshCaseDetails, acceptCase, getAcceptedCases,getCaseHistory,
     getIncidentReport, getNearbyStations,updateIncidentStatusDetailed,

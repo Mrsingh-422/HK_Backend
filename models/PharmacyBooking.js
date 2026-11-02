@@ -118,7 +118,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
     prescriptionImages: [String],
     status: {
         type: String,
-        enum: ['Pending', 'Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Cancelled'],
+        enum: ['Pending', 'Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Completed', 'Cancelled', 'No-Show'],
         default: 'Placed'
     },
 
@@ -127,6 +127,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
 
     // 🌟 Figma Screen 14 (Proof of Delivery Photo)
     deliveryProofPic: { type: String, default: null },
+    deliveryProofPics: [{ type: String }],
 
     // 🌟 Figma Screen 13 (Return Details)
     returnReason: { type: String, default: null },
@@ -167,7 +168,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
         pickupDriverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
         pickupStatus: {
             type: String,
-            enum: ['PendingAssignment', 'Assigned', 'OutForPickup', 'ReachedLocation', 'PickedUp', 'DeliveredToStore'],
+            enum: ['PendingAssignment', 'Assigned', 'OutForPickup', 'ReachedLocation', 'PickedUp', 'DeliveredToStore', 'Cancelled'],
             default: 'PendingAssignment'
         },
         returnOTP: { type: String, default: null },
