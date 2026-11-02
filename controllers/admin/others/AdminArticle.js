@@ -54,26 +54,36 @@ const getAllArticles = async (req, res) => {
 };
 
 
-// 3. UPDATE ARTICLE
+// @desc    Update Admin Article with Safe Image Cleanup
+// @route   PUT /admin/articles/update/:id
+// @access  Private (Admin)
 const updateArticle = async (req, res) => {
     try {
         const article = await AdminArticle.findById(req.params.id);
-        if (!article) return res.status(404).json({ message: "Article not found" });
+        if (!article) return res.status(404).json({ success: false, message: "Article not found" });
 
         let updateData = { ...req.body };
 
         if (req.files && req.files.length > 0) {
-            // Delete old images from disk
-            article.images.forEach(img => {
-                const oldPath = path.join(__dirname, '../../../public', img);
-                if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-            });
+            // Safe check before deleting old images from disk
+            if (Array.isArray(article.images)) {
+                article.images.forEach(img => {
+                    const oldPath = path.join(__dirname, '../../../public', img);
+                    if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+                });
+            }
             updateData.images = req.files.map(file => `/uploads/articles/${file.filename}`);
         }
 
-        const updated = await AdminArticle.findByIdAndUpdate(req.params.id, updateData, { new: true });
-        res.json({ success: true, data: updated });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const updated = await AdminArticle.findByIdAndUpdate(
+            req.params.id, 
+            { $set: updateData }, 
+            { new: true, runValidators: true }
+        );
+        return res.status(200).json({ success: true, message: "Article updated successfully", data: updated });
+    } catch (error) { 
+        return res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 4. DELETE ARTICLE

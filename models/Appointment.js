@@ -152,6 +152,8 @@ const appointmentSchema = new mongoose.Schema({
             default: 'Initial-Assignment'
         },
         notes: { type: String, default: "" },
+        
+        // Root-level Subscription Tracking for Doctor / Hospital Appointments
         subscriptionDetails: {
             isSubscriptionApplied: { type: Boolean, default: false }, // 🚨 NEW: True if booked via subscription
             userSubscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserSubscription', default: null }, // 🚨 NEW: Reference to active subscriber sheet

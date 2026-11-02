@@ -8,16 +8,27 @@ const NurseBooking = require('../../../models/NurseBooking');
 const AmbulanceBooking = require('../../../models/AmbulanceBooking');
 const mongoose = require('mongoose');
 
-// Helper function: Data ko transform karne ke liye (Exact Keys as requested)
-const transformUserData = (user) => ({
-    id: user._id,
-    name: user.name || "",
-    email: user.email || "",
-    number: user.phone || "",
-    active: user.isActive !== false,
-    active: user.profileStatus === 'Approved', // Approved = true, else false
-    profilePic: user.profilePic // Added as per your request
-});
+// Helper function: Transforms user document with accurate operational flags
+const transformUserData = (user) => {
+    const isDeactivated = user.isActive === false;
+    const isBanned = user.isBanned === true;
+    const isApproved = user.profileStatus === 'Approved';
+
+    return {
+        id: user._id,
+        name: user.name || "User",
+        email: user.email || "N/A",
+        number: user.phone || "N/A",
+        active: !isDeactivated && !isBanned,
+        isActive: user.isActive !== false,
+        isBanned: isBanned,
+        isApproved: isApproved,
+        profileStatus: user.profileStatus || 'Approved',
+        profilePic: user.profilePic || null,
+        createdAt: user.createdAt
+    };
+};
+
 
 // @desc    Get All Users for Admin with Accurate Active / Banned / Profile Status
 // @route   GET /admin/users/list
@@ -71,34 +82,40 @@ const getAllUsersAdmin = async (req, res) => {
     }
 };
 
-// 2. SEARCH USERS (Search by Name, Email, or Phone)
+// @desc    Search Users by Name, Email, or Phone (Admin)
+// @route   GET /admin/users/search?query=keyword
+// @access  Private (Admin)
 const searchUsersAdmin = async (req, res) => {
     try {
-        const { query } = req.query; // Search keyword
-        if (!query) {
-            return res.status(400).json({ message: "Search query is required" });
+        const { query } = req.query;
+        if (!query || String(query).trim() === "") {
+            return res.status(400).json({ success: false, message: "Search query is required" });
         }
 
+        const cleanQuery = String(query).trim();
         const searchCriteria = {
             role: 'user',
             $or: [
-                { name: { $regex: query, $options: 'i' } },
-                { email: { $regex: query, $options: 'i' } },
-                { phone: { $regex: query, $options: 'i' } }
+                { name: { $regex: cleanQuery, $options: 'i' } },
+                { email: { $regex: cleanQuery, $options: 'i' } },
+                { phone: { $regex: cleanQuery, $options: 'i' } }
             ]
         };
 
-        const users = await User.find(searchCriteria).limit(20); // Search results limited to 20
+        const users = await User.find(searchCriteria)
+            .select('name email phone isActive isBanned profileStatus profilePic createdAt')
+            .limit(20)
+            .lean();
 
         const formattedData = users.map(transformUserData);
 
-        res.json({
+        return res.status(200).json({
             success: true,
             count: users.length,
             data: formattedData
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

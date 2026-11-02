@@ -1,3 +1,4 @@
+// controllers/provider/Common/Availability.js
 const Availability = require('../../../models/Availability');
 const { generateTimeSlots, generateNurseSlots } = require('../../../utils/timeSlotHelper');
 const NurseService = require('../../../models/NurseService');
@@ -110,36 +111,50 @@ const setNurseAvailability = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// @desc    Get Nurse Availability & Generated Hourly/Regular Slots (Fixed NaN Price Calculation)
+// @route   GET /provider/availability/my-nurse-slots
+// @access  Private (Nurse)
 const getMyNurseSlots = async (req, res) => {
     try {
         const { serviceId } = req.query;
         const nurseId = req.user.id;
 
-        const [config, service] = await Promise.all([
-            Availability.findOne({ vendorId: nurseId }),
-            NurseService.findById(serviceId)
-        ]);
-
-        if (!config || !service) {
-            return res.status(404).json({ success: false, message: "Settings or Service not found" });
+        const config = await Availability.findOne({ vendorId: nurseId });
+        if (!config) {
+            return res.status(200).json({ 
+                success: true, 
+                message: "No availability settings configured yet.", 
+                config: null, 
+                slots: { regular: [], hourly: [], premiumDates: [] } 
+            });
         }
 
-        // Logic: NurseService ke 'pricing.oneDay.final' ko base maankar premium add karein
-        const serviceFinalPrice = service.pricing.oneDay.final;
-        const hourlyFinalPrice = service.pricing.hourly.final;
+        // Fetch specific service if serviceId is passed, otherwise pick first active service of this nurse
+        let service = null;
+        if (serviceId) {
+            service = await NurseService.findById(serviceId);
+        } else {
+            service = await NurseService.findOne({ nurseId, status: 'Approved' });
+        }
 
+        const serviceFinalPrice = Number(service?.pricing?.oneDay?.final || 500);
+        const hourlyFinalPrice = Number(service?.pricing?.hourly?.final || 200);
+
+        // Fixed: Pass (config, numericBasePrice) matching timeSlotHelper signature
         const slots = {
-            regular: generateNurseSlots(config, 'One day One Time', serviceFinalPrice),
-            hourly: generateNurseSlots(config, 'Acc. To Per/Hours', hourlyFinalPrice),
-            premiumDates: config.premiumDates.map(pd => ({
+            regular: generateNurseSlots(config, serviceFinalPrice),
+            hourly: generateNurseSlots(config, hourlyFinalPrice),
+            premiumDates: (config.premiumDates || []).map(pd => ({
                 date: pd.date,
-                additionalFee: pd.extraFee,
-                totalPriceOnDate: serviceFinalPrice + pd.extraFee // Date wise total
+                additionalFee: Number(pd.extraFee || 0),
+                totalPriceOnDate: serviceFinalPrice + Number(pd.extraFee || 0)
             }))
         };
 
-        res.json({ success: true, config, slots });
-    } catch (e) { res.status(500).json({ message: e.message }); }
+        return res.status(200).json({ success: true, config, slots });
+    } catch (e) { 
+        return res.status(500).json({ success: false, message: e.message }); 
+    }
 };
 
 

@@ -110,6 +110,11 @@ const ambulanceBookingSchema = new mongoose.Schema({
         nurse: { type: Boolean, default: false },
         doctor: { type: Boolean, default: false }
     },
+    // Indicates 100% Free Accidental Emergency or Subscription Free Trip
+    isFreeCase: { 
+        type: Boolean, 
+        default: false 
+    },
 
     // 👇 NEW: Payment Lifecycle
     paymentStatus: { 

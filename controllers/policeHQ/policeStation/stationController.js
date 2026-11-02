@@ -7,23 +7,22 @@ const {getDistance} = require('../../../utils/helpers')
 const bcrypt = require('bcryptjs');
 const moment = require('moment'); 
  
-// --- 1. DASHBOARD (Screen 1) ---
+// @desc    Get Police Station Dashboard Stats (Includes 'Accepted' in active pending cases)
+// @route   GET /policeStation/station/dashboard
+// @access  Private (Police-Station)
 const getStationDashboard = async (req, res) => {
     try {
         const stationId = req.user.id;
 
         const stats = {
-            // Newly dispatched cases
             fresh: await PoliceCase.countDocuments({ 
                 stationId, 
                 status: 'Fresh' 
             }),
-            // Ongoing, Critical, and On Hold cases grouped together under 'Pending'
             pending: await PoliceCase.countDocuments({ 
                 stationId, 
-                status: { $in: ['Pending', 'Under Investigation', 'On Hold', 'Critical'] } 
+                status: { $in: ['Pending', 'Accepted', 'Under Investigation', 'On Hold', 'Critical'] } 
             }),
-            // Completed and Archived history cases
             closed: await PoliceCase.countDocuments({ 
                 stationId, 
                 status: { $in: ['Closed', 'Archived'] } 
@@ -38,6 +37,57 @@ const getStationDashboard = async (req, res) => {
                 stats
             }
         });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// @desc    Get Station Pending / Ongoing Cases (Synced with 'Accepted' status)
+// @route   GET /policeStation/station/pending
+// @access  Private (Police-Station)
+const getPendingCases = async (req, res) => {
+    try {
+        const stationId = req.user.id;
+
+        const query = {
+            stationId,
+            status: { $in: ['Pending', 'Accepted', 'Under Investigation', 'On Hold', 'Critical'] }
+        };
+
+        const pendingCases = await PoliceCase.find(query)
+            .populate('assignedStaff', 'fullName rank badgeId profileImage')
+            .sort({ updatedAt: -1 });
+
+        res.json({
+            success: true,
+            count: pendingCases.length,
+            data: pendingCases
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Close Case at Station Level (Synced with schema key 'resolvedAt')
+// @route   PUT /policeStation/station/cases/close/:id
+// @access  Private (Police-Station)
+const closeCase = async (req, res) => {
+    try {
+        const pCase = await PoliceCase.findByIdAndUpdate(
+            req.params.id, 
+            {
+                $set: {
+                    status: 'Closed',
+                    resolvedAt: Date.now(),
+                    'progress.isReportSubmitted': true
+                }
+            }, 
+            { new: true }
+        );
+        if (!pCase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+        res.json({ success: true, message: "Case Closed Successfully", data: pCase });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
@@ -184,16 +234,7 @@ const updateCaseProgress = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
  
-const closeCase = async (req, res) => {
-    try {
-        const pCase = await PoliceCase.findByIdAndUpdate(req.params.id, {
-            status: 'Closed',
-            closedAt: Date.now()
-        }, { new: true });
-        res.json({ success: true, message: "Case Closed Successfully" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
- 
+
 // --- 4. ROSTER & LEAVE (Screens 2, 7, 8, 9, 10) ---
  
 const getStaffRoster = async (req, res) => {
@@ -258,30 +299,6 @@ const updateStationProfile = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
  
-const getPendingCases = async (req, res) => {
-    try {
-        const stationId = req.user.id;
-
-        // Dashboard aur is list API ki query bilkul same honi chahiye
-        const query = {
-            stationId,
-            status: { $in: ['Pending', 'Under Investigation', 'On Hold', 'Critical'] }
-        };
-
-        const pendingCases = await PoliceCase.find(query)
-            .populate('assignedStaff', 'fullName rank badgeId profileImage')
-            .sort({ updatedAt: -1 }); // Newest activity first
-
-        res.json({
-            success: true,
-            count: pendingCases.length,
-            data: pendingCases
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
  
 const getCaseHistory = async (req, res) => {
     try {
