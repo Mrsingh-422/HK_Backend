@@ -171,11 +171,29 @@ const getHealthHistory = async (req, res) => {
     }
 };
 
-// 5. SAVE NEW MEAL INTAKE RECORD
+// @desc    Save New Meal Intake Record (Crash-proof array validation)
+// @route   POST /user/health-records/add-meal
+// @access  Private (User)
 const addMeal = async (req, res) => {
     try {
-        const { mealType, items } = req.body; 
-        const totalKcal = items.reduce((sum, item) => sum + (item.kcal * item.qty), 0);
+        let { mealType, items } = req.body;
+
+        if (typeof items === 'string') {
+            try { items = JSON.parse(items); } catch (e) { items = []; }
+        }
+
+        if (!mealType || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "mealType and a non-empty items array ([{ name, kcal, qty }]) are required."
+            });
+        }
+
+        const totalKcal = items.reduce((sum, item) => {
+            const kcal = Number(item.kcal || item.calories || 0);
+            const qty = Number(item.qty || item.quantity || 1);
+            return sum + (kcal * qty);
+        }, 0);
 
         const mealData = await HealthData.create({
             userId: req.user.id,
@@ -187,9 +205,9 @@ const addMeal = async (req, res) => {
             date: new Date()
         });
 
-        res.status(201).json({ success: true, message: "Meal added", data: mealData });
+        return res.status(201).json({ success: true, message: "Meal added successfully.", data: mealData });
     } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

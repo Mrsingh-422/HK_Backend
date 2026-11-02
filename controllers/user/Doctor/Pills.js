@@ -1,3 +1,4 @@
+// controllers/user/Doctor/Pills.js
 const PillReminder = require('../../../models/PillReminder');
 const moment = require('moment');
 
@@ -95,31 +96,53 @@ const parseEndDate = (startDate, endDate) => {
     return parsedDate.isValid() ? parsedDate.toDate() : null;
 };
 
-// 1. ADD PILL (Relative course limit conversions applied)
+// @desc    Add Medication Reminder (Handles both String array ["09:00 AM"] and Object array [{ time: "09:00 AM" }])
+// @route   POST /user/doctor/pills/add
+// @access  Private (User)
 const addPill = async (req, res) => {
     try {
-        const { medicineName, dosage, times, frequency, daysOfWeek, startDate, endDate, notes } = req.body;
-        const formattedTimes = times.map(t => ({ time: t, isTakenToday: false }));
+        let { medicineName, dosage, times, frequency, daysOfWeek, startDate, endDate, notes } = req.body;
 
-        // Standardise input start date formatting safely
+        if (!medicineName) {
+            return res.status(400).json({ success: false, message: "medicineName is required." });
+        }
+
+        if (typeof times === 'string') {
+            try { times = JSON.parse(times); } catch (e) { times = [times]; }
+        }
+
+        if (!Array.isArray(times) || times.length === 0) {
+            return res.status(400).json({ success: false, message: "At least one reminder time slot is required." });
+        }
+
+        // 🚨 FIX: Safely extract string time whether frontend sends "09:00 AM" or { time: "09:00 AM" }
+        const formattedTimes = times.map(t => ({
+            time: typeof t === 'object' && t !== null ? String(t.time || "09:00 AM").trim() : String(t).trim(),
+            isTakenToday: false
+        }));
+
         const finalStartDate = startDate ? moment(startDate).toDate() : new Date();
-        const finalEndDate = parseEndDate(finalStartDate, endDate); // Calculates dynamic date object
+        const finalEndDate = parseEndDate(finalStartDate, endDate);
 
         const pill = await PillReminder.create({
             userId: req.user.id,
-            medicineName, 
-            dosage, 
-            times: formattedTimes, 
-            frequency, 
-            daysOfWeek, 
-            startDate: finalStartDate, 
-            endDate: finalEndDate, 
-            notes
+            medicineName: String(medicineName).trim(),
+            dosage: dosage || "1 Tablet",
+            times: formattedTimes,
+            frequency: frequency || "Daily",
+            daysOfWeek: Array.isArray(daysOfWeek) ? daysOfWeek : [],
+            startDate: finalStartDate,
+            endDate: finalEndDate,
+            notes: notes || ""
         });
         
-        res.status(201).json({ success: true, message: "Medication reminder set", data: enrichPillWithProgress(pill) });
+        return res.status(201).json({ 
+            success: true, 
+            message: "Medication reminder set successfully.", 
+            data: enrichPillWithProgress(pill) 
+        });
     } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -289,46 +312,54 @@ const deletePill = async (req, res) => {
     }
 };
 
-// 7. UPDATE SPECIFIC PILL SETTINGS (Timings, Reminder On/Off switches)
+// @desc    Update Specific Pill Settings (Timings, Reminder On/Off switches)
+// @route   PUT /user/doctor/pills/update-pill-settings/:id
+// @access  Private (User)
 const updatePillSettings = async (req, res) => {
     try {
-        const { times, isReminderOn, notes, endDate } = req.body;
+        let { times, isReminderOn, notes, endDate } = req.body;
         const pillId = req.params.id;
         const userId = req.user.id;
 
-        // Document find karke user check validation secure karna
         const pill = await PillReminder.findOne({ _id: pillId, userId: userId });
         if (!pill) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Pill reminder not found or unauthorized access" 
+                message: "Pill reminder not found or unauthorized access." 
             });
         }
 
-        const formattedTimes = times ? times.map(t => ({
-            time: t,
-            isTakenToday: false
-        })) : [];
+        if (typeof times === 'string') {
+            try { times = JSON.parse(times); } catch (e) { times = [times]; }
+        }
 
-        // Dynamic helper parses relative limits safely based on the original document start date reference
-        const finalEndDate = parseEndDate(pill.startDate, endDate);
+        const formattedTimes = Array.isArray(times) ? times.map(t => ({
+            time: typeof t === 'object' && t !== null ? String(t.time || "09:00 AM").trim() : String(t).trim(),
+            isTakenToday: Boolean(typeof t === 'object' && t?.isTakenToday)
+        })) : pill.times;
+
+        const finalEndDate = endDate !== undefined ? parseEndDate(pill.startDate, endDate) : pill.endDate;
 
         const updatedPill = await PillReminder.findOneAndUpdate(
             { _id: pillId, userId: userId },
             { 
                 $set: { 
                     times: formattedTimes, 
-                    isReminderOn, 
-                    notes,
+                    ...(isReminderOn !== undefined && { isReminderOn: Boolean(isReminderOn === true || isReminderOn === 'true') }),
+                    ...(notes !== undefined && { notes }),
                     endDate: finalEndDate
                 } 
             },
             { new: true } 
         );
 
-        res.json({ success: true, message: "Changes saved", data: enrichPillWithProgress(updatedPill) });
+        return res.status(200).json({ 
+            success: true, 
+            message: "Changes saved successfully.", 
+            data: enrichPillWithProgress(updatedPill) 
+        });
     } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

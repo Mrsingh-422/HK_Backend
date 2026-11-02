@@ -1,67 +1,98 @@
 const Driver = require('../../../models/Driver');
 const Ambulance = require('../../../models/Ambulance');
 
-// 1. GET ALL DRIVERS (Vendor Drivers + Ambulance Drivers Merged)
+// @desc    Get All Drivers for Admin (Vendor Drivers + Independent/Hospital Ambulance Drivers Merged)
+// @route   GET /admin/drivers/vendor/list
+// @access  Private (Admin)
 const getAllDriversAdmin = async (req, res) => {
     try {
-        // Query parameters extract karein
-        const { country, city, state, district } = req.query;
+        const { country, city, state, district, driverType } = req.query;
  
-        // Dynamic MongoDB query object build karein
         let filter = {};
+        if (country) filter.country = { $regex: country, $options: 'i' };
+        if (city) filter.city = { $regex: city, $options: 'i' };
  
-        // 1. Country Filter
-        if (country) {
-            filter.country = { $regex: country, $options: 'i' }; // Case-insensitive search
-        }
- 
-        // 2. City Filter
-        if (city) {
-            filter.city = { $regex: city, $options: 'i' }; // Case-insensitive search
-        }
- 
-        // 3. State / District Filter
-        // Note: Model me 'state' field hai, isliye agar admin state ya district me se
-        // kuch bhi bhejta hai, toh use hum database ke 'state' field se match karenge.
         const stateOrDistrict = state || district;
         if (stateOrDistrict) {
-            filter.state = { $regex: stateOrDistrict, $options: 'i' }; // Case-insensitive search
+            filter.state = { $regex: stateOrDistrict, $options: 'i' };
         }
+
+        let transformedDrivers = [];
+        let transformedAmbulances = [];
+
+        // 1. Fetch Vendor Drivers (Lab, Pharmacy, Nurse)
+        if (!driverType || ['Lab', 'Pharmacy', 'Nurse', 'All'].includes(driverType)) {
+            const vendorFilter = { ...filter };
+            if (driverType && driverType !== 'All') vendorFilter.vendorType = driverType;
+
+            const drivers = await Driver.find(vendorFilter)
+                .populate({ path: 'vendorId', select: 'name clinicName pharmacyName labName vendorType' })
+                .sort({ createdAt: -1 })
+                .lean();
+
+            transformedDrivers = drivers.map(driver => ({
+                id: driver._id,
+                vendorName: driver.vendorId?.name || driver.vendorId?.labName || driver.vendorId?.pharmacyName || "N/A",
+                username: driver.username || "N/A",
+                driverName: driver.name,
+                phone: driver.phone,
+                email: driver.email || "N/A",
+                imageUrl: driver.profilePic || null,
+                onlineStatus: driver.status === 'Available',
+                isActive: driver.isActive !== false,
+                vehicle: driver.vehicleType || "Bike",
+                vehicleNumber: driver.vehicleNumber || "N/A",
+                licenseNumber: driver.documents?.license || "N/A",
+                driverType: driver.vendorType, // 'Lab', 'Pharmacy', 'Nurse'
+                country: driver.country || "India",
+                state: driver.state || "N/A",
+                city: driver.city || "N/A",
+                address: driver.address || "N/A",
+                createdAt: driver.createdAt
+            }));
+        }
+
+        // 2. Fetch Ambulance Drivers if driverType is not restricted to Lab/Pharmacy/Nurse
+        if (!driverType || ['Ambulance', 'All'].includes(driverType)) {
+            const ambulances = await Ambulance.find(filter)
+                .populate('hospitalId', 'name')
+                .sort({ createdAt: -1 })
+                .lean();
+
+            transformedAmbulances = ambulances.map(amb => ({
+                id: amb._id,
+                vendorName: amb.hospitalId?.name || "Independent Ambulance",
+                username: amb.email || amb.phone || "N/A",
+                driverName: amb.driverInfo?.fullName || amb.name,
+                phone: amb.phone,
+                email: amb.email || "N/A",
+                imageUrl: null,
+                onlineStatus: Boolean(amb.isOnline && amb.availableForEmergency),
+                isActive: amb.isActive !== false,
+                vehicle: amb.vehicleType || "Ambulance",
+                vehicleNumber: amb.vehicleNumber || "N/A",
+                licenseNumber: amb.drivingLicenseNumber || amb.documents?.drivingLicenseFile || "N/A",
+                driverType: 'Ambulance',
+                country: amb.country || "India",
+                state: amb.state || "N/A",
+                city: amb.city || "N/A",
+                address: amb.address || "N/A",
+                createdAt: amb.createdAt
+            }));
+        }
+
+        const combinedData = [...transformedDrivers, ...transformedAmbulances].sort(
+            (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+        );
  
-        // Filter lagakar Drivers fetch karein
-        const drivers = await Driver.find(filter)
-            .populate({ path: 'vendorId', select: 'name clinicName pharmacyName labName vendorType' })
-            .sort({ createdAt: -1 });
- 
-        // Data transform karein taaki UI se match kare
-        const transformedData = drivers.map(driver => ({
-            id: driver._id,
-            vendorName: driver.vendorId?.name || driver.vendorId?.labName || driver.vendorId?.pharmacyName || "N/A",
-            username: driver.username,
-            driverName: driver.name,
-            phone: driver.phone,
-            email: driver.email || "N/A",
-            imageUrl: driver.profilePic,
-            onlineStatus: driver.status === 'Available', // UI Toggle logic
-            vehicle: driver.vehicleType,
-            vehicleNumber: driver.vehicleNumber,
-            licenseNumber: driver.documents?.license,
-            driverType: driver.vendorType,
-            // Location fields transform me include karein taaki UI par show ho sakein
-            country: driver.country || "N/A",
-            state: driver.state || "N/A",
-            city: driver.city || "N/A",
-            address: driver.address || "N/A"
-        }));
- 
-        res.json({
+        return res.status(200).json({
             success: true,
-            count: transformedData.length,
-            data: transformedData
+            count: combinedData.length,
+            data: combinedData
         });
  
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

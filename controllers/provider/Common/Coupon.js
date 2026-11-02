@@ -93,15 +93,20 @@ const deleteCoupon = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 }; 
 
-// 3. ADMIN: CREATE GLOBAL COUPON
+// @desc    Admin: Create Global or Category-Specific Coupon (Supports Doctor & All)
+// @route   POST /provider/coupons/admin/add
+// @access  Private (Admin)
 const createAdminCoupon = async (req, res) => {
     try {
         const { vendorType, ...couponDetails } = req.body; 
 
-        // Optional: Enum check
-        const allowedTypes = ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance'];
+        // 🚨 FIX: Added 'Doctor' and 'All' to match Coupon Schema & Dropdown Enums
+        const allowedTypes = ['Lab', 'Pharmacy', 'Nurse', 'Hospital', 'Ambulance', 'Doctor', 'All'];
         if (!allowedTypes.includes(vendorType)) {
-            return res.status(400).json({ message: "Invalid Vendor Type selected" });
+            return res.status(400).json({ 
+                success: false, 
+                message: `Invalid Vendor Type selected. Allowed: ${allowedTypes.join(', ')}` 
+            });
         }
 
         const coupon = await Coupon.create({ 
@@ -112,8 +117,13 @@ const createAdminCoupon = async (req, res) => {
             ...couponDetails 
         });
 
-        res.status(201).json({ success: true, data: coupon });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        return res.status(201).json({ success: true, message: "Admin coupon created successfully.", data: coupon });
+    } catch (error) { 
+        if (error.code === 11000) {
+            return res.status(400).json({ success: false, message: "Coupon name already exists." });
+        }
+        return res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 2. Admin List All Admin-Created Coupons

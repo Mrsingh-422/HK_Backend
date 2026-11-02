@@ -15,6 +15,7 @@ const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
 const UserNotification = require('../../models/UserNotification');
 const mongoose = require('mongoose');
 const Insurance = require('../../models/Insurance');
+const { notifyAdminsAndVendor } = require('../../utils/notification');
 
 
 // Helper: Token Generator
