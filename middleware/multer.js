@@ -902,10 +902,15 @@ const hospitalDischargeFieldsUpload = multer({
     { name: 'clinicalReports', maxCount: 10 }    // Additional clinical report files
 ]);
 
+// 🚨 DUAL-SIDE INSURANCE CARD UPLOAD CONFIGURATION (With Frontend Aliases Support)
 const insuranceCardUploads = insuranceUpload.fields([
-    { name: 'insuranceDocument', maxCount: 1 },      // Single PDF or combined photo
-    { name: 'insuranceDocumentFront', maxCount: 1 }, // Front side of card
-    { name: 'insuranceDocumentBack', maxCount: 1 }   // Back side of card
+    { name: 'insuranceDocument', maxCount: 1 },      // Combined PDF or image
+    { name: 'insuranceDocumentFront', maxCount: 1 }, // Standard front key
+    { name: 'insuranceDocumentBack', maxCount: 1 },  // Standard back key
+    { name: 'insuranceFront', maxCount: 1 },          // Flutter alias
+    { name: 'insuranceBack', maxCount: 1 },           // Flutter alias
+    { name: 'frontImage', maxCount: 1 },              // Next.js alias
+    { name: 'backImage', maxCount: 1 }                // Next.js alias
 ]);
 
 // ==========================================

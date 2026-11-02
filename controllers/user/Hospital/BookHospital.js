@@ -548,12 +548,13 @@ const getAvailableBedsForRange = async (req, res) => {
 };
 
 // for conditional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
-// @desc    Calculate IPD Admission Checkout Bill Summary (Resolves Special Services & Stay Duration)
+// @desc    Calculate IPD Admission Checkout Bill Summary with Hospital Insurance Acceptance Validation
 // @route   POST /user/hospital/checkout-summary
 // @access  Private (User)
 const getHospitalCheckoutSummary = async (req, res) => {
     try {
-        let { hospitalId, bedId, startDate, endDate, specialServices, couponCode } = req.body;
+        let { hospitalId, bedId, doctorId, startDate, endDate, specialServices, couponCode } = req.body;
+        const userId = req.user.id;
 
         if (!hospitalId || !bedId || !startDate || !endDate) {
             return res.status(400).json({
@@ -574,7 +575,16 @@ const getHospitalCheckoutSummary = async (req, res) => {
 
         const stayDays = Math.max(1, endMoment.diff(startMoment, 'days') + 1);
 
-        const targetBed = await Bed.findOne({ _id: bedId, hospitalId }).populate('wardId').lean();
+        const [hospital, targetBed, user] = await Promise.all([
+            Hospital.findById(hospitalId).select('name isInsuranceAccepted acceptedInsurances').lean(),
+            Bed.findOne({ _id: bedId, hospitalId }).populate('wardId').lean(),
+            User.findById(userId).select('insuranceDetails').lean()
+        ]);
+
+        if (!hospital) {
+            return res.status(404).json({ success: false, message: "Hospital not found." });
+        }
+
         if (!targetBed) {
             return res.status(404).json({ success: false, message: "Selected bed not found in this hospital." });
         }
@@ -582,10 +592,24 @@ const getHospitalCheckoutSummary = async (req, res) => {
         const bedRate = Number(targetBed.pricePerDay || 1000);
         const baseStayFee = bedRate * stayDays;
 
-        // 🚨 RESOLVE SPECIAL SERVICES SAFELY (Handles String IDs, Arrays, or Objects)
+        // 1. Resolve Optional Doctor Fee
+        let doctorFee = 0;
+        let selectedDoctorInfo = null;
+        const rawDocId = doctorId || req.body.doctor?._id || req.body.doctor;
+        if (rawDocId && rawDocId !== 'null' && rawDocId !== 'undefined' && String(rawDocId).trim() !== '') {
+            const cleanDocId = String(rawDocId).trim();
+            if (mongoose.isValidObjectId(cleanDocId)) {
+                const doc = await Doctor.findOne({ _id: cleanDocId, hospitalId, isActive: true }).select('name speciality fees department').lean();
+                if (doc) {
+                    doctorFee = Number(doc.fees?.clinic || 0);
+                    selectedDoctorInfo = { _id: doc._id, name: doc.name, speciality: doc.speciality, fee: doctorFee };
+                }
+            }
+        }
+
+        // 2. Resolve Special Services
         let resolvedServicesList = [];
         let specialServicesTotal = 0;
-
         if (specialServices) {
             let parsed = specialServices;
             if (typeof specialServices === 'string') {
@@ -602,10 +626,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
                     if (rawId && mongoose.isValidObjectId(String(rawId).trim()) && !item.serviceName) {
                         serviceIdsToQuery.push(new mongoose.Types.ObjectId(String(rawId).trim()));
                     } else if (item.serviceName) {
-                        resolvedServicesList.push({
-                            serviceName: String(item.serviceName).trim(),
-                            price: Number(item.price || 0)
-                        });
+                        resolvedServicesList.push({ serviceName: String(item.serviceName).trim(), price: Number(item.price || 0) });
                         specialServicesTotal += Number(item.price || 0);
                     }
                 }
@@ -614,17 +635,13 @@ const getHospitalCheckoutSummary = async (req, res) => {
             if (serviceIdsToQuery.length > 0) {
                 const dbServices = await HospitalService.find({ _id: { $in: serviceIdsToQuery } }).lean();
                 dbServices.forEach(srv => {
-                    resolvedServicesList.push({
-                        serviceId: srv._id,
-                        serviceName: srv.serviceName,
-                        price: Number(srv.price || 0)
-                    });
+                    resolvedServicesList.push({ serviceId: srv._id, serviceName: srv.serviceName, price: Number(srv.price || 0) });
                     specialServicesTotal += Number(srv.price || 0);
                 });
             }
         }
 
-        // Coupon calculation
+        // 3. Coupon Calculation
         let couponDiscount = 0;
         let appliedCoupon = null;
         if (couponCode) {
@@ -638,16 +655,29 @@ const getHospitalCheckoutSummary = async (req, res) => {
 
             if (coupon && baseStayFee >= (coupon.minOrderAmount || 0)) {
                 couponDiscount = Math.min((baseStayFee * coupon.discountPercentage) / 100, coupon.maxDiscount || Infinity);
-                appliedCoupon = {
-                    couponId: coupon._id,
-                    couponCode: coupon.couponName,
-                    discountAmount: couponDiscount
-                };
+                appliedCoupon = { couponId: coupon._id, couponCode: coupon.couponName, discountAmount: couponDiscount };
             }
         }
 
-        const subtotal = baseStayFee + specialServicesTotal;
+        const subtotal = baseStayFee + specialServicesTotal + doctorFee;
         const totalPayable = Math.max(0, subtotal - couponDiscount);
+
+        // 🚨 4. INSURANCE ACCEPTANCE VALIDATION
+        const userInsurance = user?.insuranceDetails || {};
+        const hospitalAcceptsCashless = hospital.isInsuranceAccepted !== false;
+        const patientInsuranceCompany = userInsurance.companyName || "";
+
+        let isAcceptedByHospital = false;
+        if (hospitalAcceptsCashless && userInsurance.hasInsurance) {
+            if (!hospital.acceptedInsurances || hospital.acceptedInsurances.length === 0) {
+                isAcceptedByHospital = true; // Accepts all major insurances
+            } else {
+                isAcceptedByHospital = hospital.acceptedInsurances.some(ins => 
+                    ins.toLowerCase().includes(patientInsuranceCompany.toLowerCase()) || 
+                    patientInsuranceCompany.toLowerCase().includes(ins.toLowerCase())
+                );
+            }
+        }
 
         return res.status(200).json({
             success: true,
@@ -657,12 +687,27 @@ const getHospitalCheckoutSummary = async (req, res) => {
                 pricePerDay: bedRate,
                 days: stayDays,
                 baseFee: baseStayFee,
+                doctorVisitFee: doctorFee,
+                selectedDoctor: selectedDoctorInfo,
                 specialServicesCharges: specialServicesTotal,
                 specialServices: resolvedServicesList,
-                subtotal: subtotal,
+                subtotal,
                 discount: couponDiscount,
                 appliedCoupon,
-                totalPayable: totalPayable
+                totalPayable,
+                // Insurance Policy Guidance Flags for UI
+                insuranceGuidance: {
+                    patientHasInsurance: Boolean(userInsurance.hasInsurance),
+                    patientInsuranceCompany: patientInsuranceCompany || "None",
+                    hospitalAcceptsCashless,
+                    isAcceptedByThisHospital: isAcceptedByHospital,
+                    hospitalAcceptedInsurances: hospital.acceptedInsurances || [],
+                    policyMessage: isAcceptedByHospital 
+                        ? "Cashless TPA claim is available at this hospital."
+                        : (hospitalAcceptsCashless 
+                            ? `Hospital accepts cashless claims for [${(hospital.acceptedInsurances || []).join(', ')}]. You can pay deposit and claim reimbursement later.`
+                            : "This hospital operates on reimbursement mode only.")
+                }
             }
         });
 
@@ -673,7 +718,7 @@ const getHospitalCheckoutSummary = async (req, res) => {
 };
 
 
-// @desc    Finalize Hospital IPD Admission Booking (Crash-Proof Special Services Resolver & Form-Data Parser)
+// @desc    Finalize Hospital IPD Admission Booking (Respects Explicit No-Insurance & Auto-Inherits Profile Cards)
 // @route   POST /user/hospital/book
 // @access  Private (User)
 const finalHospitalBooking = async (req, res) => {
@@ -682,6 +727,7 @@ const finalHospitalBooking = async (req, res) => {
         let {
             hospitalId,
             bedId,
+            doctorId,
             startDate,
             endDate,
             appointmentDate,
@@ -701,7 +747,7 @@ const finalHospitalBooking = async (req, res) => {
             masterInsuranceId
         } = req.body;
 
-        // 1. Mandatory validations
+        // 1. Mandatory Validations
         if (!hospitalId || !bedId || !startDate || !endDate) {
             return res.status(400).json({
                 success: false,
@@ -710,41 +756,29 @@ const finalHospitalBooking = async (req, res) => {
         }
 
         if (!mongoose.isValidObjectId(hospitalId) || !mongoose.isValidObjectId(bedId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid hospitalId or bedId format."
-            });
+            return res.status(400).json({ success: false, message: "Invalid hospitalId or bedId format." });
         }
 
-        // 2. Safe Parsing for Multipart Form-Data Strings
+        // 2. Safe Parsing for Multipart Form-Data
         const safeJsonParse = (input, fallback) => {
             if (!input) return fallback;
             if (typeof input === 'object') return input;
-            try {
-                return JSON.parse(input);
-            } catch (e) {
-                return fallback;
-            }
+            try { return JSON.parse(input); } catch (e) { return fallback; }
         };
 
         const parsedPatients = safeJsonParse(patients, []);
         const parsedAddress = safeJsonParse(address, {});
-        const parsedPricing = safeJsonParse(pricing, {});
 
-        // 3. Normalize Date Boundaries
         const startMoment = moment(startDate).startOf('day');
         const endMoment = moment(endDate).endOf('day');
 
         if (!startMoment.isValid() || !endMoment.isValid() || endMoment.isBefore(startMoment)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid dates. endDate must be on or after startDate."
-            });
+            return res.status(400).json({ success: false, message: "Invalid dates. endDate must be on or after startDate." });
         }
 
         const stayDurationDays = Math.max(1, endMoment.diff(startMoment, 'days') + 1);
 
-        // 4. Verify Target Hospital and Bed
+        // 3. Verify Target Hospital and Bed
         const hospital = await Hospital.findById(hospitalId);
         if (!hospital || !hospital.isActive) {
             return res.status(404).json({ success: false, message: "Hospital not found or inactive." });
@@ -756,13 +790,10 @@ const finalHospitalBooking = async (req, res) => {
         }
 
         if (targetBed.status === 'Maintenance') {
-            return res.status(400).json({
-                success: false,
-                message: "This bed is currently under maintenance. Please select another bed."
-            });
+            return res.status(400).json({ success: false, message: "This bed is currently under maintenance." });
         }
 
-        // 5. Overlap Collision Check (Ensure bed is not double-booked)
+        // 4. Overlap Collision Check
         const now = new Date();
         const existingConflict = await Appointment.findOne({
             hospitalId,
@@ -787,47 +818,40 @@ const finalHospitalBooking = async (req, res) => {
         if (existingConflict) {
             return res.status(400).json({
                 success: false,
-                message: "Selected bed has already been reserved or occupied for these dates. Please choose another bed."
+                message: "Selected bed has already been reserved or occupied for these dates."
             });
         }
 
-        // =========================================================================
-        // 🚨 6. BULLETPROOF SPECIAL SERVICES RESOLVER (Fixes CastError)
-        // =========================================================================
+        // 5. Resolve Optional Doctor
+        let validDoctorId = null;
+        let assignedDoctor = null;
+        const rawDoctorId = doctorId || req.body.doctor?._id || req.body.doctor;
+        if (rawDoctorId && rawDoctorId !== 'null' && rawDoctorId !== 'undefined' && String(rawDoctorId).trim() !== '') {
+            const cleanDocId = String(rawDoctorId).trim();
+            if (mongoose.isValidObjectId(cleanDocId)) {
+                assignedDoctor = await Doctor.findOne({ _id: cleanDocId, hospitalId, isActive: true, profileStatus: 'Approved' }).lean();
+                if (assignedDoctor) validDoctorId = assignedDoctor._id;
+            }
+        }
+
+        // 6. Resolve Special Services
         let formattedSpecialServices = [];
         if (specialServices) {
-            let parsedSpecialServices = specialServices;
-
-            // Handle stringified JSON from multipart form-data
+            let parsed = specialServices;
             if (typeof specialServices === 'string') {
-                try {
-                    parsedSpecialServices = JSON.parse(specialServices);
-                } catch (e) {
-                    // Raw string ID like "6a415595feafd725c1599832"
-                    parsedSpecialServices = [specialServices.trim()];
-                }
+                try { parsed = JSON.parse(specialServices); } catch (e) { parsed = [specialServices.trim()]; }
             }
-
-            if (!Array.isArray(parsedSpecialServices)) {
-                parsedSpecialServices = [parsedSpecialServices];
-            }
+            if (!Array.isArray(parsed)) parsed = [parsed];
 
             const serviceIdsToQuery = [];
-
-            for (const item of parsedSpecialServices) {
-                // Case A: Item is a raw ObjectId String (e.g. "6a415595feafd725c1599832")
+            for (const item of parsed) {
                 if (typeof item === 'string' && mongoose.isValidObjectId(item.trim())) {
                     serviceIdsToQuery.push(new mongoose.Types.ObjectId(item.trim()));
-                }
-                // Case B: Item is an Object
-                else if (item && typeof item === 'object') {
-                    // Object with only serviceId / id
+                } else if (item && typeof item === 'object') {
                     const rawId = item.serviceId || item._id || item.id;
                     if (rawId && mongoose.isValidObjectId(String(rawId).trim()) && !item.serviceName) {
                         serviceIdsToQuery.push(new mongoose.Types.ObjectId(String(rawId).trim()));
-                    }
-                    // Pre-formatted object with serviceName and price
-                    else if (item.serviceName) {
+                    } else if (item.serviceName) {
                         formattedSpecialServices.push({
                             serviceId: rawId && mongoose.isValidObjectId(String(rawId).trim()) ? new mongoose.Types.ObjectId(String(rawId).trim()) : null,
                             serviceName: String(item.serviceName).trim(),
@@ -837,10 +861,9 @@ const finalHospitalBooking = async (req, res) => {
                 }
             }
 
-            // Database lookup for any IDs sent by frontend
             if (serviceIdsToQuery.length > 0) {
-                const fetchedServices = await HospitalService.find({ _id: { $in: serviceIdsToQuery } }).lean();
-                fetchedServices.forEach(srv => {
+                const dbServices = await HospitalService.find({ _id: { $in: serviceIdsToQuery } }).lean();
+                dbServices.forEach(srv => {
                     formattedSpecialServices.push({
                         serviceId: srv._id,
                         serviceName: srv.serviceName,
@@ -850,14 +873,14 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        // 7. Calculate Pricing & Surcharges
+        // 7. Calculate Pricing
         const bedRatePerDay = Number(targetBed.pricePerDay || 1000);
         const stayBaseFee = bedRatePerDay * stayDurationDays;
-        const specialServicesTotal = formattedSpecialServices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
+        const specialServicesTotal = formattedSpecialServices.reduce((sum, s) => sum + s.price, 0);
+        const doctorFee = assignedDoctor ? Number(assignedDoctor.fees?.clinic || 0) : 0;
 
         let couponDiscount = 0;
         let appliedCouponDoc = null;
-
         if (couponCode) {
             const cleanCoupon = String(couponCode).trim().toUpperCase();
             const coupon = await Coupon.findOne({
@@ -866,7 +889,6 @@ const finalHospitalBooking = async (req, res) => {
                 isActive: true,
                 expiryDate: { $gte: now }
             });
-
             if (coupon && stayBaseFee >= (coupon.minOrderAmount || 0)) {
                 couponDiscount = Math.min((stayBaseFee * coupon.discountPercentage) / 100, coupon.maxDiscount || Infinity);
                 appliedCouponDoc = {
@@ -877,33 +899,70 @@ const finalHospitalBooking = async (req, res) => {
             }
         }
 
-        const subtotal = stayBaseFee + specialServicesTotal;
+        const subtotal = stayBaseFee + specialServicesTotal + doctorFee;
         const totalAmount = Math.max(0, subtotal - couponDiscount);
 
-        // 8. Generate Unique Booking ID
         const timePart = Date.now().toString(36).toUpperCase();
         const randPart = crypto.randomBytes(2).toString('hex').toUpperCase();
         const generatedBookingId = `HKH-ADM-${timePart}-${randPart}`;
 
-        // 9. Handle Insurance File Uploads (From Multer fields)
-        const files = req.files || {};
+        // =========================================================================
+        // 🚨 8. SMART INSURANCE RESOLVER (Respects Explicit Opt-Out vs Profile Auto-Inherit)
+        // =========================================================================
+        const user = await User.findById(userId).select('insuranceDetails').lean();
+        const savedProfileInsurance = user?.insuranceDetails || {};
+
+        // Explicit Check: Did the user explicitly select Self-Pay / No Insurance?
+        const isExplicitlyNoInsurance = hasInsurance === false || hasInsurance === 'false';
+
+        let hasInsuranceFinal = false;
+        let resolvedInsuranceNum = "";
+        let resolvedCompanyName = "";
+        let resolvedType = "Cashless";
+        let resolvedMasterInsId = null;
         let insuranceDoc = null;
         let insuranceDocFront = null;
         let insuranceDocBack = null;
 
-        if (files.insuranceDocument && files.insuranceDocument[0]) {
-            insuranceDoc = `/uploads/insurance/${files.insuranceDocument[0].filename}`;
-        }
-        if (files.insuranceDocumentFront && files.insuranceDocumentFront[0]) {
-            insuranceDocFront = `/uploads/insurance/${files.insuranceDocumentFront[0].filename}`;
-        }
-        if (files.insuranceDocumentBack && files.insuranceDocumentBack[0]) {
-            insuranceDocBack = `/uploads/insurance/${files.insuranceDocumentBack[0].filename}`;
+        if (!isExplicitlyNoInsurance) {
+            const files = req.files || {};
+
+            // 1. Newly uploaded files in this booking
+            const frontFile = (files.insuranceDocumentFront && files.insuranceDocumentFront[0]) ||
+                              (files.insuranceFront && files.insuranceFront[0]) ||
+                              (files.frontImage && files.frontImage[0]);
+
+            const backFile = (files.insuranceDocumentBack && files.insuranceDocumentBack[0]) ||
+                             (files.insuranceBack && files.insuranceBack[0]) ||
+                             (files.backImage && files.backImage[0]);
+
+            const docFile = (files.insuranceDocument && files.insuranceDocument[0]);
+
+            if (frontFile) insuranceDocFront = `/uploads/insurance/${frontFile.filename}`;
+            if (backFile) insuranceDocBack = `/uploads/insurance/${backFile.filename}`;
+            if (docFile) insuranceDoc = `/uploads/insurance/${docFile.filename}`;
+
+            // 2. Auto-inherit from profile only if not uploaded newly
+            if (!insuranceDocFront && savedProfileInsurance.insuranceDocumentFront) {
+                insuranceDocFront = savedProfileInsurance.insuranceDocumentFront;
+            }
+            if (!insuranceDocBack && savedProfileInsurance.insuranceDocumentBack) {
+                insuranceDocBack = savedProfileInsurance.insuranceDocumentBack;
+            }
+            if (!insuranceDoc && savedProfileInsurance.insuranceDocument) {
+                insuranceDoc = savedProfileInsurance.insuranceDocument;
+            }
+
+            resolvedInsuranceNum = insuranceNumber || savedProfileInsurance.insuranceNumber || "";
+            resolvedCompanyName = companyName || savedProfileInsurance.companyName || "";
+            resolvedType = insuranceType || savedProfileInsurance.insuranceType || "Cashless";
+            resolvedMasterInsId = masterInsuranceId || savedProfileInsurance.masterInsuranceId || null;
+
+            // Only mark true if there is an actual policy number, front card, or explicit boolean true
+            hasInsuranceFinal = hasInsurance === true || hasInsurance === 'true' || Boolean(resolvedInsuranceNum || insuranceDocFront);
         }
 
-        const hasInsuranceBoolean = hasInsurance === true || hasInsurance === 'true';
-
-        // 10. Format Patients List
+        // 9. Patients List
         let formattedPatients = [];
         if (Array.isArray(parsedPatients) && parsedPatients.length > 0) {
             formattedPatients = parsedPatients.map(p => ({
@@ -927,24 +986,19 @@ const finalHospitalBooking = async (req, res) => {
             }];
         }
 
-        // 11. Normalize Payment Method & Status
         const cleanPaymentMethod = String(paymentMethod).toUpperCase() === 'ONLINE' ? 'Online' : 'COD';
-        const isOnline = cleanPaymentMethod === 'Online';
-        const initialStatus = 'Hospital-Pending';
-        const initialPaymentStatus = 'Pending';
-
-        // 30-minute hold window for payment completion or hospital confirmation
         const holdDeadline = new Date(now.getTime() + 30 * 60 * 1000);
 
-        // 12. Create Appointment Document
+        // 10. Create Admission Document
         const appointment = await Appointment.create({
             userId,
             hospitalId,
+            doctorId: validDoctorId,
             bedId: targetBed._id,
             bookingType: 'Admission',
             bedBookingType: triageLevel === 'Emergency' ? 'Emergency-Bed' : 'General-Bed',
             bookingId: generatedBookingId,
-            status: initialStatus,
+            status: 'Hospital-Pending',
             triageLevel: triageLevel || 'Routine',
             bookingReason: bookingReason || "Hospital In-Patient Admission",
             wardName: targetBed.wardId?.name || "General Ward",
@@ -966,11 +1020,11 @@ const finalHospitalBooking = async (req, res) => {
                 pincode: parsedAddress.pincode || "",
                 addressType: parsedAddress.addressType || "Home"
             },
-            specialServices: formattedSpecialServices, // 👈 100% Resolved Object Array
+            specialServices: formattedSpecialServices,
             pricingBreakdown: {
                 baseFee: stayBaseFee,
                 originalBaseFee: stayBaseFee,
-                visitCharges: 0,
+                visitCharges: doctorFee,
                 extraCharges: specialServicesTotal,
                 discountAmount: couponDiscount,
                 subtotal: subtotal,
@@ -979,31 +1033,37 @@ const finalHospitalBooking = async (req, res) => {
             },
             totalAmount: totalAmount,
             paymentMethod: cleanPaymentMethod,
-            paymentStatus: initialPaymentStatus,
+            paymentStatus: 'Pending',
             couponDetails: appliedCouponDoc,
+            // 🚨 Accurately configured insurance block
             insuranceDetails: {
-                hasInsurance: hasInsuranceBoolean,
-                insuranceNumber: insuranceNumber || "",
-                companyName: companyName || "",
-                insuranceType: insuranceType || "",
-                masterInsuranceId: masterInsuranceId && mongoose.isValidObjectId(masterInsuranceId) ? masterInsuranceId : null,
-                insuranceDocument: insuranceDoc,
-                insuranceDocumentFront: insuranceDocFront,
-                insuranceDocumentBack: insuranceDocBack,
-                approvalStatus: 'Pending'
-            }
+                hasInsurance: hasInsuranceFinal,
+                insuranceNumber: hasInsuranceFinal ? resolvedInsuranceNum : "",
+                companyName: hasInsuranceFinal ? resolvedCompanyName : "",
+                insuranceType: hasInsuranceFinal ? resolvedType : "Cashless",
+                masterInsuranceId: hasInsuranceFinal && resolvedMasterInsId && mongoose.isValidObjectId(resolvedMasterInsId) ? resolvedMasterInsId : null,
+                insuranceDocument: hasInsuranceFinal ? insuranceDoc : null,
+                insuranceDocumentFront: hasInsuranceFinal ? insuranceDocFront : null,
+                insuranceDocumentBack: hasInsuranceFinal ? insuranceDocBack : null,
+                approvalStatus: hasInsuranceFinal ? 'Pending' : 'None'
+            },
+            treatmentHistory: validDoctorId ? [{
+                toDoctorId: validDoctorId,
+                action: 'Initial-Assignment',
+                notes: `Selected Dr. ${assignedDoctor.name} at admission booking.`,
+                timestamp: now,
+                startTime: now
+            }] : []
         });
 
-        // 13. Temporarily mark Bed status as Reserved during the active hold
+        // 11. Lock Bed to Reserved
         targetBed.status = 'Reserved';
         await targetBed.save();
 
-        // 14. Auto-sync hospital bed capacity
         await syncHospitalWardAndBedCapacity(hospitalId, targetBed.wardId?._id);
 
-        // 15. Online Razorpay Order generation if paymentMethod is Online
         let razorpayOrderData = null;
-        if (isOnline && totalAmount > 0) {
+        if (cleanPaymentMethod === 'Online' && totalAmount > 0) {
             try {
                 const rzpOrder = await createRazorpayOrder(totalAmount, `rcpt_${generatedBookingId}`);
                 razorpayOrderData = {
@@ -1012,40 +1072,36 @@ const finalHospitalBooking = async (req, res) => {
                     currency: "INR",
                     razorpayOrderId: rzpOrder.id
                 };
-            } catch (rzpErr) {
-                console.error("Razorpay Order Generation Failed:", rzpErr.message);
-            }
+            } catch (e) {}
         }
 
-        // 16. Alert Hospital Admin via Push Notification
         try {
             await sendPushNotification(
                 hospitalId,
                 'hospital',
                 "New IPD Admission Booking!",
-                `Patient ${formattedPatients[0].patientName} requested Bed ${targetBed.bedNumber} (${targetBed.wardId?.name}). Total Deposit: ₹${totalAmount}.`,
+                `Patient ${formattedPatients[0].patientName} booked Bed ${targetBed.bedNumber} (${targetBed.wardId?.name}).`,
                 { appointmentId: appointment._id.toString(), bookingId: generatedBookingId, type: 'new_admission_booking' }
             );
         } catch (e) {}
 
         return res.status(201).json({
             success: true,
-            message: "Admission booking created successfully. Bed reserved under active hold.",
+            message: "Admission booking created successfully.",
             bookingId: generatedBookingId,
             appointmentId: appointment._id,
+            doctorId: validDoctorId,
             totalAmount: totalAmount,
             paymentMethod: cleanPaymentMethod,
             holdExpiresAt: holdDeadline,
             razorpayOrder: razorpayOrderData,
+            insuranceSummary: appointment.insuranceDetails,
             data: appointment
         });
 
     } catch (error) {
         console.error("Final Hospital Booking Critical Error:", error);
-        return res.status(500).json({
-            success: false,
-            message: "Internal Server Error: " + error.message
-        });
+        return res.status(500).json({ success: false, message: "Internal Server Error: " + error.message });
     }
 };
 
@@ -1593,33 +1649,84 @@ const getMyHospitalBookings = async (req, res) => {
 };
 
 
-// GET FAMILY MEMBERS FOR BUBBLES (Screenshot 24)
+// @desc    Get Booking Patient Profiles with Pre-Saved Insurance Details
+// @route   GET /user/hospital/booking-profiles
+// @access  Private (User)
 const getBookingProfiles = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('name profilePic familyMember bloodGroup');
-        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        const userId = req.user.id;
 
-        // Main User + Family members array merged with Blood Group
+        const user = await User.findById(userId)
+            .select('name phone gender dob age bloodGroup insuranceDetails familyMember')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+            .populate('familyMember.insuranceId', 'provider insuranceName type')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User profile not found." });
+        }
+
+        const userInsurance = user.insuranceDetails || {};
+
+        // 1. Primary User Profile with saved insurance
         const profiles = [
-            { 
-                id: user._id, 
-                name: "My Self", 
-                profilePic: user.profilePic, 
+            {
+                id: 'Self',
+                name: user.name || "Self",
                 relation: 'Self',
-                bloodGroup: user.bloodGroup || null 
-            },
-            ...user.familyMember.map(fm => ({ 
-                id: fm._id, 
-                name: fm.memberName, 
-                profilePic: fm.profilePic, 
-                relation: fm.relation,
-                bloodGroup: fm.bloodGroup || null 
-            }))
+                gender: user.gender || "Male",
+                dob: user.dob || null,
+                phone: user.phone || "",
+                bloodGroup: user.bloodGroup || null,
+                isMainUser: true,
+                insurance: {
+                    hasInsurance: Boolean(userInsurance.hasInsurance),
+                    insuranceNumber: userInsurance.insuranceNumber || "",
+                    companyName: userInsurance.masterInsuranceId?.insuranceName || userInsurance.companyName || "",
+                    insuranceType: userInsurance.insuranceType || "Cashless",
+                    insuranceDocumentFront: userInsurance.insuranceDocumentFront || null,
+                    insuranceDocumentBack: userInsurance.insuranceDocumentBack || null,
+                    insuranceDocument: userInsurance.insuranceDocument || null,
+                    masterInsuranceId: userInsurance.masterInsuranceId?._id || null
+                }
+            }
         ];
 
-        res.json({ success: true, data: profiles });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        // 2. Family Members
+        if (Array.isArray(user.familyMember)) {
+            user.familyMember.forEach(fm => {
+                profiles.push({
+                    id: String(fm._id),
+                    name: fm.memberName || fm.name || "Family Member",
+                    relation: fm.relation || "Dependent",
+                    gender: fm.gender || "Male",
+                    dob: fm.dob || null,
+                    phone: fm.phone || user.phone || "",
+                    bloodGroup: fm.bloodGroup || null,
+                    isMainUser: false,
+                    insurance: {
+                        hasInsurance: Boolean(fm.hasInsurance || fm.insuranceNo),
+                        insuranceNumber: fm.insuranceNo || "",
+                        companyName: fm.insuranceId?.insuranceName || "",
+                        insuranceType: fm.insuranceId?.type || "Cashless",
+                        insuranceDocumentFront: null,
+                        insuranceDocumentBack: null,
+                        insuranceDocument: null,
+                        masterInsuranceId: fm.insuranceId?._id || null
+                    }
+                });
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            count: profiles.length,
+            data: profiles
+        });
+
+    } catch (error) {
+        console.error("Get Booking Profiles Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

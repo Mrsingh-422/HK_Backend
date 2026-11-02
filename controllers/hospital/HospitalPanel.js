@@ -657,21 +657,45 @@ const updateBedStatus = async (req, res) => {
     }
 };
 
-// POST /hospital/panel/admissions/assign-doctor
-// Updated: Verified hospital doctor fleet matching and automatically initiated clinical shift tracking
+// @desc    Assign Hospital Doctor to Admission Case & Activate Doctor Shift Tracking
+// @route   POST /hospital/panel/admissions/assign-doctor
+// @access  Private (Hospital Admin)
 const assignDoctorToAdmission = async (req, res) => {
     try {
         const { appointmentId, doctorId } = req.body;
         const hospitalId = req.user.id; // Logged-in Hospital Admin
 
-        // 1. Fetch Target Appointment
-        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission request not found on your hospital console." });
+        // 1. Validation
+        if (!appointmentId || !doctorId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId and doctorId are both required."
+            });
         }
 
-        // 2. Fetch and Validate Doctor (Verify they belong strictly to this hospital and are active)
-        const Doctor = require('../../models/Doctor'); // Path-safe local load
+        // 2. Fetch Target Appointment (Supports both MongoDB _id and custom bookingId)
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            hospitalId,
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query);
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Admission request not found on your hospital console."
+            });
+        }
+
+        // 3. Fetch and Validate Doctor (Must be approved, active, and belong to this hospital)
+        if (!mongoose.isValidObjectId(doctorId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid doctorId format."
+            });
+        }
+
         const doctor = await Doctor.findOne({ 
             _id: doctorId, 
             hospitalId,
@@ -688,41 +712,49 @@ const assignDoctorToAdmission = async (req, res) => {
 
         const now = new Date();
 
-        // 3. Assign Doctor & Start Treatment Shift Tracking Timeline (Doctor Panel Sync)
-        appointment.doctorId = doctorId;
-        appointment.status = 'Confirmed'; // Confirms the pending admission request
+        // 4. Assign Doctor & Start Treatment Shift Tracking Timeline
+        appointment.doctorId = doctor._id;
+        appointment.status = 'Confirmed';
+
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
+        }
 
         appointment.treatmentHistory.push({
-            toDoctorId: doctorId,
+            toDoctorId: doctor._id,
             action: 'Initial-Assignment',
             notes: `Assigned Dr. ${doctor.name} from Hospital Admin Control Desk.`,
             timestamp: now,
-            startTime: now // 🚀 Starts doctor's active treatment shift instantly!
+            startTime: now // Starts doctor's clinical shift tracking
         });
 
         await appointment.save();
 
-        // 4. Trigger Push Notification to the assigned Doctor (Figma Alerts Sync)
-        const { sendPushNotification } = require('../../utils/notification');
-        await sendPushNotification(
-            doctorId,
-            'doctor',
-            "🚨 New Case Assigned!",
-            `You have been assigned as the primary physician for patient case #${appointment.bookingId}. Please review dossier.`,
-            { appointmentId: appointment._id.toString(), type: 'new_case_assigned' }
-        );
+        // 5. Send Push Notification to Doctor Panel
+        try {
+            await sendPushNotification(
+                doctor._id,
+                'doctor',
+                "🚨 New Patient Case Assigned!",
+                `You have been assigned as the primary attending physician for patient ${appointment.patients[0]?.patientName || 'Patient'} (Case #${appointment.bookingId}).`,
+                { appointmentId: appointment._id.toString(), bookingId: appointment.bookingId, type: 'new_case_assigned' }
+            );
+        } catch (notifErr) {
+            console.error("Doctor Assignment Push Error:", notifErr.message);
+        }
 
-        res.json({ 
+        return res.status(200).json({ 
             success: true, 
-            message: `Dr. ${doctor.name} successfully assigned to case and clinical shift tracking activated.`,
+            message: `Dr. ${doctor.name} successfully assigned to case #${appointment.bookingId}.`,
             data: appointment 
         });
 
     } catch (error) { 
         console.error("Assign Doctor Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 
@@ -1940,32 +1972,143 @@ const getDailyOccupancy = async (req, res) => {
     }
 };
 
+// @desc    Hospital Admin Finalizes Inpatient Discharge & Calculates 24-Hour Stay Settlement with Insurance
+// @route   POST /hospital/panel/finalize-discharge
+// @access  Private (Hospital Admin)
 const finalizeDischarge = async (req, res) => {
     try {
-        const { appointmentId, billingItems, dischargeDate } = req.body;
+        const { appointmentId, dischargeNote } = req.body;
+        const hospitalId = req.user.id;
 
-        const appt = await Appointment.findById(appointmentId);
-        if (!appt) return res.status(404).json({ message: "Appointment record not found." });
-        
-        appt.status = 'Completed';
-        appt.endDate = dischargeDate ? new Date(dischargeDate) : new Date(); 
-        
-        await appt.save();
+        const isObjectId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            hospitalId,
+            bookingType: 'Admission',
+            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
 
-        // Bed Release logic (Check if actual discharge is today or in past)
-        if (moment(appt.endDate).isSameOrBefore(moment(), 'day')) {
-            await Bed.findByIdAndUpdate(appt.bedId, { status: 'Available' });
-            
-            // FIX: Added appt.hospitalId constraint so that wards across different hospitals don't overlap by name
-            await Ward.findOneAndUpdate(
-                { name: appt.wardName, hospitalId: appt.hospitalId }, 
-                { $inc: { availableBeds: 1 } }
-            );
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Admission record not found." });
         }
 
-        res.json({ success: true, message: "Patient Discharged. Range inventory updated." });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        if (appointment.status === 'Completed') {
+            return res.status(400).json({ success: false, message: "Patient is already discharged." });
+        }
+
+        const now = new Date();
+        const startMoment = moment(appointment.startDate || appointment.createdAt);
+        const currentMoment = moment(now);
+
+        // Calculate actual stay duration based on standard 24-hour cycle
+        const actualStayHours = Math.max(1, currentMoment.diff(startMoment, 'hours'));
+        const actualStayDays = Math.max(1, Math.ceil(actualStayHours / 24));
+        const bookedDays = Number(appointment.pricingBreakdown?.bookedDurationDays || appointment.stayDuration || 1);
+
+        const targetBed = await Bed.findById(appointment.bedId);
+        const bedPricePerDay = Number(targetBed?.pricePerDay || 1000);
+        const depositPaid = Number(appointment.pricingBreakdown?.depositPaidOnBooking || appointment.totalAmount || 0);
+
+        // Standard stay cost calculation
+        const actualBaseFee = bedPricePerDay * actualStayDays;
+        const specialServicesFee = Number(appointment.pricingBreakdown?.extraCharges || 0);
+        const doctorFee = Number(appointment.pricingBreakdown?.visitCharges || 0);
+        const totalActualBill = actualBaseFee + specialServicesFee + doctorFee;
+
+        // 🚨 CASHLESS INSURANCE SETTLEMENT ENGINE
+        const isCashlessApproved = appointment.insuranceDetails?.hasInsurance === true && 
+                                   appointment.insuranceDetails?.approvalStatus === 'Approved';
+
+        let refundDue = 0;
+        let pendingPayableByPatient = 0;
+        let settlementNotes = "";
+
+        if (isCashlessApproved) {
+            // Case A: 100% Cashless TPA Claim Approved
+            // The insurance company pays the hospital bill directly.
+            // Any initial deposit paid by patient is 100% refunded!
+            refundDue = depositPaid;
+            pendingPayableByPatient = 0;
+            settlementNotes = `100% Cashless Claim Approved by TPA. Hospital bill of ₹${totalActualBill} settled by insurance. Booking deposit of ₹${depositPaid} refunded to patient.`;
+        } else {
+            // Case B: Self-Pay / Cash / Pending Insurance
+            if (depositPaid > totalActualBill) {
+                // Early recovery: refund unused days
+                refundDue = depositPaid - totalActualBill;
+                pendingPayableByPatient = 0;
+                settlementNotes = `Patient recovered early (${actualStayDays}/${bookedDays} days). Unused deposit refund: ₹${refundDue}.`;
+            } else if (totalActualBill > depositPaid) {
+                // Extended stay: collect additional balance at counter
+                pendingPayableByPatient = totalActualBill - depositPaid;
+                refundDue = 0;
+                settlementNotes = `Extended stay (${actualStayDays} days). Pending balance payable at counter: ₹${pendingPayableByPatient}.`;
+            } else {
+                refundDue = 0;
+                pendingPayableByPatient = 0;
+                settlementNotes = "Deposit exactly covers the hospitalization bill.";
+            }
+        }
+
+        // Update Appointment Document
+        appointment.status = 'Completed';
+        appointment.clinicalSummary.dischargedAt = now;
+        if (dischargeNote) {
+            appointment.clinicalSummary.dischargeNote = dischargeNote;
+        }
+
+        if (!appointment.pricingBreakdown) appointment.pricingBreakdown = {};
+        appointment.pricingBreakdown.actualStayHours = actualStayHours;
+        appointment.pricingBreakdown.actualStayDays = actualStayDays;
+        appointment.pricingBreakdown.unusedDaysRefund = refundDue;
+        appointment.pricingBreakdown.refundDueToUser = refundDue;
+        appointment.pricingBreakdown.pendingDepartureBalance = pendingPayableByPatient;
+        appointment.pricingBreakdown.settlementStatus = refundDue > 0 ? 'Refund-Initiated' : 'Settled';
+
+        // 🚨 Release Bed & Synchronize Hospital Capacity
+        if (targetBed) {
+            targetBed.status = 'Available';
+            await targetBed.save();
+        }
+
+        await appointment.save();
+
+        if (appointment.hospitalId) {
+            await syncHospitalWardAndBedCapacity(appointment.hospitalId, targetBed?.wardId);
+        }
+
+        // Notify Patient
+        if (appointment.userId) {
+            try {
+                await sendPushNotification(
+                    appointment.userId._id,
+                    'user',
+                    "🏥 Hospital Discharge Finalized",
+                    `Discharge finalized for Bed ${appointment.bedNumber}. ${settlementNotes}`,
+                    { appointmentId: appointment._id.toString(), type: 'discharge_completed' }
+                );
+            } catch (e) {}
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Discharge finalized successfully. Bed released to Available.",
+            settlement: {
+                bookingId: appointment.bookingId,
+                isCashlessInsuranceApproved: isCashlessApproved,
+                actualStayDays,
+                totalActualBill,
+                depositPaidOnBooking: depositPaid,
+                refundDueToUser: refundDue,
+                pendingPayableAtCounter: pendingPayableByPatient,
+                settlementStatus: appointment.pricingBreakdown.settlementStatus,
+                notes: settlementNotes
+            },
+            data: appointment
+        });
+
+    } catch (error) {
+        console.error("Finalize Discharge Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -4078,255 +4221,353 @@ const getReferralHospitals = async (req, res) => {
 /////////////////////////// INSURANCE  ///////////////////////////
 /////////////////////////////////////////////////////////////////
 
-// @desc    Get Hospital Insured Patients for TPA Desk (Default: Strictly only insured patients)
+// @desc    Get Hospital Inpatients Filtered by Insurance Claim Status (TPA Desk Console)
 // @route   GET /hospital/panel/insurance/patients
-// @access  Private (Hospital)
+// @access  Private (Hospital Admin)
 const getInsurancePatientsList = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { status = 'All', search = "", page = 1, limit = 20 } = req.query;
+        const { tab = 'Insured', claimStatus, search, page = 1, limit = 20 } = req.query;
 
-        const query = { hospitalId };
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 20);
+        const skip = (pageNum - 1) * limitNum;
 
-        // 🚨 CRITICAL FIX: By default, the Insurance Desk must ONLY show patients with hasInsurance === true!
-        if (status === 'Uninsured') {
-            // Only show non-insured / self-pay patients if explicitly requested
-            query['insuranceDetails.hasInsurance'] = false;
-        } else if (status === 'Pending' || status === 'PendingApproval') {
-            query['insuranceDetails.hasInsurance'] = true;
-            query['insuranceDetails.approvalStatus'] = 'Pending';
-        } else if (status === 'Approved') {
-            query['insuranceDetails.hasInsurance'] = true;
-            query['insuranceDetails.approvalStatus'] = 'Approved';
-        } else if (status === 'Rejected') {
-            query['insuranceDetails.hasInsurance'] = true;
-            query['insuranceDetails.approvalStatus'] = 'Rejected';
-        } else {
-            // Default (status === 'All', 'Insured' or no query param): Strictly show ONLY Insured patients!
-            query['insuranceDetails.hasInsurance'] = true;
-        }
+        let query = {
+            hospitalId,
+            bookingType: 'Admission',
+            status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending'] }
+        };
 
-        if (search && search.trim() !== '') {
+        // Filter based on Insured vs Self-Pay (Uninsured)
+        if (tab === 'Insured') {
+            query['insuranceDetails.hasInsurance'] = true;
+            if (claimStatus && claimStatus !== 'All') {
+                query['insuranceDetails.approvalStatus'] = claimStatus; // 'Pending', 'Approved', 'Rejected'
+            }
+        } else if (tab === 'Self-Pay') {
             query.$or = [
-                { bookingId: { $regex: search.trim(), $options: 'i' } },
-                { 'patients.patientName': { $regex: search.trim(), $options: 'i' } },
-                { 'insuranceDetails.insuranceNumber': { $regex: search.trim(), $options: 'i' } }
+                { 'insuranceDetails.hasInsurance': false },
+                { 'insuranceDetails.hasInsurance': { $exists: false } }
             ];
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        if (search && search.trim() !== '') {
+            const cleanSearch = search.trim();
+            query.$or = [
+                { bookingId: { $regex: cleanSearch, $options: 'i' } },
+                { 'patients.patientName': { $regex: cleanSearch, $options: 'i' } },
+                { 'insuranceDetails.insuranceNumber': { $regex: cleanSearch, $options: 'i' } }
+            ];
+        }
 
-        const [total, patients] = await Promise.all([
+        const [totalRecords, admissions] = await Promise.all([
             Appointment.countDocuments(query),
             Appointment.find(query)
-                .populate('userId', 'name phone email profilePic')
+                .populate('userId', 'name phone email profilePic age gender')
                 .populate('doctorId', 'name speciality')
-                .populate('bedId', 'bedNumber wardId')
-                .sort({ createdAt: -1 })
+                .populate({
+                    path: 'bedId',
+                    select: 'bedNumber pricePerDay status',
+                    populate: { path: 'wardId', select: 'name type' }
+                })
+                .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+                .sort({ 'insuranceDetails.approvalStatus': 1, createdAt: -1 })
                 .skip(skip)
-                .limit(parseInt(limit))
+                .limit(limitNum)
                 .lean()
         ]);
 
-        const formatted = patients.map(p => ({
-            appointmentId: p._id,
-            bookingId: p.bookingId,
-            bookingType: p.bookingType,
-            patientName: p.patients?.[0]?.patientName || p.userId?.name || "Patient",
-            phone: p.userId?.phone || "N/A",
-            wardName: p.wardName || "N/A",
-            bedNumber: p.bedNumber || "N/A",
-            status: p.status,
+        const formatted = admissions.map(item => ({
+            appointmentId: item._id,
+            bookingId: item.bookingId,
+            status: item.status,
+            admissionDate: item.startDate,
+            patient: {
+                userId: item.userId?._id,
+                name: item.patients?.[0]?.patientName || item.userId?.name || "Patient",
+                phone: item.address?.phone || item.userId?.phone || "N/A",
+                gender: item.patients?.[0]?.gender || item.userId?.gender || "N/A",
+                age: item.patients?.[0]?.patientAge || item.userId?.age || "N/A"
+            },
+            doctorName: item.doctorId ? `Dr. ${item.doctorId.name} (${item.doctorId.speciality})` : "Unassigned",
+            bedNumber: item.bedNumber || item.bedId?.bedNumber || "N/A",
+            wardName: item.wardName || item.bedId?.wardId?.name || "General Ward",
+            totalEstimatedAmount: Number(item.totalAmount || 0),
             insurance: {
-                hasInsurance: Boolean(p.insuranceDetails?.hasInsurance),
-                companyName: p.insuranceDetails?.companyName || "N/A",
-                insuranceNumber: p.insuranceDetails?.insuranceNumber || "N/A",
-                insuranceType: p.insuranceDetails?.insuranceType || "N/A",
-                approvalStatus: p.insuranceDetails?.approvalStatus || "Pending",
-                approvalLetterPdf: p.insuranceDetails?.approvalLetterPdf || null,
-                cardFront: p.insuranceDetails?.insuranceDocumentFront || p.insuranceDetails?.insuranceDocument || null,
-                cardBack: p.insuranceDetails?.insuranceDocumentBack || null
+                hasInsurance: Boolean(item.insuranceDetails?.hasInsurance),
+                insuranceNumber: item.insuranceDetails?.insuranceNumber || "N/A",
+                companyName: item.insuranceDetails?.masterInsuranceId?.insuranceName || item.insuranceDetails?.companyName || "N/A",
+                insuranceType: item.insuranceDetails?.insuranceType || "Cashless",
+                cardFrontUrl: item.insuranceDetails?.insuranceDocumentFront || null,
+                cardBackUrl: item.insuranceDetails?.insuranceDocumentBack || null,
+                approvalLetterPdf: item.insuranceDetails?.approvalLetterPdf || null,
+                approvalStatus: item.insuranceDetails?.approvalStatus || 'Pending',
+                isApproved: item.insuranceDetails?.approvalStatus === 'Approved'
             }
         }));
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            total,
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitNum),
+            currentPage: pageNum,
             count: formatted.length,
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(total / parseInt(limit)),
             data: formatted
         });
 
     } catch (error) {
-        console.error("Get Insurance Patients Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Get Insurance Patients List Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// @desc    Upload TPA Insurance Approval Letter for Patient Appointment
+// @desc    Hospital TPA Desk Uploads Cashless Approval Letter & Notifies Inpatient
 // @route   PUT /hospital/panel/insurance/upload-approval-letter/:appointmentId
-// @access  Private (Hospital)
+// @access  Private (Hospital Admin)
 const uploadInsuranceApprovalLetter = async (req, res) => {
     try {
         const { appointmentId } = req.params;
         const hospitalId = req.user.id;
-
-        if (!req.file) {
-            return res.status(400).json({ success: false, message: "Approval letter file (PDF or Image) is required." });
-        }
+        const { approvalStatus = 'Approved', rejectionReason, approvedAmount } = req.body;
 
         const isObjectId = mongoose.isValidObjectId(appointmentId);
         const query = {
             hospitalId,
+            bookingType: 'Admission',
             ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
         };
 
-        const appointment = await Appointment.findOne(query);
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Appointment record not found." });
-        }
-
-        // Delete old approval letter if re-uploading
-        if (appointment.insuranceDetails?.approvalLetterPdf) {
-            deleteFile(appointment.insuranceDetails.approvalLetterPdf);
+            return res.status(404).json({ success: false, message: "Inpatient admission record not found." });
         }
 
         if (!appointment.insuranceDetails) {
             appointment.insuranceDetails = { hasInsurance: true };
         }
 
-        const letterPath = `/uploads/insurance_approvals/${req.file.filename}`;
-        appointment.insuranceDetails.hasInsurance = true;
-        appointment.insuranceDetails.approvalLetterPdf = letterPath;
-        appointment.insuranceDetails.approvalStatus = 'Approved';
+        // 1. Handle Approval Letter PDF Upload
+        if (req.file) {
+            if (appointment.insuranceDetails.approvalLetterPdf) {
+                deleteFile(appointment.insuranceDetails.approvalLetterPdf);
+            }
+            appointment.insuranceDetails.approvalLetterPdf = `/uploads/insurance_approvals/${req.file.filename}`;
+        }
+
+        const cleanStatus = approvalStatus === 'Rejected' ? 'Rejected' : 'Approved';
+        appointment.insuranceDetails.approvalStatus = cleanStatus;
+
+        if (cleanStatus === 'Rejected') {
+            appointment.insuranceDetails.rejectionReason = rejectionReason || "Declined by Insurance TPA Desk";
+        } else {
+            appointment.insuranceDetails.rejectionReason = null;
+        }
 
         await appointment.save();
 
-        // Notify Patient
+        // 🚨 2. PUSH NOTIFICATION: Alert Patient of Cashless Claim Status
         if (appointment.userId) {
             try {
+                const isApproved = cleanStatus === 'Approved';
+                const notifTitle = isApproved ? "🎉 Cashless Insurance Approved!" : "⚠️ Insurance Claim Declined";
+                const notifMsg = isApproved
+                    ? `Your cashless claim for Hospital Admission #${appointment.bookingId} has been approved by TPA desk. Download approval letter from app.`
+                    : `Your insurance claim for Admission #${appointment.bookingId} was declined (${rejectionReason || 'Policy terms'}). Please visit TPA desk.`;
+
                 await sendPushNotification(
-                    appointment.userId,
+                    appointment.userId._id,
                     'user',
-                    "Insurance Claim Approved! 📄",
-                    `Your TPA Cashless insurance approval letter has been uploaded for Booking #${appointment.bookingId}.`,
-                    { appointmentId: appointment._id.toString(), type: 'insurance_claim_approved' }
+                    notifTitle,
+                    notifMsg,
+                    { 
+                        appointmentId: appointment._id.toString(), 
+                        type: 'insurance_claim_status_updated',
+                        status: cleanStatus 
+                    }
                 );
-            } catch (e) {}
+            } catch (notifErr) {
+                console.error("Insurance Status Push Notification Error:", notifErr.message);
+            }
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: "Insurance approval letter uploaded and verified successfully.",
-            data: {
-                appointmentId: appointment._id,
-                bookingId: appointment.bookingId,
-                insuranceDetails: appointment.insuranceDetails
-            }
+            message: `Insurance approval letter uploaded. Claim marked as ${cleanStatus}. Patient notified.`,
+            data: appointment.insuranceDetails
         });
 
     } catch (error) {
-        console.error("Upload Approval Letter Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Upload Insurance Approval Letter Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
 
 
-// @desc    Get Active Insurance Master Dropdowns for Hospital Desk
+// @desc    Get Active Insurance Master Companies for TPA Desk Dropdown
 // @route   GET /hospital/panel/insurance/master-data
-// @access  Private (Hospital)
+// @access  Private (Hospital Admin)
 const getInsuranceMasterDropdowns = async (req, res) => {
     try {
-        const [companies, types] = await Promise.all([
-            Insurance.find({ isActive: true }).select('provider insuranceName type').sort({ provider: 1 }).lean(),
-            InsuranceType.find({ isActive: true }).select('name').sort({ name: 1 }).lean()
-        ]);
+        const companies = await Insurance.find({ isActive: true })
+            .sort({ provider: 1, insuranceName: 1 })
+            .lean();
 
-        res.status(200).json({
+        const providers = [...new Set(companies.map(c => c.provider))].filter(Boolean);
+
+        return res.status(200).json({
             success: true,
-            companies: companies || [],
-            types: (types || []).map(t => t.name)
+            count: companies.length,
+            providers,
+            data: companies.map(c => ({
+                _id: c._id,
+                provider: c.provider,
+                insuranceName: c.insuranceName,
+                type: c.type,
+                displayName: `${c.provider} - ${c.insuranceName} (${c.type.toUpperCase()})`
+            }))
         });
 
     } catch (error) {
-        console.error("Get Insurance Master Data Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Get Insurance Master Dropdowns Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// @desc    Hospital Desk Saves or Updates Patient Insurance Details and Syncs Active Appointment
+// @desc    Hospital TPA Desk Saves/Updates Patient Insurance & Syncs Active Inpatient Admission
 // @route   PUT /hospital/panel/insurance/save/:patientUserId
-// @access  Private (Hospital)
+// @access  Private (Hospital Admin)
 const savePatientInsuranceDetails = async (req, res) => {
     try {
         const { patientUserId } = req.params;
         const hospitalId = req.user.id;
-        const { insuranceNumber, companyName, insuranceType, startDate, endDate, masterInsuranceId } = req.body;
+        const {
+            insuranceNumber,
+            companyName,
+            insuranceType,
+            startDate,
+            endDate,
+            masterInsuranceId,
+            appointmentId // Optional: Direct link to specific admission
+        } = req.body;
+
+        if (!mongoose.isValidObjectId(patientUserId)) {
+            return res.status(400).json({ success: false, message: "Invalid patientUserId format." });
+        }
 
         const user = await User.findById(patientUserId);
         if (!user) {
-            return res.status(404).json({ success: false, message: "Patient user record not found." });
+            return res.status(404).json({ success: false, message: "Patient user profile not found." });
         }
 
-        let frontCard = user.insuranceDetails?.insuranceDocumentFront || null;
-        let backCard = user.insuranceDetails?.insuranceDocumentBack || null;
+        const files = req.files || {};
+        const existingInsurance = user.insuranceDetails || {};
 
-        if (req.files) {
-            if (req.files.insuranceDocumentFront && req.files.insuranceDocumentFront[0]) {
-                if (frontCard) deleteFile(frontCard);
-                frontCard = `/uploads/insurance/${req.files.insuranceDocumentFront[0].filename}`;
-            }
-            if (req.files.insuranceDocumentBack && req.files.insuranceDocumentBack[0]) {
-                if (backCard) deleteFile(backCard);
-                backCard = `/uploads/insurance/${req.files.insuranceDocumentBack[0].filename}`;
+        // 1. Resolve Front & Back Card Photos (from files or keep existing)
+        let frontCardPath = existingInsurance.insuranceDocumentFront || null;
+        let backCardPath = existingInsurance.insuranceDocumentBack || null;
+        let docPath = existingInsurance.insuranceDocument || null;
+
+        const frontFile = (files.insuranceDocumentFront && files.insuranceDocumentFront[0]) ||
+                          (files.insuranceFront && files.insuranceFront[0]) ||
+                          (files.frontImage && files.frontImage[0]);
+
+        const backFile = (files.insuranceDocumentBack && files.insuranceDocumentBack[0]) ||
+                         (files.insuranceBack && files.insuranceBack[0]) ||
+                         (files.backImage && files.backImage[0]);
+
+        const policyDocFile = (files.insuranceDocument && files.insuranceDocument[0]);
+
+        if (frontFile) {
+            if (existingInsurance.insuranceDocumentFront) deleteFile(existingInsurance.insuranceDocumentFront);
+            frontCardPath = `/uploads/insurance/${frontFile.filename}`;
+        }
+
+        if (backFile) {
+            if (existingInsurance.insuranceDocumentBack) deleteFile(existingInsurance.insuranceDocumentBack);
+            backCardPath = `/uploads/insurance/${backFile.filename}`;
+        }
+
+        if (policyDocFile) {
+            if (existingInsurance.insuranceDocument) deleteFile(existingInsurance.insuranceDocument);
+            docPath = `/uploads/insurance/${policyDocFile.filename}`;
+        }
+
+        // 2. Resolve Master Insurance Plan Name
+        let resolvedCompanyName = companyName ? String(companyName).trim() : (existingInsurance.companyName || "");
+        let validMasterId = null;
+
+        if (masterInsuranceId && mongoose.isValidObjectId(String(masterInsuranceId).trim())) {
+            validMasterId = new mongoose.Types.ObjectId(String(masterInsuranceId).trim());
+            const masterIns = await Insurance.findById(validMasterId).lean();
+            if (masterIns) {
+                resolvedCompanyName = masterIns.insuranceName;
             }
         }
 
-        const insuranceObj = {
+        // 3. Update User Document
+        const updatedInsuranceObj = {
             hasInsurance: true,
-            insuranceNumber: insuranceNumber || user.insuranceDetails?.insuranceNumber || "",
-            companyName: companyName || user.insuranceDetails?.companyName || "",
-            insuranceType: insuranceType || user.insuranceDetails?.insuranceType || "Cashless Mediclaim",
-            startDate: startDate || user.insuranceDetails?.startDate || null,
-            endDate: endDate || user.insuranceDetails?.endDate || null,
-            masterInsuranceId: masterInsuranceId || user.insuranceDetails?.masterInsuranceId || null,
-            insuranceDocumentFront: frontCard,
-            insuranceDocumentBack: backCard
+            insuranceNumber: insuranceNumber ? String(insuranceNumber).trim() : (existingInsurance.insuranceNumber || ""),
+            companyName: resolvedCompanyName,
+            insuranceType: insuranceType ? String(insuranceType).trim() : (existingInsurance.insuranceType || "Cashless"),
+            startDate: startDate || existingInsurance.startDate || "",
+            endDate: endDate || existingInsurance.endDate || "",
+            insuranceDocument: docPath,
+            insuranceDocumentFront: frontCardPath,
+            insuranceDocumentBack: backCardPath,
+            masterInsuranceId: validMasterId || existingInsurance.masterInsuranceId || null
         };
 
-        user.insuranceDetails = insuranceObj;
+        user.insuranceDetails = updatedInsuranceObj;
+        if (validMasterId) {
+            user.insuranceId = validMasterId;
+        }
         await user.save();
 
-        // 🚨 CRITICAL FIX: Synchronize current active stay appointment in this hospital!
-        await Appointment.updateMany(
-            {
-                userId: patientUserId,
-                hospitalId,
-                status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress'] }
-            },
-            {
-                $set: {
-                    "insuranceDetails.hasInsurance": true,
-                    "insuranceDetails.insuranceNumber": insuranceObj.insuranceNumber,
-                    "insuranceDetails.companyName": insuranceObj.companyName,
-                    "insuranceDetails.insuranceType": insuranceObj.insuranceType,
-                    "insuranceDetails.insuranceDocumentFront": frontCard,
-                    "insuranceDetails.insuranceDocumentBack": backCard
-                }
-            }
-        );
+        // 🚨 4. CRITICAL FIX: Sync with Patient's Active Hospital Admission (Appointment)
+        const apptQuery = {
+            hospitalId,
+            userId: user._id,
+            bookingType: 'Admission',
+            status: { $in: ['Hospital-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending'] }
+        };
 
-        res.status(200).json({
+        if (appointmentId && mongoose.isValidObjectId(appointmentId)) {
+            apptQuery._id = appointmentId;
+        }
+
+        const activeAdmission = await Appointment.findOne(apptQuery);
+
+        if (activeAdmission) {
+            activeAdmission.insuranceDetails = {
+                hasInsurance: true,
+                insuranceNumber: updatedInsuranceObj.insuranceNumber,
+                companyName: updatedInsuranceObj.companyName,
+                insuranceType: updatedInsuranceObj.insuranceType,
+                insuranceDocument: docPath,
+                insuranceDocumentFront: frontCardPath,
+                insuranceDocumentBack: backCardPath,
+                masterInsuranceId: validMasterId || activeAdmission.insuranceDetails?.masterInsuranceId || null,
+                approvalLetterPdf: activeAdmission.insuranceDetails?.approvalLetterPdf || null,
+                approvalStatus: activeAdmission.insuranceDetails?.approvalStatus || 'Pending'
+            };
+            await activeAdmission.save();
+        }
+
+        return res.status(200).json({
             success: true,
-            message: "Patient insurance details updated and synchronized with hospital stay.",
-            data: insuranceObj
+            message: "Patient insurance and active hospital admission records successfully synchronized.",
+            data: {
+                userInsurance: updatedInsuranceObj,
+                syncedAdmissionId: activeAdmission ? activeAdmission._id : null
+            }
         });
 
     } catch (error) {
         console.error("Save Patient Insurance Details Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

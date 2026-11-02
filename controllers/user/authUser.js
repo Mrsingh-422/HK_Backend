@@ -463,40 +463,86 @@ const updateWorkDetails = async (req, res) => {
 
 
 
-// --- 10. ADD FAMILY MEMBER ---
-// endpoint: POST /api/auth/user/add-family
+// @desc    Add Family Member to User Profile with Insurance Details
+// @route   POST /api/auth/user/add-family
+// @access  Private (User)
 const addUserFamilyMember = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { 
-            memberName, relation, dob, phone, gender, 
-            height, weight, bloodGroup, insuranceNo, insuranceId, hasInsurance 
-        } = req.body;
-
-        const user = await User.findById(userId);
-        if (!user) return res.status(404).json({ message: "User not found" });
-
-        const newMember = {
+        const {
             memberName,
+            name,
             relation,
             dob,
             phone,
             gender,
             height,
             weight,
-            bloodGroup: bloodGroup || null, // 👈 Saved in Family Array
+            bloodGroup,
+            hasInsurance,
             insuranceNo,
-            insuranceId: insuranceId || null,
-            hasInsurance: hasInsurance === 'true' || hasInsurance === true,
-            profilePic: req.file ? `/uploads/users/${req.file.filename}` : null
+            insuranceNumber,
+            insuranceId,
+            masterInsuranceId
+        } = req.body;
+
+        const displayName = memberName || name;
+        if (!displayName || !relation) {
+            return res.status(400).json({ success: false, message: "Member name and relation are required." });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+
+        // 🚨 Resolve Insurance for Family Member
+        const resolvedInsuranceNo = insuranceNo || insuranceNumber || "";
+        const rawInsId = insuranceId || masterInsuranceId;
+        const validInsId = rawInsId && mongoose.isValidObjectId(String(rawInsId).trim()) ? new mongoose.Types.ObjectId(String(rawInsId).trim()) : null;
+        const hasInsuranceBool = hasInsurance === true || hasInsurance === 'true' || Boolean(resolvedInsuranceNo || validInsId);
+
+        let profilePicPath = null;
+        if (req.file) {
+            profilePicPath = `/uploads/users/${req.file.filename}`;
+        }
+
+        const newFamilyMember = {
+            memberName: displayName.trim(),
+            relation: relation.trim(),
+            dob: dob ? new Date(dob) : null,
+            phone: phone ? String(phone).trim() : "",
+            gender: gender || "Male",
+            height: height || "",
+            weight: weight || "",
+            bloodGroup: bloodGroup || null,
+            hasInsurance: hasInsuranceBool,
+            insuranceNo: resolvedInsuranceNo,
+            insuranceId: validInsId,
+            profilePic: profilePicPath
         };
 
-        user.familyMember.push(newMember);
+        if (!Array.isArray(user.familyMember)) {
+            user.familyMember = [];
+        }
+
+        user.familyMember.push(newFamilyMember);
         await user.save();
 
-        res.status(201).json({ success: true, data: user.familyMember[user.familyMember.length - 1] });
+        const updatedUser = await User.findById(userId)
+            .select('familyMember')
+            .populate('familyMember.insuranceId', 'provider insuranceName type')
+            .lean();
+
+        return res.status(201).json({
+            success: true,
+            message: "Family member added successfully with insurance details.",
+            data: updatedUser.familyMember
+        });
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Add Family Member Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 // --- 18. GET FAMILY MEMBERS LIST (Figma Screen 4) ---
@@ -596,16 +642,20 @@ const removeFamilyMember = async (req, res) => {
 
 
 
-// @desc    Update User Insurance Details (Supports Single File OR Dual Front & Back Card Photos)
+// @desc    Update User Insurance Details with Dual-Side Card Photos (Front & Back)
 // @route   PUT /api/auth/user/update-insurance
 // @access  Private (User)
 const updateInsuranceDetails = async (req, res) => {
     try {
         const userId = req.user.id;
-        
-        const { 
-            hasInsurance, insuranceNumber, companyName, 
-            insuranceType, startDate, endDate, masterInsuranceId 
+        const {
+            hasInsurance,
+            insuranceNumber,
+            companyName,
+            insuranceType,
+            startDate,
+            endDate,
+            masterInsuranceId
         } = req.body;
 
         const user = await User.findById(userId);
@@ -613,98 +663,136 @@ const updateInsuranceDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "User not found." });
         }
 
-        const isInsured = hasInsurance === 'true' || hasInsurance === true;
+        const files = req.files || {};
+        const existingInsurance = user.insuranceDetails || {};
 
-        let updateData = {
-            "insuranceDetails.hasInsurance": isInsured,
-            "insuranceDetails.insuranceNumber": insuranceNumber || (user.insuranceDetails?.insuranceNumber || ""),
-            "insuranceDetails.companyName": companyName || (user.insuranceDetails?.companyName || ""),
-            "insuranceDetails.insuranceType": insuranceType || (user.insuranceDetails?.insuranceType || ""),
-            "insuranceDetails.startDate": startDate || (user.insuranceDetails?.startDate || null),
-            "insuranceDetails.endDate": endDate || (user.insuranceDetails?.endDate || null),
-            "insuranceDetails.masterInsuranceId": (companyName === 'other' || !masterInsuranceId) ? null : masterInsuranceId
+        // 1. Resolve Front Card Image from multiple potential frontend keys
+        let frontCardPath = existingInsurance.insuranceDocumentFront || null;
+        const frontFile = (files.insuranceDocumentFront && files.insuranceDocumentFront[0]) ||
+                          (files.insuranceFront && files.insuranceFront[0]) ||
+                          (files.frontImage && files.frontImage[0]);
+
+        if (frontFile) {
+            // Delete old front card image from disk if updating
+            if (existingInsurance.insuranceDocumentFront) {
+                deleteFile(existingInsurance.insuranceDocumentFront);
+            }
+            frontCardPath = `/uploads/insurance/${frontFile.filename}`;
+        }
+
+        // 2. Resolve Back Card Image from multiple potential frontend keys
+        let backCardPath = existingInsurance.insuranceDocumentBack || null;
+        const backFile = (files.insuranceDocumentBack && files.insuranceDocumentBack[0]) ||
+                         (files.insuranceBack && files.insuranceBack[0]) ||
+                         (files.backImage && files.backImage[0]);
+
+        if (backFile) {
+            // Delete old back card image from disk if updating
+            if (existingInsurance.insuranceDocumentBack) {
+                deleteFile(existingInsurance.insuranceDocumentBack);
+            }
+            backCardPath = `/uploads/insurance/${backFile.filename}`;
+        }
+
+        // 3. Resolve PDF / Policy Document (Optional)
+        let policyDocPath = existingInsurance.insuranceDocument || null;
+        const docFile = (files.insuranceDocument && files.insuranceDocument[0]);
+        if (docFile) {
+            if (existingInsurance.insuranceDocument) {
+                deleteFile(existingInsurance.insuranceDocument);
+            }
+            policyDocPath = `/uploads/insurance/${docFile.filename}`;
+        }
+
+        const hasInsuranceBool = hasInsurance === true || hasInsurance === 'true' || Boolean(insuranceNumber);
+
+        // 4. Validate masterInsuranceId if provided
+        let validMasterInsuranceId = existingInsurance.masterInsuranceId || null;
+        if (masterInsuranceId && masterInsuranceId !== 'null' && masterInsuranceId !== 'undefined' && String(masterInsuranceId).trim() !== '') {
+            if (mongoose.isValidObjectId(String(masterInsuranceId).trim())) {
+                validMasterInsuranceId = new mongoose.Types.ObjectId(String(masterInsuranceId).trim());
+            }
+        }
+
+        // 5. Build updated insurance details object
+        const updatedDetails = {
+            hasInsurance: hasInsuranceBool,
+            insuranceNumber: insuranceNumber ? String(insuranceNumber).trim() : (existingInsurance.insuranceNumber || ""),
+            companyName: companyName ? String(companyName).trim() : (existingInsurance.companyName || ""),
+            insuranceType: insuranceType ? String(insuranceType).trim() : (existingInsurance.insuranceType || "Cashless"),
+            startDate: startDate || existingInsurance.startDate || "",
+            endDate: endDate || existingInsurance.endDate || "",
+            insuranceDocument: policyDocPath,
+            insuranceDocumentFront: frontCardPath,
+            insuranceDocumentBack: backCardPath,
+            masterInsuranceId: validMasterInsuranceId
         };
 
-        // 1. Single File Upload Handling (insuranceDocument)
-        if (req.file) {
-            if (user.insuranceDetails?.insuranceDocument) {
-                deleteFile(user.insuranceDetails.insuranceDocument);
-            }
-            updateData["insuranceDetails.insuranceDocument"] = `/uploads/insurance/${req.file.filename}`;
+        user.insuranceDetails = updatedDetails;
+        if (validMasterInsuranceId) {
+            user.insuranceId = validMasterInsuranceId;
         }
 
-        // 2. Dual Side Card Upload Handling (req.files.insuranceDocumentFront / insuranceDocumentBack)
-        if (req.files) {
-            if (req.files.insuranceDocument && req.files.insuranceDocument[0]) {
-                if (user.insuranceDetails?.insuranceDocument) deleteFile(user.insuranceDetails.insuranceDocument);
-                updateData["insuranceDetails.insuranceDocument"] = `/uploads/insurance/${req.files.insuranceDocument[0].filename}`;
-            }
-            if (req.files.insuranceDocumentFront && req.files.insuranceDocumentFront[0]) {
-                if (user.insuranceDetails?.insuranceDocumentFront) deleteFile(user.insuranceDetails.insuranceDocumentFront);
-                updateData["insuranceDetails.insuranceDocumentFront"] = `/uploads/insurance/${req.files.insuranceDocumentFront[0].filename}`;
-            }
-            if (req.files.insuranceDocumentBack && req.files.insuranceDocumentBack[0]) {
-                if (user.insuranceDetails?.insuranceDocumentBack) deleteFile(user.insuranceDetails.insuranceDocumentBack);
-                updateData["insuranceDetails.insuranceDocumentBack"] = `/uploads/insurance/${req.files.insuranceDocumentBack[0].filename}`;
-            }
-        }
+        await user.save();
 
-        const updatedUser = await User.findByIdAndUpdate(
-            userId,
-            { $set: updateData },
-            { new: true, runValidators: true }
-        ).populate('insuranceDetails.masterInsuranceId', 'insuranceName provider type');
+        const populatedUser = await User.findById(userId)
+            .select('insuranceDetails insuranceId')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+            .lean();
 
-        res.status(200).json({ 
-            success: true, 
-            message: "Insurance details and policy cards updated successfully.", 
-            data: updatedUser.insuranceDetails 
+        return res.status(200).json({
+            success: true,
+            message: "Insurance details and card photos updated successfully.",
+            data: populatedUser.insuranceDetails
         });
 
     } catch (error) {
-        console.error("Update User Insurance Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Update Insurance Details Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// @desc    Get Logged-in User Saved Insurance Details (Returns 200 OK with clean default if unconfigured)
+// @desc    Get Logged-in User Insurance Details with Populated Master Company & Photos
 // @route   GET /api/auth/user/my-insurance
 // @access  Private (User)
 const getMyInsurance = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id)
-            .select('insuranceDetails')
-            .populate({
-                path: 'insuranceDetails.masterInsuranceId',
-                select: 'insuranceName provider type'
-            })
+        const userId = req.user.id;
+
+        const user = await User.findById(userId)
+            .select('insuranceDetails insuranceId name phone')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+            .populate('insuranceId', 'provider insuranceName type')
             .lean();
 
         if (!user) {
             return res.status(404).json({ success: false, message: "User not found." });
         }
 
-        // Return clean default object with 200 OK instead of throwing 404 error
-        const details = user.insuranceDetails || {
-            hasInsurance: false,
-            insuranceNumber: "",
-            companyName: "",
-            insuranceType: "",
-            startDate: null,
-            endDate: null,
-            insuranceDocument: null,
-            insuranceDocumentFront: null,
-            insuranceDocumentBack: null,
-            masterInsuranceId: null
-        };
+        const details = user.insuranceDetails || {};
+        const isConfigured = Boolean(details.hasInsurance && (details.insuranceNumber || details.insuranceDocumentFront));
 
-        res.status(200).json({ 
-            success: true, 
-            data: details 
+        return res.status(200).json({
+            success: true,
+            isConfigured,
+            data: {
+                hasInsurance: Boolean(details.hasInsurance),
+                insuranceNumber: details.insuranceNumber || "",
+                companyName: details.masterInsuranceId?.insuranceName || details.companyName || "",
+                provider: details.masterInsuranceId?.provider || details.companyName || "",
+                insuranceType: details.insuranceType || details.masterInsuranceId?.type || "Cashless",
+                startDate: details.startDate || "",
+                endDate: details.endDate || "",
+                insuranceDocument: details.insuranceDocument || null,
+                insuranceDocumentFront: details.insuranceDocumentFront || null,
+                insuranceDocumentBack: details.insuranceDocumentBack || null,
+                masterInsurance: details.masterInsuranceId || user.insuranceId || null
+            }
         });
+
     } catch (error) {
         console.error("Get My Insurance Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
