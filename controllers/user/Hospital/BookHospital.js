@@ -2394,7 +2394,7 @@ const getUserOpdPrescription = async (req, res) => {
 };
 
 
-// @desc    Get Single Hospital Booking Full Details (OPD Token Slip or IPD Admission Sheet)
+// @desc    Get Hospital Booking Details for Patient App (Includes Insurance Status & Card Photos)
 // @route   GET /user/hospital/booking-details/:id
 // @access  Private (User)
 const getHospitalBookingDetails = async (req, res) => {
@@ -2409,82 +2409,45 @@ const getHospitalBookingDetails = async (req, res) => {
         };
 
         const booking = await Appointment.findOne(query)
-            .populate('hospitalId', 'name address city state hospitalImage phone type location')
-            .populate('doctorId', 'name speciality qualification profileImage fees department')
-            .populate('ambulanceId', 'name vehicleNumber phone vehicleType')
+            .populate('hospitalId', 'name address city phone hospitalImage isInsuranceAccepted acceptedInsurances')
+            .populate('doctorId', 'name speciality department profileImage qualification fees')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
                 populate: { path: 'wardId', select: 'name type' }
             })
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
+            .populate('specialServices.serviceId', 'serviceName price image description')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
             .lean();
 
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking record not found or access denied." });
+            return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        const isOPD = booking.bookingType === 'OPD';
-        const isCOD = booking.paymentMethod === 'COD';
-        const isPaid = booking.paymentStatus === 'Paid';
+        const insurance = booking.insuranceDetails || {};
 
-        // Destination display label
-        let destinationLabel = "";
-        if (isOPD) {
-            destinationLabel = `${booking.hospitalId?.name || 'Hospital'} (${booking.opdRoomNumber || booking.doctorId?.department?.roomNumber || 'OPD Cabin'})`;
-        } else {
-            destinationLabel = `${booking.hospitalId?.name || 'Hospital'} (Bed: ${booking.bedNumber || 'Unassigned'}, ${booking.wardName || 'Ward'})`;
-        }
-
-        // Live Queue Estimate for OPD
-        let currentServingToken = null;
-        let patientsAhead = 0;
-        let estimatedWaitTime = "";
-
-        if (isOPD && booking.status === 'Confirmed') {
-            const todayStart = moment(booking.appointmentDate).startOf('day').toDate();
-            const todayEnd = moment(booking.appointmentDate).endOf('day').toDate();
-
-            const todayTokens = await Appointment.find({
-                hospitalId: booking.hospitalId?._id,
-                doctorId: booking.doctorId?._id,
-                bookingType: 'OPD',
-                appointmentDate: { $gte: todayStart, $lte: todayEnd },
-                status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'] }
-            }).sort({ tokenNumber: 1 }).select('tokenNumber status').lean();
-
-            const activeAppt = todayTokens.find(t => t.status === 'In-Progress');
-            currentServingToken = activeAppt ? activeAppt.tokenNumber : (todayTokens.filter(t => t.status === 'Completed').length + 1);
-            patientsAhead = Math.max(0, (booking.tokenNumber || 1) - currentServingToken);
-            estimatedWaitTime = `${patientsAhead * (booking.doctorId?.slotDuration || 15)} mins`;
-        }
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             data: {
                 ...booking,
-                isOpd: isOPD,
-                isIpd: !isOPD,
-                isCod,
-                isPaid,
-                paymentDisplayLabel: isCOD ? "Cash on Delivery" : (isPaid ? "Paid Online" : "Payment Pending"),
-                destinationLabel,
-                tokenDetails: isOPD ? {
-                    tokenNumber: booking.tokenNumber,
-                    opdRoomNumber: booking.opdRoomNumber || booking.doctorId?.department?.roomNumber || "Cabin 1",
-                    currentServingToken,
-                    patientsAhead,
-                    estimatedWaitTime
-                } : null,
-                formattedDate: isOPD 
-                    ? moment(booking.appointmentDate).format('DD MMM YYYY')
-                    : `${moment(booking.startDate).format('DD MMM YYYY')} - ${moment(booking.endDate).format('DD MMM YYYY')}`,
-                canCancel: !['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital'].includes(booking.status)
+                insuranceSummary: {
+                    hasInsurance: Boolean(insurance.hasInsurance),
+                    insuranceNumber: insurance.insuranceNumber || "N/A",
+                    companyName: insurance.masterInsuranceId?.insuranceName || insurance.companyName || "N/A",
+                    insuranceType: insurance.insuranceType || "Cashless",
+                    cardFrontUrl: insurance.insuranceDocumentFront || null,
+                    cardBackUrl: insurance.insuranceDocumentBack || null,
+                    approvalLetterPdf: insurance.approvalLetterPdf || null,
+                    approvalStatus: insurance.approvalStatus || (insurance.hasInsurance ? 'Pending' : 'None'),
+                    isApproved: insurance.approvalStatus === 'Approved'
+                }
             }
         });
 
     } catch (error) {
         console.error("Get Hospital Booking Details Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

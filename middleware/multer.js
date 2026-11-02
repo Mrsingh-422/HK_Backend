@@ -12,13 +12,28 @@ const ensureDir = (dir) => {
 };
 
 // ==========================================
-// 1. FILTERS (Common for Doctors/Providers)
+// 1. FILTERS (Universal Extension & MIME Safe for all Uploaders)
 // ==========================================
 const docFileFilter = (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const mime = (file.mimetype || '').toLowerCase();
+
+    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.pdf', '.doc', '.docx'];
+
+    // 🚨 Safe check: Accepts if MIME is image/pdf OR extension matches allowed documents
+    const isAllowedExt = allowedExtensions.includes(ext);
+    const isAllowedMime = mime.startsWith('image/') || 
+                          mime === 'application/pdf' || 
+                          mime === 'application/msword' || 
+                          mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                          mime === 'application/octet-stream'; // Postman / mobile camera fallback
+
+    if (isAllowedExt || isAllowedMime) {
         cb(null, true);
     } else {
-        cb(new Error('Only Images and PDF files are allowed!'), false);
+        const err = new Error('Invalid file format! Only Images, PDF, and Word documents are allowed.');
+        err.status = 400;
+        cb(err, false);
     }
 };
 
@@ -316,24 +331,32 @@ ensureDir(insuranceDir);
 const insuranceUpload = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, insuranceDir),
-        filename: (req, file, cb) => cb(null, `insurance-${Date.now()}${path.extname(file.originalname)}`)
+        filename: (req, file, cb) => cb(null, `insurance-${Date.now()}${path.extname(file.originalname || '.jpg')}`)
     }),
     fileFilter: (req, file, cb) => {
-        // Allowing Images, PDF, and DOC files as per Flutter UI requirements
-        const allowedMimes = [
-            'image/jpeg', 'image/jpg', 'image/png', 
-            'application/pdf', 
-            'application/msword', 
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        ];
-        
-        if (allowedMimes.includes(file.mimetype)) {
+        // Safe lowercase extraction of extension and MIME
+        const ext = path.extname(file.originalname || '').toLowerCase();
+        const mime = (file.mimetype || '').toLowerCase();
+
+        const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.pdf', '.doc', '.docx'];
+
+        // 🚨 FIX: Accept if either MIME is image/pdf OR extension matches allowed list (Solves Postman octet-stream bug)
+        const isAllowedExt = allowedExtensions.includes(ext);
+        const isAllowedMime = mime.startsWith('image/') || 
+                              mime === 'application/pdf' || 
+                              mime === 'application/msword' || 
+                              mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                              mime === 'application/octet-stream'; // Postman & raw camera stream fallback
+
+        if (isAllowedExt || isAllowedMime) {
             cb(null, true);
         } else {
-            cb(new Error('Only Images, PDF, and Word documents are allowed!'), false);
+            const err = new Error('Invalid file format! Only image photos (JPG, PNG, WEBP, HEIC) and PDF files are allowed.');
+            err.status = 400;
+            cb(err, false);
         }
     },
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit per file
 });
 
 // ==========================================
@@ -902,15 +925,10 @@ const hospitalDischargeFieldsUpload = multer({
     { name: 'clinicalReports', maxCount: 10 }    // Additional clinical report files
 ]);
 
-// 🚨 DUAL-SIDE INSURANCE CARD UPLOAD CONFIGURATION (With Frontend Aliases Support)
 const insuranceCardUploads = insuranceUpload.fields([
-    { name: 'insuranceDocument', maxCount: 1 },      // Combined PDF or image
-    { name: 'insuranceDocumentFront', maxCount: 1 }, // Standard front key
-    { name: 'insuranceDocumentBack', maxCount: 1 },  // Standard back key
-    { name: 'insuranceFront', maxCount: 1 },          // Flutter alias
-    { name: 'insuranceBack', maxCount: 1 },           // Flutter alias
-    { name: 'frontImage', maxCount: 1 },              // Next.js alias
-    { name: 'backImage', maxCount: 1 }                // Next.js alias
+    { name: 'insuranceDocument', maxCount: 1 },      // Single PDF or combined photo
+    { name: 'insuranceDocumentFront', maxCount: 1 }, // Front side of card
+    { name: 'insuranceDocumentBack', maxCount: 1 }   // Back side of card
 ]);
 
 // ==========================================

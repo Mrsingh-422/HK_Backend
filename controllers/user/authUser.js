@@ -13,6 +13,8 @@ const { verifyFirebasePhoneToken } = require('../../utils/firebaseAuthHelper'); 
 const UnbanRequest = require('../../models/UnbanRequest');
 const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
 const UserNotification = require('../../models/UserNotification');
+const mongoose = require('mongoose');
+const Insurance = require('../../models/Insurance');
 
 
 // Helper: Token Generator
@@ -360,31 +362,33 @@ const resetPassword = async (req, res) => {
 };
 
 
-// 5. GET PROFILE (Fixed Populate)
-// endpoint: GET /api/auth/user/profile
+// @desc    Get User Profile with Populated Insurance Master & Active Subscriptions
+// @route   GET /api/auth/user/profile
+// @access  Private (User)
 const getUserProfile = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('-password');
+        const user = await User.findById(req.user.id)
+            .select('-password')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+            .populate('familyMember.insuranceId', 'provider insuranceName type')
+            .lean();
 
         if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
+            return res.status(404).json({ success: false, message: 'User not found.' });
         }
 
-        // 🚨 INTEGRATION CHECK: Fetch subscription metadata
         const subscriptionMeta = await getActiveSubscriptionMetadata(user._id);
 
-        // Safe conversion of Mongoose Document to JS Object
-        const userObj = user.toObject();
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             data: {
-                ...userObj, // Purane saare keys (abhaDetails, userAddress, familyMember etc.) safe rahenge
-                activeSubscription: subscriptionMeta // 👈 Additive injection for Frontend UI Badge/Vitals
+                ...user,
+                activeSubscription: subscriptionMeta
             }
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Get User Profile Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 // @desc    Update User Profile (Supports updating basic details and rotated FCM token)
@@ -666,84 +670,84 @@ const updateInsuranceDetails = async (req, res) => {
         const files = req.files || {};
         const existingInsurance = user.insuranceDetails || {};
 
-        // 1. Resolve Front Card Image from multiple potential frontend keys
+        // 1. Resolve Front Card Image (Standard Key: insuranceDocumentFront)
         let frontCardPath = existingInsurance.insuranceDocumentFront || null;
-        const frontFile = (files.insuranceDocumentFront && files.insuranceDocumentFront[0]) ||
-                          (files.insuranceFront && files.insuranceFront[0]) ||
-                          (files.frontImage && files.frontImage[0]);
-
-        if (frontFile) {
-            // Delete old front card image from disk if updating
+        if (files.insuranceDocumentFront && files.insuranceDocumentFront[0]) {
             if (existingInsurance.insuranceDocumentFront) {
                 deleteFile(existingInsurance.insuranceDocumentFront);
             }
-            frontCardPath = `/uploads/insurance/${frontFile.filename}`;
+            frontCardPath = `/uploads/insurance/${files.insuranceDocumentFront[0].filename}`;
         }
 
-        // 2. Resolve Back Card Image from multiple potential frontend keys
+        // 2. Resolve Back Card Image (Standard Key: insuranceDocumentBack)
         let backCardPath = existingInsurance.insuranceDocumentBack || null;
-        const backFile = (files.insuranceDocumentBack && files.insuranceDocumentBack[0]) ||
-                         (files.insuranceBack && files.insuranceBack[0]) ||
-                         (files.backImage && files.backImage[0]);
-
-        if (backFile) {
-            // Delete old back card image from disk if updating
+        if (files.insuranceDocumentBack && files.insuranceDocumentBack[0]) {
             if (existingInsurance.insuranceDocumentBack) {
                 deleteFile(existingInsurance.insuranceDocumentBack);
             }
-            backCardPath = `/uploads/insurance/${backFile.filename}`;
+            backCardPath = `/uploads/insurance/${files.insuranceDocumentBack[0].filename}`;
         }
 
-        // 3. Resolve PDF / Policy Document (Optional)
+        // 3. Resolve Optional Combined Policy PDF (Standard Key: insuranceDocument)
         let policyDocPath = existingInsurance.insuranceDocument || null;
-        const docFile = (files.insuranceDocument && files.insuranceDocument[0]);
-        if (docFile) {
+        if (files.insuranceDocument && files.insuranceDocument[0]) {
             if (existingInsurance.insuranceDocument) {
                 deleteFile(existingInsurance.insuranceDocument);
             }
-            policyDocPath = `/uploads/insurance/${docFile.filename}`;
+            policyDocPath = `/uploads/insurance/${files.insuranceDocument[0].filename}`;
         }
 
-        const hasInsuranceBool = hasInsurance === true || hasInsurance === 'true' || Boolean(insuranceNumber);
+        // 4. Safe masterInsuranceId Resolver (Bypasses BSON CastError on empty/invalid string)
+        let validMasterId = null;
+        let resolvedCompanyName = companyName ? String(companyName).trim() : (existingInsurance.companyName || "");
+        let resolvedType = insuranceType ? String(insuranceType).trim() : (existingInsurance.insuranceType || "Cashless");
 
-        // 4. Validate masterInsuranceId if provided
-        let validMasterInsuranceId = existingInsurance.masterInsuranceId || null;
         if (masterInsuranceId && masterInsuranceId !== 'null' && masterInsuranceId !== 'undefined' && String(masterInsuranceId).trim() !== '') {
-            if (mongoose.isValidObjectId(String(masterInsuranceId).trim())) {
-                validMasterInsuranceId = new mongoose.Types.ObjectId(String(masterInsuranceId).trim());
+            const cleanId = String(masterInsuranceId).trim();
+            if (mongoose.isValidObjectId(cleanId)) {
+                validMasterId = new mongoose.Types.ObjectId(cleanId);
+                const masterDoc = await Insurance.findById(validMasterId).lean();
+                if (masterDoc) {
+                    resolvedCompanyName = masterDoc.insuranceName;
+                    resolvedType = masterDoc.type ? (masterDoc.type.charAt(0).toUpperCase() + masterDoc.type.slice(1)) : resolvedType;
+                }
             }
+        } else if (existingInsurance.masterInsuranceId) {
+            validMasterId = existingInsurance.masterInsuranceId;
         }
 
-        // 5. Build updated insurance details object
+        const hasInsuranceFinal = hasInsurance === true || hasInsurance === 'true' || Boolean(insuranceNumber || frontCardPath);
+
+        // 5. Build Updated Object
         const updatedDetails = {
-            hasInsurance: hasInsuranceBool,
+            hasInsurance: hasInsuranceFinal,
             insuranceNumber: insuranceNumber ? String(insuranceNumber).trim() : (existingInsurance.insuranceNumber || ""),
-            companyName: companyName ? String(companyName).trim() : (existingInsurance.companyName || ""),
-            insuranceType: insuranceType ? String(insuranceType).trim() : (existingInsurance.insuranceType || "Cashless"),
+            companyName: resolvedCompanyName,
+            insuranceType: resolvedType,
             startDate: startDate || existingInsurance.startDate || "",
             endDate: endDate || existingInsurance.endDate || "",
             insuranceDocument: policyDocPath,
             insuranceDocumentFront: frontCardPath,
             insuranceDocumentBack: backCardPath,
-            masterInsuranceId: validMasterInsuranceId
+            masterInsuranceId: validMasterId
         };
 
-        user.insuranceDetails = updatedDetails;
-        if (validMasterInsuranceId) {
-            user.insuranceId = validMasterInsuranceId;
-        }
-
-        await user.save();
-
-        const populatedUser = await User.findById(userId)
-            .select('insuranceDetails insuranceId')
-            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
-            .lean();
+        // 6. Atomic Database Update
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            {
+                $set: {
+                    insuranceDetails: updatedDetails,
+                    ...(validMasterId && { insuranceId: validMasterId })
+                }
+            },
+            { new: true, runValidators: false }
+        ).populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type').lean();
 
         return res.status(200).json({
             success: true,
             message: "Insurance details and card photos updated successfully.",
-            data: populatedUser.insuranceDetails
+            data: updatedUser.insuranceDetails
         });
 
     } catch (error) {

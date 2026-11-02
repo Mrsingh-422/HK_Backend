@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo - Patient Portal</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome 6 Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Font: Plus Jakarta Sans -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        hkGreen: '#00a859',
+                        hkGreenDark: '#007a3e',
+                        hkGreenSoft: '#f0faf5',
+                        hkDark: '#0e1e38'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0b1329; color: #1e293b; }
+        .mobile-shell { width: 412px; min-height: 860px; max-height: 92vh; background: #ffffff; border-radius: 46px; border: 8px solid #1e293b; overflow: hidden; position: relative; box-shadow: 0 25px 70px rgba(0,0,0,0.6); display: flex; flex-direction: column; }
+        .hk-input-box { @apply flex items-center gap-3 border border-slate-200 bg-slate-50/60 rounded-2xl px-4 py-3.5 transition-all focus-within:border-hkGreen focus-within:bg-white focus-within:ring-2 focus-within:ring-emerald-100; }
+        .hk-input { @apply w-full bg-transparent font-semibold text-slate-800 outline-none text-xs placeholder-slate-400; }
+        .hk-btn-primary { @apply w-full bg-hkGreen hover:bg-hkGreenDark text-white font-extrabold py-4 rounded-2xl shadow-lg shadow-emerald-700/20 active:scale-95 transition-all uppercase tracking-wider text-xs flex items-center justify-center gap-2; }
+        .hk-card { @apply bg-white border border-slate-100 rounded-3xl p-5 shadow-sm space-y-3; }
+        .nav-tab { @apply flex flex-col items-center justify-center flex-1 py-3 text-slate-400 hover:text-hkGreen transition cursor-pointer text-[10px] font-bold; }
+        .nav-tab.active { @apply text-hkGreen; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <!-- Mobile App Container Frame -->
+    <div class="mobile-shell shadow-2xl">
+
+        <!-- Top Status Bar Simulation -->
+        <div class="h-11 px-7 flex justify-between items-center text-xs font-bold text-slate-800 bg-white border-b border-slate-100 z-50 shrink-0">
+            <span>9:41</span>
+            <div class="flex items-center gap-2 text-slate-600 text-xs">
+                <i class="fas fa-signal"></i>
+                <i class="fas fa-wifi"></i>
+                <i class="fas fa-battery-full text-sm"></i>
+            </div>
+        </div>
+
+        <!-- App Navigation Header -->
+        <div class="px-6 py-3.5 bg-white border-b border-slate-100 flex items-center justify-between z-40 shrink-0">
+            <div class="flex items-center gap-2.5">
+                <div class="w-9 h-9 bg-hkGreen rounded-xl flex items-center justify-center text-white text-base shadow-sm">
+                    <i class="fas fa-heart-pulse"></i>
+                </div>
+                <div>
+                    <h2 class="text-xs font-black text-slate-900 tracking-tight">Health Kangaroo</h2>
+                    <p class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Patient Portal</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <span id="tokenBadge" class="text-[9px] font-black uppercase px-2.5 py-1 rounded-full bg-rose-50 text-rose-600 border border-rose-200">
+                    No Token
+                </span>
+                <button onclick="toggleConsoleDrawer()" title="View API Logs" class="w-8 h-8 rounded-xl bg-slate-100 text-slate-600 hover:text-hkGreen flex items-center justify-center text-xs transition">
+                    <i class="fas fa-code"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Screens Scrollable Viewport -->
+        <div class="flex-1 overflow-y-auto no-scrollbar p-6 space-y-6 pb-24" id="viewPort">
+
+            <!-- ============================================================= -->
+            <!-- 📱 SCREEN 1: REGISTER & CASCADING LOCATION (NO-LOOP GUARANTEE) -->
+            <!-- ============================================================= -->
+            <div id="scr-register" class="space-y-5">
+                <div class="space-y-1">
+                    <span class="text-[10px] font-extrabold text-hkGreen uppercase tracking-widest">New Patient Onboarding</span>
+                    <h3 class="text-2xl font-black text-slate-900 tracking-tight">Create Account</h3>
+                    <p class="text-xs text-slate-500 font-medium">Verify your phone number and join Health Kangaroo.</p>
+                </div>
+
+                <div class="space-y-3.5">
+                    <!-- Mobile Number with Fast Check-Exists Button -->
+                    <div class="hk-input-box">
+                        <i class="fas fa-phone-alt text-slate-400 text-xs"></i>
+                        <input id="regPhone" type="tel" value="9876543210" placeholder="10-digit mobile number" class="hk-input">
+                        <button onclick="handleCheckExists()" class="text-[10px] font-extrabold text-hkGreen hover:text-hkGreenDark px-2 py-1 bg-emerald-50 rounded-lg whitespace-nowrap transition">
+                            Check
+                        </button>
+                    </div>
+
+                    <!-- Full Name -->
+                    <div class="hk-input-box">
+                        <i class="far fa-user text-slate-400 text-xs"></i>
+                        <input id="regName" type="text" value="Anmol Buttar" placeholder="Full Name" class="hk-input">
+                    </div>
+
+                    <!-- Email -->
+                    <div class="hk-input-box">
+                        <i class="far fa-envelope text-slate-400 text-xs"></i>
+                        <input id="regEmail" type="email" value="anmol.buttar@healthkangaroo.com" placeholder="Email Address" class="hk-input">
+                    </div>
+
+                    <!-- Password -->
+                    <div class="hk-input-box">
+                        <i class="fas fa-lock text-slate-400 text-xs"></i>
+                        <input id="regPassword" type="password" value="TestPassword@123" placeholder="Create Password" class="hk-input">
+                    </div>
+
+                    <!-- 🌍 Cascading Dropdowns: Load Once, Zero Loop -->
+                    <div class="space-y-2 pt-1">
+                        <label class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Select Location</label>
+                        <div class="grid grid-cols-3 gap-2">
+                            <!-- Country -->
+                            <div class="hk-input-box !px-2.5">
+                                <select id="selCountry" onchange="onCountrySelected(this.value)" class="hk-input !text-[11px] font-bold">
+                                    <option value="">Country...</option>
+                                </select>
+                            </div>
+                            <!-- State -->
+                            <div class="hk-input-box !px-2.5">
+                                <select id="selState" onchange="onStateSelected(this.value)" class="hk-input !text-[11px] font-bold" disabled>
+                                    <option value="">State...</option>
+                                </select>
+                            </div>
+                            <!-- City -->
+                            <div class="hk-input-box !px-2.5">
+                                <select id="selCity" class="hk-input !text-[11px] font-bold" disabled>
+                                    <option value="">City...</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Submit Register Button -->
+                    <button onclick="handleRegister()" class="hk-btn-primary mt-2">
+                        <i class="fas fa-user-plus"></i> Register Patient
+                    </button>
+
+                    <p class="text-center text-xs text-slate-500 font-semibold pt-2">
+                        Already have an account? <a href="javascript:void(0)" onclick="goToScreen('login')" class="text-hkGreen font-extrabold underline">Sign In</a>
+                    </p>
+                </div>
+            </div>
+
+            <!-- ============================================================= -->
+            <!-- 🔑 SCREEN 2: LOGIN -->
+            <!-- ============================================================= -->
+            <div id="scr-login" class="space-y-5 hidden">
+                <div class="space-y-1">
+                    <span class="text-[10px] font-extrabold text-hkGreen uppercase tracking-widest">Secure Access</span>
+                    <h3 class="text-2xl font-black text-slate-900 tracking-tight">Welcome Back</h3>
+                    <p class="text-xs text-slate-500 font-medium">Login with your verified phone number or email.</p>
+                </div>
+
+                <div class="space-y-3.5">
+                    <div class="hk-input-box">
+                        <i class="fas fa-user-check text-slate-400 text-xs"></i>
+                        <input id="loginId" type="text" value="9876543210" placeholder="Mobile Number or Email" class="hk-input">
+                    </div>
+                    <div class="hk-input-box">
+                        <i class="fas fa-lock text-slate-400 text-xs"></i>
+                        <input id="loginPass" type="password" value="TestPassword@123" placeholder="Password" class="hk-input">
+                    </div>
+
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-slate-400 font-medium">Forgot password?</span>
+                        <a href="javascript:void(0)" onclick="goToScreen('forgot')" class="text-hkGreen font-bold underline">Reset here</a>
+                    </div>
+
+                    <button onclick="handleLogin()" class="hk-btn-primary mt-2">
+                        <i class="fas fa-arrow-right-to-bracket"></i> Sign In to Account
+                    </button>
+                </div>
+            </div>
+
+            <!-- ============================================================= -->
+            <!-- 🛡️ SCREEN 3: REAL DUAL-SIDE INSURANCE CARD UPLOAD -->
+            <!-- ============================================================= -->
+            <div id="scr-insurance" class="space-y-5 hidden">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <span class="text-[10px] font-extrabold text-hkGreen uppercase tracking-widest">TPA Cashless Claims</span>
+                        <h3 class="text-2xl font-black text-slate-900 tracking-tight">Health Insurance</h3>
+                    </div>
+                    <button onclick="handleGetMyInsurance()" class="text-xs text-hkGreen font-extrabold bg-emerald-50 px-3 py-1.5 rounded-xl hover:bg-emerald-100 transition">
+                        <i class="fas fa-rotate mr-1"></i> Refresh
+                    </button>
+                </div>
+
+                <div class="space-y-3.5">
+                    <!-- Policy Number -->
+                    <div class="hk-input-box">
+                        <i class="fas fa-hashtag text-slate-400 text-xs"></i>
+                        <input id="insPolicyNo" type="text" value="POL-98214421" placeholder="Policy / Card Number" class="hk-input">
+                    </div>
+
+                    <!-- Company Dropdown (From Admin Master) -->
+                    <div class="hk-input-box">
+                        <i class="far fa-building text-slate-400 text-xs"></i>
+                        <select id="insCompanySelect" class="hk-input">
+                            <option value="HDFC ERGO Health">HDFC ERGO Health</option>
+                            <option value="Star Health Insurance">Star Health Insurance</option>
+                            <option value="Care Health Insurance">Care Health Insurance</option>
+                            <option value="Ayushman Bharat (PM-JAY)">Ayushman Bharat (PM-JAY)</option>
+                        </select>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2.5">
+                        <div class="hk-input-box">
+                            <select id="insClaimType" class="hk-input">
+                                <option value="Cashless">Cashless</option>
+                                <option value="Reimbursement">Reimbursement</option>
+                            </select>
+                        </div>
+                        <div class="hk-input-box">
+                            <input id="insExpiryDate" type="date" value="2027-12-31" class="hk-input">
+                        </div>
+                    </div>
+
+                    <!-- Real Cards Preview Box -->
+                    <div class="grid grid-cols-2 gap-3 pt-2">
+                        <!-- Front Card Upload Box -->
+                        <div onclick="document.getElementById('fileCardFront').click()" class="border-2 border-dashed border-slate-200 hover:border-hkGreen bg-slate-50/80 rounded-2xl p-4 text-center cursor-pointer space-y-2 transition relative overflow-hidden group">
+                            <input type="file" id="fileCardFront" accept="image/*,.pdf" class="hidden" onchange="previewCard(this, 'imgPreviewFront', 'boxFrontIcon')">
+                            <img id="imgPreviewFront" src="" class="hidden w-full h-24 object-cover rounded-xl" alt="Front Preview">
+                            <div id="boxFrontIcon" class="space-y-1">
+                                <div class="w-10 h-10 bg-emerald-50 text-hkGreen rounded-full flex items-center justify-center text-sm mx-auto">
+                                    <i class="fas fa-camera"></i>
+                                </div>
+                                <p class="text-[10px] font-black text-slate-700">Card Front</p>
+                                <p class="text-[8px] text-slate-400 font-bold">Tap to Upload</p>
+                            </div>
+                        </div>
+
+                        <!-- Back Card Upload Box -->
+                        <div onclick="document.getElementById('fileCardBack').click()" class="border-2 border-dashed border-slate-200 hover:border-hkGreen bg-slate-50/80 rounded-2xl p-4 text-center cursor-pointer space-y-2 transition relative overflow-hidden group">
+                            <input type="file" id="fileCardBack" accept="image/*,.pdf" class="hidden" onchange="previewCard(this, 'imgPreviewBack', 'boxBackIcon')">
+                            <img id="imgPreviewBack" src="" class="hidden w-full h-24 object-cover rounded-xl" alt="Back Preview">
+                            <div id="boxBackIcon" class="space-y-1">
+                                <div class="w-10 h-10 bg-emerald-50 text-hkGreen rounded-full flex items-center justify-center text-sm mx-auto">
+                                    <i class="fas fa-id-card"></i>
+                                </div>
+                                <p class="text-[10px] font-black text-slate-700">Card Back</p>
+                                <p class="text-[8px] text-slate-400 font-bold">Tap to Upload</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="handleSaveInsurance()" class="hk-btn-primary mt-2">
+                        <i class="fas fa-cloud-arrow-up"></i> Save & Upload Insurance
+                    </button>
+                </div>
+            </div>
+
+            <!-- ============================================================= -->
+            <!-- 👤 SCREEN 4: PROFILE & MEDICAL DETAILS -->
+            <!-- ============================================================= -->
+            <div id="scr-profile" class="space-y-5 hidden">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <span class="text-[10px] font-extrabold text-hkGreen uppercase tracking-widest">Medical Records</span>
+                        <h3 class="text-2xl font-black text-slate-900 tracking-tight">User Profile</h3>
+                    </div>
+                    <button onclick="handleGetProfile()" class="text-xs text-hkGreen font-bold bg-emerald-50 px-3 py-1.5 rounded-xl hover:bg-emerald-100 transition">
+                        <i class="fas fa-rotate mr-1"></i> Refresh
+                    </button>
+                </div>
+
+                <div class="hk-card">
+                    <div class="flex items-center gap-4">
+                        <div class="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center text-2xl text-slate-400 border border-slate-200">
+                            <i class="far fa-user"></i>
+                        </div>
+                        <div>
+                            <h4 id="dispName" class="font-extrabold text-sm text-slate-900">Loading Patient...</h4>
+                            <p id="dispPhone" class="text-xs text-slate-400 font-semibold">+91 00000 00000</p>
+                            <p id="dispLocation" class="text-[10px] text-slate-500 font-bold mt-0.5">Mohali, Punjab</p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 pt-3 border-t border-slate-100 text-xs">
+                        <div class="bg-slate-50 p-2.5 rounded-xl">
+                            <span class="text-[9px] font-bold text-slate-400 uppercase block">Blood Group</span>
+                            <strong id="dispBlood" class="text-slate-800 font-extrabold">O+</strong>
+                        </div>
+                        <div class="bg-slate-50 p-2.5 rounded-xl">
+                            <span class="text-[9px] font-bold text-slate-400 uppercase block">Gender</span>
+                            <strong id="dispGender" class="text-slate-800 font-extrabold">Male</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <h4 class="text-xs font-black text-slate-800 uppercase tracking-wider">Quick Updates</h4>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="hk-input-box">
+                            <select id="updBloodGroup" class="hk-input">
+                                <option value="A+">A+</option>
+                                <option value="B+">B+</option>
+                                <option value="O+" selected>O+</option>
+                                <option value="AB+">AB+</option>
+                            </select>
+                        </div>
+                        <div class="hk-input-box">
+                            <input id="updHeight" type="text" value="5'10" placeholder="Height" class="hk-input">
+                        </div>
+                    </div>
+                    <button onclick="handleUpdateProfile()" class="hk-btn-primary">Save Medical Vitals</button>
+                </div>
+            </div>
+
+            <!-- ============================================================= -->
+            <!-- 🔒 SCREEN 5: FORGOT PASSWORD -->
+            <!-- ============================================================= -->
+            <div id="scr-forgot" class="space-y-5 hidden">
+                <div class="space-y-1">
+                    <span class="text-[10px] font-extrabold text-hkGreen uppercase tracking-widest">Password Recovery</span>
+                    <h3 class="text-2xl font-black text-slate-900 tracking-tight">Reset Password</h3>
+                    <p class="text-xs text-slate-500 font-medium">Verify OTP to configure a new password.</p>
+                </div>
+
+                <div class="space-y-3.5">
+                    <div class="hk-input-box">
+                        <i class="far fa-envelope text-slate-400 text-xs"></i>
+                        <input id="forgotEmail" type="email" placeholder="Registered Email Address" class="hk-input">
+                    </div>
+                    <button onclick="handleSendForgotOtp()" class="hk-btn-primary">Send Verification Code</button>
+
+                    <div class="grid grid-cols-2 gap-2 pt-2">
+                        <div class="hk-input-box">
+                            <input id="forgotOtp" type="text" maxlength="6" placeholder="Enter OTP" class="hk-input font-bold text-center">
+                        </div>
+                        <div class="hk-input-box">
+                            <input id="forgotNewPass" type="password" placeholder="New Password" class="hk-input">
+                        </div>
+                    </div>
+                    <button onclick="handleResetPassword()" class="w-full bg-slate-900 hover:bg-black text-white font-black py-4 rounded-2xl text-xs uppercase transition">
+                        Update Password
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Real Bottom App Tab Navigation -->
+        <div class="absolute bottom-0 left-0 right-0 h-16 bg-white border-t border-slate-100 flex justify-around items-center z-40 shrink-0">
+            <div class="nav-tab active" id="tab-register" onclick="goToScreen('register')">
+                <i class="fas fa-user-plus text-base mb-1"></i><span>Register</span>
+            </div>
+            <div class="nav-tab" id="tab-login" onclick="goToScreen('login')">
+                <i class="fas fa-arrow-right-to-bracket text-base mb-1"></i><span>Sign In</span>
+            </div>
+            <div class="nav-tab" id="tab-insurance" onclick="goToScreen('insurance')">
+                <i class="fas fa-shield-halved text-base mb-1"></i><span>Insurance</span>
+            </div>
+            <div class="nav-tab" id="tab-profile" onclick="goToScreen('profile')">
+                <i class="far fa-user text-base mb-1"></i><span>Profile</span>
+            </div>
+        </div>
+
+        <!-- Slide-up API Response Drawer -->
+        <div id="consoleDrawer" class="hidden absolute inset-x-0 bottom-16 bg-slate-950/95 border-t border-slate-800 p-4 z-50 text-[10px] space-y-2">
+            <div class="flex justify-between items-center text-slate-400 border-b border-slate-800 pb-2">
+                <span class="font-bold text-emerald-400 flex items-center gap-1.5"><i class="fas fa-terminal"></i> Live API Response</span>
+                <button onclick="toggleConsoleDrawer()" class="text-slate-400 hover:text-white"><i class="fas fa-xmark"></i></button>
+            </div>
+            <pre id="apiConsoleOutput" class="text-emerald-400 overflow-x-auto max-h-40 leading-relaxed font-mono">Ready...</pre>
+        </div>
+
+    </div>
+
+    <!-- JAVASCRIPT ENGINE (Double-Click & HTTP Safe) -->
+    <script>
+        // 🚨 AUTO-DETECT BASE URL: Handles both file:/// and http://localhost:5002
+        const BASE_URL = (window.location.protocol.startsWith('http') && window.location.origin !== "null")
+            ? window.location.origin
+            : 'http://localhost:5002';
+
+        let userJwtToken = localStorage.getItem('hk_user_auth_token') || "";
+        let hasInitializedCountries = false;
+
+        window.onload = () => {
+            updateAuthBadge();
+            loadCountriesOnce(); // Loaded strictly once, zero loops!
+        };
+
+        function setToken(token) {
+            userJwtToken = token;
+            localStorage.setItem('hk_user_auth_token', token);
+            updateAuthBadge();
+        }
+
+        function updateAuthBadge() {
+            const badge = document.getElementById('tokenBadge');
+            if (userJwtToken) {
+                badge.className = "text-[9px] font-black uppercase px-2.5 py-1 rounded-full bg-emerald-50 text-hkGreen border border-emerald-200";
+                badge.innerText = "Authorized";
+            } else {
+                badge.className = "text-[9px] font-black uppercase px-2.5 py-1 rounded-full bg-rose-50 text-rose-600 border border-rose-200";
+                badge.innerText = "No Token";
+            }
+        }
+
+        function logApi(data) {
+            const out = document.getElementById('apiConsoleOutput');
+            out.innerText = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+            document.getElementById('consoleDrawer').classList.remove('hidden');
+        }
+
+        function toggleConsoleDrawer() {
+            document.getElementById('consoleDrawer').classList.toggle('hidden');
+        }
+
+        function goToScreen(screenKey) {
+            const screens = ['register', 'login', 'insurance', 'profile', 'forgot'];
+            screens.forEach(s => {
+                document.getElementById(`scr-${s}`)?.classList.add('hidden');
+                document.getElementById(`tab-${s}`)?.classList.remove('active');
+            });
+            document.getElementById(`scr-${screenKey}`)?.classList.remove('hidden');
+            document.getElementById(`tab-${screenKey}`)?.classList.add('active');
+
+            if (screenKey === 'profile') handleGetProfile();
+            if (screenKey === 'insurance') handleGetMyInsurance();
+        }
+
+        function previewCard(input, imgId, iconBoxId) {
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = document.getElementById(imgId);
+                    img.src = e.target.result;
+                    img.classList.remove('hidden');
+                    document.getElementById(iconBoxId).classList.add('hidden');
+                };
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+
+        // =========================================================================
+        // 🌍 1. CASCADING LOCATION DROPDOWNS (ZERO-LOOP EXECUTION)
+        // =========================================================================
+        async function loadCountriesOnce() {
+            if (hasInitializedCountries) return;
+            try {
+                const res = await fetch(`${BASE_URL}/api/public/countries`);
+                const json = await res.json();
+                if (json.success) {
+                    hasInitializedCountries = true;
+                    const cSelect = document.getElementById('selCountry');
+                    cSelect.innerHTML = '<option value="">Country</option>';
+                    json.data.forEach(c => {
+                        const isIndia = c.name === "India" || c.id === "101";
+                        cSelect.innerHTML += `<option value="${c.id}" ${isIndia ? 'selected' : ''}>${c.name}</option>`;
+                    });
+                    if (cSelect.value) onCountrySelected(cSelect.value);
+                }
+            } catch (err) {
+                logApi({ error: `Cannot load countries from ${BASE_URL}: ${err.message}` });
+            }
+        }
+
+        async function onCountrySelected(cId) {
+            const sSelect = document.getElementById('selState');
+            const citySelect = document.getElementById('selCity');
+            sSelect.disabled = true;
+            citySelect.disabled = true;
+
+            if (!cId) return;
+
+            sSelect.innerHTML = '<option value="">Loading...</option>';
+            try {
+                const res = await fetch(`${BASE_URL}/api/public/states?country_id=${cId}`);
+                const json = await res.json();
+                if (json.success) {
+                    sSelect.innerHTML = '<option value="">State</option>';
+                    json.data.forEach(s => {
+                        const isPunjab = s.name === "Punjab";
+                        sSelect.innerHTML += `<option value="${s.id}" ${isPunjab ? 'selected' : ''}>${s.name}</option>`;
+                    });
+                    sSelect.disabled = false;
+                    if (sSelect.value) onStateSelected(sSelect.value);
+                }
+            } catch (e) { logApi(e.message); }
+        }
+
+        async function onStateSelected(sId) {
+            const citySelect = document.getElementById('selCity');
+            citySelect.disabled = true;
+
+            if (!sId) return;
+
+            citySelect.innerHTML = '<option value="">Loading...</option>';
+            try {
+                const res = await fetch(`${BASE_URL}/api/public/cities?state_id=${sId}`);
+                const json = await res.json();
+                if (json.success) {
+                    citySelect.innerHTML = '<option value="">City</option>';
+                    json.data.forEach(c => {
+                        const isMohali = c.name === "Mohali" || c.name === "Chandigarh";
+                        citySelect.innerHTML += `<option value="${c.name}" ${isMohali ? 'selected' : ''}>${c.name}</option>`;
+                    });
+                    citySelect.disabled = false;
+                }
+            } catch (e) { logApi(e.message); }
+        }
+
+        // =========================================================================
+        // 🚀 2. USER AUTH CALLS
+        // =========================================================================
+        async function handleCheckExists() {
+            const phone = document.getElementById('regPhone').value.trim();
+            const email = document.getElementById('regEmail').value.trim();
+            try {
+                const res = await fetch(`${BASE_URL}/api/auth/user/check-exists`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone, email })
+                });
+                const json = await res.json();
+                logApi(json);
+                alert(json.message);
+            } catch (e) { logApi(e.message); }
+        }
+
+        async function handleRegister() {
+            const cEl = document.getElementById('selCountry');
+            const sEl = document.getElementById('selState');
+            const cityEl = document.getElementById('selCity');
+
+            const payload = {
+                name: document.getElementById('regName').value.trim(),
+                phone: document.getElementById('regPhone').value.trim(),
+                email: document.getElementById('regEmail').value.trim(),
+                password: document.getElementById('regPassword').value,
+                country: cEl.options[cEl.selectedIndex]?.text || "India",
+                state: sEl.options[sEl.selectedIndex]?.text || "Punjab",
+                city: cityEl.value || "Mohali"
+            };
+
+            try {
+                const res = await fetch(`${BASE_URL}/api/auth/user/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const json = await res.json();
+                logApi(json);
+                if (json.success && json.token) {
+                    setToken(json.token);
+                    alert("Account created successfully!");
+                    goToScreen('insurance');
+                } else {
+                    alert(json.message);
+                }
+            } catch (e) { logApi(e.message); }
+        }
+
+        async function handleLogin() {
+            const idVal = document.getElementById('loginId').value.trim();
+            const password = document.getElementById('loginPass').value;
+            const isEmail = idVal.includes('@');
+
+            const payload = {
+                [isEmail ? 'email' : 'phone']: idVal,
+                password
+            };
+
+            try {
+                const res = await fetch(`${BASE_URL}/api/auth/user/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const json = await res.json();
+                logApi(json);
+                if (json.success && json.token) {
+                    setToken(json.token);
+                    alert("Logged in successfully!");
+                    goToScreen('profile');
+                } else {
+                    alert(json.message);
+                }
+            } catch (e) { logApi(e.message); }
+        }
+
+        // =========================================================================
+        // 🛡️ 3. DUAL-SIDE INSURANCE UPLOAD
+        // =========================================================================
+        async function handleSaveInsurance() {
+            if (!userJwtToken) return alert("Please Login first!");
+
+            const frontFile = document.getElementById('fileCardFront').files[0];
+            const backFile = document.getElementById('fileCardBack').files[0];
+
+            const formData = new FormData();
+            formData.append('hasInsurance', 'true');
+            formData.append('insuranceNumber', document.getElementById('insPolicyNo').value.trim());
+            formData.append('companyName', document.getElementById('insCompanySelect').value);
+            formData.append('insuranceType', document.getElementById('insClaimType').value);
+            formData.append('endDate', document.getElementById('insExpiryDate').value);
+
+            if (frontFile) formData.append('insuranceDocumentFront', frontFile);
+            if (backFile) formData.append('insuranceDocumentBack', backFile);
+
+            logApi("Uploading Front & Back Insurance Cards to Backend...");
+
+            try {
+                const res = await fetch(`${BASE_URL}/api/auth/user/update-insurance`, {
+                    method: 'PUT',
+                    headers: { 'Authorization': `Bearer ${userJwtToken}` },
+                    body: formData
+                });
+                const json = await res.json();
+                logApi(json);
+                if (json.success) {
+                    alert("Insurance card uploaded & verified successfully!");
+                } else {
+                    alert(json.message);
+                }
+            } catch (e) { logApi(e.message); }
+        }
+
+        async function handleGetMyInsurance() {
+            if (!userJwtToken) return;
+            try {
+                const res = await fetch(`${BASE_URL}/api/auth/user/my-insurance`, {
+                    headers: { 'Authorization': `Bearer ${userJwtToken}` }
+                });
+                const json = await res.json();
+                logApi(json);
+                if (json.success && json.data) {
+                    const d = json.data;
+                    document.getElementById('insPolicyNo').value = d.insuranceNumber || '';
+                    if (d.companyName) document.getElementById('insCompanySelect').value = d.companyName;
+
+                    if (d.insuranceDocumentFront) {
+                        const img = document.getElementById('imgPreviewFront');
+                        img.src = `${BASE_URL}${d.insuranceDocumentFront}`;
+                        img.classList.remove('hidden');
+                        document.getElementById('boxFrontIcon').classList.add('hidden');
+                    }
+                    if (d.insuranceDocumentBack) {
+                        const img = document.getElementById('imgPreviewBack');
+                        img.src = `${BASE_URL}${d.insuranceDocumentBack}`;
+                        img.classList.remove('hidden');
+                        document.getElementById('boxBackIcon').classList.add('hidden');
+                    }
+                }
+            } catch (e) { logApi(e.message); }
+        }
+
+        async function handleGetProfile() {
+            if (!userJwtToken) return;
+            try {
+                const res = await fetch(`${BASE_URL}/api/auth/user/profile`, {
+                    headers: { 'Authorization': `Bearer ${userJwtToken}` }
+                });
+                const json = await res.json();
+                logApi(json);
+                if (json.success && json.data) {
+                    const u = json.data;
+                    document.getElementById('dispName').innerText = u.name || 'Patient';
+                    document.getElementById('dispPhone').innerText = u.phone ? `+91 ${u.phone}` : 'N/A';
+                    document.getElementById('dispLocation').innerText = `${u.city || 'Mohali'}, ${u.state || 'Punjab'}`;
+                    document.getElementById('dispBlood').innerText = u.bloodGroup || 'O+';
+                    document.getElementById('dispGender').innerText = u.gender || 'Male';
+                }
+            } catch (e) { logApi(e.message); }
+        }
+
+        async function handleUpdateProfile() {
+            if (!userJwtToken) return alert("Please Login first!");
+            const payload = {
+                bloodGroup: document.getElementById('updBloodGroup').value,
+                height: document.getElementById('updHeight').value.trim()
+            };
+            try {
+                const res = await fetch(`${BASE_URL}/api/auth/user/update`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${userJwtToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                const json = await res.json();
+                logApi(json);
+                alert("Profile medical vitals updated!");
+                handleGetProfile();
+            } catch (e) { logApi(e.message); }
+        }
+    </script>
+</body>
+</html>
