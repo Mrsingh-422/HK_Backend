@@ -2,6 +2,7 @@
 const Wallet = require('../../models/Wallet');
 const Appointment = require('../../models/Appointment'); 
 const WithdrawalRequest = require('../../models/WithdrawalRequest'); 
+const Doctor = require('../../models/Doctor');
 const moment = require('moment');
 const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
@@ -285,7 +286,9 @@ const getDoctorTransactions = async (req, res) => {
     }
 };
 
-// 4. UPDATE DOCTOR BANK DETAILS (Strict verification reset) - [1]
+// @desc    Update Doctor Bank Details (Strict verification reset on edit)
+// @route   PATCH /doctor/wallet/bank-details
+// @access  Private (Doctor)
 const updateDoctorBankDetails = async (req, res) => {
     try {
         const { accountType, bankName, accountHolderName, accountNumber, ifscCode, upiId } = req.body;
@@ -295,18 +298,16 @@ const updateDoctorBankDetails = async (req, res) => {
             return res.status(400).json({ success: false, message: "Missing required bank details fields." });
         }
 
-        // 🚨 SECURITY GUARD: Reset verification status to false on any edit for admin re-approval
         const updatedBankDetails = {
             accountType: accountType || 'Savings',
-            bankName,
-            accountHolderName,
-            accountNumber,
-            ifscCode,
-            upiId: upiId || "",
+            bankName: String(bankName).trim(),
+            accountHolderName: String(accountHolderName).trim(),
+            accountNumber: String(accountNumber).trim(),
+            ifscCode: String(ifscCode).trim().toUpperCase(),
+            upiId: upiId ? String(upiId).trim() : "",
             isVerified: false // Locked for admin re-verification
         };
 
-        // 🚀 SYNC FIX: Atomic update prevents 2dsphere & full-document schema validation crashes
         const updatedDoc = await Doctor.findByIdAndUpdate(
             doctorId,
             { $set: { bankDetails: updatedBankDetails } },
@@ -317,13 +318,13 @@ const updateDoctorBankDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Doctor profile not found." });
         }
 
-        res.json({ 
+        return res.status(200).json({ 
             success: true, 
             message: "Bank details updated successfully. Payouts are locked until Admin verifies your account.", 
             data: updatedDoc.bankDetails 
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

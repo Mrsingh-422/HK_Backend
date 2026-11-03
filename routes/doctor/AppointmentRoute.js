@@ -16,7 +16,8 @@ const { getVendorDashboard,
     getPrescriptionDetails, updatePrescription, resendPrescription,getAppointmentClinicalDetails, createPrescription,
     getPatientHistory, getPatientHistoryDetails,
     getDoctorVideoConsults,searchMasterMedicinesForDoctor,
-     reportDoctorNoShow , sendCompletionOtp,verifyCompletionOtp
+     reportDoctorNoShow , sendCompletionOtp,verifyCompletionOtp,
+     updateDoctorLiveLocation
 } = require('../../controllers/doctor/Appointment');
 
 // Base URL: /doctor/appointments
@@ -64,6 +65,8 @@ router.patch('/no-show/:id', protect('doctor'), reportDoctorNoShow);
 
 router.post('/send-completion-otp', protect('doctor'), sendCompletionOtp);
 router.post('/verify-completion-otp', protect('doctor'), verifyCompletionOtp);
+router.patch('/location', protect('doctor'), updateDoctorLiveLocation);
+
 
 
 module.exports = router;

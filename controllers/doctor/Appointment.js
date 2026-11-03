@@ -11,7 +11,6 @@ const { sendPushNotification } = require('../../utils/notification');
 
 
 // GET: Doctor Dashboard Stats
-// endpoint: GET /doctor/dashboard/summary
 const getVendorDashboard = async (req, res) => {
     try {
         const doctorId = req.user.id;
@@ -840,162 +839,63 @@ const createPrescription = async (req, res) => {
     }
 };
 
-// --- COMPLETE WITH PRESCRIPTION (Fallback) ---
+// @desc    Doctor Completes Consultation (Safe Destructuring & Handles Empty Body)
+// @route   POST /doctor/appointments/complete/:id
+// @access  Private (Doctor)
 const completeWithPrescription = async (req, res) => {
     try {
-        const { appointmentId, diagnosis, medicines, additionalNotes } = req.body;
-        const targetId = appointmentId || req.params.id;
+        const doctorId = req.user.id;
+        const appointmentId = req.params.id || req.body?.appointmentId;
 
-        const appointment = await Appointment.findOne({ _id: targetId, bookingType: 'Appointment' });
-        if (!appointment) return res.status(404).json({ message: "Appointment not found" });
-
-        if (appointment.consultationType === 'Video Consult') {
-            if (appointment.tracking?.isOtpVerified !== true) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: "Prescription Blocked: Video consultation has not been verified via User OTP yet." 
-                });
-            }
+        if (!appointmentId || !mongoose.isValidObjectId(appointmentId)) {
+            return res.status(400).json({ success: false, message: "Valid appointment ID is required." });
         }
 
-        let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
-        if (req.body.bp !== undefined) finalVitals.bp = req.body.bp;
-        if (req.body.pulse !== undefined) finalVitals.pulse = req.body.pulse;
-        if (req.body.temp !== undefined) finalVitals.temp = req.body.temp;
-        if (req.body.spo2 !== undefined) finalVitals.spo2 = req.body.spo2;
+        const appointment = await Appointment.findOne({ _id: appointmentId, doctorId });
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Appointment record not found or access denied." });
+        }
 
-        if (req.body['vitals[bp]'] !== undefined) finalVitals.bp = req.body['vitals[bp]'];
-        if (req.body['vitals[pulse]'] !== undefined) finalVitals.pulse = req.body['vitals[pulse]'];
-        if (req.body['vitals[temp]'] !== undefined) finalVitals.temp = req.body['vitals[temp]'];
-        if (req.body['vitals[spo2]'] !== undefined) finalVitals.spo2 = req.body['vitals[spo2]'];
+        if (appointment.status === 'Completed') {
+            return res.status(400).json({ success: false, message: "Appointment is already marked as Completed." });
+        }
 
-        if (req.body.vitals) {
+        appointment.status = 'Completed';
+        
+        // Auto-mark cash payment as Paid on completion if COD
+        if (appointment.paymentMethod === 'COD' || appointment.paymentMethod === 'Cash') {
+            appointment.paymentStatus = 'Paid';
+        }
+
+        await appointment.save();
+
+        // Release doctor duty state
+        await Doctor.findByIdAndUpdate(doctorId, { $set: { isOnline: true } });
+
+        // Alert patient of completion
+        if (appointment.userId) {
             try {
-                const parsedVitals = typeof req.body.vitals === 'string' 
-                    ? JSON.parse(req.body.vitals) 
-                    : req.body.vitals;
-                
-                if (parsedVitals && typeof parsedVitals === 'object') {
-                    if (parsedVitals.bp !== undefined) finalVitals.bp = parsedVitals.bp;
-                    if (parsedVitals.pulse !== undefined) finalVitals.pulse = parsedVitals.pulse;
-                    if (parsedVitals.temp !== undefined) finalVitals.temp = parsedVitals.temp;
-                    if (parsedVitals.spo2 !== undefined) finalVitals.spo2 = parsedVitals.spo2;
-                }
+                await sendPushNotification(
+                    appointment.userId,
+                    'user',
+                    "Consultation Completed! 🎉",
+                    `Your consultation with Dr. ${req.user.name} has been completed.`,
+                    { appointmentId: String(appointment._id), type: 'appointment_completed' }
+                );
             } catch (e) {}
         }
 
-        let prescription = await Prescription.findOne({ appointmentId: targetId });
-
-        if (prescription) {
-            prescription.diagnosis = diagnosis || prescription.diagnosis || [];
-            prescription.medicines = medicines || prescription.medicines || [];
-            prescription.additionalNotes = additionalNotes || prescription.additionalNotes || "";
-            prescription.vitals = finalVitals;
-            await prescription.save();
-        } else {
-            prescription = await Prescription.create({
-                appointmentId: targetId,
-                doctorId: req.user.id,
-                userId: appointment.userId,
-                diagnosis,
-                medicines,
-                additionalNotes,
-                vitals: finalVitals
-            });
-        }
-
-        // 🚨 Complete Appointment and mark payment paid
-        appointment.status = 'Completed';
-        appointment.paymentStatus = 'Paid';
-        await appointment.save();
-
-        res.status(201).json({ success: true, message: "Prescription added and consultation completed", data: prescription });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        return res.status(200).json({
+            success: true,
+            message: "Consultation marked as Completed successfully.",
+            data: appointment
+        });
+    } catch (error) {
+        console.error("Complete Appointment Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- COMPLETE WITH PRESCRIPTION (Direct API fallback) ---
-// const completeWithPrescription = async (req, res) => {
-//     try {
-//         const { appointmentId, diagnosis, medicines, additionalNotes } = req.body;
-//         const targetId = appointmentId || req.params.id;
-
-//         const appointment = await Appointment.findOne({ _id: targetId, bookingType: 'Appointment' });
-//         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
-
-//         // SECURE OTP LOCK VALIDATION: For Video consultations, verify OTP check is true
-//         if (appointment.consultationType === 'Video Consult') {
-//             if (appointment.tracking?.isOtpVerified !== true) {
-//                 return res.status(400).json({ 
-//                     success: false, 
-//                     message: "Prescription Blocked: Video consultation has not been verified via User OTP yet." 
-//                 });
-//             }
-//         }
-
-//         // Robust Vitals Parser
-//         let finalVitals = { bp: "", pulse: "", temp: "", spo2: "" };
-
-//         // Option A: Direct Flat Keys
-//         if (req.body.bp !== undefined) finalVitals.bp = req.body.bp;
-//         if (req.body.pulse !== undefined) finalVitals.pulse = req.body.pulse;
-//         if (req.body.temp !== undefined) finalVitals.temp = req.body.temp;
-//         if (req.body.spo2 !== undefined) finalVitals.spo2 = req.body.spo2;
-
-//         // Option B: Flutter Multipart Nested Keys
-//         if (req.body['vitals[bp]'] !== undefined) finalVitals.bp = req.body['vitals[bp]'];
-//         if (req.body['vitals[pulse]'] !== undefined) finalVitals.pulse = req.body['vitals[pulse]'];
-//         if (req.body['vitals[temp]'] !== undefined) finalVitals.temp = req.body['vitals[temp]'];
-//         if (req.body['vitals[spo2]'] !== undefined) finalVitals.spo2 = req.body['vitals[spo2]'];
-
-//         // Option C: JSON stringified or raw nested Object
-//         if (req.body.vitals) {
-//             try {
-//                 const parsedVitals = typeof req.body.vitals === 'string' 
-//                     ? JSON.parse(req.body.vitals) 
-//                     : req.body.vitals;
-                
-//                 if (parsedVitals && typeof parsedVitals === 'object') {
-//                     if (parsedVitals.bp !== undefined) finalVitals.bp = parsedVitals.bp;
-//                     if (parsedVitals.pulse !== undefined) finalVitals.pulse = parsedVitals.pulse;
-//                     if (parsedVitals.temp !== undefined) finalVitals.temp = parsedVitals.temp;
-//                     if (parsedVitals.spo2 !== undefined) finalVitals.spo2 = parsedVitals.spo2;
-//                 }
-//             } catch (e) {
-//                 console.error("Error parsing vitals in completeWithPrescription:", e.message);
-//             }
-//         }
-
-//         // 🚀 SYNC FIX: Check if a prescription already exists for this appointmentId to prevent double entries
-//         let prescription = await Prescription.findOne({ appointmentId: targetId });
-
-//         if (prescription) {
-//             // Update existing prescription details instead of creating a new duplicate
-//             prescription.diagnosis = diagnosis || prescription.diagnosis || [];
-//             prescription.medicines = medicines || prescription.medicines || [];
-//             prescription.additionalNotes = additionalNotes || prescription.additionalNotes || "";
-//             prescription.vitals = finalVitals;
-//             await prescription.save();
-//             console.log(`[Self-Healed Fallback] Duplicate prevented. Updated existing prescription ID: ${prescription._id}`);
-//         } else {
-//             // Create only if it doesn't exist
-//             prescription = await Prescription.create({
-//                 appointmentId: targetId,
-//                 doctorId: req.user.id,
-//                 userId: appointment.userId,
-//                 diagnosis,
-//                 medicines,
-//                 additionalNotes,
-//                 vitals: finalVitals
-//             });
-//         }
-
-//         appointment.status = 'Completed';
-//         await appointment.save();
-//         res.status(201).json({ success: true, message: "Prescription added and completed", data: prescription });
-//     } catch (error) { res.status(500).json({ message: error.message }); }
-// };
 
 // endpoint: GET /doctor/appointments/patient-history?page=1&limit=10
 const getPatientHistory = async (req, res) => {
@@ -1369,6 +1269,49 @@ const verifyCompletionOtp = async (req, res) => {
     }
 };
 
+// @desc    Stream Doctor Live GPS Location during Home Visit (Updates Doctor profile & Patient Live Map)
+// @route   PATCH /doctor/appointments/location
+// @access  Private (Doctor)
+const updateDoctorLiveLocation = async (req, res) => {
+    try {
+        const { lat, lng, appointmentId } = req.body || {};
+        const doctorId = req.user.id;
+
+        if (lat === undefined || lng === undefined) {
+            return res.status(400).json({ success: false, message: "lat and lng are required." });
+        }
+
+        const numLat = Number(lat);
+        const numLng = Number(lng);
+
+        // 1. Update Doctor's global location
+        await Doctor.findByIdAndUpdate(doctorId, {
+            $set: { location: { lat: numLat, lng: numLng } }
+        });
+
+        // 2. If appointmentId is provided (Home Visit in progress), update live tracking in Appointment
+        if (appointmentId && mongoose.isValidObjectId(appointmentId)) {
+            await Appointment.findByIdAndUpdate(appointmentId, {
+                $set: {
+                    'tracking.liveLocation': {
+                        lat: numLat,
+                        lng: numLng,
+                        lastUpdated: new Date()
+                    }
+                }
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Doctor live location updated successfully.",
+            location: { lat: numLat, lng: numLng }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 
@@ -1380,6 +1323,7 @@ module.exports = { getVendorDashboard,
     getPatientHistory, getPatientHistoryDetails,
     getDoctorVideoConsults,
     searchMasterMedicinesForDoctor,
-    reportDoctorNoShow,sendCompletionOtp,verifyCompletionOtp
+    reportDoctorNoShow,sendCompletionOtp,verifyCompletionOtp,
+    updateDoctorLiveLocation
 
 };
