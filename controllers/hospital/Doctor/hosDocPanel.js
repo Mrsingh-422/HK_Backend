@@ -8,6 +8,7 @@ const Availability = require('../../../models/Availability');
 const User = require('../../../models/User');
 const Coupon = require('../../../models/Coupon'); 
 const DeliveryCharge = require('../../../models/DeliveryCharge'); 
+const Insurance = require('../../../models/Insurance');
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
 const moment = require('moment');
@@ -1758,96 +1759,65 @@ const getRawDischargeSummary = async (req, res) => {
     }
 };
 
-// @desc    Get Single Case Details for Hospital Doctor (Handles Both OPD Token Details & IPD Ward Chart)
+// @desc    Get Detailed Patient Case File for Hospital Doctor (With Populated Insurance Details)
 // @route   GET /hospital-doctor/panel/case-details/:id
-// @access  Private (Hospital Doctor)
+// @access  Private (Hospital-Doctor)
 const getPatientDetails = async (req, res) => {
     try {
         const { id } = req.params;
         const doctorId = req.user.id;
 
         const isObjectId = mongoose.isValidObjectId(id);
-        const query = {
-            doctorId,
-            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
-        };
+        const query = isObjectId ? { _id: id } : { bookingId: String(id).trim() };
 
         const appointment = await Appointment.findOne(query)
-            .populate('userId', 'name phone email profilePic age gender bloodGroup')
-            .populate('hospitalId', 'name address city state phone')
+            .populate('userId', 'name phone email profilePic age gender dob bloodGroup userAddress')
+            .populate('hospitalId', 'name address phone location hospitalImage isInsuranceAccepted acceptedInsurances')
+            .populate('doctorId', 'name speciality department profileImage fees qualification phone')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
-                populate: { path: 'wardId', select: 'name type' }
+                populate: { path: 'wardId', select: 'name type description' }
             })
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverInfo location')
+            .populate('specialServices.serviceId', 'serviceName price image description')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type') // 👈 Populated Insurance
+            .populate('clinicalLogs.doctorId', 'name speciality profileImage')
             .populate('bedsideCareTeam.doctorId', 'name speciality profileImage dutyStatus')
-            .populate('clinicalLogs.doctorId', 'name speciality')
+            .populate('activeMedications.addedBy', 'name speciality')
+            .populate('pendingDoctorId', 'name speciality')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality')
+            .populate('treatmentHistory.toDoctorId', 'name speciality')
             .lean();
 
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Appointment case not found or access denied." });
+            return res.status(404).json({ success: false, message: "Patient case record not found." });
         }
 
-        const isOpd = appointment.bookingType === 'OPD';
+        // Format duration if applicable
+        let durationDisplay = "N/A";
+        if (appointment.startDate) {
+            const start = moment(appointment.startDate);
+            const end = appointment.endDate ? moment(appointment.endDate) : moment();
+            const days = end.diff(start, 'days') || 1;
+            durationDisplay = `${days} Day(s)`;
+        }
 
-        // Fetch Digital Prescriptions issued for this appointment
-        const prescriptions = await Prescription.find({ appointmentId: appointment._id })
-            .sort({ createdAt: -1 })
-            .lean();
-
-        const primaryPatient = (Array.isArray(appointment.patients) && appointment.patients.length > 0)
-            ? appointment.patients[0]
-            : { patientName: appointment.userId?.name || "Patient", patientAge: 30, gender: "Male" };
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             data: {
                 ...appointment,
-                isOpd,
-                isIpd: !isOpd,
-                patientSummary: {
-                    name: primaryPatient.patientName,
-                    age: primaryPatient.patientAge,
-                    gender: primaryPatient.gender,
-                    bloodGroup: primaryPatient.bloodGroup || appointment.userId?.bloodGroup || "Not Provided",
-                    relation: primaryPatient.relation || "Self",
-                    contactPhone: appointment.userId?.phone || "N/A",
-                    profilePic: appointment.userId?.profilePic || null
-                },
-                // OPD Specific Metadata
-                opdInfo: isOpd ? {
-                    tokenNumber: appointment.tokenNumber,
-                    opdRoomNumber: appointment.opdRoomNumber || "Cabin 1",
-                    appointmentTime: appointment.appointmentTime,
-                    appointmentDate: moment(appointment.appointmentDate).format('YYYY-MM-DD'),
-                    consultationFee: appointment.pricingBreakdown?.baseFee || 500,
-                    reasonForVisit: appointment.bookingReason || primaryPatient.reasonForVisit || "Routine OPD Checkup"
-                } : null,
-                // IPD Specific Metadata
-                ipdInfo: !isOpd ? {
-                    wardName: appointment.wardName,
-                    bedNumber: appointment.bedNumber,
-                    startDate: appointment.startDate,
-                    endDate: appointment.endDate,
-                    stayDuration: appointment.stayDuration
-                } : null,
-                // Prescriptions List
-                prescriptions: prescriptions || [],
-                hasPrescription: prescriptions.length > 0,
-                // Action Controls for Doctor UI
-                actions: {
-                    canStartConsultation: isOpd && ['Confirmed', 'Hospital-Pending'].includes(appointment.status),
-                    canWritePrescription: appointment.status === 'In-Progress' || (isOpd && appointment.status === 'Confirmed'),
-                    canMarkNoShow: isOpd && ['Confirmed', 'In-Progress'].includes(appointment.status),
-                    canTransferDoctor: !isOpd && ['Confirmed', 'In-Progress'].includes(appointment.status),
-                    canDischarge: !isOpd && appointment.status === 'In-Progress'
-                }
+                durationDisplay,
+                hasInsurance: Boolean(appointment.insuranceDetails?.hasInsurance),
+                insuranceClaimStatus: appointment.insuranceDetails?.hasInsurance 
+                    ? (appointment.insuranceDetails?.approvalStatus || 'Pending') 
+                    : 'Self-Pay (No Insurance)'
             }
         });
 
     } catch (error) {
         console.error("Get Patient Details Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -3252,7 +3222,7 @@ const getDoctorAvailableWardsAndBeds = async (req, res) => {
     }
 };
 
-// @desc    Hospital Doctor Initiates OPD-to-IPD Bed Admission (30-Minute Hold & Instant Ward Sync)
+// @desc    Hospital Doctor Initiates OPD-to-IPD Bed Admission (Seamlessly Carries Over Patient Insurance)
 // @route   POST /hospital-doctor/panel/opd/initiate-admission
 // @access  Private (Hospital-Doctor)
 const initiateOpdToIpdAdmission = async (req, res) => {
@@ -3260,7 +3230,7 @@ const initiateOpdToIpdAdmission = async (req, res) => {
         const doctorId = req.user.id;
         const { 
             opdAppointmentId, 
-            appointmentId, // Fallback key support
+            appointmentId, 
             bedId, 
             stayDuration = 1, 
             triageLevel = 'Urgent', 
@@ -3277,7 +3247,6 @@ const initiateOpdToIpdAdmission = async (req, res) => {
             });
         }
 
-        // 1. Fetch parent OPD appointment
         const isObjectId = mongoose.isValidObjectId(targetOpdId);
         const opdAppt = await Appointment.findOne(
             isObjectId ? { _id: targetOpdId } : { bookingId: String(targetOpdId).trim() }
@@ -3298,10 +3267,8 @@ const initiateOpdToIpdAdmission = async (req, res) => {
             });
         }
 
-        // 2. Sync capacity first to release any expired holds
         await syncHospitalWardAndBedCapacity(hospitalId);
 
-        // 3. Verify target bed is Available
         const targetBed = await Bed.findOne({ _id: bedId, hospitalId }).populate('wardId', 'name type');
         if (!targetBed) {
             return res.status(404).json({ 
@@ -3318,7 +3285,7 @@ const initiateOpdToIpdAdmission = async (req, res) => {
         }
 
         const now = new Date();
-        const holdExpiresAt = moment(now).add(30, 'minutes').toDate(); // 30-Minute payment timer
+        const holdExpiresAt = moment(now).add(30, 'minutes').toDate();
         const durationDays = Math.max(1, parseInt(stayDuration) || 1);
         const startDate = now;
         const endDate = moment(now).add(durationDays, 'days').toDate();
@@ -3327,14 +3294,26 @@ const initiateOpdToIpdAdmission = async (req, res) => {
         const depositAmount = bedPricePerDay * durationDays;
         const wardTitle = targetBed.wardId?.name || "General Ward";
 
-        // 4. Reserve Bed for 30 Minutes
         targetBed.status = 'Reserved';
         await targetBed.save();
 
-        // 5. Generate Unique Admission Booking ID
         const admissionBookingId = await generateUniqueOrderCode('HKH', Appointment, 'bookingId');
 
-        // 6. Create IPD Admission Appointment Record linked to Parent OPD Appointment
+        // 🚨 CRITICAL FIX: Copy over insurance details from OPD appointment to IPD Admission
+        const insurancePayload = opdAppt.insuranceDetails ? {
+            hasInsurance: Boolean(opdAppt.insuranceDetails.hasInsurance),
+            insuranceNumber: opdAppt.insuranceDetails.insuranceNumber || "",
+            companyName: opdAppt.insuranceDetails.companyName || "",
+            insuranceType: opdAppt.insuranceDetails.insuranceType || "",
+            masterInsuranceId: opdAppt.insuranceDetails.masterInsuranceId || null,
+            insuranceDocument: opdAppt.insuranceDetails.insuranceDocument || null,
+            insuranceDocumentFront: opdAppt.insuranceDetails.insuranceDocumentFront || null,
+            insuranceDocumentBack: opdAppt.insuranceDetails.insuranceDocumentBack || null,
+            approvalLetterPdf: opdAppt.insuranceDetails.approvalLetterPdf || null,
+            approvalStatus: opdAppt.insuranceDetails.approvalStatus || (opdAppt.insuranceDetails.hasInsurance ? 'Pending' : 'None'),
+            rejectionReason: opdAppt.insuranceDetails.rejectionReason || null
+        } : { hasInsurance: false };
+
         const admissionAppt = await Appointment.create({
             userId: opdAppt.userId._id || opdAppt.userId,
             hospitalId: hospitalId,
@@ -3372,6 +3351,7 @@ const initiateOpdToIpdAdmission = async (req, res) => {
             paymentStatus: 'Pending',
             status: 'Hospital-Pending',
             admissionHoldExpiresAt: holdExpiresAt,
+            insuranceDetails: insurancePayload, // 👈 Saved with full insurance
             clinicalSummary: {
                 vitals: opdAppt.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
                 admissionNote: admissionNotes || bookingReason || ""
@@ -3385,16 +3365,13 @@ const initiateOpdToIpdAdmission = async (req, res) => {
             }]
         });
 
-        // 7. Mark parent OPD consultation as Completed if it was In-Progress/Confirmed
         if (opdAppt.status !== 'Completed') {
             opdAppt.status = 'Completed';
             await opdAppt.save();
         }
 
-        // 8. Sync Ward & Bed Capacity Counters after reserving bed
         await syncHospitalWardAndBedCapacity(hospitalId, targetBed.wardId?._id);
 
-        // 9. Notify Patient & Hospital Reception Desk
         try {
             await sendPushNotification(
                 opdAppt.userId._id || opdAppt.userId,
@@ -3408,6 +3385,7 @@ const initiateOpdToIpdAdmission = async (req, res) => {
                     bedNumber: String(targetBed.bedNumber),
                     wardName: String(wardTitle),
                     depositAmount: String(depositAmount),
+                    hasInsurance: String(insurancePayload.hasInsurance),
                     holdExpiresAt: holdExpiresAt.toISOString(),
                     click_action: 'FLUTTER_NOTIFICATION_CLICK'
                 }
@@ -3417,7 +3395,7 @@ const initiateOpdToIpdAdmission = async (req, res) => {
                 hospitalId,
                 'hospital',
                 `🛏️ New OPD-to-IPD Bed Hold: ${targetBed.bedNumber}`,
-                `Dr. ${req.user.name || 'Doctor'} reserved Bed ${targetBed.bedNumber} (${wardTitle}) for patient ${opdAppt.patients?.[0]?.patientName || 'Patient'}. Deposit ₹${depositAmount} pending.`,
+                `Dr. ${req.user.name || 'Doctor'} reserved Bed ${targetBed.bedNumber} (${wardTitle}) for patient ${opdAppt.patients?.[0]?.patientName || 'Patient'}. Insurance: ${insurancePayload.hasInsurance ? 'Yes (' + (insurancePayload.companyName || 'TPA') + ')' : 'Self-Pay'}.`,
                 {
                     type: 'NEW_ADMISSION_HOLD',
                     admissionAppointmentId: String(admissionAppt._id),
@@ -3441,7 +3419,6 @@ const initiateOpdToIpdAdmission = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 module.exports = { 
     getMyDoctorProfile,changeHospitalDoctorPassword,

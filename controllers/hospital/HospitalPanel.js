@@ -1365,7 +1365,7 @@ const deleteWard = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// @desc    Get All Hospital IPD Admissions (With Selected Doctor, Special Services & Bed Details)
+// @desc    Get All Hospital IPD Admissions (With Selected Doctor, Special Services, Bed & Lightweight Insurance Details)
 // @route   GET /hospital/panel/admissions/all
 // @access  Private (Hospital Admin)
 const getAllHospitalAdmissions = async (req, res) => {
@@ -1412,7 +1412,7 @@ const getAllHospitalAdmissions = async (req, res) => {
 
         const totalRecords = await Appointment.countDocuments(query);
 
-        // Fetch admissions with deep population of Doctor, Special Services, Bed, and Ambulance
+        // Fetch admissions with deep population of Doctor, Special Services, Bed, Ambulance, and Master Insurance
         const admissions = await Appointment.find(query)
             .populate('userId', 'name phone email profilePic gender dob age')
             .populate('doctorId', 'name speciality department profileImage qualification phone fees')
@@ -1424,6 +1424,7 @@ const getAllHospitalAdmissions = async (req, res) => {
             .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverInfo')
             .populate('specialServices.serviceId', 'serviceName price image description')
             .populate('opdAppointmentId', 'bookingId tokenNumber opdRoomNumber')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type') // 👈 Populated Master Insurance
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum)
@@ -1450,6 +1451,8 @@ const getAllHospitalAdmissions = async (req, res) => {
             if (item.startDate && item.endDate) {
                 stayDays = Math.max(1, moment(item.endDate).diff(moment(item.startDate), 'days') + 1);
             }
+
+            const isInsured = Boolean(item.insuranceDetails?.hasInsurance);
 
             return {
                 _id: item._id,
@@ -1514,9 +1517,22 @@ const getAllHospitalAdmissions = async (req, res) => {
                 paymentMethod: item.paymentMethod || 'COD',
                 paymentStatus: item.paymentStatus || 'Pending',
 
-                // Insurance Status
-                hasInsurance: Boolean(item.insuranceDetails?.hasInsurance),
+                // 🚨 PRESERVED & HIGHLIGHTED INSURANCE DETAILS (Lightweight DTO)
+                hasInsurance: isInsured,
                 insuranceApprovalStatus: item.insuranceDetails?.approvalStatus || 'None',
+                insuranceClaimStatus: isInsured 
+                    ? (item.insuranceDetails?.approvalStatus || 'Pending') 
+                    : 'Self-Pay (No Insurance)',
+                insurance: isInsured ? {
+                    insuranceNumber: item.insuranceDetails?.insuranceNumber || "N/A",
+                    companyName: item.insuranceDetails?.companyName || item.insuranceDetails?.masterInsuranceId?.insuranceName || "N/A",
+                    provider: item.insuranceDetails?.masterInsuranceId?.provider || "N/A",
+                    insuranceType: item.insuranceDetails?.insuranceType || item.insuranceDetails?.masterInsuranceId?.type || "Cashless",
+                    approvalStatus: item.insuranceDetails?.approvalStatus || 'Pending',
+                    approvalLetterPdf: item.insuranceDetails?.approvalLetterPdf || null,
+                    cardFrontImage: item.insuranceDetails?.insuranceDocumentFront || null,
+                    cardBackImage: item.insuranceDetails?.insuranceDocumentBack || null
+                } : null,
 
                 // 30-Minute Hold Window Metadata
                 admissionHoldExpiresAt: item.admissionHoldExpiresAt,
@@ -2535,9 +2551,9 @@ const emergencyDischarge = async (req, res) => {
     }
 };
 
-// @desc    Get Single Admission Super Details (With Doctor, Services, Clinical Logs & Bedside Team)
+// @desc    Get Detailed Hospital Case (With Populated Insurance Cards, TPA Status, Bed & Doctor Vitals)
 // @route   GET /hospital/panel/admissions/details/:id
-// @access  Private (Hospital Admin)
+// @access  Private (Hospital)
 const getHospitalCaseDetails = async (req, res) => {
     try {
         const { id } = req.params;
@@ -2550,52 +2566,57 @@ const getHospitalCaseDetails = async (req, res) => {
         };
 
         const appointment = await Appointment.findOne(query)
-            .populate('userId', 'name email phone profilePic gender dob age bloodGroup userAddress')
-            .populate('doctorId', 'name email phone speciality qualification profileImage department fees languages')
+            .populate('userId', 'name phone email profilePic age gender dob bloodGroup userAddress')
+            .populate('doctorId', 'name speciality department profileImage fees qualification phone')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
-                populate: { path: 'wardId', select: 'name type' }
+                populate: { path: 'wardId', select: 'name type description' }
             })
-            .populate('ambulanceId', 'name phone vehicleNumber vehicleType driverInfo')
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverInfo location')
             .populate('specialServices.serviceId', 'serviceName price image description')
-            .populate('bedsideCareTeam.doctorId', 'name speciality department profileImage phone')
-            .populate('clinicalLogs.doctorId', 'name speciality')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type') // 👈 Populated Master Insurance
+            .populate('clinicalLogs.doctorId', 'name speciality profileImage')
+            .populate({
+                path: 'bedsideCareTeam.doctorId',
+                select: 'name speciality profileImage dutyStatus'
+            })
             .populate('activeMedications.addedBy', 'name speciality')
+            .populate('pendingDoctorId', 'name speciality')
             .populate('treatmentHistory.fromDoctorId', 'name speciality')
             .populate('treatmentHistory.toDoctorId', 'name speciality')
             .lean();
 
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission record not found." });
+            return res.status(404).json({ success: false, message: "Hospital case record not found." });
         }
 
-        // Format Special Services cleanly
-        const formattedSpecialServices = (appointment.specialServices || []).map(srv => ({
-            serviceId: srv.serviceId?._id || srv.serviceId || null,
-            serviceName: srv.serviceId?.serviceName || srv.serviceName || "Special Service",
-            price: Number(srv.price || srv.serviceId?.price || 0),
-            image: srv.serviceId?.image || null,
-            description: srv.serviceId?.description || ""
-        }));
-
-        const totalSpecialServicesCharges = formattedSpecialServices.reduce((sum, s) => sum + s.price, 0);
+        const isInsuranceApplied = Boolean(appointment.insuranceDetails?.hasInsurance);
 
         return res.status(200).json({
             success: true,
             data: {
                 ...appointment,
-                doctor: appointment.doctorId ? {
-                    _id: appointment.doctorId._id,
-                    name: appointment.doctorId.name,
-                    speciality: appointment.doctorId.speciality,
-                    department: appointment.doctorId.department?.roomNumber || "Cabin",
-                    qualification: appointment.doctorId.qualification || "",
-                    phone: appointment.doctorId.phone || "",
-                    profileImage: appointment.doctorId.profileImage || null
-                } : null,
-                specialServices: formattedSpecialServices,
-                totalSpecialServicesCharges
+                isOpd: appointment.bookingType === 'OPD',
+                isIpd: appointment.bookingType === 'Admission',
+                hasInsurance: isInsuranceApplied,
+                insuranceClaimStatus: isInsuranceApplied 
+                    ? (appointment.insuranceDetails?.approvalStatus || 'Pending') 
+                    : 'Self-Pay (No Insurance)',
+                // Dedicated Clean Insurance Object for Hospital TPA Desk UI
+                insuranceSummary: isInsuranceApplied ? {
+                    hasInsurance: true,
+                    insuranceNumber: appointment.insuranceDetails?.insuranceNumber || "N/A",
+                    companyName: appointment.insuranceDetails?.companyName || appointment.insuranceDetails?.masterInsuranceId?.insuranceName || "N/A",
+                    provider: appointment.insuranceDetails?.masterInsuranceId?.provider || "N/A",
+                    insuranceType: appointment.insuranceDetails?.insuranceType || appointment.insuranceDetails?.masterInsuranceId?.type || "Cashless",
+                    approvalStatus: appointment.insuranceDetails?.approvalStatus || 'Pending',
+                    approvalLetterPdf: appointment.insuranceDetails?.approvalLetterPdf || null,
+                    cardFrontImage: appointment.insuranceDetails?.insuranceDocumentFront || null,
+                    cardBackImage: appointment.insuranceDetails?.insuranceDocumentBack || null,
+                    cardDocument: appointment.insuranceDetails?.insuranceDocument || null,
+                    rejectionReason: appointment.insuranceDetails?.rejectionReason || null
+                } : null
             }
         });
 
@@ -2604,6 +2625,7 @@ const getHospitalCaseDetails = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // 🧮 MASTER 24-HOUR DYNAMIC STAY & FINANCIAL LEDGER ENGINE
 const calcStayAndLedger = (appt, actualEndDate = new Date(), billingItems = []) => {
@@ -3482,7 +3504,14 @@ const getTrackCaseSuperDetails = async (req, res) => {
         const { id } = req.params;
         const { sortOrder = 'desc', order } = req.query;
 
-        const appointment = await Appointment.findOne({ _id: id, hospitalId })
+        // Support both MongoDB _id and custom bookingId (e.g. HKH-XXXX)
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            hospitalId,
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query)
             .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
             .populate('doctorId', 'name speciality qualification profileImage')
             .populate({
@@ -3494,14 +3523,15 @@ const getTrackCaseSuperDetails = async (req, res) => {
             .populate('treatmentHistory.toDoctorId', 'name speciality qualification profileImage')
             .populate('bedsideCareTeam.doctorId', 'name speciality qualification profileImage dutyStatus')
             .populate('clinicalLogs.doctorId', 'name speciality qualification profileImage')
-            .populate('activeMedications.addedBy', 'name speciality qualification profileImage');
+            .populate('activeMedications.addedBy', 'name speciality qualification profileImage')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type'); // 👈 Populated Master Insurance
 
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
         }
 
-        const Prescription = require('../../models/Prescription');
-        const prescription = await Prescription.findOne({ appointmentId: id }).sort({ createdAt: -1 });
+        // Fetch prescription using verified appointment ObjectId
+        const prescription = await Prescription.findOne({ appointmentId: appointment._id }).sort({ createdAt: -1 });
 
         const resolvedPatient = resolvePatientDTO(appointment);
 
@@ -3648,7 +3678,9 @@ const getTrackCaseSuperDetails = async (req, res) => {
             spo2: appointment.clinicalSummary?.vitals?.spo2 || ""
         };
 
-        res.json({
+        const isInsuranceApplied = Boolean(appointment.insuranceDetails?.hasInsurance);
+
+        return res.status(200).json({
             success: true,
             timelineSortApplied: isAscending ? 'asc' : 'desc',
             totalTimelineEvents: treatmentTimeline.length,
@@ -3666,7 +3698,27 @@ const getTrackCaseSuperDetails = async (req, res) => {
                     paymentMethod: appointment.paymentMethod || "",
                     patientProfile: resolvedPatient, 
                     bedDetails: appointment.bedId,
-                    dischargeVitals: actualVitals
+                    dischargeVitals: actualVitals,
+
+                    // 🚨 PRESERVED & ADDED INSURANCE METRICS
+                    hasInsurance: isInsuranceApplied,
+                    insuranceClaimStatus: isInsuranceApplied 
+                        ? (appointment.insuranceDetails?.approvalStatus || 'Pending') 
+                        : 'Self-Pay (No Insurance)',
+                    insuranceDetails: appointment.insuranceDetails || null,
+                    insuranceSummary: isInsuranceApplied ? {
+                        hasInsurance: true,
+                        insuranceNumber: appointment.insuranceDetails?.insuranceNumber || "N/A",
+                        companyName: appointment.insuranceDetails?.companyName || appointment.insuranceDetails?.masterInsuranceId?.insuranceName || "N/A",
+                        provider: appointment.insuranceDetails?.masterInsuranceId?.provider || "N/A",
+                        insuranceType: appointment.insuranceDetails?.insuranceType || appointment.insuranceDetails?.masterInsuranceId?.type || "Cashless",
+                        approvalStatus: appointment.insuranceDetails?.approvalStatus || 'Pending',
+                        approvalLetterPdf: appointment.insuranceDetails?.approvalLetterPdf || null,
+                        cardFrontImage: appointment.insuranceDetails?.insuranceDocumentFront || null,
+                        cardBackImage: appointment.insuranceDetails?.insuranceDocumentBack || null,
+                        cardDocument: appointment.insuranceDetails?.insuranceDocument || null,
+                        rejectionReason: appointment.insuranceDetails?.rejectionReason || null
+                    } : null
                 },
                 treatmentTimeline, 
                 prescriptionDetails: prescription ? {
@@ -3691,7 +3743,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
 
     } catch (error) {
         console.error("Super Details Fetch Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

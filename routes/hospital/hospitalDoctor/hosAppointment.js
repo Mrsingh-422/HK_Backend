@@ -3,31 +3,24 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 
 const { 
-    getHospitalAllBookings,
-    approveHospitalBooking,
     rejectHospitalBooking,
-    getHospitalStats  ,
-    collectHospitalOpdCounterPayment,
-    recordOpdPatientVitals,getHospitalPendingAdmissionHolds,collectAdmissionCounterPayment,
+    recordOpdPatientVitals,
+    getHospitalPendingAdmissionHolds,
+    collectAdmissionCounterPayment,
     switchAdmissionHeldBedAtCounter
 } = require('../../../controllers/hospital/hospitalDoctor/hosAppoinment');
 
 // Base URL: /hospital/doctor/appointments
 
-router.get('/stats', protect('hospital'), getHospitalStats); // Dashboard Numbers
-router.get('/all-bookings', protect('hospital'), getHospitalAllBookings); // Listing with filters
-router.patch('/approve/:id', protect('hospital'), approveHospitalBooking);
+// 1. Booking Rejection by Hospital Desk
 router.patch('/reject/:id', protect('hospital'), rejectHospitalBooking);
 
-router.patch('/collect-payment/:id', protect('hospital'), collectHospitalOpdCounterPayment);
+// 2. OPD Vitals Recording (Triage / Pre-Consultation)
+router.patch('/opd-vitals/:id', protect(['hospital', 'hospital-doctor']), recordOpdPatientVitals);
 
-router.patch('/opd-vitals/:id', protect('hospital'), recordOpdPatientVitals);
-
+// 3. Admission Desk: Pending 30-Min Holds, Deposit Collection & Bed Switch
 router.get('/admissions/pending-holds', protect('hospital'), getHospitalPendingAdmissionHolds);
 router.patch('/admission/collect-payment/:id', protect('hospital'), collectAdmissionCounterPayment);
-
 router.patch('/admission/switch-bed/:id', protect('hospital'), switchAdmissionHeldBedAtCounter);
-
-
 
 module.exports = router;

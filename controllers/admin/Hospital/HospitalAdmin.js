@@ -3,7 +3,8 @@ const BedRescheduleLimit = require("../../../models/BedRescheduleLimit");
 const Appointment = require("../../../models/Appointment");
 const Hospital = require("../../../models/Hospital");
 const HospitalService = require("../../../models/HospitalService");
-const Ambulance = require("../../../models/Ambulance");  
+const Ambulance = require("../../../models/Ambulance");
+const Insurance = require("../../../models/Insurance");  
 const mongoose = require("mongoose");
 
 // 1. UPDATE GLOBAL LIMIT (patch API)
@@ -87,7 +88,7 @@ const adminGetApprovedHospitals = async (req, res) => {
     }
 };
 
-// @desc    Admin: Get Hospital Bookings (With Doctor, Bed, Special Services & Insurance)
+// @desc    Admin: Get Hospital Bookings (With Doctor, Bed, Special Services & Populated Master Insurance)
 // @route   GET /admin/hospital/appointments
 // @access  Private (Admin)
 const adminGetHospitalBookings = async (req, res) => {
@@ -126,7 +127,6 @@ const adminGetHospitalBookings = async (req, res) => {
 
         const totalCount = await Appointment.countDocuments(query);
 
-        // 🚨 Populated Doctor, Special Services, Ambulance & Bed
         const data = await Appointment.find(query)
             .populate('userId', 'name phone email')
             .populate('hospitalId', 'name address hospitalImage city isInsuranceAccepted')
@@ -138,6 +138,7 @@ const adminGetHospitalBookings = async (req, res) => {
             })
             .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
             .populate('specialServices.serviceId', 'serviceName price image description')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type') // 👈 Populated
             .sort(bookingType === 'OPD' ? { tokenNumber: 1, createdAt: -1 } : { createdAt: -1 })
             .skip(skip)
             .limit(limit)
