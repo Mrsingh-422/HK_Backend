@@ -369,13 +369,16 @@ const adminHandleUnbanAction = async (req, res) => {
     }
 };
 
+// @desc    Get User Orders List for Admin (Separates Independent Doctor vs Hospital Visit/Admission)
+// @route   GET /admin/users/details/:id/orders?type=All
+// @access  Private (Admin)
 const getUserOrdersAdmin = async (req, res) => {
     try {
         const { id } = req.params;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
-        const type = req.query.type || 'All'; // Options: 'Doctor', 'Lab', 'Pharmacy', 'Nurse', 'Ambulance', 'All'
+        const type = req.query.type || 'All'; // 'Doctor', 'Hospital', 'Lab', 'Pharmacy', 'Nurse', 'Ambulance', 'All'
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid User ID format." });
@@ -384,12 +387,12 @@ const getUserOrdersAdmin = async (req, res) => {
         let orders = [];
         let total = 0;
 
-        // Specific category logic for fast DB execution & precise pagination
         if (type === 'Doctor') {
-            total = await Appointment.countDocuments({ userId: id });
-            const data = await Appointment.find({ userId: id })
+            // Independent Doctor Only (Video Call, Home Visit, Private Clinic)
+            const docQuery = { userId: id, hospitalId: null, bookingType: 'Appointment' };
+            total = await Appointment.countDocuments(docQuery);
+            const data = await Appointment.find(docQuery)
                 .populate('doctorId', 'name speciality')
-                .populate('hospitalId', 'name')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -402,7 +405,37 @@ const getUserOrdersAdmin = async (req, res) => {
                 date: item.appointmentDate || item.createdAt,
                 status: item.status,
                 total: item.totalAmount || 0,
-                details: item.bookingType === 'Admission' ? 'Hospital Admission' : `Consultation with Dr. ${item.doctorId?.name || 'Staff'}`
+                details: `${item.consultationType || 'Consultation'} with Dr. ${item.doctorId?.name || 'Doctor'}`
+            }));
+
+        } else if (type === 'Hospital') {
+            // Hospital Only (Hospital OPD Visit & IPD Bed Admission)
+            const hospQuery = { 
+                userId: id, 
+                $or: [
+                    { hospitalId: { $ne: null } }, 
+                    { bookingType: { $in: ['Admission', 'OPD'] } }
+                ] 
+            };
+            total = await Appointment.countDocuments(hospQuery);
+            const data = await Appointment.find(hospQuery)
+                .populate('doctorId', 'name speciality')
+                .populate('hospitalId', 'name')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean();
+
+            orders = data.map(item => ({
+                orderId: item.bookingId || "N/A",
+                mongoId: item._id,
+                type: 'Hospital',
+                date: item.appointmentDate || item.startDate || item.createdAt,
+                status: item.status,
+                total: item.totalAmount || 0,
+                details: item.bookingType === 'OPD' 
+                    ? `Hospital OPD (Token #${item.tokenNumber || '1'}) - Dr. ${item.doctorId?.name || 'Doctor'} at ${item.hospitalId?.name || 'Hospital'}`
+                    : `Hospital Bed Admission (${item.wardName || 'Ward'} - ${item.bedNumber || 'Bed'}) at ${item.hospitalId?.name || 'Hospital'}`
             }));
 
         } else if (type === 'Lab') {
@@ -482,8 +515,8 @@ const getUserOrdersAdmin = async (req, res) => {
             }));
 
         } else {
-            // 'All' - Parallel fetch for recent orders across all services
-            const [doctorList, labList, pharmacyList, nurseList, ambulanceList] = await Promise.all([
+            // 'All' - Fetch across all services
+            const [appointmentList, labList, pharmacyList, nurseList, ambulanceList] = await Promise.all([
                 Appointment.find({ userId: id }).populate('doctorId', 'name').populate('hospitalId', 'name').sort({ createdAt: -1 }).limit(100).lean(),
                 LabBooking.find({ userId: id }).populate('labId', 'name').sort({ createdAt: -1 }).limit(100).lean(),
                 PharmacyBooking.find({ userId: id }).populate('pharmacyId', 'name').sort({ createdAt: -1 }).limit(100).lean(),
@@ -492,16 +525,23 @@ const getUserOrdersAdmin = async (req, res) => {
             ]);
 
             const compiled = [
-                ...doctorList.map(item => ({
-                    orderId: item.bookingId || "N/A",
-                    mongoId: item._id,
-                    type: 'Doctor',
-                    date: item.appointmentDate || item.createdAt,
-                    status: item.status,
-                    total: item.totalAmount || 0,
-                    details: item.bookingType === 'Admission' ? 'Hospital Admission' : `Consultation with Dr. ${item.doctorId?.name || 'Staff'}`,
-                    createdAt: item.createdAt
-                })),
+                ...appointmentList.map(item => {
+                    const isHospitalBooking = Boolean(item.hospitalId || item.bookingType === 'Admission' || item.bookingType === 'OPD');
+                    return {
+                        orderId: item.bookingId || "N/A",
+                        mongoId: item._id,
+                        type: isHospitalBooking ? 'Hospital' : 'Doctor',
+                        date: item.appointmentDate || item.startDate || item.createdAt,
+                        status: item.status,
+                        total: item.totalAmount || 0,
+                        details: isHospitalBooking
+                            ? (item.bookingType === 'OPD' 
+                                ? `Hospital OPD (Token #${item.tokenNumber || '1'}) at ${item.hospitalId?.name || 'Hospital'}` 
+                                : `Hospital Admission at ${item.hospitalId?.name || 'Hospital'}`)
+                            : `${item.consultationType || 'Consultation'} with Dr. ${item.doctorId?.name || 'Doctor'}`,
+                        createdAt: item.createdAt
+                    };
+                }),
                 ...labList.map(item => ({
                     orderId: item.bookingId || "N/A",
                     mongoId: item._id,
@@ -544,14 +584,13 @@ const getUserOrdersAdmin = async (req, res) => {
                 }))
             ];
 
-            // Real-time Sorting of compiled logs by creation timestamp
             compiled.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
             total = compiled.length;
             orders = compiled.slice(skip, skip + limit);
         }
 
-        res.json({
+        return res.status(200).json({
             success: true,
             total,
             totalPages: Math.ceil(total / limit),
@@ -562,10 +601,13 @@ const getUserOrdersAdmin = async (req, res) => {
         });
 
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
+// @desc    Get Single User Order Detail for Admin (Supports both 'Doctor' & 'Hospital' type params)
+// @route   GET /admin/users/orders/details/:type/:id
+// @access  Private (Admin)
 const getUserOrderDetailAdmin = async (req, res) => {
     try {
         const { type, id } = req.params;
@@ -578,12 +620,13 @@ const getUserOrderDetailAdmin = async (req, res) => {
 
         switch (type) {
             case 'Doctor':
-                // 🩺 Doctor Appointment & Hospital Bed Booking (Both resolved under Appointment schema)
+            case 'Hospital':
                 detail = await Appointment.findById(id)
                     .populate('userId', 'name email phone profilePic gender dob')
-                    .populate('doctorId', 'name email phone speciality qualification profileImage fees alternatePhone languages')
+                    .populate('doctorId', 'name email phone speciality qualification profileImage fees alternatePhone languages department')
                     .populate('hospitalId', 'name address phone location hospitalImage type')
                     .populate('bedId', 'bedNumber status pricePerDay isVentilatorAvailable')
+                    .populate('specialServices.serviceId', 'serviceName price image description')
                     .populate('clinicalLogs.doctorId', 'name speciality')
                     .populate('bedsideCareTeam.doctorId', 'name speciality')
                     .populate('activeMedications.addedBy', 'name speciality')
@@ -593,12 +636,11 @@ const getUserOrderDetailAdmin = async (req, res) => {
                     .lean();
 
                 if (!detail) {
-                    return res.status(404).json({ success: false, message: "Doctor Appointment/Admission record not found." });
+                    return res.status(404).json({ success: false, message: "Appointment/Admission record not found." });
                 }
                 break;
 
             case 'Lab':
-                // 🧪 Lab Tests & Packages Bookings
                 detail = await LabBooking.findById(id)
                     .populate('userId', 'name email phone profilePic')
                     .populate('labId', 'name email phone location address isHomeCollectionAvailable isRapidServiceAvailable')
@@ -613,7 +655,6 @@ const getUserOrderDetailAdmin = async (req, res) => {
                 break;
 
             case 'Pharmacy':
-                // 💊 Pharmacy Medicine Orders
                 detail = await PharmacyBooking.findById(id)
                     .populate('userId', 'name email phone profilePic')
                     .populate('pharmacyId', 'name email phone address location isHomeDeliveryAvailable')
@@ -627,7 +668,6 @@ const getUserOrderDetailAdmin = async (req, res) => {
                 break;
 
             case 'Nurse':
-                // 🩻 Nurse Clinical Visita & Stay Packages
                 detail = await NurseBooking.findById(id)
                     .populate('userId', 'name email phone profilePic gender dob')
                     .populate('nurseId', 'name email phone speciality profileImage experienceYears gender about')
@@ -640,7 +680,6 @@ const getUserOrderDetailAdmin = async (req, res) => {
                 break;
 
             case 'Ambulance':
-                // 🚑 Emergency SOS & Scheduled Ambulance Bookings
                 detail = await AmbulanceBooking.findById(id)
                     .populate('userId', 'name email phone profilePic')
                     .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo profilePic')
@@ -656,11 +695,11 @@ const getUserOrderDetailAdmin = async (req, res) => {
             default:
                 return res.status(400).json({ 
                     success: false, 
-                    message: "Invalid order type. Supported categories are: Doctor, Lab, Pharmacy, Nurse, Ambulance." 
+                    message: "Invalid order type. Supported categories are: Doctor, Hospital, Lab, Pharmacy, Nurse, Ambulance." 
                 });
         }
 
-        res.json({
+        return res.status(200).json({
             success: true,
             type,
             data: detail
@@ -668,7 +707,7 @@ const getUserOrderDetailAdmin = async (req, res) => {
 
     } catch (error) {
         console.error("Admin Get User Order Detail Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

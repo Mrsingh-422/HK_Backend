@@ -113,24 +113,52 @@ const calculateHospitalBalances = async (hospitalId) => {
     };
 };
 
-// 1. GET HOSPITAL WALLET STATS
+// @desc    Get Hospital Wallet Stats (Deducts early-discharge refunds in Today & Weekly stats)
+// @route   GET /hospital/wallet/stats
+// @access  Private (Hospital)
 const getHospitalWalletStats = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const hospital = req.user;
+        const hospObjId = new mongoose.Types.ObjectId(hospitalId);
 
         const balances = await calculateHospitalBalances(hospitalId);
 
-        const stats = {
-            todayEarnings: await Appointment.aggregate([
-                { $match: { hospitalId: new mongoose.Types.ObjectId(hospitalId), status: 'Completed', updatedAt: { $gte: moment().startOf('day').toDate() } } },
-                { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-            ]),
-            weeklyEarnings: await Appointment.aggregate([
-                { $match: { hospitalId: new mongoose.Types.ObjectId(hospitalId), status: 'Completed', updatedAt: { $gte: moment().subtract(7, 'days').toDate() } } },
-                { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-            ])
+        // Deduct any early-discharge refund (unusedDaysRefund / refundDueToUser) from today & weekly gross
+        const netRevenueExpr = {
+            $max: [
+                0,
+                {
+                    $subtract: [
+                        { $ifNull: ["$totalAmount", 0] },
+                        { $ifNull: ["$pricingBreakdown.unusedDaysRefund", { $ifNull: ["$pricingBreakdown.refundDueToUser", 0] }] }
+                    ]
+                }
+            ]
         };
+
+        const [todayEarnings, weeklyEarnings] = await Promise.all([
+            Appointment.aggregate([
+                { 
+                    $match: { 
+                        hospitalId: hospObjId, 
+                        status: 'Completed', 
+                        updatedAt: { $gte: moment().startOf('day').toDate() } 
+                    } 
+                },
+                { $group: { _id: null, total: { $sum: netRevenueExpr } } }
+            ]),
+            Appointment.aggregate([
+                { 
+                    $match: { 
+                        hospitalId: hospObjId, 
+                        status: 'Completed', 
+                        updatedAt: { $gte: moment().subtract(7, 'days').toDate() } 
+                    } 
+                },
+                { $group: { _id: null, total: { $sum: netRevenueExpr } } }
+            ])
+        ]);
 
         let wallet = await Wallet.findOne({ vendorId: hospitalId, vendorModel: 'Hospital' });
         if (!wallet) {
@@ -142,23 +170,23 @@ const getHospitalWalletStats = async (req, res) => {
             });
         }
 
-        res.json({ 
+        return res.status(200).json({ 
             success: true, 
-            grossEarnings: balances.grossEarnings,                     // 👈 Total bill volume before commission
-            adminCommissionDeducted: balances.adminCommissionDeducted, // 👈 Admin commission deducted
-            commissionPolicy: balances.commissionConfig,               // 👈 Active commission rate
+            grossEarnings: balances.grossEarnings,
+            adminCommissionDeducted: balances.adminCommissionDeducted,
+            commissionPolicy: balances.commissionConfig,
             totalBalance: balances.walletBalance,             
             withdrawableBalance: balances.withdrawableBalance,      
             pendingBalance: balances.pendingEarnings,         
             bankDetails: hospital.bankDetails || null,
             stats: {
-                today: stats.todayEarnings[0]?.total || 0,
-                weekly: stats.weeklyEarnings[0]?.total || 0
+                today: todayEarnings[0]?.total || 0,
+                weekly: weeklyEarnings[0]?.total || 0
             },
             transactions: wallet?.transactions?.slice(-10) || [] 
         });
     } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

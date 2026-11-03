@@ -112,7 +112,7 @@ const getHospitalAllBookings = async (req, res) => {
     }
 };
 
-// @desc    Hospital Admin Approves Booking (Supports both MongoDB _id and custom bookingId safely)
+// @desc    Hospital Admin Approves Booking (Syncs Ward & Bed Capacity on IPD Bed Reservation)
 // @route   PATCH /hospital/doctor/appointments/approve/:id
 // @access  Private (Hospital Admin)
 const approveHospitalBooking = async (req, res) => {
@@ -150,6 +150,11 @@ const approveHospitalBooking = async (req, res) => {
                 await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Reserved' } });
             }
 
+            await appointment.save();
+
+            // Sync hospital ward and bed capacity counters immediately
+            await syncHospitalWardAndBedCapacity(hospitalId);
+
             if (appointment.userId) {
                 try {
                     await sendPushNotification(
@@ -162,11 +167,9 @@ const approveHospitalBooking = async (req, res) => {
                 } catch (e) {}
             }
 
-            await appointment.save();
-
             return res.status(200).json({ 
                 success: true, 
-                message: "IPD Admission Confirmed, Bed Reserved, and Patient Notified.", 
+                message: "IPD Admission Confirmed, Bed Reserved, Capacity Synced, and Patient Notified.", 
                 data: appointment 
             });
         }
@@ -221,11 +224,11 @@ const approveHospitalBooking = async (req, res) => {
         }
 
         await appointment.save();
-        res.status(200).json({ success: true, message: "Booking confirmed successfully.", data: appointment });
+        return res.status(200).json({ success: true, message: "Booking confirmed successfully.", data: appointment });
 
     } catch (error) { 
         console.error("Approve Booking Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
@@ -487,7 +490,7 @@ const recordOpdPatientVitals = async (req, res) => {
     }
 };
 
-// @desc    Hospital Reception Desk Collects Admission Deposit (Safe Enum Parsing)
+// @desc    Hospital Reception Desk Collects Admission Deposit (Safe Enum Parsing & Ward Capacity Sync)
 // @route   PATCH /hospital/doctor/appointments/admission/collect-payment/:id
 // @access  Private (Hospital Admin / Reception)
 const collectAdmissionCounterPayment = async (req, res) => {
@@ -524,11 +527,15 @@ const collectAdmissionCounterPayment = async (req, res) => {
                 await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             }
             appointment.status = 'Cancelled-By-Hospital';
+            appointment.admissionHoldExpiresAt = null;
             appointment.cancellationDetails = {
                 reason: "30-Minute admission deposit window expired. Bed was released.",
                 cancelledAt: now
             };
             await appointment.save();
+
+            // Sync hospital ward and bed counters immediately
+            await syncHospitalWardAndBedCapacity(hospitalId);
 
             return res.status(400).json({
                 success: false,
@@ -546,11 +553,7 @@ const collectAdmissionCounterPayment = async (req, res) => {
         bed.status = 'Occupied';
         await bed.save();
 
-        if (bed.wardId) {
-            await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
-        }
-
-        // 🚨 ENUM NORMALIZATION FIX
+        // Normalize payment mode to match Appointment schema enum
         const modeInput = String(rawPaymentMode).trim().toUpperCase();
         let cleanPaymentMode = 'Cash';
         if (modeInput === 'UPI') cleanPaymentMode = 'UPI';
@@ -576,7 +579,10 @@ const collectAdmissionCounterPayment = async (req, res) => {
 
         await appointment.save();
 
-        // 3. Alert Patient
+        // 3. Accurate Ward & Bed Capacity Sync (Prevents double-decrementing availableBeds)
+        await syncHospitalWardAndBedCapacity(hospitalId, bed.wardId);
+
+        // 4. Alert Patient
         if (appointment.userId) {
             try {
                 await sendPushNotification(
@@ -589,7 +595,7 @@ const collectAdmissionCounterPayment = async (req, res) => {
             } catch (e) {}
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             message: `Bed Admission confirmed! Deposit of ₹${appointment.totalAmount} collected via ${cleanPaymentMode}. Bed ${appointment.bedNumber} is Occupied.`,
             bookingId: appointment.bookingId,
@@ -601,11 +607,11 @@ const collectAdmissionCounterPayment = async (req, res) => {
 
     } catch (error) {
         console.error("Collect Admission Counter Payment Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// @desc    Get All Doctor-Initiated Bed Admissions Pending Deposit Payment (Shows 30-min live hold timer)
+// @desc    Get All Doctor-Initiated Bed Admissions Pending Deposit Payment (Syncs ward capacity on lazy expiry)
 // @route   GET /hospital/doctor/appointments/admissions/pending-holds
 // @access  Private (Hospital Admin / Reception)
 const getHospitalPendingAdmissionHolds = async (req, res) => {
@@ -613,26 +619,8 @@ const getHospitalPendingAdmissionHolds = async (req, res) => {
         const hospitalId = req.user.id;
         const now = new Date();
 
-        // 1. Lazy Release: Auto-release any bed holds where 30 minutes expired before querying
-        const expiredHolds = await Appointment.find({
-            hospitalId,
-            bookingType: 'Admission',
-            status: 'Hospital-Pending',
-            paymentStatus: 'Pending',
-            admissionHoldExpiresAt: { $lt: now, $ne: null },
-            bedId: { $ne: null }
-        });
-
-        for (let exp of expiredHolds) {
-            await Bed.findByIdAndUpdate(exp.bedId, { $set: { status: 'Available' } });
-            exp.admissionHoldExpiresAt = null;
-            exp.status = 'Cancelled-By-Hospital';
-            exp.cancellationDetails = {
-                reason: "30-Minute admission deposit window expired. Bed released automatically.",
-                cancelledAt: now
-            };
-            await exp.save();
-        }
+        // 1. Lazy Release & Ward Capacity Sync: Auto-release any expired 30-minute bed holds
+        await syncHospitalWardAndBedCapacity(hospitalId);
 
         // 2. Fetch all active holds within the 30-minute window
         const pendingHolds = await Appointment.find({
@@ -649,8 +637,8 @@ const getHospitalPendingAdmissionHolds = async (req, res) => {
             select: 'bedNumber pricePerDay isVentilatorAvailable wardId',
             populate: { path: 'wardId', select: 'name type' }
         })
-        .populate('opdAppointmentId', 'bookingId tokenNumber appointmentDate') // Cross-link to parent OPD
-        .sort({ admissionHoldExpiresAt: 1 }) // Urgency first (lowest time remaining at top)
+        .populate('opdAppointmentId', 'bookingId tokenNumber appointmentDate')
+        .sort({ admissionHoldExpiresAt: 1 })
         .lean();
 
         const formattedData = pendingHolds.map(item => {
@@ -692,7 +680,7 @@ const getHospitalPendingAdmissionHolds = async (req, res) => {
             };
         });
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             count: formattedData.length,
             message: "Pending admission holds fetched successfully.",
@@ -701,11 +689,11 @@ const getHospitalPendingAdmissionHolds = async (req, res) => {
 
     } catch (error) {
         console.error("Get Pending Admission Holds Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// @desc    Hospital Receptionist Switches Held Bed Before Payment (Releases old bed, locks new bed & recalculates deposit)
+// @desc    Hospital Receptionist Switches Held Bed Before Payment (Releases old bed, locks new bed, syncs wards & recalculates deposit)
 // @route   PATCH /hospital/doctor/appointments/admission/switch-bed/:id
 // @access  Private (Hospital Admin / Reception)
 const switchAdmissionHeldBedAtCounter = async (req, res) => {
@@ -731,7 +719,10 @@ const switchAdmissionHeldBedAtCounter = async (req, res) => {
         }
 
         if (appointment.paymentStatus === 'Paid') {
-            return res.status(400).json({ success: false, message: "Deposit is already paid for this bed. To transfer an occupied bed, use Bed Transfer API." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Deposit is already paid for this bed. To transfer an occupied bed, use Bed Transfer API." 
+            });
         }
 
         const now = new Date();
@@ -741,13 +732,20 @@ const switchAdmissionHeldBedAtCounter = async (req, res) => {
                 await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
             }
             appointment.status = 'Cancelled-By-Hospital';
+            appointment.admissionHoldExpiresAt = null;
             await appointment.save();
 
-            return res.status(400).json({ success: false, message: "Hold has expired. Please ask doctor to re-initiate admission." });
+            await syncHospitalWardAndBedCapacity(hospitalId);
+
+            return res.status(400).json({ 
+                success: false, 
+                isExpired: true,
+                message: "Hold has expired. Please ask doctor to re-initiate admission." 
+            });
         }
 
         // Verify new bed is available
-        const newTargetBed = await Bed.findById(newBedId).populate('wardId');
+        const newTargetBed = await Bed.findOne({ _id: newBedId, hospitalId }).populate('wardId');
         if (!newTargetBed || newTargetBed.status !== 'Available') {
             return res.status(400).json({ success: false, message: "Target bed is not available." });
         }
@@ -777,7 +775,10 @@ const switchAdmissionHeldBedAtCounter = async (req, res) => {
 
         await appointment.save();
 
-        // 4. Alert Patient Mobile App with updated bed & new deposit
+        // 4. Sync both old and new ward bed counters
+        await syncHospitalWardAndBedCapacity(hospitalId);
+
+        // 5. Alert Patient Mobile App with updated bed & new deposit
         if (appointment.userId) {
             try {
                 await sendPushNotification(
@@ -790,7 +791,7 @@ const switchAdmissionHeldBedAtCounter = async (req, res) => {
             } catch (e) {}
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             message: `Bed successfully changed to ${newWardTitle} (${newTargetBed.bedNumber}). New deposit: ₹${newDeposit}.`,
             bookingId: appointment.bookingId,
@@ -802,7 +803,7 @@ const switchAdmissionHeldBedAtCounter = async (req, res) => {
 
     } catch (error) {
         console.error("Switch Admission Bed Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

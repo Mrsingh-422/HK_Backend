@@ -192,30 +192,35 @@ const adminGetApprovedDoctors = async (req, res) => {
     }
 };
 
-// --- 5. ADMIN: GET DOCTOR APPOINTMENTS (Filter by doctorId & Limit: 25) ---
-// Endpoint: GET /admin/doctor/appointments?doctorId=ID&page=1
+// @desc    Admin: Get Independent Doctor Appointments (Strictly excludes Hospital bookings)
+// @route   GET /admin/doctor/appointments?doctorId=ID&page=1
+// @access  Private (Admin)
 const adminGetDoctorAppointments = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = 25; // 👈 25 items limit
+        const limit = 25;
         const skip = (page - 1) * limit;
-        const { status, userId, doctorId } = req.query; // 👈 Added doctorId filter
+        const { status, userId, doctorId } = req.query;
 
-        const query = { bookingType: 'Appointment' };        
-        if (status) query.status = status; 
+        // Strictly filter for Independent Doctor appointments only (hospitalId must be null)
+        const query = { 
+            bookingType: 'Appointment',
+            hospitalId: null 
+        };        
+        if (status && status !== 'All') query.status = status; 
         if (userId) query.userId = userId;
-        if (doctorId) query.doctorId = doctorId; // 👈 Filter by specific Doctor
+        if (doctorId) query.doctorId = doctorId;
 
         const appointments = await Appointment.find(query)
             .populate('userId', 'name phone email')
             .populate('doctorId', 'name speciality profileImage profileStatus role')
-            .sort({ appointmentDate: -1 })
+            .sort({ appointmentDate: -1, createdAt: -1 })
             .skip(skip)
             .limit(limit);
 
         const total = await Appointment.countDocuments(query);
 
-        res.json({ 
+        return res.status(200).json({ 
             success: true, 
             count: appointments.length, 
             totalPages: Math.ceil(total / limit),
@@ -223,7 +228,7 @@ const adminGetDoctorAppointments = async (req, res) => {
             data: appointments 
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

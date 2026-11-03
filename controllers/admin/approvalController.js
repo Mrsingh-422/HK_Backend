@@ -49,8 +49,50 @@ const getPaginatedList = async (Model, req, res, searchFields = [], populateFiel
  
 
 // --- DOCTOR ---
-const getDoctorsList = (req, res) => getPaginatedList(Doctor, req, res, ['name', 'email', 'specialization'], { path: 'hospitalId', select: 'name email' });
+// @desc    Admin: Get Independent Doctors List for Approval (Excludes hospital-doctor)
+// @route   GET /api/admin/approval/doctors
+// @access  Private (Admin)
+const getDoctorsList = async (req, res) => {
+    try {
+        const { status, page = 1, limit = 10, search = "", country, state, city } = req.query;
+        const locFilter = getLocationFilter(req);
 
+        // Strictly filter only independent doctors (role: 'doctor')
+        const filter = { ...locFilter, role: 'doctor' };
+        if (status) filter.profileStatus = status;
+
+        if (country) filter.country = { $regex: country, $options: 'i' };
+        if (state) filter.state = { $regex: state, $options: 'i' };
+        if (city) filter.city = { $regex: city, $options: 'i' };
+
+        if (search) {
+            filter.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { speciality: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const totalDocs = await Doctor.countDocuments(filter);
+
+        const data = await Doctor.find(filter)
+            .populate({ path: 'hospitalId', select: 'name email' })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            success: true,
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / parseInt(limit)),
+            currentPage: parseInt(page),
+            data
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 const approveDoctor = async (req, res) => {
     const doctor = await Doctor.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
     if (!doctor) return res.status(404).json({ success: false, message: "Doctor not found." });

@@ -301,14 +301,14 @@ const loginHospitalDoctor = async (req, res) => {
     }
 };
 
-// @desc    Hospital Admin Sets Doctor's OPD Cabin Room, Fee, Schedule & Premium Slots
+// @desc    Hospital Admin Sets Doctor's OPD Cabin Room, Fee, Schedule & Syncs Availability Collection
 // @route   PUT /api/hospital/doctors/configure-opd/:doctorId
 // @access  Private (Hospital Admin)
 const configureDoctorOpdScheduleByHospital = async (req, res) => {
     try {
         const hospitalId = req.user.id;
         const { doctorId } = req.params;
-        const { roomNumber, slotDuration, opdFee, availability, isOpdEnabled, premiumSlots } = req.body;
+        const { roomNumber, slotDuration, opdFee, availability, isOpdEnabled, premiumSlots, startTime, endTime, offDays } = req.body;
 
         const doctor = await Doctor.findOne({ _id: doctorId, hospitalId }).lean();
         if (!doctor) {
@@ -342,51 +342,77 @@ const configureDoctorOpdScheduleByHospital = async (req, res) => {
             currentDepartment.roomNumber = String(roomNumber).trim();
         }
 
+        const resolvedSlotDuration = slotDuration !== undefined 
+            ? Math.max(5, parseInt(slotDuration) || 15) 
+            : (doctor.slotDuration || 15);
+
         const updatePayload = {
             consultationStatus: currentConsultation,
             fees: currentFees,
-            department: currentDepartment
+            department: currentDepartment,
+            slotDuration: resolvedSlotDuration
         };
 
-        if (slotDuration !== undefined) {
-            updatePayload.slotDuration = Math.max(5, parseInt(slotDuration) || 15);
-        }
-
+        let parsedAvailabilityArray = doctor.availability || [];
         if (availability !== undefined) {
-            updatePayload.availability = Array.isArray(availability)
+            parsedAvailabilityArray = Array.isArray(availability)
                 ? availability
                 : (typeof availability === 'string' ? safeObjectParse(availability, []) : []);
+            updatePayload.availability = parsedAvailabilityArray;
         }
 
-        // Update Doctor Document
+        // 1. Update Doctor Document
         await Doctor.collection.updateOne(
             { _id: new mongoose.Types.ObjectId(doctorId) },
             { $set: updatePayload }
         );
 
-        // Update Premium Slots in Availability Collection
-        if (premiumSlots !== undefined) {
-            const formattedPremiumSlots = Array.isArray(premiumSlots) ? premiumSlots : safeObjectParse(premiumSlots, []);
-            await Availability.findOneAndUpdate(
-                { vendorId: doctorId, vendorType: 'Doctor' },
-                { $set: { premiumSlots: formattedPremiumSlots } },
-                { upsert: true, new: true }
-            );
+        // 2. Sync Slot Duration, Start/End Times & Premium Slots in Availability Collection
+        const availabilitySyncFields = {
+            vendorId: doctorId,
+            vendorType: 'Doctor',
+            slotDuration: resolvedSlotDuration
+        };
+
+        if (startTime) {
+            availabilitySyncFields.startTime = String(startTime).trim();
+        } else if (parsedAvailabilityArray.length > 0 && parsedAvailabilityArray[0].startTime) {
+            availabilitySyncFields.startTime = parsedAvailabilityArray[0].startTime;
         }
+
+        if (endTime) {
+            availabilitySyncFields.endTime = String(endTime).trim();
+        } else if (parsedAvailabilityArray.length > 0 && parsedAvailabilityArray[0].endTime) {
+            availabilitySyncFields.endTime = parsedAvailabilityArray[0].endTime;
+        }
+
+        if (offDays !== undefined) {
+            availabilitySyncFields.offDays = Array.isArray(offDays) ? offDays : safeObjectParse(offDays, []);
+        }
+
+        if (premiumSlots !== undefined) {
+            availabilitySyncFields.premiumSlots = Array.isArray(premiumSlots) ? premiumSlots : safeObjectParse(premiumSlots, []);
+        }
+
+        await Availability.findOneAndUpdate(
+            { vendorId: doctorId, vendorType: 'Doctor' },
+            { $set: availabilitySyncFields },
+            { upsert: true, new: true }
+        );
 
         const updatedDoctor = await Doctor.findById(doctorId)
             .select('name speciality fees department slotDuration availability consultationStatus')
             .lean();
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: `OPD Configuration and Premium Slots saved for Dr. ${updatedDoctor.name}.`,
+            message: `OPD Configuration and Slots synced for Dr. ${updatedDoctor.name}.`,
             data: updatedDoctor
         });
 
     } catch (error) {
         console.error("Configure Doctor OPD Schedule Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

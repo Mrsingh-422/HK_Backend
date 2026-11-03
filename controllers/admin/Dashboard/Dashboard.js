@@ -248,8 +248,9 @@ const getLiveOrdersFeed = async (req, res) => {
     }
 };
 
-// --- 3. UPDATED FULL DETAIL API (No Vendor Required) ---
-// Endpoint: GET /admin/dashboard/order-details/:id
+// @desc    Admin Dashboard Full Order Detail (Correctly identifies both Hospital IPD & OPD as 'Hospital')
+// @route   GET /admin/dashboard/order-details/:id
+// @access  Private (Admin)
 const getOrderDetail = async (req, res) => {
     try {
         const { id } = req.params;
@@ -265,7 +266,6 @@ const getOrderDetail = async (req, res) => {
             query.$or = [{ bookingId: id }, { orderId: id }, { caseReference: id }];
         }
 
-        // Parallel lookups across all models
         const [lab, pharmacy, nurse, hospital, ambulance] = await Promise.all([
             LabBooking.findOne(query)
                 .populate('userId', 'name phone email')
@@ -285,7 +285,8 @@ const getOrderDetail = async (req, res) => {
             Appointment.findOne(query)
                 .populate('userId', 'name phone email')
                 .populate('hospitalId', 'name address city state hospitalImage type')
-                .populate('doctorId', 'name speciality profileImage fees consultationStatus')
+                .populate('doctorId', 'name speciality profileImage fees consultationStatus department')
+                .populate('specialServices.serviceId', 'serviceName price image description')
                 .populate({
                     path: 'bedId',
                     select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
@@ -315,8 +316,10 @@ const getOrderDetail = async (req, res) => {
             detectedVendor = 'Nurse';
         } else if (hospital) {
             detail = hospital;
-            // Split detail vendor dynamic labels
-            detectedVendor = hospital.bookingType === 'Admission' ? 'Hospital' : 'Doctor';
+            // Fixed: Both Hospital Admission (IPD) and Hospital OPD belong to 'Hospital' vendor
+            detectedVendor = (hospital.hospitalId || hospital.bookingType === 'Admission' || hospital.bookingType === 'OPD') 
+                ? 'Hospital' 
+                : 'Doctor';
         } else if (ambulance) {
             detail = ambulance;
             detectedVendor = 'Ambulance';
@@ -329,13 +332,13 @@ const getOrderDetail = async (req, res) => {
             });
         }
 
-        res.json({
+        return res.status(200).json({
             success: true,
             vendor: detectedVendor,
             data: detail
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

@@ -13,18 +13,27 @@ const getMyConsultationFees = async (req, res) => {
     }
 };
 
-// 2. UPDATE FEES (Screenshot 23/28 Mapping)
-// endpoint: PUT /doctor/settings/update-fees
+// @desc    Update Independent Doctor Consultation Fees (Blocks hospital-doctor from enabling Video/Home visit)
+// @route   PUT /doctor/settings/update-fees
+// @access  Private (Doctor)
 const updateConsultationFees = async (req, res) => {
     try {
-        const { online, clinic, home } = req.body;
-
-        // Validation: Check if values are numbers and not negative
-        if ((online && online < 0) || (clinic && clinic < 0) || (home && home < 0)) {
-            return res.status(400).json({ message: "Fees cannot be negative" });
+        if (req.user.role === 'hospital-doctor') {
+            return res.status(403).json({ 
+                success: false, 
+                isHospitalDoctor: true,
+                message: "Access Denied: Hospital Doctors only support Hospital Visit (OPD) bookings. Video Call and Home Visit are strictly for Independent Doctors." 
+            });
         }
 
-        // Professional Update Logic: Sirf wahi fields update hongi jo body mein aayengi
+        const { online, clinic, home } = req.body;
+
+        if ((online !== undefined && Number(online) < 0) || 
+            (clinic !== undefined && Number(clinic) < 0) || 
+            (home !== undefined && Number(home) < 0)) {
+            return res.status(400).json({ success: false, message: "Fees cannot be negative." });
+        }
+
         const updateData = {};
         if (online !== undefined) updateData['fees.online'] = Number(online);
         if (clinic !== undefined) updateData['fees.clinic'] = Number(clinic);
@@ -36,19 +45,29 @@ const updateConsultationFees = async (req, res) => {
             { new: true, runValidators: true }
         ).select('fees');
 
-        res.json({ 
+        return res.status(200).json({ 
             success: true, 
             message: "Consultation fees updated successfully", 
             data: updatedDoctor.fees 
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
-// 3. UPDATE CONSULTATION SETTINGS (Fees + On/Off Status)
-// endpoint: PUT /doctor/settings/update-settings
+
+// @desc    Update Independent Doctor Consultation Settings (Fees + On/Off Status)
+// @route   PUT /doctor/settings/update-settings
+// @access  Private (Doctor)
 const updateConsultationSettings = async (req, res) => {
     try {
+        if (req.user.role === 'hospital-doctor') {
+            return res.status(403).json({ 
+                success: false, 
+                isHospitalDoctor: true,
+                message: "Access Denied: Hospital Doctors only support Hospital Visit (OPD) bookings configured by the Hospital." 
+            });
+        }
+
         const { 
             onlinePrice, onlineStatus, 
             clinicPrice, clinicStatus, 
@@ -57,12 +76,10 @@ const updateConsultationSettings = async (req, res) => {
 
         const updateData = {};
 
-        // Price Updates
-        if (onlinePrice !== undefined) updateData['fees.online'] = Number(onlinePrice);
-        if (clinicPrice !== undefined) updateData['fees.clinic'] = Number(clinicPrice);
-        if (homePrice !== undefined) updateData['fees.home'] = Number(homePrice);
+        if (onlinePrice !== undefined) updateData['fees.online'] = Math.max(0, Number(onlinePrice));
+        if (clinicPrice !== undefined) updateData['fees.clinic'] = Math.max(0, Number(clinicPrice));
+        if (homePrice !== undefined) updateData['fees.home'] = Math.max(0, Number(homePrice));
 
-        // 🚀 SYNC FIX: Strict string-to-boolean conversions
         if (onlineStatus !== undefined) {
             updateData['consultationStatus.online'] = (onlineStatus === true || onlineStatus === 'true');
         }
@@ -79,13 +96,13 @@ const updateConsultationSettings = async (req, res) => {
             { new: true }
         ).select('fees consultationStatus');
 
-        res.json({ 
+        return res.status(200).json({ 
             success: true, 
             message: "Settings updated successfully", 
             data: updatedDoctor 
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 

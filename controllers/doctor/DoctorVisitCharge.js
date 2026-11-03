@@ -10,10 +10,20 @@ const DEFAULT_DOCTOR_CHARGES = {
     taxInRupees: 0
 };
 
-// 1. SAVE/UPDATE VISIT CHARGES
+// @desc    Save/Update Home Visit Travel Charges (Strictly for Independent Doctors)
+// @route   POST /doctor/visit-charges/save
+// @access  Private (Doctor)
 const saveDoctorVisitCharges = async (req, res) => {
     try {
         const doctorId = req.user.id;
+
+        if (req.user.role === 'hospital-doctor') {
+            return res.status(403).json({
+                success: false,
+                isHospitalDoctor: true,
+                message: "Access Denied: Home Visit is only available for Independent Doctors. Hospital Doctors only support Hospital Visit (OPD)."
+            });
+        }
 
         const charges = await DeliveryCharge.findOneAndUpdate(
             { vendorId: doctorId },
@@ -27,13 +37,19 @@ const saveDoctorVisitCharges = async (req, res) => {
             { upsert: true, new: true }
         );
 
-        res.json({ success: true, message: "Visit/Travel charges saved successfully", data: charges });
+        return res.status(200).json({ 
+            success: true, 
+            message: "Visit/Travel charges saved successfully", 
+            data: charges 
+        });
     } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 2. GET DOCTOR'S VISIT CHARGES
+// @desc    Get Doctor's Visit Charges
+// @route   GET /doctor/visit-charges
+// @access  Private (Doctor)
 const getDoctorVisitCharges = async (req, res) => {
     try {
         const charges = await DeliveryCharge.findOne({ vendorId: req.user.id });

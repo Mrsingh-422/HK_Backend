@@ -119,24 +119,44 @@ const calculateVendorBalances = async (vendorId) => {
     };
 };
 
-// 1. GET DOCTOR EARNING STATS
+// @desc    Get Independent Doctor Earning Stats (Strictly excludes Hospital OPD/IPD from Today/Weekly aggregates)
+// @route   GET /doctor/wallet/stats
+// @access  Private (Doctor)
 const getDoctorWalletStats = async (req, res) => {
     try {
         const doctorId = req.user.id;
         const doctor = req.user;
+        const docObjId = new mongoose.Types.ObjectId(doctorId);
 
         const balances = await calculateVendorBalances(doctorId);
 
-        const stats = {
-            today: await Appointment.aggregate([
-                { $match: { doctorId: new mongoose.Types.ObjectId(doctorId), status: 'Completed', updatedAt: { $gte: moment().startOf('day').toDate() } } }, 
+        // Fixed: Added hospitalId: null & bookingType: 'Appointment' so hospital bookings don't inflate independent stats
+        const [todayStats, weeklyStats] = await Promise.all([
+            Appointment.aggregate([
+                { 
+                    $match: { 
+                        doctorId: docObjId, 
+                        hospitalId: null,
+                        bookingType: 'Appointment',
+                        status: 'Completed', 
+                        updatedAt: { $gte: moment().startOf('day').toDate() } 
+                    } 
+                }, 
                 { $group: { _id: null, total: { $sum: "$totalAmount" } } }
             ]),
-            weekly: await Appointment.aggregate([
-                { $match: { doctorId: new mongoose.Types.ObjectId(doctorId), status: 'Completed', updatedAt: { $gte: moment().subtract(7, 'days').toDate() } } }, 
+            Appointment.aggregate([
+                { 
+                    $match: { 
+                        doctorId: docObjId, 
+                        hospitalId: null,
+                        bookingType: 'Appointment',
+                        status: 'Completed', 
+                        updatedAt: { $gte: moment().subtract(7, 'days').toDate() } 
+                    } 
+                }, 
                 { $group: { _id: null, total: { $sum: "$totalAmount" } } }
-            ]),
-        };
+            ])
+        ]);
 
         let wallet = await Wallet.findOne({ vendorId: doctorId, vendorModel: 'Doctor' });
         if (!wallet) {
@@ -148,21 +168,21 @@ const getDoctorWalletStats = async (req, res) => {
             });
         }
 
-        res.json({ 
+        return res.status(200).json({ 
             success: true, 
-            grossEarnings: balances.grossEarnings,                     // Total consultation revenue before commission
-            adminCommissionDeducted: balances.adminCommissionDeducted, // Admin platform fee deducted
-            commissionPolicy: balances.commissionConfig,               // Active commission rate
+            grossEarnings: balances.grossEarnings,
+            adminCommissionDeducted: balances.adminCommissionDeducted,
+            commissionPolicy: balances.commissionConfig,
             totalBalance: balances.walletBalance,
             withdrawableBalance: balances.withdrawableBalance,
             pendingBalance: balances.pendingEarnings,
-            todayEarning: stats.today[0]?.total || 0,
-            weeklyEarning: stats.weekly[0]?.total || 0,
+            todayEarning: todayStats[0]?.total || 0,
+            weeklyEarning: weeklyStats[0]?.total || 0,
             bankDetails: doctor.bankDetails || null,
             transactions: wallet?.transactions?.slice(-10) || []
         });
     } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
