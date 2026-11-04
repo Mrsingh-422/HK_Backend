@@ -211,7 +211,7 @@ const addMeal = async (req, res) => {
     }
 };
 
-// 6. MEALS BREAKDOWNS
+// 6. MEALS BREAKDOWNS (Safe Note Parsing & Numeric Fallback)
 const getCalorieBreakdown = async (req, res) => {
     try {
         const today = moment().startOf('day').toDate();
@@ -225,14 +225,21 @@ const getCalorieBreakdown = async (req, res) => {
         let totalConsumed = 0;
 
         records.forEach(r => {
-            try {
-                const details = JSON.parse(r.note);
-                if (breakdown[details.mealType] !== undefined) {
-                    breakdown[details.mealType] += r.numericValue;
-                    totalConsumed += r.numericValue;
+            const numVal = Number(r.numericValue) || 0;
+            if (r.note && typeof r.note === 'string' && r.note.trim().startsWith('{')) {
+                try {
+                    const details = JSON.parse(r.note);
+                    if (details && breakdown[details.mealType] !== undefined) {
+                        breakdown[details.mealType] += numVal;
+                        totalConsumed += numVal;
+                    } else {
+                        totalConsumed += numVal;
+                    }
+                } catch (e) { 
+                    totalConsumed += numVal; 
                 }
-            } catch (e) { 
-                totalConsumed += r.numericValue; 
+            } else {
+                totalConsumed += numVal;
             }
         });
 

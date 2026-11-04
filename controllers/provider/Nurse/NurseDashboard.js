@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
 const { sendPushNotification } = require('../../../utils/notification');
+const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 
 // @desc    Get Provider Bureau Dashboard Summary (Fail-Safe Revenue & Active Task Counters)
 // @route   GET /provider/nurse/dash/dashboard-stats
@@ -453,7 +454,7 @@ const getBookingRequests = async (req, res) => {
     }
 };
 
-// @desc    Accept or Reject Patient Booking Request by Bureau (Supports both MongoDB _id & custom bookingId)
+// @desc    Accept or Reject Patient Booking Request by Bureau (Uses top-level refundBenefitCount)
 // @route   POST /provider/nurse/dash/booking/action
 // @access  Private (Nurse Bureau)
 const handleBookingAction = async (req, res) => {
@@ -517,7 +518,6 @@ const handleBookingAction = async (req, res) => {
             }
 
             if (booking.subscriptionDetails?.isSubscriptionApplied) {
-                const { refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
                 await refundBenefitCount(booking.userId, 'freeNurseVisitsCount');
             }
 

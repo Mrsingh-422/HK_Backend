@@ -19,28 +19,130 @@ const PoliceStaff = require('../models/PoliceStaff');
 
 1. // Verify Token & Identify User Type
 
+// const protect = (modelType) => async (req, res, next) => {
+//     let token;
+//     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+//         try {
+//             token = req.headers.authorization.split(' ')[1];
+
+//             // --- Development Mode: No Expiry Check ---
+//             const verifyOptions = process.env.NODE_ENV === 'development' ? { ignoreExpiration: true } : {};
+//             const decoded = jwt.verify(token, process.env.JWT_SECRET, verifyOptions);
+
+//             let user;
+            
+//             // FIX: Normalize modelType to single string if passed as an array (for role matching)
+//             let activeModelType;
+//             if (Array.isArray(modelType)) {
+//                 // Agar array hai toh check karenge token role isme exist karta hai ya nahi, fallback to first index
+//                 activeModelType = modelType.includes(decoded.role) ? decoded.role : modelType[0];
+//             } else {
+//                 activeModelType = modelType;
+//             }
+
+//             // Model Selection Logic based on resolved activeModelType
+//             switch (activeModelType) {
+//                 case 'admin':
+//                     user = await Admin.findById(decoded.id).populate('roleType');
+//                     break;
+//                 case 'user':
+//                     user = await User.findById(decoded.id);
+//                     break;
+//                 case 'doctor':
+//                 case 'hospital-doctor':
+//                     user = await Doctor.findById(decoded.id);
+//                     break;
+//                 case 'hospital':
+//                     user = await Hospital.findById(decoded.id);
+//                     break;
+//                 case 'lab':
+//                     user = await Lab.findById(decoded.id);
+//                     break;
+//                 case 'pharmacy':
+//                     user = await Pharmacy.findById(decoded.id);
+//                     break;
+//                 case 'nurse':
+//                     user = await Nurse.findById(decoded.id);
+//                     break;
+//                 case 'driver':
+//                     user = await Driver.findById(decoded.id);
+//                     break;
+//                 case 'provider':
+//                     user = await Lab.findById(decoded.id) || 
+//                            await Pharmacy.findById(decoded.id) || 
+//                            await Nurse.findById(decoded.id);
+//                     break;
+//                 case 'ambulance':
+//                 case 'hospital-ambulance':
+//                     user = await Ambulance.findById(decoded.id);
+//                     break;
+//                 // fire models
+//                 case 'fire-hq':
+//                     user = await FireHQ.findById(decoded.id);
+//                     break;
+//                 case 'fire-station':
+//                     user = await FireStation.findById(decoded.id);
+//                     break;
+//                 case 'fire-staff':
+//                     user = await FireStaff.findById(decoded.id);
+//                     break;
+//                 // police models
+//                 case 'police-hq':
+//                     user = await PoliceHQ.findById(decoded.id);
+//                     break;
+//                 case 'police-station':
+//                     user = await PoliceStation.findById(decoded.id);
+//                     break;
+//                 case 'police-staff':
+//                     user = await PoliceStaff.findById(decoded.id);
+//                     break;
+
+//                 default:
+//                     return res.status(400).json({ message: 'Invalid Model Type in Middleware' });
+//             }
+
+//             if (!user) return res.status(401).json({ message: 'User not found' });
+
+//             // --- Deactivation Check (Common for all) ---
+//             if (user.isActive === false) {
+//                 return res.status(403).json({ message: 'Account is deactivated' });
+//             }
+
+//             req.user = user; 
+//             next();
+//         } catch (error) {
+//             console.error("Auth Error:", error.message);
+//             res.status(401).json({ message: 'Not authorized, invalid token' });
+//         }
+//     } else {
+//         res.status(401).json({ message: 'Not authorized, no token' });
+//     }
+// };
+
+// 1. Verify Token & Identify User Type (Case-Insensitive Role Resolution)
 const protect = (modelType) => async (req, res, next) => {
     let token;
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
         try {
             token = req.headers.authorization.split(' ')[1];
 
-            // --- Development Mode: No Expiry Check ---
+            // Development Mode: No Expiry Check
             const verifyOptions = process.env.NODE_ENV === 'development' ? { ignoreExpiration: true } : {};
             const decoded = jwt.verify(token, process.env.JWT_SECRET, verifyOptions);
 
             let user;
-            
-            // FIX: Normalize modelType to single string if passed as an array (for role matching)
+            const decodedRoleLower = decoded.role ? String(decoded.role).toLowerCase() : '';
+
+            // Normalize modelType to lowercase string safely
             let activeModelType;
             if (Array.isArray(modelType)) {
-                // Agar array hai toh check karenge token role isme exist karta hai ya nahi, fallback to first index
-                activeModelType = modelType.includes(decoded.role) ? decoded.role : modelType[0];
+                const lowerArray = modelType.map(m => String(m).toLowerCase());
+                activeModelType = lowerArray.includes(decodedRoleLower) ? decodedRoleLower : lowerArray[0];
             } else {
-                activeModelType = modelType;
+                activeModelType = String(modelType).toLowerCase();
             }
 
-            // Model Selection Logic based on resolved activeModelType
+            // Model Selection Logic based on resolved lowercase activeModelType
             switch (activeModelType) {
                 case 'admin':
                     user = await Admin.findById(decoded.id).populate('roleType');
@@ -76,7 +178,6 @@ const protect = (modelType) => async (req, res, next) => {
                 case 'hospital-ambulance':
                     user = await Ambulance.findById(decoded.id);
                     break;
-                // fire models
                 case 'fire-hq':
                     user = await FireHQ.findById(decoded.id);
                     break;
@@ -86,7 +187,6 @@ const protect = (modelType) => async (req, res, next) => {
                 case 'fire-staff':
                     user = await FireStaff.findById(decoded.id);
                     break;
-                // police models
                 case 'police-hq':
                     user = await PoliceHQ.findById(decoded.id);
                     break;
@@ -96,14 +196,13 @@ const protect = (modelType) => async (req, res, next) => {
                 case 'police-staff':
                     user = await PoliceStaff.findById(decoded.id);
                     break;
-
                 default:
                     return res.status(400).json({ message: 'Invalid Model Type in Middleware' });
             }
 
             if (!user) return res.status(401).json({ message: 'User not found' });
 
-            // --- Deactivation Check (Common for all) ---
+            // Deactivation Check (Common for all)
             if (user.isActive === false) {
                 return res.status(403).json({ message: 'Account is deactivated' });
             }
@@ -119,86 +218,35 @@ const protect = (modelType) => async (req, res, next) => {
     }
 };
 
-// 2. PHP Style Tab ID Check (SQL IDs like 1, 28, 31...)
-// const checkRoleAccess = (tabId) => {
-//     return async (req, res, next) => {
-//         try {
-           
-//             if (req.user.role === 'superadmin') return next();
- 
-       
-//             const Tab = require('../models/Tab');
-//             const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
-//             if (!globalTab) return res.status(403).json({ message: "This module is temporarily disabled by Admin" });
- 
-       
-//             const roleTypes = req.user.roleType;
-           
-       
-//             if (!roleTypes || !Array.isArray(roleTypes) || roleTypes.length === 0) {
-//                 return res.status(403).json({ message: "Access Denied: No Role Assigned" });
-//             }
- 
-           
-//             let allAllowedTabs = [];
-//             roleTypes.forEach(role => {
-//                 if (role && role.tabIds) {
-//                     allAllowedTabs.push(...role.tabIds);
-//                 }
-//             });
- 
-       
-//             const hasAccess = allAllowedTabs.includes(Number(tabId));
-           
-//             if (!hasAccess) {
-//                 return res.status(403).json({
-//                     success: false,
-//                     message: "Access Denied: You do not have permission for this module."
-//                 });
-//             }
-           
-//             next(); // Access Granted!
-//         } catch (error) {
-//             res.status(500).json({ message: error.message });
-//         }
-//     };
-// };
- 
+// 2. Role Access Check (Uses Top-Level Tab Import)
 const checkRoleAccess = (tabId) => {
     return async (req, res, next) => {
         try {
             // 1. Superadmin bypass
             if (req.user.role === 'superadmin') return next();
 
-            // 2. Global active check
-            const Tab = require('../models/Tab'); 
+            // 2. Global active check using top-level Tab model
             const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
             if (!globalTab) return res.status(403).json({ message: "This module is temporarily disabled by Admin" });
 
             const roleTypeData = req.user.roleType;
-            
             if (!roleTypeData) {
                 return res.status(403).json({ message: "Access Denied: No Role Assigned" });
             }
 
             let allAllowedTabs = [];
 
-            // HYBRID LOGIC: Array aur Single Object dono ke liye taiyar hai
             if (Array.isArray(roleTypeData)) {
-                // Case A: Agar multiple roles (Array) hain, toh loop chalayenge
                 roleTypeData.forEach(role => {
                     if (role && role.tabIds) {
                         allAllowedTabs.push(...role.tabIds);
                     }
                 });
             } else if (roleTypeData.tabIds) {
-                // Case B: Agar single role (Object) hai, toh direct permissions utha lenge
                 allAllowedTabs = roleTypeData.tabIds;
             }
 
-            // Check access
             const hasAccess = allAllowedTabs.includes(Number(tabId));
-            
             if (!hasAccess) {
                 return res.status(403).json({ 
                     success: false, 
@@ -206,12 +254,62 @@ const checkRoleAccess = (tabId) => {
                 });
             }
             
-            next(); // Access Granted!
+            next();
         } catch (error) { 
             res.status(500).json({ message: error.message }); 
         }
     };
 };
+
+// 2. // Check Role Access
+// const checkRoleAccess = (tabId) => {
+//     return async (req, res, next) => {
+//         try {
+//             // 1. Superadmin bypass
+//             if (req.user.role === 'superadmin') return next();
+
+//             // 2. Global active check
+//             const Tab = require('../models/Tab'); 
+//             const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
+//             if (!globalTab) return res.status(403).json({ message: "This module is temporarily disabled by Admin" });
+
+//             const roleTypeData = req.user.roleType;
+            
+//             if (!roleTypeData) {
+//                 return res.status(403).json({ message: "Access Denied: No Role Assigned" });
+//             }
+
+//             let allAllowedTabs = [];
+
+//             // HYBRID LOGIC: Array aur Single Object dono ke liye taiyar hai
+//             if (Array.isArray(roleTypeData)) {
+//                 // Case A: Agar multiple roles (Array) hain, toh loop chalayenge
+//                 roleTypeData.forEach(role => {
+//                     if (role && role.tabIds) {
+//                         allAllowedTabs.push(...role.tabIds);
+//                     }
+//                 });
+//             } else if (roleTypeData.tabIds) {
+//                 // Case B: Agar single role (Object) hai, toh direct permissions utha lenge
+//                 allAllowedTabs = roleTypeData.tabIds;
+//             }
+
+//             // Check access
+//             const hasAccess = allAllowedTabs.includes(Number(tabId));
+            
+//             if (!hasAccess) {
+//                 return res.status(403).json({ 
+//                     success: false, 
+//                     message: "Access Denied: You do not have permission for this module." 
+//                 });
+//             }
+            
+//             next(); // Access Granted!
+//         } catch (error) { 
+//             res.status(500).json({ message: error.message }); 
+//         }
+//     };
+// };
 
 
 // 3. Location Filter Helper (For Controller use)

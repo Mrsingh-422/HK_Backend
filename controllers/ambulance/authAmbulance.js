@@ -640,9 +640,8 @@ const checkAmbulanceExists = async (req, res) => {
             });
         }
 
-        // 2. Consume Registration-OTP limit
+        // 2. Consume Registration-OTP limit (Using top-level imported helper)
         if (cleanPhone) {
-            const { checkAndConsumeOtpLimit } = require('../../utils/otpRateLimiterHelper');
             const limitCheck = await checkAndConsumeOtpLimit(cleanPhone, 'phone', 'Registration-OTP', clientIp);
             if (!limitCheck.allowed) {
                 return res.status(limitCheck.statusCode).json({

@@ -3,6 +3,7 @@ const Wallet = require('../../../models/Wallet');
 const WithdrawalRequest = require('../../../models/WithdrawalRequest');
 const moment = require('moment');
 const mongoose = require('mongoose');
+const AdminCommissionConfig = require('../../../models/AdminCommissionConfig');
 
 // Mapped real models to guarantee schema compilation [1]
 const Lab = require('../../../models/Lab');
@@ -16,6 +17,7 @@ const { calculateAdminCommission } = require('../../../utils/policyHelper');
 // 1. CALCULATE PROVIDER BALANCES (With Strict COD vs Online & Compensations)
 // =========================================================================
 // Calculate Provider Balances (Fix: Both COD & Doorstep Cash deduct platform commission instead of double crediting)
+// @desc    Calculate Provider Balances (Uses top-level AdminCommissionConfig)
 const calculateProviderBalances = async (vendorId, role) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const vendorObjId = new mongoose.Types.ObjectId(vendorId);
@@ -81,17 +83,14 @@ const calculateProviderBalances = async (vendorId, role) => {
 
         let effectiveVendorCredit = 0;
 
-        // Both Cash collected at doorstep by Phlebotomist and COD mean vendor physically took the cash
         const isCashOrCod = order.paymentMethod === 'COD' || 
                             order.paymentMethod === 'Cash' || 
                             String(order.paymentMethod).toUpperCase() === 'CASH' ||
                             String(order.paymentMethod).toUpperCase() === 'COD';
 
         if (isCashOrCod) {
-            // Deduct Admin platform commission from digital wallet
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online gateway; handle doorstep extra cash for nurse or credit net amount
             const doorstepCashCollected = Number(order.totalConsumableCharges || 0) + Number(order.extraServicePayment || 0);
             if (doorstepCashCollected > 0) {
                 effectiveVendorCredit = netVendorAmount - doorstepCashCollected;
@@ -139,7 +138,6 @@ const calculateProviderBalances = async (vendorId, role) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    const AdminCommissionConfig = require('../../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: role, isActive: true }).lean();
 
     return {

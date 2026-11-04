@@ -19,10 +19,9 @@ const getPharmacyProfile = async (req, res) => {
     }
 };
 
-// 2. UPDATE PHARMACY PROFILE (Figma: Edit Profile)
-
-// endpoint: PUT /provider/pharmacy/profile/update
-
+// @desc    Update Pharmacy Profile (Safe Boolean Evaluation & Crash-Proof JSON Parsing)
+// @route   PUT /provider/pharmacy/profile/update
+// @access  Private (Pharmacy)
 const updatePharmacyProfile = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
@@ -32,8 +31,6 @@ const updatePharmacyProfile = async (req, res) => {
             isInsuranceAccepted, acceptedInsurances, is24x7,
             country, state, city, lat, lng,
             alternatePhone,
-            
-            // 🚨 CORPORATE & TAX COMPLIANCE INPUTS
             cinNumber,
             gstNumber,
             tanNumber,
@@ -44,53 +41,73 @@ const updatePharmacyProfile = async (req, res) => {
             drugLicenseType
         } = req.body;
 
-        // 🚨 1. VALIDATION: Agar tax/corporate details update ho rahi hain toh rules check karein
-        if (cinNumber !== undefined && cinNumber.trim() === "") {
+        const existingPharmacy = await Pharmacy.findById(pharmacyId);
+        if (!existingPharmacy) {
+            return res.status(404).json({ success: false, message: "Pharmacy not found." });
+        }
+
+        if (cinNumber !== undefined && String(cinNumber).trim() === "") {
             return res.status(400).json({ 
                 success: false, 
                 message: "CIN Number (Corporate Identity Number) cannot be empty." 
             });
         }
 
-        const hasGst = gstNumber && gstNumber.trim() !== "";
-        const hasTanAndPan = (tanNumber && tanNumber.trim() !== "") && (panNumber && panNumber.trim() !== "");
+        const hasGst = gstNumber && String(gstNumber).trim() !== "";
+        const hasTanAndPan = (tanNumber && String(tanNumber).trim() !== "") && (panNumber && String(panNumber).trim() !== "");
 
-        // Agar user ne GST ya TAN/PAN me se kuch bheja hai toh rule satisfy hona chahiye
         if ((gstNumber !== undefined || tanNumber !== undefined || panNumber !== undefined) && (!hasGst && !hasTanAndPan)) {
             return res.status(400).json({ 
                 success: false, 
                 message: "Compliance Error: You must provide either a valid 'GST Number' OR both 'TAN Number and PAN Number'." 
             });
         }
- 
-        let updateData = {
-            name, about, address, country, state, city,
-            isHomeDeliveryAvailable: isHomeDeliveryAvailable === 'true',
-            isRapidServiceAvailable: isRapidServiceAvailable === 'true',
-            isInsuranceAccepted: isInsuranceAccepted === 'true',
-            is24x7: is24x7 === 'true',
-            location: { lat: Number(lat || 0), lng: Number(lng || 0) },
-            alternatePhone
+
+        const parseBool = (val, fallback) => {
+            if (val === undefined || val === null) return fallback;
+            return (val === true || val === 'true' || val === 1 || val === '1');
         };
  
-        if (acceptedInsurances) {
-            updateData.acceptedInsurances = typeof acceptedInsurances === 'string' 
-                ? JSON.parse(acceptedInsurances) 
-                : acceptedInsurances;
+        let updateData = {
+            name: name ? String(name).trim() : existingPharmacy.name,
+            about: about !== undefined ? about : existingPharmacy.about,
+            address: address !== undefined ? address : existingPharmacy.address,
+            country: country || existingPharmacy.country,
+            state: state || existingPharmacy.state,
+            city: city || existingPharmacy.city,
+            isHomeDeliveryAvailable: parseBool(isHomeDeliveryAvailable, existingPharmacy.isHomeDeliveryAvailable),
+            isRapidServiceAvailable: parseBool(isRapidServiceAvailable, existingPharmacy.isRapidServiceAvailable),
+            isInsuranceAccepted: parseBool(isInsuranceAccepted, existingPharmacy.isInsuranceAccepted),
+            is24x7: parseBool(is24x7, existingPharmacy.is24x7),
+            location: { 
+                lat: Number(lat !== undefined ? lat : (existingPharmacy.location?.lat || 0)), 
+                lng: Number(lng !== undefined ? lng : (existingPharmacy.location?.lng || 0)) 
+            },
+            alternatePhone: alternatePhone !== undefined ? alternatePhone : existingPharmacy.alternatePhone
+        };
+ 
+        if (acceptedInsurances !== undefined) {
+            if (Array.isArray(acceptedInsurances)) {
+                updateData.acceptedInsurances = acceptedInsurances;
+            } else if (typeof acceptedInsurances === 'string') {
+                try {
+                    updateData.acceptedInsurances = JSON.parse(acceptedInsurances);
+                } catch (e) {
+                    updateData.acceptedInsurances = acceptedInsurances.split(',').map(i => i.trim()).filter(Boolean);
+                }
+            }
         }
 
-        // 🚨 MAPPING COMPLIANCE FIELDS (Using dot notation to merge safely without overwriting other documents)
-        if (cinNumber !== undefined) updateData['documents.cinNumber'] = cinNumber.trim().toUpperCase();
-        if (gstNumber !== undefined) updateData['documents.gstNumber'] = hasGst ? gstNumber.trim().toUpperCase() : "";
-        if (tanNumber !== undefined) updateData['documents.tanNumber'] = hasTanAndPan ? tanNumber.trim().toUpperCase() : "";
-        if (panNumber !== undefined) updateData['documents.panNumber'] = hasTanAndPan ? panNumber.trim().toUpperCase() : "";
+        if (cinNumber !== undefined) updateData['documents.cinNumber'] = String(cinNumber).trim().toUpperCase();
+        if (gstNumber !== undefined) updateData['documents.gstNumber'] = hasGst ? String(gstNumber).trim().toUpperCase() : "";
+        if (tanNumber !== undefined) updateData['documents.tanNumber'] = hasTanAndPan ? String(tanNumber).trim().toUpperCase() : "";
+        if (panNumber !== undefined) updateData['documents.panNumber'] = hasTanAndPan ? String(panNumber).trim().toUpperCase() : "";
         
-        if (drugLicenseNumber !== undefined) updateData['documents.drugLicenseNumber'] = drugLicenseNumber.trim();
-        if (foodLicenseNumber !== undefined) updateData['documents.foodLicenseNumber'] = foodLicenseNumber.trim();
-        if (issuingAuthority !== undefined) updateData['documents.issuingAuthority'] = issuingAuthority.trim();
+        if (drugLicenseNumber !== undefined) updateData['documents.drugLicenseNumber'] = String(drugLicenseNumber).trim();
+        if (foodLicenseNumber !== undefined) updateData['documents.foodLicenseNumber'] = String(foodLicenseNumber).trim();
+        if (issuingAuthority !== undefined) updateData['documents.issuingAuthority'] = String(issuingAuthority).trim();
         if (drugLicenseType !== undefined) updateData['documents.drugLicenseType'] = drugLicenseType;
  
-        // 🚨 FILE ATTACHMENTS (Profile Pic & Signature/Stamp)
         if (req.files) {
             if (req.files.profileImage && req.files.profileImage[0]) {
                 updateData.profileImage = req.files.profileImage[0].path.replace(/\\/g, "/");
@@ -106,7 +123,6 @@ const updatePharmacyProfile = async (req, res) => {
             }
         }
 
-        // 🚨 DISK CLEANUP: Purani unapproved pending request delete karein
         const existingPending = await ProfileUpdateRequest.findOne({ vendorId: pharmacyId, vendorModel: 'Pharmacy', status: 'Pending' });
         if (existingPending) {
             if (updateData.profileImage && existingPending.updatedFields?.profileImage) {
@@ -118,7 +134,6 @@ const updatePharmacyProfile = async (req, res) => {
             await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
  
-        // Admin ke liye pending profile update request create karein
         const request = await ProfileUpdateRequest.create({
             vendorId: pharmacyId,
             vendorModel: 'Pharmacy',

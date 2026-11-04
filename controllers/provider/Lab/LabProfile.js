@@ -18,7 +18,7 @@ const getLabProfile = async (req, res) => {
 };
 
 
-// @desc    Update Lab Profile (Syncs live operational toggles directly & stages document edits for Admin)
+// @desc    Update Lab Profile (Crash-Proof acceptedInsurances Parser & Operational Sync)
 // @route   PUT /provider/labs/profile/update
 // @access  Private (Lab)
 const updateLabProfile = async (req, res) => {
@@ -54,11 +54,26 @@ const updateLabProfile = async (req, res) => {
             ? (is24x7 === 'true' || is24x7 === true) 
             : existingLab.is24x7;
 
+        // Safe crash-proof parser for acceptedInsurances
         let parsedInsurances = existingLab.acceptedInsurances || [];
-        if (acceptedInsurances) {
-            parsedInsurances = typeof acceptedInsurances === 'string'
-                ? JSON.parse(acceptedInsurances)
-                : acceptedInsurances;
+        if (acceptedInsurances !== undefined) {
+            if (Array.isArray(acceptedInsurances)) {
+                parsedInsurances = acceptedInsurances.map(i => String(i).trim()).filter(Boolean);
+            } else if (typeof acceptedInsurances === 'string') {
+                const rawStr = acceptedInsurances.trim();
+                if (rawStr === '') {
+                    parsedInsurances = [];
+                } else {
+                    try {
+                        const parsed = JSON.parse(rawStr);
+                        parsedInsurances = Array.isArray(parsed)
+                            ? parsed.map(i => String(i).trim()).filter(Boolean)
+                            : [String(parsed).trim()];
+                    } catch (e) {
+                        parsedInsurances = rawStr.split(',').map(i => i.trim()).filter(Boolean);
+                    }
+                }
+            }
         }
 
         const targetLocation = {
@@ -83,18 +98,18 @@ const updateLabProfile = async (req, res) => {
         };
  
         if (req.files && req.files.profileImage && req.files.profileImage[0]) {
-            updateData.profileImage = req.files.profileImage[0].path;
+            updateData.profileImage = req.files.profileImage[0].path.replace(/\\/g, "/");
         }
 
         if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
-            updateData.signatureImage = req.files.signatureImage[0].path;
+            updateData.signatureImage = req.files.signatureImage[0].path.replace(/\\/g, "/");
         }
 
         if (nablNumber !== undefined) {
             updateData['documents.nablNumber'] = nablNumber;
         }
 
-        // Instant update for real-time operational availability so customers see correct toggles
+        // Instant update for real-time operational availability
         await Lab.findByIdAndUpdate(labId, {
             $set: {
                 isHomeCollectionAvailable: boolHome,
@@ -142,14 +157,13 @@ const updateLabProfile = async (req, res) => {
 // endpoint: GET /provider/labs/profile/services/my-all-services
 const getMyAllServices = async (req, res) => {
     try {
-        const LabTest = require('../../../models/LabTest');
-        const LabPackage = require('../../../models/LabPackage');
-        
         const tests = await LabTest.find({ labId: req.user.id });
         const packages = await LabPackage.find({ labId: req.user.id });
         
         res.json({ success: true, data: { tests, packages } });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // GET: Fetch latest profile update request status for logged-in Lab

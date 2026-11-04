@@ -3,11 +3,12 @@ const Wallet = require('../../models/Wallet');
 const Booking = require('../../models/AmbulanceBooking');
 const WithdrawalRequest = require('../../models/WithdrawalRequest');
 const Ambulance = require('../../models/Ambulance');
+const AdminCommissionConfig = require('../../models/AdminCommissionConfig')
 const moment = require('moment');
 const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
-// @desc    Calculate Ambulance Balances (Includes Completed Trips, Compensations & Breakdown Payouts)
+// @desc    Calculate Ambulance Balances (Includes Completed Trips, Compensations & Breakdown Payouts)// @desc    Calculate Ambulance Balances (Includes Completed Trips, Compensations & Breakdown Payouts)
 const calculateAmbulanceBalances = async (ambulanceId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
     const ambulanceObjId = new mongoose.Types.ObjectId(ambulanceId);
@@ -36,7 +37,6 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
     let clearedEarnings = 0;
     let pendingEarnings = 0;
 
-    // 1. Process Completed Trips
     for (let trip of allCompletedTrips) {
         let vendorSubtype = 'Ambulance-Medical';
         if (trip.serviceType === 'Accident emergency') vendorSubtype = 'Ambulance-Accident';
@@ -77,7 +77,6 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
         }
     }
 
-    // 2. Process Cancellation & No-Show Compensations
     for (let compTrip of compensatedTrips) {
         const compFee = Number(compTrip.pricing?.noShowFeeApplied || compTrip.pricing?.cancellationFeeApplied || 0);
         if (compFee > 0) {
@@ -90,7 +89,6 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
         }
     }
 
-    // 🚨 3. FIX: Include Manual / Breakdown Credits from Wallet Transactions
     if (walletDoc && Array.isArray(walletDoc.transactions)) {
         const manualCredits = walletDoc.transactions.filter(t => 
             t.type === 'Credit' && 
@@ -120,7 +118,6 @@ const calculateAmbulanceBalances = async (ambulanceId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
     const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Ambulance-Medical', isActive: true }).lean();
 
     return {

@@ -3,6 +3,7 @@
 const Medicine = require('../../../models/Medicine');
 const MedicineInventory = require('../../../models/MedicineInventory');
 const MasterRequest = require('../../../models/MasterRequest');
+const PharmacyComboOffer = require('../../../models/PharmacyComboOffer');
 const mongoose = require('mongoose')
 const HsnMaster = require('../../../models/HsnMaster');
 const HsnRequest = require('../../../models/HsnRequest');
@@ -374,8 +375,7 @@ const deleteInventoryItem = async (req, res) => {
             return res.status(404).json({ success: false, message: "Medicine not found in your inventory or unauthorized" });
         }
 
-        // 🚨 CLEANUP: Also remove or deactivate active combo offers for this medicine
-        const PharmacyComboOffer = require('../../../models/PharmacyComboOffer');
+        // Clean up active combo offers for this medicine using top-level imported model
         await PharmacyComboOffer.deleteMany({
             pharmacyId,
             medicineId: deleted.medicineId

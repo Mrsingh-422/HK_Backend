@@ -3,31 +3,26 @@ const Wallet = require('../../models/Wallet');
 const Appointment = require('../../models/Appointment'); 
 const WithdrawalRequest = require('../../models/WithdrawalRequest'); 
 const Doctor = require('../../models/Doctor');
+const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
 const moment = require('moment');
 const mongoose = require('mongoose');
 const { calculateAdminCommission } = require('../../utils/policyHelper');
 
 
-// Calculate Doctor Balances (Fix: Both COD & Counter Cash correctly deduct platform commission instead of double crediting)
-// @desc    Calculate Doctor Balances (Filters out hospital bookings to prevent double-payout)
-const calculateVendorBalances = async (vendorId) => {
+// @desc    Calculate Hospital Balances with Accurate Early Discharge & Refund Deductions
+const calculateHospitalBalances = async (hospitalId) => {
     const sevenDaysAgo = moment().subtract(7, 'days').toDate();
-    const doctorObjId = new mongoose.Types.ObjectId(vendorId);
+    const hospitalObjId = new mongoose.Types.ObjectId(hospitalId);
 
-    // 🚨 FIX: Only include private clinic/consultation appointments (hospitalId must be null)
     const [completedAppointments, compensatedAppointments] = await Promise.all([
         Appointment.find({
-            doctorId: doctorObjId,
-            hospitalId: null, // 👈 Strictly exclude Hospital OPD/IPD revenue
-            bookingType: 'Appointment',
+            hospitalId: hospitalObjId,
             status: 'Completed'
         }).select('totalAmount pricingBreakdown paymentMethod paymentStatus subscriptionDetails updatedAt').lean(),
 
         Appointment.find({
-            doctorId: doctorObjId,
-            hospitalId: null, // 👈 Strictly exclude Hospital OPD/IPD penalties
-            bookingType: 'Appointment',
-            status: { $in: ['Cancelled-By-User', 'No-Show'] },
+            hospitalId: hospitalObjId,
+            status: { $in: ['Cancelled-By-User', 'Cancelled-By-Hospital', 'No-Show'] },
             $or: [
                 { 'pricingBreakdown.cancellationFeeApplied': { $gt: 0 } },
                 { 'pricingBreakdown.noShowFeeApplied': { $gt: 0 } }
@@ -43,27 +38,25 @@ const calculateVendorBalances = async (vendorId) => {
 
     for (let appt of completedAppointments) {
         const isSub = appt.subscriptionDetails?.isSubscriptionApplied === true;
-        const grossAmount = isSub 
-            ? Number(appt.pricingBreakdown?.originalBaseFee || 0) 
-            : Number(appt.totalAmount || 0);
+        const refundGiven = Number(appt.pricingBreakdown?.unusedDaysRefund || appt.pricingBreakdown?.refundDueToUser || 0);
+        const bookedGross = isSub ? Number(appt.pricingBreakdown?.originalBaseFee || 0) : Number(appt.totalAmount || 0);
+        const effectiveGross = Math.max(0, bookedGross - refundGiven);
 
-        grossEarnings += grossAmount;
+        grossEarnings += effectiveGross;
 
-        const { netVendorAmount, adminCutoff } = await calculateAdminCommission('Doctor', grossAmount);
+        const { netVendorAmount, adminCutoff } = await calculateAdminCommission('Hospital', effectiveGross);
         adminCommissionDeducted += adminCutoff;
 
         let effectiveVendorCredit = 0;
 
-        const isCashOrCod = appt.paymentMethod === 'COD' || 
-                            appt.paymentMethod === 'Cash' || 
-                            String(appt.paymentMethod).toUpperCase() === 'CASH' ||
-                            String(appt.paymentMethod).toUpperCase() === 'COD';
+        const isCounterCashOrCod = appt.paymentMethod === 'COD' || 
+                                   appt.paymentMethod === 'Cash' || 
+                                   String(appt.paymentMethod).toUpperCase() === 'CASH' ||
+                                   String(appt.paymentMethod).toUpperCase() === 'COD';
 
-        if (isCashOrCod) {
-            // Deduct platform commission because doctor physically collected cash
+        if (isCounterCashOrCod) {
             effectiveVendorCredit = -adminCutoff;
         } else {
-            // Online payment; credit net earnings to virtual wallet
             effectiveVendorCredit = netVendorAmount;
         }
 
@@ -91,8 +84,8 @@ const calculateVendorBalances = async (vendorId) => {
     const totalWithdrawalsQuery = await WithdrawalRequest.aggregate([
         {
             $match: {
-                vendorId: doctorObjId,
-                vendorModel: 'Doctor',
+                vendorId: hospitalObjId,
+                vendorModel: 'Hospital',
                 status: { $in: ['Pending', 'Approved'] }
             }
         },
@@ -100,8 +93,7 @@ const calculateVendorBalances = async (vendorId) => {
     ]);
     const totalWithdrawals = totalWithdrawalsQuery[0]?.total || 0;
 
-    const AdminCommissionConfig = require('../../models/AdminCommissionConfig');
-    const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Doctor', isActive: true }).lean();
+    const commissionConfig = await AdminCommissionConfig.findOne({ vendorType: 'Hospital', isActive: true }).lean();
 
     return {
         grossEarnings,

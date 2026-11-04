@@ -27,17 +27,26 @@ const addHospitalAmbulance = async (req, res) => {
         const hashedPassword = await bcrypt.hash(String(password), 10);
 
         const files = req.files || {};
-        const getPath = (key) => (files[key] ? `/uploads/ambulances/${files[key][0].filename}` : null);
+        const getPath = (key) => (files[key] && files[key][0] ? `/uploads/ambulances/${files[key][0].filename}` : null);
 
         const ambulanceName = fullName || name || "Hospital Ambulance";
-        // 🚨 BUG FIX: Map ambulanceNumber to schema key vehicleNumber
         const finalVehicleNumber = vehicleNumber || ambulanceNumber || "N/A";
+
+        // Safe parsing for optionalService (Handles Array or JSON String)
+        let parsedOptionalServices = [];
+        if (optionalService) {
+            if (Array.isArray(optionalService)) {
+                parsedOptionalServices = optionalService;
+            } else if (typeof optionalService === 'string') {
+                try { parsedOptionalServices = JSON.parse(optionalService); } catch (e) { parsedOptionalServices = []; }
+            }
+        }
 
         const newAmbulance = await Ambulance.create({
             hospitalId: req.user.id,
             name: ambulanceName, 
-            email: email, 
-            phone: phone,
+            email: email ? email.toLowerCase().trim() : undefined, 
+            phone: phone ? String(phone).trim() : undefined,
             password: hashedPassword,
             address: address,
             vehicleNumber: finalVehicleNumber,
@@ -69,7 +78,7 @@ const addHospitalAmbulance = async (req, res) => {
             },
             
             defaultService: defaultService,
-            optionalServices: optionalService ? JSON.parse(optionalService) : [],
+            optionalServices: parsedOptionalServices,
             
             driverInfo: {
                 fullName: ambulanceName,
@@ -92,17 +101,7 @@ const addHospitalAmbulance = async (req, res) => {
     }
 };
 
-// --- 2. GET ALL AMBULANCES ---
-const getMyHospitalAmbulances = async (req, res) => {
-    try {
-        const ambulances = await Ambulance.find({ hospitalId: req.user.id });
-        res.json({ success: true, data: ambulances });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
-// --- 3. UPDATE AMBULANCE (Figma Aligned) ---
+// --- 3. UPDATE AMBULANCE (Safe Array/JSON Parsing & Boolean Handling) ---
 const updateHospitalAmbulance = async (req, res) => {
     try {
         const { id } = req.params;
@@ -111,17 +110,20 @@ const updateHospitalAmbulance = async (req, res) => {
         const files = req.files || {};
         let updateData = { ...otherData };
 
-        // Handle Toggles
-        if (accidentalService !== undefined) updateData['freeServices.accidental'] = accidentalService === 'true';
-        if (emergencyService !== undefined) updateData['freeServices.emergency'] = emergencyService === 'true';
-        if (referralService !== undefined) updateData['freeServices.referral'] = referralService === 'true';
+        if (accidentalService !== undefined) updateData['freeServices.accidental'] = (accidentalService === 'true' || accidentalService === true);
+        if (emergencyService !== undefined) updateData['freeServices.emergency'] = (emergencyService === 'true' || emergencyService === true);
+        if (referralService !== undefined) updateData['freeServices.referral'] = (referralService === 'true' || referralService === true);
 
-        // Handle Optional Services Array
-        if (optionalService) updateData.optionalServices = JSON.parse(optionalService);
+        if (optionalService !== undefined) {
+            if (Array.isArray(optionalService)) {
+                updateData.optionalServices = optionalService;
+            } else if (typeof optionalService === 'string') {
+                try { updateData.optionalServices = JSON.parse(optionalService); } catch (e) {}
+            }
+        }
 
-        // Handle File Updates
-        if (files.rcFile) updateData['documents.rcFile'] = `/uploads/ambulances/${files.rcFile[0].filename}`;
-        if (files.drivingLicenseFile) updateData['documents.drivingLicenseFile'] = `/uploads/ambulances/${files.drivingLicenseFile[0].filename}`;
+        if (files.rcFile && files.rcFile[0]) updateData['documents.rcFile'] = `/uploads/ambulances/${files.rcFile[0].filename}`;
+        if (files.drivingLicenseFile && files.drivingLicenseFile[0]) updateData['documents.drivingLicenseFile'] = `/uploads/ambulances/${files.drivingLicenseFile[0].filename}`;
 
         const ambulance = await Ambulance.findOneAndUpdate(
             { _id: id, hospitalId: req.user.id },
@@ -135,6 +137,50 @@ const updateHospitalAmbulance = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// --- 2. GET ALL AMBULANCES ---
+const getMyHospitalAmbulances = async (req, res) => {
+    try {
+        const ambulances = await Ambulance.find({ hospitalId: req.user.id });
+        res.json({ success: true, data: ambulances });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// // --- 3. UPDATE AMBULANCE (Figma Aligned) ---
+// const updateHospitalAmbulance = async (req, res) => {
+//     try {
+//         const { id } = req.params;
+//         const { optionalService, accidentalService, emergencyService, referralService, ...otherData } = req.body;
+        
+//         const files = req.files || {};
+//         let updateData = { ...otherData };
+
+//         // Handle Toggles
+//         if (accidentalService !== undefined) updateData['freeServices.accidental'] = accidentalService === 'true';
+//         if (emergencyService !== undefined) updateData['freeServices.emergency'] = emergencyService === 'true';
+//         if (referralService !== undefined) updateData['freeServices.referral'] = referralService === 'true';
+
+//         // Handle Optional Services Array
+//         if (optionalService) updateData.optionalServices = JSON.parse(optionalService);
+
+//         // Handle File Updates
+//         if (files.rcFile) updateData['documents.rcFile'] = `/uploads/ambulances/${files.rcFile[0].filename}`;
+//         if (files.drivingLicenseFile) updateData['documents.drivingLicenseFile'] = `/uploads/ambulances/${files.drivingLicenseFile[0].filename}`;
+
+//         const ambulance = await Ambulance.findOneAndUpdate(
+//             { _id: id, hospitalId: req.user.id },
+//             { $set: updateData },
+//             { new: true }
+//         );
+
+//         if (!ambulance) return res.status(404).json({ message: "Ambulance not found" });
+//         res.json({ success: true, message: "Updated successfully", data: ambulance });
+//     } catch (error) {
+//         res.status(500).json({ message: error.message });
+//     }
+// };
 
 // --- 4. DELETE AMBULANCE ---
 const deleteHospitalAmbulance = async (req, res) => {
