@@ -1174,78 +1174,242 @@ const getMyPrescriptions = async (req, res) => {
     }
 };
 
-// @desc    Get Available Slots from Cart View (Now with full real-time occupancy & prescription holds checking)
-// @route   GET /user/cart/available-slots
+// @desc    Get Available Slots for Independent Doctor (Auto-Fallback & Hospital-Doctor Guard)
+// @route   GET /user/doctors/slots/:doctorId?date=YYYY-MM-DD
 // @access  Private (User)
 const getAvailableSlots = async (req, res) => {
     try {
-        const { vendorId, date } = req.query; 
+        const { doctorId } = req.params;
+        const { date, consultationType } = req.query;
 
-        if (!vendorId || !date) {
-            return res.status(400).json({ success: false, message: "vendorId and date are required." });
+        // 1. Validate Doctor ID format
+        if (!doctorId || !mongoose.isValidObjectId(doctorId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid doctorId format provided."
+            });
         }
 
-        const config = await Availability.findOne({ vendorId }).lean();
-        if (!config) return res.status(404).json({ success: false, message: "Slots not configured" });
-
-        const dayName = moment(date).format('dddd');
-        if (Array.isArray(config.offDays) && config.offDays.includes(dayName)) {
-            return res.status(200).json({ success: true, isClosed: true, slots: [] });
+        // 2. Validate Date parameter
+        const targetDateStr = date ? String(date).trim() : moment().format('YYYY-MM-DD');
+        const parsedDate = moment(targetDateStr, 'YYYY-MM-DD', true);
+        if (!parsedDate.isValid()) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid date format. Please send date as YYYY-MM-DD (e.g. 2026-11-04)."
+            });
         }
 
-        const allSlots = generateTimeSlots(config);
-        const startOfDay = moment(date).startOf('day').toDate();
-        const endOfDay = moment(date).endOf('day').toDate();
+        // 3. Fetch Doctor Profile
+        const doctor = await Doctor.findById(doctorId)
+            .select('name role hospitalId slotDuration availability leaves consultationStatus fees isOnline isActive')
+            .lean();
 
-        // 1. Check bookings & prescription holds
-        const [bookedOrders, activePrescriptions] = await Promise.all([
-            LabBooking.find({
-                labId: vendorId,
-                appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-                status: { $nin: ['Cancelled', 'No-Show'] }
-            }).select('appointmentTime').lean(),
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Doctor not found."
+            });
+        }
 
-            LabPrescriptionRequest.find({
-                labId: vendorId,
-                appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-                status: { $in: ['Pending Review', 'Reviewing', 'Bill Generated', 'Pending Payment'] }
-            }).select('appointmentTime').lean()
-        ]);
+        // 4. STRICT RULE CHECK: Block Hospital Doctor on Independent Doctor Slot API
+        if (doctor.role === 'hospital-doctor' || doctor.hospitalId) {
+            return res.status(400).json({
+                success: false,
+                errorType: "WRONG_DOCTOR_ENDPOINT",
+                isHospitalDoctor: true,
+                hospitalId: doctor.hospitalId,
+                message: `Frontend Error: Dr. ${doctor.name} is a Hospital Doctor (Only Hospital Visit / OPD allowed). Please use GET /user/hospital/doctors/${doctorId}/opd-slots?date=${targetDateStr} instead.`
+            });
+        }
 
-        const normalize = (t) => {
-            if (!t) return "";
-            let c = String(t).trim().split('-')[0].trim();
-            const m = moment(c, ["HH:mm", "H:mm", "hh:mm A", "h:mm A"]);
-            return m.isValid() ? m.format("HH:mm") : c;
-        };
+        // 5. Optional Check: If frontend passed consultationType, verify if Independent Doctor supports it
+        if (consultationType) {
+            const cleanType = String(consultationType).trim();
+            if (cleanType === 'Video Consult' && doctor.consultationStatus?.online === false) {
+                return res.status(200).json({
+                    success: true,
+                    isClosed: true,
+                    reason: "Doctor has disabled Video Consultation.",
+                    slots: []
+                });
+            }
+            if (cleanType === 'Home Visit' && doctor.consultationStatus?.home === false) {
+                return res.status(200).json({
+                    success: true,
+                    isClosed: true,
+                    reason: "Doctor has disabled Home Visit.",
+                    slots: []
+                });
+            }
+            if (cleanType === 'Clinic Visit' && doctor.consultationStatus?.clinic === false) {
+                return res.status(200).json({
+                    success: true,
+                    isClosed: true,
+                    reason: "Doctor has disabled Clinic Visit.",
+                    slots: []
+                });
+            }
+        }
 
-        const usageMap = {};
-        bookedOrders.forEach(b => {
-            const k = normalize(b.appointmentTime);
-            if (k) usageMap[k] = (usageMap[k] || 0) + 1;
+        // 6. Check if Doctor is on Approved Leave on this date
+        const startOfDay = parsedDate.clone().startOf('day').toDate();
+        const endOfDay = parsedDate.clone().endOf('day').toDate();
+
+        if (Array.isArray(doctor.leaves) && doctor.leaves.length > 0) {
+            const isOnLeave = doctor.leaves.some(leave =>
+                leave.status === 'Approved' &&
+                new Date(leave.startDate) <= endOfDay &&
+                new Date(leave.endDate) >= startOfDay
+            );
+
+            if (isOnLeave) {
+                return res.status(200).json({
+                    success: true,
+                    date: targetDateStr,
+                    isClosed: true,
+                    isOnLeave: true,
+                    reason: `Dr. ${doctor.name} is on leave on ${targetDateStr}.`,
+                    slots: []
+                });
+            }
+        }
+
+        // 7. Fetch Availability Config (Or Build Smart Fallback if Doctor hasn't saved settings yet)
+        let config = await Availability.findOne({ vendorId: doctorId }).lean();
+
+        const dayFull = parsedDate.format('dddd'); // e.g., "Wednesday"
+        const dayShort = parsedDate.format('ddd'); // e.g., "Wed"
+
+        if (!config) {
+            // Check if Doctor model has day-wise availability array
+            const daySchedule = Array.isArray(doctor.availability)
+                ? doctor.availability.find(a => a.day === dayShort || a.day === dayFull)
+                : null;
+
+            config = {
+                vendorId: doctorId,
+                vendorType: 'Doctor',
+                morningSlots: true,
+                afternoonSlots: true,
+                eveningSlots: true,
+                startTime: daySchedule?.startTime || "09:00",
+                endTime: daySchedule?.endTime || "21:00",
+                slotDuration: Number(doctor.slotDuration) || 30,
+                maxClientsPerSlot: 1,
+                offDays: [],
+                blockedDates: [],
+                unavailableSlots: [],
+                premiumSlots: [],
+                blockedSlotsWithReason: []
+            };
+        }
+
+        // 8. Check Off-Days and Blocked Dates (Return 200 OK with empty slots instead of 400 error)
+        const offDaysList = Array.isArray(config.offDays) ? config.offDays : [];
+        const blockedDatesList = Array.isArray(config.blockedDates) ? config.blockedDates : [];
+
+        if (offDaysList.includes(dayFull) || offDaysList.includes(dayShort) || blockedDatesList.includes(targetDateStr)) {
+            return res.status(200).json({
+                success: true,
+                date: targetDateStr,
+                isClosed: true,
+                reason: `Doctor is unavailable on ${dayFull} (${targetDateStr}).`,
+                slots: []
+            });
+        }
+
+        // 9. Generate Raw Time Slots
+        const rawSlots = generateTimeSlots(config);
+
+        // 10. Fetch Existing Active Appointments on this Date to mark booked slots
+        const existingAppointments = await Appointment.find({
+            doctorId: doctorId,
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'] }
+        }).select('appointmentTime').lean();
+
+        // Count bookings per time slot
+        const bookingCountMap = {};
+        existingAppointments.forEach(appt => {
+            if (appt.appointmentTime) {
+                const normTime = moment(appt.appointmentTime, ["HH:mm", "hh:mm A"]).format("HH:mm");
+                bookingCountMap[normTime] = (bookingCountMap[normTime] || 0) + 1;
+            }
         });
-        activePrescriptions.forEach(p => {
-            const k = normalize(p.appointmentTime);
-            if (k) usageMap[k] = (usageMap[k] || 0) + 1;
-        });
 
-        const maxCapacity = Number(config.maxClientsPerSlot || 0);
+        // Check date-specific blocked slots with reason
+        const dateSpecificBlocked = {};
+        if (Array.isArray(config.blockedSlotsWithReason)) {
+            config.blockedSlotsWithReason.forEach(b => {
+                if (b.date === targetDateStr && b.time) {
+                    const normTime = moment(b.time, ["HH:mm", "hh:mm A"]).format("HH:mm");
+                    dateSpecificBlocked[normTime] = b.reason || "Blocked by Doctor";
+                }
+            });
+        }
 
-        const mappedSlots = allSlots.map(s => {
-            const slotK = normalize(s.time);
-            const isFull = maxCapacity > 0 && (usageMap[slotK] || 0) >= maxCapacity;
+        // Check if targetDate is Today to filter/disable past time slots
+        const nowMoment = moment();
+        const isToday = targetDateStr === nowMoment.format('YYYY-MM-DD');
+        const maxClients = Number(config.maxClientsPerSlot) > 0 ? Number(config.maxClientsPerSlot) : 1;
+
+        // 11. Format Final Slots Array (Keeping all dynamic keys intact for Frontend)
+        const finalSlots = rawSlots.map(slot => {
+            const slotTime24 = moment(slot.time, ["HH:mm", "hh:mm A"]).format("HH:mm");
+            const slotDisplay12 = moment(slotTime24, "HH:mm").format("hh:mm A");
+
+            const currentBookings = bookingCountMap[slotTime24] || 0;
+            const isBooked = currentBookings >= maxClients;
+            const isDateBlocked = Boolean(dateSpecificBlocked[slotTime24]);
+
+            let isPast = false;
+            if (isToday) {
+                const slotDateTime = moment(`${targetDateStr} ${slotTime24}`, "YYYY-MM-DD HH:mm");
+                if (slotDateTime.isBefore(nowMoment)) {
+                    isPast = true;
+                }
+            }
+
+            const isAvailable = !isBooked && !isDateBlocked && !isPast;
+
+            let status = "Available";
+            if (isPast) status = "Past";
+            else if (isDateBlocked) status = "Blocked";
+            else if (isBooked) status = "Booked";
+
             return {
-                ...s,
-                isAvailable: !isFull,
-                isFull,
-                currentBookings: usageMap[slotK] || 0
+                time: slot.time,                 // "09:00"
+                displayTime: slotDisplay12,      // "09:00 AM"
+                category: slot.category,         // "Morning" | "Afternoon" | "Evening"
+                extraFee: Number(slot.extraFee || 0),
+                premiumFee: Number(slot.extraFee || 0),
+                available: isAvailable,          // Boolean flag used by web/app
+                isAvailable: isAvailable,        // Alias boolean flag
+                isBooked: isBooked,
+                isPast: isPast,
+                status: status,                  // "Available" | "Booked" | "Past" | "Blocked"
+                blockReason: dateSpecificBlocked[slotTime24] || null
             };
         });
 
-        res.status(200).json({ success: true, isClosed: false, slots: mappedSlots });
-    } catch (error) { 
-        console.error("Cart Get Available Slots Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(200).json({
+            success: true,
+            doctorId,
+            date: targetDateStr,
+            isClosed: false,
+            slotDuration: config.slotDuration || 30,
+            totalSlots: finalSlots.length,
+            availableSlotsCount: finalSlots.filter(s => s.available).length,
+            slots: finalSlots
+        });
+
+    } catch (error) {
+        console.error("Get Doctor Available Slots Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 

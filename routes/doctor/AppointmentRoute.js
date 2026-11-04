@@ -43,7 +43,7 @@ router.post('/complete/:id', protect('doctor'), completeWithPrescription);
 router.get('/profile/fees', protect('doctor'), getMyConsultationFees);
 router.put('/profile/update-fees', protect('doctor'), updateConsultationFees);
 
-router.post('/reschedule/:id', protect('doctor'), rescheduleAppointment);
+router.patch('/reschedule/:id', protect('doctor'), rescheduleAppointment);
 
 router.get('/details/:id', protect('doctor'), getAppointmentClinicalDetails);
 // Create new prescription

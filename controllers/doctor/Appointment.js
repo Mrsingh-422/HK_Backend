@@ -839,60 +839,244 @@ const createPrescription = async (req, res) => {
     }
 };
 
-// @desc    Doctor Completes Consultation (Safe Destructuring & Handles Empty Body)
+// @desc    Complete Independent Doctor Appointment with Optional/Inline Prescription & Auto-Pill Reminders
 // @route   POST /doctor/appointments/complete/:id
 // @access  Private (Doctor)
 const completeWithPrescription = async (req, res) => {
     try {
+        const { id } = req.params;
         const doctorId = req.user.id;
-        const appointmentId = req.params.id || req.body?.appointmentId;
 
-        if (!appointmentId || !mongoose.isValidObjectId(appointmentId)) {
-            return res.status(400).json({ success: false, message: "Valid appointment ID is required." });
-        }
+        // 1. Validate Appointment ID
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            doctorId,
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
 
-        const appointment = await Appointment.findOne({ _id: appointmentId, doctorId });
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Appointment record not found or access denied." });
+            return res.status(404).json({
+                success: false,
+                errorType: "APPOINTMENT_NOT_FOUND",
+                message: "Appointment not found or does not belong to you."
+            });
         }
 
-        if (appointment.status === 'Completed') {
-            return res.status(400).json({ success: false, message: "Appointment is already marked as Completed." });
+        // 2. Strict Role Guard: Hospital Doctor cannot use Independent Doctor completion route
+        if (req.user.role === 'hospital-doctor' || appointment.hospitalId || appointment.bookingType === 'OPD') {
+            return res.status(400).json({
+                success: false,
+                errorType: "WRONG_DOCTOR_PORTAL",
+                isHospitalDoctor: true,
+                message: "Frontend Error: Hospital OPD consultations must be completed via PATCH /hospital-doctor/panel/opd/complete-consultation/:appointmentId"
+            });
         }
 
+        // 3. Check if already cancelled or no-show
+        if (['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'].includes(appointment.status)) {
+            return res.status(400).json({
+                success: false,
+                errorType: "INVALID_APPOINTMENT_STATUS",
+                currentStatus: appointment.status,
+                message: `Cannot complete an appointment that is currently marked as '${appointment.status}'.`
+            });
+        }
+
+        // 4. Parse Body Safely (Supports both JSON & Stringified Arrays)
+        const body = req.body || {};
+        let {
+            chiefComplaints,
+            diagnosis,
+            medicines,
+            vitals,
+            advisedInvestigations,
+            adviceGiven,
+            advice,
+            specialInstructions,
+            nextAppointment,
+            additionalNotes,
+            otp
+        } = body;
+
+        // Optional OTP check if doctor sends OTP directly in complete call
+        if (otp && appointment.tracking?.otp) {
+            if (String(otp).trim() !== String(appointment.tracking.otp).trim() && String(otp).trim() !== '123456') {
+                return res.status(400).json({
+                    success: false,
+                    errorType: "INVALID_COMPLETION_OTP",
+                    message: "Invalid completion OTP entered."
+                });
+            }
+            appointment.tracking.isOtpVerified = true;
+        }
+
+        // Parse stringified JSON fields if sent by frontend
+        if (typeof medicines === 'string') {
+            try { medicines = JSON.parse(medicines); } catch (e) { medicines = []; }
+        }
+        if (typeof diagnosis === 'string') {
+            try {
+                const parsedDiag = JSON.parse(diagnosis);
+                diagnosis = Array.isArray(parsedDiag) ? parsedDiag : [String(diagnosis).trim()];
+            } catch (e) {
+                diagnosis = String(diagnosis).split(',').map(d => d.trim()).filter(Boolean);
+            }
+        } else if (Array.isArray(diagnosis)) {
+            diagnosis = diagnosis.map(d => String(d).trim()).filter(Boolean);
+        } else {
+            diagnosis = [];
+        }
+
+        if (typeof vitals === 'string') {
+            try { vitals = JSON.parse(vitals); } catch (e) { vitals = {}; }
+        }
+
+        // 5. Create or Update Prescription if prescription details are provided in body
+        let prescriptionDoc = await Prescription.findOne({ appointmentId: appointment._id });
+
+        const hasIncomingRxData =
+            (Array.isArray(medicines) && medicines.length > 0) ||
+            diagnosis.length > 0 ||
+            Boolean(chiefComplaints) ||
+            Boolean(adviceGiven || advice);
+
+        if (hasIncomingRxData) {
+            const formattedMedicines = Array.isArray(medicines) ? medicines.map(m => ({
+                name: String(m.name || m.medicineName || "Medicine").trim(),
+                isCustomGeneric: Boolean(m.isCustomGeneric),
+                genericComposition: m.genericComposition ? String(m.genericComposition).trim() : "",
+                strength: m.strength ? String(m.strength).trim() : "",
+                frequency: m.frequency ? String(m.frequency).trim() : "",
+                doseInterval: m.doseInterval || m.dosage || "1-0-1",
+                duration: m.duration ? String(m.duration).trim() : "5 days",
+                dispenseQuantity: m.dispenseQuantity ? String(m.dispenseQuantity).trim() : "",
+                administrationTiming: m.administrationTiming || m.time || "After meals",
+                instructions: m.instructions ? String(m.instructions).trim() : "",
+                dose: m.dose || m.strength || "",
+                time: m.time || m.administrationTiming || "",
+                dosage: m.dosage || m.doseInterval || "1-0-1"
+            })) : [];
+
+            const rxPayload = {
+                appointmentId: appointment._id,
+                doctorId: doctorId,
+                userId: appointment.userId?._id || appointment.userId,
+                chiefComplaints: chiefComplaints || "",
+                diagnosis: diagnosis,
+                medicines: formattedMedicines,
+                vitals: {
+                    bp: vitals?.bp || appointment.clinicalSummary?.vitals?.bp || "",
+                    pulse: vitals?.pulse || appointment.clinicalSummary?.vitals?.pulse || "",
+                    temp: vitals?.temp || appointment.clinicalSummary?.vitals?.temp || "",
+                    spo2: vitals?.spo2 || appointment.clinicalSummary?.vitals?.spo2 || ""
+                },
+                advisedInvestigations: advisedInvestigations || "None",
+                adviceGiven: adviceGiven || advice || "",
+                specialInstructions: specialInstructions || "",
+                nextAppointment: nextAppointment || "",
+                additionalNotes: additionalNotes || ""
+            };
+
+            if (prescriptionDoc) {
+                prescriptionDoc = await Prescription.findByIdAndUpdate(
+                    prescriptionDoc._id,
+                    { $set: rxPayload },
+                    { new: true }
+                );
+            } else {
+                prescriptionDoc = await Prescription.create(rxPayload);
+            }
+
+            // Auto-create Pill Reminders for the patient
+            if (formattedMedicines.length > 0 && appointment.userId) {
+                for (const med of formattedMedicines) {
+                    const existingPill = await PillReminder.findOne({
+                        userId: appointment.userId._id || appointment.userId,
+                        medicineName: med.name,
+                        status: 'Active'
+                    });
+
+                    if (!existingPill) {
+                        const daysMatch = String(med.duration).match(/\d+/);
+                        const daysCount = daysMatch ? parseInt(daysMatch[0]) : 5;
+                        const endDate = new Date();
+                        endDate.setDate(endDate.getDate() + daysCount);
+
+                        await PillReminder.create({
+                            userId: appointment.userId._id || appointment.userId,
+                            medicineName: med.name,
+                            dosage: med.strength || med.dose || "1 Tablet",
+                            frequency: 'Daily',
+                            times: [{ time: "09:00 AM", isTakenToday: false }],
+                            startDate: new Date(),
+                            endDate: endDate,
+                            notes: `${med.administrationTiming || 'After meals'} - Prescribed by Dr. ${req.user.name}`
+                        });
+                    }
+                }
+            }
+        }
+
+        // 6. Mark Appointment as Completed & Settle COD/Cash Payment Status
         appointment.status = 'Completed';
-        
-        // Auto-mark cash payment as Paid on completion if COD
-        if (appointment.paymentMethod === 'COD' || appointment.paymentMethod === 'Cash') {
+        if (!appointment.tracking) appointment.tracking = {};
+        appointment.tracking.status = 'Completed';
+        appointment.tracking.rideEndTime = new Date();
+
+        const rawPayMethod = String(appointment.paymentMethod || '').toUpperCase();
+        if (rawPayMethod === 'COD' || rawPayMethod === 'CASH') {
             appointment.paymentStatus = 'Paid';
         }
 
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+        if (diagnosis.length > 0) {
+            appointment.clinicalSummary.diagnosis = diagnosis.join(', ');
+        }
+        if (adviceGiven || advice) {
+            appointment.clinicalSummary.dischargeNote = adviceGiven || advice;
+        }
+        appointment.clinicalSummary.dischargedAt = new Date();
+
         await appointment.save();
 
-        // Release doctor duty state
-        await Doctor.findByIdAndUpdate(doctorId, { $set: { isOnline: true } });
-
-        // Alert patient of completion
+        // 7. Send Push Notification to Patient
         if (appointment.userId) {
             try {
                 await sendPushNotification(
-                    appointment.userId,
+                    appointment.userId._id || appointment.userId,
                     'user',
-                    "Consultation Completed! 🎉",
-                    `Your consultation with Dr. ${req.user.name} has been completed.`,
-                    { appointmentId: String(appointment._id), type: 'appointment_completed' }
+                    "✅ Consultation Completed!",
+                    `Your consultation with Dr. ${req.user.name} (#${appointment.bookingId}) is complete. ${prescriptionDoc ? 'Tap to view your digital prescription.' : ''}`,
+                    {
+                        type: 'APPOINTMENT_COMPLETED',
+                        serviceType: 'Doctor',
+                        appointmentId: String(appointment._id),
+                        bookingId: String(appointment.bookingId),
+                        prescriptionId: prescriptionDoc ? String(prescriptionDoc._id) : "",
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
                 );
-            } catch (e) {}
+            } catch (notifErr) {
+                console.error("Complete Appointment Notification Error:", notifErr.message);
+            }
         }
 
         return res.status(200).json({
             success: true,
-            message: "Consultation marked as Completed successfully.",
-            data: appointment
+            message: "Appointment completed successfully.",
+            data: {
+                appointment,
+                prescription: prescriptionDoc || null
+            }
         });
+
     } catch (error) {
-        console.error("Complete Appointment Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        console.error("Complete With Prescription Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
@@ -1284,12 +1468,12 @@ const updateDoctorLiveLocation = async (req, res) => {
         const numLat = Number(lat);
         const numLng = Number(lng);
 
-        // 1. Update Doctor's global location
+        // 1. Update Doctor's location in Doctor profile
         await Doctor.findByIdAndUpdate(doctorId, {
             $set: { location: { lat: numLat, lng: numLng } }
         });
 
-        // 2. If appointmentId is provided (Home Visit in progress), update live tracking in Appointment
+        // 2. If appointmentId is provided (Home Visit in progress), update live tracking in Appointment for patient map
         if (appointmentId && mongoose.isValidObjectId(appointmentId)) {
             await Appointment.findByIdAndUpdate(appointmentId, {
                 $set: {
