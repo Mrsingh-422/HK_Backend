@@ -10,6 +10,8 @@ const Ambulance = require('../../../models/Ambulance');
 const BedRescheduleLimit = require('../../../models/BedRescheduleLimit');
 const UserSubscription = require('../../../models/UserSubscription');
 const Availability = require('../../../models/Availability');
+const Prescription = require('../../../models/Prescription');
+const AmbulanceBooking = require('../../../models/AmbulanceBooking');
 
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const Review = require('../../../models/Review');
@@ -25,6 +27,22 @@ const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require(
 const { processCancellationRefund } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper');
 const { syncHospitalWardAndBedCapacity } = require('../../../utils/helpers');
+
+// Helper: Calculate human-readable shift duration between two timestamps
+const formatUserShiftDuration = (startTime, endTime = new Date()) => {
+    if (!startTime) return "0 mins";
+    const diffMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
+    const totalMinutes = Math.floor(diffMs / 60000);
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const mins = totalMinutes % 60;
+
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours} hr${hours > 1 ? 's' : ''}`);
+    parts.push(`${mins} min${mins !== 1 ? 's' : ''}`);
+    return parts.join(' ');
+};
 
 
 // @desc    List / Search Hospitals for Users (Supports City, Speciality, GPS Distance & Insurance Filters)
@@ -2845,7 +2863,7 @@ const getUserOpdPrescription = async (req, res) => {
 };
 
 
-// @desc    Get Hospital Booking Details for Patient App (With Populated Insurance Details)
+// @desc    Get Single Hospital Booking Full Details for User (Synced with Doctor & Hospital Panel Logs)
 // @route   GET /user/hospital/booking-details/:id
 // @access  Private (User)
 const getHospitalBookingDetails = async (req, res) => {
@@ -2859,31 +2877,83 @@ const getHospitalBookingDetails = async (req, res) => {
             ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
         };
 
-        const appointment = await Appointment.findOne(query)
-            .populate('hospitalId', 'name address city state hospitalImage phone isInsuranceAccepted acceptedInsurances')
-            .populate('doctorId', 'name speciality department profileImage fees qualification')
+        const booking = await Appointment.findOne(query)
+            .populate('hospitalId', 'name address city state phone hospitalImage location isInsuranceAccepted')
+            .populate('doctorId', 'name speciality qualification profileImage fees department phone')
+            .populate('pendingDoctorId', 'name speciality qualification profileImage department')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
-                populate: { path: 'wardId', select: 'name type description' }
+                populate: { path: 'wardId', select: 'name type' }
             })
+            .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo')
             .populate('specialServices.serviceId', 'serviceName price image description')
-            .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
-            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type') // 👈 Populated
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage department')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage department')
+            .populate('clinicalLogs.doctorId', 'name speciality profileImage department')
+            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage department')
+            .populate('activeMedications.addedBy', 'name speciality profileImage')
             .lean();
 
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Booking record not found." });
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Hospital booking record not found."
+            });
         }
+
+        // Parallel fetch for Prescriptions and linked IPD Admission (if this is an OPD booking that converted to IPD)
+        const [prescriptions, linkedIpdAdmission, linkedAmbulance] = await Promise.all([
+            Prescription.find({ appointmentId: booking._id })
+                .populate('doctorId', 'name speciality qualification signatureImage')
+                .sort({ createdAt: -1 })
+                .lean(),
+            booking.bookingType === 'OPD'
+                ? Appointment.findOne({ opdAppointmentId: booking._id, userId })
+                    .select('_id bookingId status paymentStatus wardName bedNumber totalAmount admissionHoldExpiresAt')
+                    .lean()
+                : Promise.resolve(null),
+            booking.transactionId
+                ? AmbulanceBooking.findOne({ bookingId: booking.transactionId })
+                    .populate('ambulanceId', 'name phone vehicleNumber vehicleType location')
+                    .lean()
+                : Promise.resolve(null)
+        ]);
+
+        const now = new Date();
+        const enrichedTreatmentHistory = (booking.treatmentHistory || []).map(item => {
+            const startRef = item.startTime || item.timestamp;
+            const isCurrentlyActive = !item.endTime && booking.status !== 'Completed';
+            return {
+                ...item,
+                fromDoctorName: item.fromDoctorId?.name || null,
+                toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
+                toDoctorSpeciality: item.toDoctorId?.speciality || "",
+                isCurrentlyActive,
+                durationDisplay: item.endTime
+                    ? (item.durationDisplay || formatUserShiftDuration(startRef, item.endTime))
+                    : (isCurrentlyActive ? `${formatUserShiftDuration(startRef, now)} (Active)` : (item.durationDisplay || "Completed"))
+            };
+        });
+
+        const enrichedClinicalLogs = (booking.clinicalLogs || []).map(log => ({
+            ...log,
+            doctorName: log.doctorId?.name || "Attending Doctor",
+            doctorSpeciality: log.doctorId?.speciality || ""
+        }));
 
         return res.status(200).json({
             success: true,
             data: {
-                ...appointment,
-                hasInsurance: Boolean(appointment.insuranceDetails?.hasInsurance),
-                insuranceClaimStatus: appointment.insuranceDetails?.hasInsurance 
-                    ? (appointment.insuranceDetails?.approvalStatus || 'Pending') 
-                    : 'Self-Pay (No Insurance)'
+                ...booking,
+                isOpd: booking.bookingType === 'OPD',
+                isIpd: booking.bookingType === 'Admission',
+                treatmentHistory: enrichedTreatmentHistory,
+                clinicalLogs: enrichedClinicalLogs,
+                prescriptions: prescriptions || [],
+                linkedIpdAdmission: linkedIpdAdmission || null,
+                ambulanceJourney: linkedAmbulance || null
             }
         });
 

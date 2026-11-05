@@ -24,6 +24,22 @@ const mongoose = require('mongoose');
 const { syncHospitalWardAndBedCapacity,generateUniqueOrderCode } = require('../../../utils/helpers');
 
 
+// Helper: Calculate human-readable shift duration
+const formatDocShiftDuration = (startTime, endTime = new Date()) => {
+    if (!startTime) return "0 mins";
+    const diffMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
+    const totalMinutes = Math.floor(diffMs / 60000);
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const mins = totalMinutes % 60;
+
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours} hr${hours > 1 ? 's' : ''}`);
+    parts.push(`${mins} min${mins !== 1 ? 's' : ''}`);
+    return parts.join(' ');
+};
+
 // --- ENRICH APPOINTMENT WITH DYNAMIC 24-HOUR LEDGER SNAPSHOT (For Doctor Panel) ---
 const enrichAppointmentClinicalDetails = async (appt, targetDischargeDate = new Date()) => {
     const apptObj = appt.toObject ? appt.toObject() : { ...appt };
@@ -710,90 +726,182 @@ const processPrescription = async (req, res) => {
     }
 };
 
-// 2. TRANSFER PATIENT HANDOVER (Doctor A Panel)
-// Updated: Automatically sets the transferring doctor's shift action to 'Discharged' upon initiating transfer
+// 3. INITIATE PATIENT HANDOVER / TRANSFER TO COLLEAGUE
+// Endpoint: POST /hospital-doctor/panel/case/transfer
 const transferPatient = async (req, res) => {
     try {
+        const fromDoctorId = req.user.id;
         const { appointmentId, toDoctorId, reason, priority } = req.body;
 
-        const appointment = await Appointment.findById(appointmentId);
-        if (!appointment) return res.status(404).json({ success: false, message: "Case not found" });
+        if (!appointmentId || !toDoctorId) {
+            return res.status(400).json({ success: false, message: "appointmentId and toDoctorId are required." });
+        }
 
-        // Verify target colleague
-        const targetDoctor = await Doctor.findOne({ 
-            _id: toDoctorId, 
-            hospitalId: req.user.hospitalId, 
-            role: 'hospital-doctor',
-            isActive: true 
-        });
+        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            doctorId: fromDoctorId,
+            ...(isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
 
+        const [appointment, targetDoctor] = await Promise.all([
+            Appointment.findOne(query),
+            Doctor.findById(toDoctorId).select('name speciality hospitalId').lean()
+        ]);
+
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Active case not found under your care." });
+        }
         if (!targetDoctor) {
-            return res.status(400).json({ success: false, message: "Target doctor not active in this hospital." });
+            return res.status(404).json({ success: false, message: "Target colleague doctor not found." });
         }
 
         const now = new Date();
+        appointment.pendingDoctorId = targetDoctor._id;
 
-        // 1. Close Doctor A's (current doctor) active shift in history and mark as 'Discharged'
-        const activeShift = appointment.treatmentHistory.find(h => 
-            h.toDoctorId && h.toDoctorId.toString() === req.user.id && !h.endTime
-        );
-        if (activeShift) {
-            activeShift.endTime = now;
-            activeShift.action = 'Discharged'; // 🚀 SYNC FIX: Officially discharges Doctor A from active care duty
-            activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
         }
 
-        // 2. Set Pending status & targets
-        appointment.pendingDoctorId = toDoctorId;
-        appointment.triageLevel = priority || appointment.triageLevel;
-        
-        // 3. Push Transfer-Initiated log
         appointment.treatmentHistory.push({
-            fromDoctorId: req.user.id,
-            toDoctorId: toDoctorId,
+            fromDoctorId: fromDoctorId,
+            toDoctorId: targetDoctor._id,
             action: 'Transfer-Initiated',
-            notes: reason || "Shift Handover",
-            timestamp: now
+            notes: reason
+                ? `Handover requested to Dr. ${targetDoctor.name} (${priority || 'Routine'}). Note: ${reason}`
+                : `Shift handover requested to Dr. ${targetDoctor.name}.`,
+            timestamp: now,
+            startTime: now,
+            endTime: now,
+            durationDisplay: "Handover Pending"
         });
 
         await appointment.save();
-        res.json({ success: true, message: "Patient handover initiated. Pending colleague acceptance." });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        // Notify Colleague Doctor & Hospital Admin
+        Promise.allSettled([
+            sendPushNotification(
+                targetDoctor._id,
+                'doctor',
+                "🔄 Incoming Patient Handover Request",
+                `Dr. ${req.user.name} requested a case handover for booking #${appointment.bookingId} (Bed: ${appointment.bedNumber || 'IPD'}).`,
+                { appointmentId: String(appointment._id), type: 'HANDOVER_REQUEST' }
+            ),
+            appointment.hospitalId ? sendPushNotification(
+                appointment.hospitalId,
+                'hospital',
+                "🔄 Doctor Shift Handover Initiated",
+                `Dr. ${req.user.name} initiated handover to Dr. ${targetDoctor.name} for case #${appointment.bookingId}.`,
+                { appointmentId: String(appointment._id), type: 'HANDOVER_INITIATED' }
+            ) : Promise.resolve()
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: `Handover request sent to Dr. ${targetDoctor.name}.`,
+            data: appointment
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 
-// 3. ACCEPT PATIENT HANDOVER (Doctor B Panel - NEW API)
+
+// 4. ACCEPT PATIENT HANDOVER (Closes previous doctor's active shift & starts new shift)
+// Endpoint: POST /hospital-doctor/panel/case/accept-transfer
 const acceptTransfer = async (req, res) => {
     try {
-        const { appointmentId } = req.body;
+        const doctorId = req.user.id;
+        const { appointmentId, notes } = req.body;
 
-        const appointment = await Appointment.findOne({ _id: appointmentId, pendingDoctorId: req.user.id });
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "No pending transfer request found." });
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: "appointmentId is required." });
         }
 
-        const oldDoctorId = appointment.doctorId;
-        const now = new Date();
+        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            pendingDoctorId: doctorId,
+            ...(isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
 
-        // Make Doctor B primary
-        appointment.doctorId = req.user.id;
+        const appointment = await Appointment.findOne(query).populate('doctorId', 'name speciality');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Pending handover request not found for you." });
+        }
+
+        const now = new Date();
+        const previousDoctorId = appointment.doctorId?._id || appointment.doctorId || null;
+        const previousDoctorName = appointment.doctorId?.name || "Previous Doctor";
+
+        // Close previous doctor's open shift log
+        if (Array.isArray(appointment.treatmentHistory)) {
+            for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+                const logItem = appointment.treatmentHistory[i];
+                if (logItem && !logItem.endTime && logItem.action !== 'Transfer-Initiated') {
+                    logItem.endTime = now;
+                    logItem.durationDisplay = formatDocShiftDuration(logItem.startTime || logItem.timestamp, now);
+                    break;
+                }
+            }
+        } else {
+            appointment.treatmentHistory = [];
+        }
+
+        // Start new active shift log for accepting doctor
+        appointment.treatmentHistory.push({
+            fromDoctorId: previousDoctorId,
+            toDoctorId: doctorId,
+            action: 'Transfer-Accepted',
+            notes: notes
+                ? String(notes).trim()
+                : `Handover accepted by Dr. ${req.user.name} from Dr. ${previousDoctorName}.`,
+            timestamp: now,
+            startTime: now,
+            endTime: null,
+            durationDisplay: "Active Shift"
+        });
+
+        appointment.doctorId = doctorId;
         appointment.pendingDoctorId = null;
         appointment.status = 'In-Progress';
 
-        // 1. Push Acceptance audit and START Doctor B's shift
-        appointment.treatmentHistory.push({
-            fromDoctorId: oldDoctorId,
-            toDoctorId: req.user.id,
-            action: 'Transfer-Accepted',
-            notes: "Handover accepted on duty.",
-            timestamp: now,
-            startTime: now // 👈 Start of Doctor B's treatment shift
-        });
-
         await appointment.save();
-        res.json({ success: true, message: "Transfer accepted. Patient added to your active tray.", data: appointment });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+
+        // Notify Previous Doctor, Hospital Admin & Patient
+        Promise.allSettled([
+            previousDoctorId ? sendPushNotification(
+                previousDoctorId,
+                'doctor',
+                "✅ Handover Accepted",
+                `Dr. ${req.user.name} accepted your handover for case #${appointment.bookingId}.`,
+                { appointmentId: String(appointment._id), type: 'HANDOVER_ACCEPTED' }
+            ) : Promise.resolve(),
+            appointment.hospitalId ? sendPushNotification(
+                appointment.hospitalId,
+                'hospital',
+                "✅ Shift Handover Completed",
+                `Dr. ${req.user.name} accepted handover from Dr. ${previousDoctorName} for case #${appointment.bookingId}.`,
+                { appointmentId: String(appointment._id), type: 'HANDOVER_ACCEPTED' }
+            ) : Promise.resolve(),
+            appointment.userId ? sendPushNotification(
+                appointment.userId,
+                'user',
+                "👨‍⚕️ Attending Doctor Shift Updated",
+                `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) has taken over your care from Dr. ${previousDoctorName}.`,
+                { appointmentId: String(appointment._id), type: 'DOCTOR_SHIFT_UPDATED' }
+            ) : Promise.resolve()
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: "Handover accepted successfully. You are now the lead attending doctor.",
+            data: appointment
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
 };
+
 // --- 16. REJECT/DECLINE PATIENT HANDOVER (Doctor B Action - NEW API) ---
 // Updated: Re-activates/re-opens a new active treatment shift for Doctor A if Doctor B declines handover
 const rejectTransfer = async (req, res) => {
@@ -1759,62 +1867,73 @@ const getRawDischargeSummary = async (req, res) => {
     }
 };
 
-// @desc    Get Detailed Patient Case File for Hospital Doctor (With Populated Insurance Details)
-// @route   GET /hospital-doctor/panel/case-details/:id
-// @access  Private (Hospital-Doctor)
+// 5. GET PATIENT DETAILS FOR DOCTOR PANEL (Full Populated Sync)
+// Endpoint: GET /hospital-doctor/panel/case-details/:id
 const getPatientDetails = async (req, res) => {
     try {
         const { id } = req.params;
-        const doctorId = req.user.id;
+        const isObjId = mongoose.isValidObjectId(id);
+        const query = isObjId ? { _id: id } : { bookingId: String(id).trim() };
 
-        const isObjectId = mongoose.isValidObjectId(id);
-        const query = isObjectId ? { _id: id } : { bookingId: String(id).trim() };
-
-        const appointment = await Appointment.findOne(query)
-            .populate('userId', 'name phone email profilePic age gender dob bloodGroup userAddress')
-            .populate('hospitalId', 'name address phone location hospitalImage isInsuranceAccepted acceptedInsurances')
-            .populate('doctorId', 'name speciality department profileImage fees qualification phone')
+        const caseData = await Appointment.findOne(query)
+            .populate('userId', 'name phone email profilePic gender dob bloodGroup height weight conditionStatus familyHistory')
+            .populate('hospitalId', 'name address phone city state hospitalImage')
+            .populate('doctorId', 'name speciality qualification phone profileImage department')
+            .populate('pendingDoctorId', 'name speciality qualification phone profileImage department')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
-                populate: { path: 'wardId', select: 'name type description' }
+                populate: { path: 'wardId', select: 'name type' }
             })
-            .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverInfo location')
+            .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo')
             .populate('specialServices.serviceId', 'serviceName price image description')
-            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type') // 👈 Populated Insurance
-            .populate('clinicalLogs.doctorId', 'name speciality profileImage')
-            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage dutyStatus')
-            .populate('activeMedications.addedBy', 'name speciality')
-            .populate('pendingDoctorId', 'name speciality')
-            .populate('treatmentHistory.fromDoctorId', 'name speciality')
-            .populate('treatmentHistory.toDoctorId', 'name speciality')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage department')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage department')
+            .populate('clinicalLogs.doctorId', 'name speciality profileImage department')
+            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage department')
+            .populate('activeMedications.addedBy', 'name speciality profileImage')
             .lean();
 
-        if (!appointment) {
+        if (!caseData) {
             return res.status(404).json({ success: false, message: "Patient case record not found." });
         }
 
-        // Format duration if applicable
-        let durationDisplay = "N/A";
-        if (appointment.startDate) {
-            const start = moment(appointment.startDate);
-            const end = appointment.endDate ? moment(appointment.endDate) : moment();
-            const days = end.diff(start, 'days') || 1;
-            durationDisplay = `${days} Day(s)`;
-        }
+        const prescriptions = await Prescription.find({ appointmentId: caseData._id })
+            .populate('doctorId', 'name speciality qualification signatureImage')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const now = new Date();
+        const enrichedTreatmentHistory = (caseData.treatmentHistory || []).map(item => {
+            const startRef = item.startTime || item.timestamp;
+            const isCurrentlyActive = !item.endTime && caseData.status !== 'Completed';
+            return {
+                ...item,
+                fromDoctorName: item.fromDoctorId?.name || null,
+                toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
+                toDoctorSpeciality: item.toDoctorId?.speciality || "",
+                isCurrentlyActive,
+                durationDisplay: item.endTime
+                    ? (item.durationDisplay || formatDocShiftDuration(startRef, item.endTime))
+                    : (isCurrentlyActive ? `${formatDocShiftDuration(startRef, now)} (Active)` : (item.durationDisplay || "Completed"))
+            };
+        });
+
+        const enrichedClinicalLogs = (caseData.clinicalLogs || []).map(log => ({
+            ...log,
+            doctorName: log.doctorId?.name || "Attending Doctor",
+            doctorSpeciality: log.doctorId?.speciality || ""
+        }));
 
         return res.status(200).json({
             success: true,
             data: {
-                ...appointment,
-                durationDisplay,
-                hasInsurance: Boolean(appointment.insuranceDetails?.hasInsurance),
-                insuranceClaimStatus: appointment.insuranceDetails?.hasInsurance 
-                    ? (appointment.insuranceDetails?.approvalStatus || 'Pending') 
-                    : 'Self-Pay (No Insurance)'
+                ...caseData,
+                treatmentHistory: enrichedTreatmentHistory,
+                clinicalLogs: enrichedClinicalLogs,
+                prescriptions: prescriptions || []
             }
         });
-
     } catch (error) {
         console.error("Get Patient Details Error:", error);
         return res.status(500).json({ success: false, message: error.message });
@@ -2087,86 +2206,209 @@ const getPendingAdmissions = async (req, res) => {
     }
 };
 
-// --- 15. TAKE CHARGE OF WARD ADMISSION (NEW API - Self Doctor Assignment) ---
+// 1. TAKE CHARGE OF ADMISSION (Hospital Doctor claims unassigned admission)
+// Endpoint: POST /hospital-doctor/panel/case/take-charge
 const takeChargeOfAdmission = async (req, res) => {
     try {
-        const { appointmentId } = req.body;
         const doctorId = req.user.id;
+        const hospitalId = req.user.hospitalId;
+        const { appointmentId, notes } = req.body;
 
-        // Verify patient is currently admitted, belongs to same hospital, and has no doctor assigned
-        const appointment = await Appointment.findOne({
-            _id: appointmentId,
-            hospitalId: req.user.hospitalId,
-            doctorId: null,
-            status: 'In-Progress'
-        });
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: "appointmentId is required." });
+        }
 
+        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            hospitalId,
+            ...(isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query);
         if (!appointment) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Patient already assigned to another doctor, discharged, or record not found." 
-            });
+            return res.status(404).json({ success: false, message: "Admission case not found in your hospital." });
         }
 
         const now = new Date();
+        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
+            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
+            if (lastLog && !lastLog.endTime) {
+                lastLog.endTime = now;
+                lastLog.durationDisplay = formatDocShiftDuration(lastLog.startTime || lastLog.timestamp, now);
+            }
+        } else {
+            appointment.treatmentHistory = [];
+        }
 
-        // Assign Doctor & Start Treatment Shift Tracking
         appointment.doctorId = doctorId;
+        appointment.pendingDoctorId = null;
+        if (['Pending', 'Hospital-Pending', 'Confirmed'].includes(appointment.status)) {
+            appointment.status = 'In-Progress';
+        }
+
         appointment.treatmentHistory.push({
+            fromDoctorId: null,
             toDoctorId: doctorId,
             action: 'Initial-Assignment',
-            notes: `Dr. ${req.user.name} took charge of the ward admission.`,
+            notes: notes ? String(notes).trim() : `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) took charge of the patient.`,
             timestamp: now,
-            startTime: now // Start shift tracking!
+            startTime: now,
+            endTime: null,
+            durationDisplay: "Active Shift"
         });
 
         await appointment.save();
-        res.json({ success: true, message: "Aapne patient ka charge le liya hai. Ward case activated.", data: appointment });
 
+        // Notify Patient & Hospital Admin
+        Promise.allSettled([
+            appointment.userId ? sendPushNotification(
+                appointment.userId,
+                'user',
+                "👨‍⚕️ Doctor Took Charge",
+                `Dr. ${req.user.name} is now attending your admission case (#${appointment.bookingId}).`,
+                { appointmentId: String(appointment._id), type: 'DOCTOR_TOOK_CHARGE' }
+            ) : Promise.resolve(),
+            hospitalId ? sendPushNotification(
+                hospitalId,
+                'hospital',
+                "👨‍⚕️ Doctor Claimed Case",
+                `Dr. ${req.user.name} took charge of case #${appointment.bookingId}.`,
+                { appointmentId: String(appointment._id), type: 'DOCTOR_TOOK_CHARGE' }
+            ) : Promise.resolve()
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: "You have successfully taken charge of this patient.",
+            data: appointment
+        });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
 
-// --- API: DOCTOR SELF-ASSIGN UNASSIGNED CASE (NEW API) ---
-// Endpoint: POST /hospital-doctor/panel/case/self-assign
+// @desc    Hospital Doctor Self-Assigns an Unassigned / Incoming Emergency or IPD Case
+// @route   POST /hospital-doctor/panel/case/self-assign
+// @access  Private (Hospital-Doctor)
 const doctorSelfAssignCase = async (req, res) => {
     try {
-        const { appointmentId } = req.body;
         const doctorId = req.user.id;
+        const hospitalId = req.user.hospitalId;
+        const { appointmentId, caseId, bookingId, notes } = req.body;
 
-        // Verify patient is currently unassigned (doctorId is null) and belongs to same hospital
-        const appointment = await Appointment.findOne({
-            _id: appointmentId,
-            hospitalId: req.user.hospitalId,
-            doctorId: null // Checks strictly unassigned state
-        });
+        const targetId = appointmentId || caseId || bookingId;
+        if (!targetId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId (or caseId / bookingId) is required to self-assign a case."
+            });
+        }
 
+        const isObjId = mongoose.isValidObjectId(targetId);
+        const query = {
+            hospitalId,
+            ...(isObjId ? { _id: targetId } : { bookingId: String(targetId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query);
         if (!appointment) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Self-Assign Failed: Patient already assigned to another doctor, completed, or not found." 
+            return res.status(404).json({
+                success: false,
+                message: "Case record not found in your hospital."
+            });
+        }
+
+        // Security check: If another doctor is already actively assigned, block accidental overwrite
+        if (appointment.doctorId && String(appointment.doctorId) !== String(doctorId)) {
+            return res.status(400).json({
+                success: false,
+                message: "This case is already assigned to another doctor. Please use the Shift Handover / Transfer flow."
             });
         }
 
         const now = new Date();
 
-        // Assign Doctor & Start Treatment Shift Tracking
+        // Close any previous open shift log in treatmentHistory if present
+        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
+            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
+            if (lastLog && !lastLog.endTime) {
+                lastLog.endTime = now;
+                lastLog.durationDisplay = formatDocShiftDuration(lastLog.startTime || lastLog.timestamp, now);
+            }
+        } else {
+            appointment.treatmentHistory = [];
+        }
+
+        // Assign current doctor & update status to In-Progress
         appointment.doctorId = doctorId;
+        appointment.pendingDoctorId = null;
+        if (['Pending', 'Hospital-Pending', 'Confirmed'].includes(appointment.status)) {
+            appointment.status = 'In-Progress';
+        }
+
+        // Push full audit entry into treatmentHistory so User, Doctor & Hospital Panel stay synced
         appointment.treatmentHistory.push({
+            fromDoctorId: null,
             toDoctorId: doctorId,
             action: 'Initial-Assignment',
-            notes: `Dr. ${req.user.name} self-assigned this case.`,
+            notes: notes
+                ? String(notes).trim()
+                : `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) self-assigned and took charge of the case.`,
             timestamp: now,
-            startTime: now // Start shift tracking!
+            startTime: now,
+            endTime: null,
+            durationDisplay: "Active Shift"
         });
 
         await appointment.save();
-        res.json({ success: true, message: "Aapne patient ka case successfully self-assign kar liya hai.", data: appointment });
+
+        // Non-blocking Push Notifications to Patient & Hospital Admin
+        Promise.allSettled([
+            appointment.userId ? sendPushNotification(
+                appointment.userId,
+                'user',
+                "👨‍⚕️ Attending Doctor Assigned",
+                `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) has taken charge of your hospital case (#${appointment.bookingId}).`,
+                {
+                    type: 'DOCTOR_SELF_ASSIGNED',
+                    serviceType: 'Hospital',
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId)
+                }
+            ) : Promise.resolve(),
+            hospitalId ? sendPushNotification(
+                hospitalId,
+                'hospital',
+                "👨‍⚕️ Doctor Self-Assigned Case",
+                `Dr. ${req.user.name} has self-assigned case #${appointment.bookingId} (Bed: ${appointment.bedNumber || 'IPD'}).`,
+                {
+                    type: 'DOCTOR_SELF_ASSIGNED',
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId)
+                }
+            ) : Promise.resolve()
+        ]);
+
+        // Return populated appointment so Frontend UI updates immediately
+        const populatedCase = await Appointment.findById(appointment._id)
+            .populate('userId', 'name phone gender dob bloodGroup profilePic')
+            .populate('doctorId', 'name speciality qualification phone profileImage department')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage department')
+            .lean();
+
+        return res.status(200).json({
+            success: true,
+            message: `Case #${appointment.bookingId} self-assigned successfully to Dr. ${req.user.name}.`,
+            data: populatedCase
+        });
 
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Doctor Self Assign Case Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 

@@ -39,6 +39,22 @@ const generateCaseRef = (type) => {
     return `HK-${new Date().getFullYear()}-${prefix}-${timeSlice}${randomHex}`;
 };
 
+// Helper: Calculate human-readable shift duration between two timestamps
+const formatShiftDuration = (startTime, endTime = new Date()) => {
+    if (!startTime) return "0 mins";
+    const diffMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
+    const totalMinutes = Math.floor(diffMs / 60000);
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const mins = totalMinutes % 60;
+
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours} hr${hours > 1 ? 's' : ''}`);
+    parts.push(`${mins} min${mins !== 1 ? 's' : ''}`);
+    return parts.join(' ');
+};
+
 // 🛡️ REUSABLE DTO HELPER: Resolves accurate single patient profile & bloodGroup without data leaks
 const resolvePatientDTO = (appt) => {
     const user = appt.userId;
@@ -657,101 +673,101 @@ const updateBedStatus = async (req, res) => {
     }
 };
 
-// @desc    Assign Hospital Doctor to Admission Case & Activate Doctor Shift Tracking
-// @route   POST /hospital/panel/admissions/assign-doctor
-// @access  Private (Hospital Admin)
+// 1. ASSIGN DOCTOR TO ADMISSION (Logs Initial-Assignment in treatmentHistory)
+// Endpoint: POST /hospital/panel/admissions/assign-doctor
 const assignDoctorToAdmission = async (req, res) => {
     try {
-        const { appointmentId, doctorId } = req.body;
-        const hospitalId = req.user.id; // Logged-in Hospital Admin
+        const hospitalId = req.user.id;
+        const { appointmentId, doctorId, notes } = req.body;
 
-        // 1. Validation
         if (!appointmentId || !doctorId) {
             return res.status(400).json({
                 success: false,
-                message: "appointmentId and doctorId are both required."
+                message: "appointmentId and doctorId are required."
             });
         }
 
-        // 2. Fetch Target Appointment (Supports both MongoDB _id and custom bookingId)
-        const isObjectId = mongoose.isValidObjectId(appointmentId);
-        const query = {
+        const isApptObjId = mongoose.isValidObjectId(appointmentId);
+        const apptQuery = {
             hospitalId,
-            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+            ...(isApptObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
         };
 
-        const appointment = await Appointment.findOne(query);
+        // Parallel fetch for speed
+        const [appointment, doctor] = await Promise.all([
+            Appointment.findOne(apptQuery),
+            Doctor.findOne({ _id: doctorId, hospitalId }).select('name speciality department phone profileImage').lean()
+        ]);
+
         if (!appointment) {
-            return res.status(404).json({
-                success: false,
-                message: "Admission request not found on your hospital console."
-            });
+            return res.status(404).json({ success: false, message: "Admission record not found in this hospital." });
         }
-
-        // 3. Fetch and Validate Doctor (Must be approved, active, and belong to this hospital)
-        if (!mongoose.isValidObjectId(doctorId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid doctorId format."
-            });
-        }
-
-        const doctor = await Doctor.findOne({ 
-            _id: doctorId, 
-            hospitalId,
-            isActive: true,
-            profileStatus: 'Approved'
-        });
-
         if (!doctor) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Selected doctor is either inactive, unapproved, or does not belong to your hospital fleet." 
-            });
+            return res.status(404).json({ success: false, message: "Doctor not found in this hospital." });
         }
 
         const now = new Date();
+        const previousDoctorId = appointment.doctorId;
 
-        // 4. Assign Doctor & Start Treatment Shift Tracking Timeline
-        appointment.doctorId = doctor._id;
-        appointment.status = 'Confirmed';
-
-        if (!Array.isArray(appointment.treatmentHistory)) {
+        // Close any previous open shift log in treatmentHistory
+        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
+            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
+            if (lastLog && !lastLog.endTime) {
+                lastLog.endTime = now;
+                lastLog.durationDisplay = formatShiftDuration(lastLog.startTime || lastLog.timestamp, now);
+            }
+        } else {
             appointment.treatmentHistory = [];
         }
 
+        // Push new assignment log so User, Doctor & Hospital Panel all see the exact audit trail
         appointment.treatmentHistory.push({
+            fromDoctorId: previousDoctorId || null,
             toDoctorId: doctor._id,
-            action: 'Initial-Assignment',
-            notes: `Assigned Dr. ${doctor.name} from Hospital Admin Control Desk.`,
+            action: previousDoctorId ? 'Transfer-Accepted' : 'Initial-Assignment',
+            notes: notes ? String(notes).trim() : `Assigned to Dr. ${doctor.name} (${doctor.speciality || 'Specialist'}) by Hospital Management.`,
             timestamp: now,
-            startTime: now // Starts doctor's clinical shift tracking
+            startTime: now,
+            endTime: null,
+            durationDisplay: "Active Shift"
         });
+
+        appointment.doctorId = doctor._id;
+        appointment.pendingDoctorId = null;
+
+        if (appointment.status === 'Hospital-Pending' || appointment.status === 'Pending') {
+            appointment.status = 'Confirmed';
+        }
 
         await appointment.save();
 
-        // 5. Send Push Notification to Doctor Panel
-        try {
-            await sendPushNotification(
+        // Non-blocking notifications to Doctor and Patient
+        Promise.allSettled([
+            sendPushNotification(
                 doctor._id,
                 'doctor',
-                "🚨 New Patient Case Assigned!",
-                `You have been assigned as the primary attending physician for patient ${appointment.patients[0]?.patientName || 'Patient'} (Case #${appointment.bookingId}).`,
-                { appointmentId: appointment._id.toString(), bookingId: appointment.bookingId, type: 'new_case_assigned' }
-            );
-        } catch (notifErr) {
-            console.error("Doctor Assignment Push Error:", notifErr.message);
-        }
+                "🏥 New IPD Case Assigned",
+                `Hospital Admin assigned you to patient ${appointment.patients?.[0]?.patientName || 'Patient'} (Booking #${appointment.bookingId}, Bed: ${appointment.bedNumber || 'Assigned'}).`,
+                { appointmentId: String(appointment._id), bookingId: String(appointment.bookingId), type: 'CASE_ASSIGNED' }
+            ),
+            appointment.userId ? sendPushNotification(
+                appointment.userId,
+                'user',
+                "👨‍⚕️ Attending Doctor Assigned",
+                `Dr. ${doctor.name} (${doctor.speciality || 'Specialist'}) has been assigned to your hospital care (#${appointment.bookingId}).`,
+                { appointmentId: String(appointment._id), bookingId: String(appointment.bookingId), type: 'DOCTOR_ASSIGNED' }
+            ) : Promise.resolve()
+        ]);
 
-        return res.status(200).json({ 
-            success: true, 
-            message: `Dr. ${doctor.name} successfully assigned to case #${appointment.bookingId}.`,
-            data: appointment 
+        return res.status(200).json({
+            success: true,
+            message: `Dr. ${doctor.name} assigned to case #${appointment.bookingId} successfully.`,
+            data: appointment
         });
 
-    } catch (error) { 
-        console.error("Assign Doctor Error:", error);
-        return res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Assign Doctor To Admission Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -2551,9 +2567,8 @@ const emergencyDischarge = async (req, res) => {
     }
 };
 
-// @desc    Get Detailed Hospital Case (With Populated Insurance Cards, TPA Status, Bed & Doctor Vitals)
-// @route   GET /hospital/panel/admissions/details/:id
-// @access  Private (Hospital)
+// 3. GET HOSPITAL CASE DETAILS (Full Populated Doctor Assignment & Clinical Logs)
+// Endpoint: GET /hospital/panel/admissions/details/:id
 const getHospitalCaseDetails = async (req, res) => {
     try {
         const { id } = req.params;
@@ -2565,58 +2580,69 @@ const getHospitalCaseDetails = async (req, res) => {
             ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
         };
 
-        const appointment = await Appointment.findOne(query)
-            .populate('userId', 'name phone email profilePic age gender dob bloodGroup userAddress')
-            .populate('doctorId', 'name speciality department profileImage fees qualification phone')
+        const caseData = await Appointment.findOne(query)
+            .populate('userId', 'name phone email profilePic gender dob bloodGroup height weight')
+            .populate('doctorId', 'name speciality qualification phone profileImage department licenseNumber')
+            .populate('pendingDoctorId', 'name speciality qualification phone profileImage department')
             .populate({
                 path: 'bedId',
                 select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
-                populate: { path: 'wardId', select: 'name type description' }
+                populate: { path: 'wardId', select: 'name type totalBeds availableBeds' }
             })
-            .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverInfo location')
+            .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo')
             .populate('specialServices.serviceId', 'serviceName price image description')
-            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type') // 👈 Populated Master Insurance
-            .populate('clinicalLogs.doctorId', 'name speciality profileImage')
-            .populate({
-                path: 'bedsideCareTeam.doctorId',
-                select: 'name speciality profileImage dutyStatus'
-            })
-            .populate('activeMedications.addedBy', 'name speciality')
-            .populate('pendingDoctorId', 'name speciality')
-            .populate('treatmentHistory.fromDoctorId', 'name speciality')
-            .populate('treatmentHistory.toDoctorId', 'name speciality')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage phone department')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage phone department')
+            .populate('clinicalLogs.doctorId', 'name speciality profileImage phone department')
+            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage phone department')
+            .populate('activeMedications.addedBy', 'name speciality profileImage')
             .lean();
 
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Hospital case record not found." });
+        if (!caseData) {
+            return res.status(404).json({
+                success: false,
+                message: "Hospital case record not found."
+            });
         }
 
-        const isInsuranceApplied = Boolean(appointment.insuranceDetails?.hasInsurance);
+        // Fetch any prescriptions linked to this case in parallel
+        const prescriptions = await Prescription.find({ appointmentId: caseData._id })
+            .populate('doctorId', 'name speciality qualification signatureImage')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Enrich treatmentHistory with live elapsed time for currently active shift
+        const now = new Date();
+        const enrichedTreatmentHistory = (caseData.treatmentHistory || []).map(item => {
+            const startRef = item.startTime || item.timestamp;
+            const isCurrentlyActive = !item.endTime && caseData.status !== 'Completed';
+            return {
+                ...item,
+                fromDoctorName: item.fromDoctorId?.name || null,
+                toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
+                toDoctorSpeciality: item.toDoctorId?.speciality || "",
+                isCurrentlyActive,
+                durationDisplay: item.endTime
+                    ? (item.durationDisplay || formatShiftDuration(startRef, item.endTime))
+                    : (isCurrentlyActive ? `${formatShiftDuration(startRef, now)} (Active)` : (item.durationDisplay || "Completed"))
+            };
+        });
+
+        // Enrich clinicalLogs with flat doctorName for easy UI rendering
+        const enrichedClinicalLogs = (caseData.clinicalLogs || []).map(log => ({
+            ...log,
+            doctorName: log.doctorId?.name || "Attending Doctor",
+            doctorSpeciality: log.doctorId?.speciality || ""
+        }));
 
         return res.status(200).json({
             success: true,
             data: {
-                ...appointment,
-                isOpd: appointment.bookingType === 'OPD',
-                isIpd: appointment.bookingType === 'Admission',
-                hasInsurance: isInsuranceApplied,
-                insuranceClaimStatus: isInsuranceApplied 
-                    ? (appointment.insuranceDetails?.approvalStatus || 'Pending') 
-                    : 'Self-Pay (No Insurance)',
-                // Dedicated Clean Insurance Object for Hospital TPA Desk UI
-                insuranceSummary: isInsuranceApplied ? {
-                    hasInsurance: true,
-                    insuranceNumber: appointment.insuranceDetails?.insuranceNumber || "N/A",
-                    companyName: appointment.insuranceDetails?.companyName || appointment.insuranceDetails?.masterInsuranceId?.insuranceName || "N/A",
-                    provider: appointment.insuranceDetails?.masterInsuranceId?.provider || "N/A",
-                    insuranceType: appointment.insuranceDetails?.insuranceType || appointment.insuranceDetails?.masterInsuranceId?.type || "Cashless",
-                    approvalStatus: appointment.insuranceDetails?.approvalStatus || 'Pending',
-                    approvalLetterPdf: appointment.insuranceDetails?.approvalLetterPdf || null,
-                    cardFrontImage: appointment.insuranceDetails?.insuranceDocumentFront || null,
-                    cardBackImage: appointment.insuranceDetails?.insuranceDocumentBack || null,
-                    cardDocument: appointment.insuranceDetails?.insuranceDocument || null,
-                    rejectionReason: appointment.insuranceDetails?.rejectionReason || null
-                } : null
+                ...caseData,
+                treatmentHistory: enrichedTreatmentHistory,
+                clinicalLogs: enrichedClinicalLogs,
+                prescriptions: prescriptions || []
             }
         });
 
@@ -3161,83 +3187,106 @@ const reassignAmbulanceOnBreakdown = async (req, res) => {
     }
 };
 
-// --- API: REASSIGNS PRIMARY DOCTOR FROM ADMIN PANEL (Auto-syncs shift duration tracking logs) ---
-// Endpoint: POST /hospital/panel/admissions/reassign-doctor
+// 2. REASSIGN DOCTOR FROM HOSPITAL PANEL (Closes old shift & logs new doctor)
+// Endpoint: POST /hospital/panel/reassign-doctor
 const reassignDoctorFromPanel = async (req, res) => {
     try {
-        const hospitalId = req.user.id; // Logged-in Hospital Admin
-        const { appointmentId, newDoctorId, reason } = req.body;
+        const hospitalId = req.user.id;
+        const { appointmentId, newDoctorId, doctorId, reason } = req.body;
+        const targetNewDocId = newDoctorId || doctorId;
 
-        // FIX: Native load Doctor model to resolve ReferenceError crashes
-        const Doctor = require('../../models/Doctor');
-
-        // 1. Verify New Doctor exists, belongs to same hospital, and is active
-        const newDoctor = await Doctor.findOne({
-            _id: newDoctorId,
-            hospitalId,
-            profileStatus: 'Approved',
-            isActive: true
-        });
-
-        if (!newDoctor) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Selected doctor is not active or unauthorized in your hospital." 
+        if (!appointmentId || !targetNewDocId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId and newDoctorId are required."
             });
         }
 
-        // 2. Find active Admission/Emergency record
-        const appointment = await Appointment.findOne({
-            _id: appointmentId,
+        const isApptObjId = mongoose.isValidObjectId(appointmentId);
+        const apptQuery = {
             hospitalId,
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending'] } // Active journey states
-        });
+            ...(isApptObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const [appointment, newDoctor] = await Promise.all([
+            Appointment.findOne(apptQuery).populate('doctorId', 'name speciality'),
+            Doctor.findOne({ _id: targetNewDocId, hospitalId }).select('name speciality department phone profileImage').lean()
+        ]);
 
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Active admission record not found." });
+            return res.status(404).json({ success: false, message: "Admission case not found." });
         }
-
-        const oldDoctorId = appointment.doctorId;
-        if (oldDoctorId && String(oldDoctorId) === String(newDoctorId)) {
-            return res.status(400).json({ success: false, message: "Kripya reassign karne ke liye koi doosra (new) doctor select karein." });
+        if (!newDoctor) {
+            return res.status(404).json({ success: false, message: "Target doctor not found in this hospital." });
         }
 
         const now = new Date();
+        const oldDoctorId = appointment.doctorId?._id || appointment.doctorId || null;
+        const oldDoctorName = appointment.doctorId?.name || "Previous Doctor";
 
-        // 3. AUTO-CLOSE OLD DOCTOR SHIFT TIMELINE (If old doctor was assigned previously)
-        if (oldDoctorId) {
-            const activeShift = appointment.treatmentHistory.find(h => 
-                h.toDoctorId && h.toDoctorId.toString() === oldDoctorId.toString() && !h.endTime
-            );
-            if (activeShift) {
-                activeShift.endTime = now;
-                activeShift.durationDisplay = calcDuration(activeShift.startTime, now); // Computes exact stay duration
+        // Close previous doctor's active shift duration in treatmentHistory
+        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
+            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
+            if (lastLog && !lastLog.endTime) {
+                lastLog.endTime = now;
+                lastLog.durationDisplay = formatShiftDuration(lastLog.startTime || lastLog.timestamp, now);
             }
+        } else {
+            appointment.treatmentHistory = [];
         }
 
-        // 4. Update primary doctor & Push new assignment shift to timeline history
-        appointment.doctorId = newDoctorId;
-        
+        // Push complete handover log
         appointment.treatmentHistory.push({
-            fromDoctorId: oldDoctorId || null,
-            toDoctorId: newDoctorId,
-            action: oldDoctorId ? 'Transfer-Accepted' : 'Initial-Assignment',
-            notes: `Doctor reassigned from Hospital Admin Panel. Reason: ${reason || 'Shift adjustment'}`,
+            fromDoctorId: oldDoctorId,
+            toDoctorId: newDoctor._id,
+            action: 'Transfer-Accepted',
+            notes: reason
+                ? `Reassigned by Hospital Admin from Dr. ${oldDoctorName} to Dr. ${newDoctor.name}. Reason: ${reason}`
+                : `Case reassigned by Hospital Admin from Dr. ${oldDoctorName} to Dr. ${newDoctor.name} (${newDoctor.speciality}).`,
             timestamp: now,
-            startTime: now // Start new doctor's shift tracking instantly!
+            startTime: now,
+            endTime: null,
+            durationDisplay: "Active Shift"
         });
 
+        appointment.doctorId = newDoctor._id;
+        appointment.pendingDoctorId = null;
         await appointment.save();
 
-        res.json({
+        // Notify New Doctor, Old Doctor & Patient in background
+        Promise.allSettled([
+            sendPushNotification(
+                newDoctor._id,
+                'doctor',
+                "🔄 Case Reassigned to You",
+                `Hospital Admin reassigned patient ${appointment.patients?.[0]?.patientName || 'Patient'} (#${appointment.bookingId}) to your care.`,
+                { appointmentId: String(appointment._id), type: 'CASE_REASSIGNED' }
+            ),
+            oldDoctorId ? sendPushNotification(
+                oldDoctorId,
+                'doctor',
+                "ℹ️ Case Handed Over",
+                `Case #${appointment.bookingId} has been reassigned to Dr. ${newDoctor.name} by Hospital Admin.`,
+                { appointmentId: String(appointment._id), type: 'CASE_HANDOVER_COMPLETE' }
+            ) : Promise.resolve(),
+            appointment.userId ? sendPushNotification(
+                appointment.userId,
+                'user',
+                "👨‍⚕️ Attending Doctor Updated",
+                `Dr. ${newDoctor.name} (${newDoctor.speciality}) is now your attending doctor for booking #${appointment.bookingId}.`,
+                { appointmentId: String(appointment._id), type: 'DOCTOR_UPDATED' }
+            ) : Promise.resolve()
+        ]);
+
+        return res.status(200).json({
             success: true,
-            message: `Doctor successfully reassigned to Dr. ${newDoctor.name}`,
+            message: `Case successfully reassigned to Dr. ${newDoctor.name}.`,
             data: appointment
         });
 
     } catch (error) {
-        console.error("Reassign Doctor Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Reassign Doctor From Panel Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -3496,15 +3545,13 @@ const getTrackCasesList = async (req, res) => {
     }
 };
 
-// --- API 2: UNIFIED "SUPER DETAILS" ADMISSION FILE (NEW CONSOLIDATED API) ---
+// 4. GET TRACK CASE SUPER DETAILS (Consolidated Ambulance + Doctor + Ward Audit)
 // Endpoint: GET /hospital/panel/cases/track-details/:id
 const getTrackCaseSuperDetails = async (req, res) => {
     try {
-        const hospitalId = req.user.id;
         const { id } = req.params;
-        const { sortOrder = 'desc', order } = req.query;
+        const hospitalId = req.user.id;
 
-        // Support both MongoDB _id and custom bookingId (e.g. HKH-XXXX)
         const isObjectId = mongoose.isValidObjectId(id);
         const query = {
             hospitalId,
@@ -3512,237 +3559,80 @@ const getTrackCaseSuperDetails = async (req, res) => {
         };
 
         const appointment = await Appointment.findOne(query)
-            .populate('userId', 'name phone email profilePic age gender bloodGroup familyMember')
-            .populate('doctorId', 'name speciality qualification profileImage')
+            .populate('userId', 'name phone email profilePic gender dob bloodGroup')
+            .populate('doctorId', 'name speciality qualification phone profileImage department')
+            .populate('pendingDoctorId', 'name speciality phone profileImage department')
             .populate({
                 path: 'bedId',
-                select: 'bedNumber pricePerDay status',
+                select: 'bedNumber status pricePerDay isVentilatorAvailable wardId',
                 populate: { path: 'wardId', select: 'name type' }
             })
-            .populate('treatmentHistory.fromDoctorId', 'name speciality qualification profileImage')
-            .populate('treatmentHistory.toDoctorId', 'name speciality qualification profileImage')
-            .populate('bedsideCareTeam.doctorId', 'name speciality qualification profileImage dutyStatus')
-            .populate('clinicalLogs.doctorId', 'name speciality qualification profileImage')
-            .populate('activeMedications.addedBy', 'name speciality qualification profileImage')
-            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type'); // 👈 Populated Master Insurance
+            .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo')
+            .populate('specialServices.serviceId', 'serviceName price image description')
+            .populate('insuranceDetails.masterInsuranceId', 'provider insuranceName type')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage phone department')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage phone department')
+            .populate('clinicalLogs.doctorId', 'name speciality profileImage phone department')
+            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage phone department')
+            .populate('activeMedications.addedBy', 'name speciality profileImage')
+            .lean();
 
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission Record Not Found on your hospital console." });
+            return res.status(404).json({
+                success: false,
+                message: "Tracked case not found."
+            });
         }
 
-        // Fetch prescription using verified appointment ObjectId
-        const prescription = await Prescription.findOne({ appointmentId: appointment._id }).sort({ createdAt: -1 });
+        // Parallel fetch for linked Ambulance Trip (if patient came via Ambulance) and Prescriptions
+        const [linkedAmbulanceTrip, prescriptions] = await Promise.all([
+            appointment.transactionId
+                ? AmbulanceBooking.findOne({ bookingId: appointment.transactionId })
+                    .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo')
+                    .populate('pickupHospitalId', 'name address phone')
+                    .lean()
+                : Promise.resolve(null),
+            Prescription.find({ appointmentId: appointment._id })
+                .populate('doctorId', 'name speciality qualification signatureImage')
+                .sort({ createdAt: -1 })
+                .lean()
+        ]);
 
-        const resolvedPatient = resolvePatientDTO(appointment);
-
-        const treatmentTimeline = [];
-
-        const formatDoc = (doc, defaultRole = "Physician") => ({
-            doctorId: doc?._id || null,
-            name: doc?.name || "",
-            speciality: doc?.speciality || "",
-            qualification: doc?.qualification || "",
-            profileImage: doc?.profileImage || null,
-            role: defaultRole
+        const now = new Date();
+        const enrichedTreatmentHistory = (appointment.treatmentHistory || []).map(item => {
+            const startRef = item.startTime || item.timestamp;
+            const isCurrentlyActive = !item.endTime && appointment.status !== 'Completed';
+            return {
+                ...item,
+                fromDoctorName: item.fromDoctorId?.name || null,
+                toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
+                toDoctorSpeciality: item.toDoctorId?.speciality || "",
+                isCurrentlyActive,
+                durationDisplay: item.endTime
+                    ? (item.durationDisplay || formatShiftDuration(startRef, item.endTime))
+                    : (isCurrentlyActive ? `${formatShiftDuration(startRef, now)} (Active)` : (item.durationDisplay || "Completed"))
+            };
         });
 
-        // A. Doctor Shifts
-        if (appointment.treatmentHistory && appointment.treatmentHistory.length > 0) {
-            appointment.treatmentHistory.forEach(h => {
-                treatmentTimeline.push({
-                    eventType: "SHIFT_ACTION",
-                    category: "Doctor Assignment / Transfer",
-                    timestamp: h.startTime || h.timestamp || appointment.createdAt,
-                    doctor: formatDoc(h.toDoctorId || appointment.doctorId, "Primary Physician"),
-                    action: h.action || "",
-                    notes: h.notes || "",
-                    duration: h.durationDisplay || ""
-                });
-            });
-        }
-
-        // B. Primary Doctor Rounds (Actual Vitals)
-        if (appointment.clinicalLogs && appointment.clinicalLogs.length > 0) {
-            appointment.clinicalLogs.forEach(log => {
-                treatmentTimeline.push({
-                    eventType: "CLINICAL_ROUND",
-                    category: "Attending Physician Round",
-                    timestamp: log.loggedAt || new Date(),
-                    doctor: formatDoc(log.doctorId, "Attending Physician"),
-                    observation: log.observation || "",
-                    patientCondition: log.patientCondition || "",
-                    priorityRating: log.priorityRating || "",
-                    vitals: {
-                        bp: log.vitals?.bp || "",
-                        pulse: log.vitals?.pulse || "",
-                        temp: log.vitals?.temp || "",
-                        spo2: log.vitals?.spo2 || ""
-                    }
-                });
-            });
-        }
-
-        // C. Bedside Specialists Feedbacks & Meds
-        if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
-            appointment.bedsideCareTeam.forEach(member => {
-                const docMeta = formatDoc(member.doctorId, "Bedside Specialist");
-                
-                (member.specialistFeedback || []).forEach(obs => {
-                    treatmentTimeline.push({
-                        eventType: "BEDSIDE_FEEDBACK",
-                        category: "Specialist Observation",
-                        timestamp: obs.submittedAt || member.requestedAt,
-                        doctor: docMeta,
-                        observation: obs.observation || "",
-                        patientCondition: obs.patientCondition || "",
-                        priorityRating: obs.priorityRating || "",
-                        vitals: {
-                            bp: obs.vitals?.bp || "",
-                            pulse: obs.vitals?.pulse || "",
-                            temp: obs.vitals?.temp || "",
-                            spo2: obs.vitals?.spo2 || ""
-                        }
-                    });
-                });
-
-                (member.recommendedMedicines || []).forEach(med => {
-                    treatmentTimeline.push({
-                        eventType: "SPECIALIST_RECOMMENDATION",
-                        category: "Specialist Medication Advice",
-                        timestamp: med.addedAt || member.requestedAt,
-                        doctor: docMeta,
-                        medication: {
-                            name: med.name || "",
-                            dosage: med.dosage || "",
-                            frequency: med.frequency || "",
-                            duration: med.duration || "",
-                            instructions: med.instructions || "",
-                            target: med.type === 'Active-Stay' ? "In-Hospital Stay" : "Post-Discharge Home"
-                        }
-                    });
-                });
-            });
-        }
-
-        // D. In-Patient Active Medication Orders
-        if (appointment.activeMedications && appointment.activeMedications.length > 0) {
-            appointment.activeMedications.forEach(med => {
-                treatmentTimeline.push({
-                    eventType: med.status === 'Active' ? "MEDICATION_ORDERED" : "MEDICATION_STOPPED",
-                    category: "In-Patient Drug Order",
-                    timestamp: med.startDate || new Date(),
-                    doctor: formatDoc(med.addedBy, "Ordering Doctor"),
-                    medication: {
-                        name: med.medicineName || "",
-                        dosage: med.dosage || "",
-                        frequency: med.frequency || "",
-                        instructions: med.instructions || "",
-                        status: med.status || ""
-                    }
-                });
-            });
-        }
-
-        // E. Prescription Generation Event
-        if (prescription) {
-            treatmentTimeline.push({
-                eventType: "PRESCRIPTION_ISSUED",
-                category: "Final Prescription Compiled",
-                timestamp: prescription.createdAt,
-                doctor: formatDoc(appointment.doctorId, "Prescribing Doctor"),
-                pdfUrl: prescription.pdfUrl || null,
-                diagnosis: prescription.diagnosis || [],
-                totalMedicines: prescription.medicines?.length || 0,
-                vitals: {
-                    bp: prescription.vitals?.bp || "",
-                    pulse: prescription.vitals?.pulse || "",
-                    temp: prescription.vitals?.temp || "",
-                    spo2: prescription.vitals?.spo2 || ""
-                }
-            });
-        }
-
-        const effectiveOrder = (sortOrder || order || 'desc').toLowerCase();
-        const isAscending = effectiveOrder === 'asc';
-
-        treatmentTimeline.sort((a, b) => {
-            const timeA = new Date(a.timestamp || 0).getTime();
-            const timeB = new Date(b.timestamp || 0).getTime();
-            return isAscending ? timeA - timeB : timeB - timeA;
-        });
-
-        const actualVitals = {
-            bp: appointment.clinicalSummary?.vitals?.bp || "",
-            pulse: appointment.clinicalSummary?.vitals?.pulse || "",
-            temp: appointment.clinicalSummary?.vitals?.temp || "",
-            spo2: appointment.clinicalSummary?.vitals?.spo2 || ""
-        };
-
-        const isInsuranceApplied = Boolean(appointment.insuranceDetails?.hasInsurance);
+        const enrichedClinicalLogs = (appointment.clinicalLogs || []).map(log => ({
+            ...log,
+            doctorName: log.doctorId?.name || "Attending Doctor",
+            doctorSpeciality: log.doctorId?.speciality || ""
+        }));
 
         return res.status(200).json({
             success: true,
-            timelineSortApplied: isAscending ? 'asc' : 'desc',
-            totalTimelineEvents: treatmentTimeline.length,
             data: {
-                caseDetails: {
-                    appointmentId: appointment._id,
-                    bookingId: appointment.bookingId,
-                    status: appointment.status,
-                    triageLevel: appointment.clinicalSummary?.triagePriority || appointment.triageLevel || "",
-                    startDate: appointment.startDate,
-                    endDate: appointment.endDate,
-                    stayDuration: appointment.stayDuration || 1,
-                    totalAmount: appointment.totalAmount || 0,
-                    paymentStatus: appointment.paymentStatus || "",
-                    paymentMethod: appointment.paymentMethod || "",
-                    patientProfile: resolvedPatient, 
-                    bedDetails: appointment.bedId,
-                    dischargeVitals: actualVitals,
-
-                    // 🚨 PRESERVED & ADDED INSURANCE METRICS
-                    hasInsurance: isInsuranceApplied,
-                    insuranceClaimStatus: isInsuranceApplied 
-                        ? (appointment.insuranceDetails?.approvalStatus || 'Pending') 
-                        : 'Self-Pay (No Insurance)',
-                    insuranceDetails: appointment.insuranceDetails || null,
-                    insuranceSummary: isInsuranceApplied ? {
-                        hasInsurance: true,
-                        insuranceNumber: appointment.insuranceDetails?.insuranceNumber || "N/A",
-                        companyName: appointment.insuranceDetails?.companyName || appointment.insuranceDetails?.masterInsuranceId?.insuranceName || "N/A",
-                        provider: appointment.insuranceDetails?.masterInsuranceId?.provider || "N/A",
-                        insuranceType: appointment.insuranceDetails?.insuranceType || appointment.insuranceDetails?.masterInsuranceId?.type || "Cashless",
-                        approvalStatus: appointment.insuranceDetails?.approvalStatus || 'Pending',
-                        approvalLetterPdf: appointment.insuranceDetails?.approvalLetterPdf || null,
-                        cardFrontImage: appointment.insuranceDetails?.insuranceDocumentFront || null,
-                        cardBackImage: appointment.insuranceDetails?.insuranceDocumentBack || null,
-                        cardDocument: appointment.insuranceDetails?.insuranceDocument || null,
-                        rejectionReason: appointment.insuranceDetails?.rejectionReason || null
-                    } : null
-                },
-                treatmentTimeline, 
-                prescriptionDetails: prescription ? {
-                    prescriptionId: prescription._id,
-                    pdfUrl: prescription.pdfUrl || null,
-                    dietPlanPdf: prescription.dietPlanPdf || null,
-                    medicines: prescription.medicines || [],
-                    vitals: {
-                        bp: prescription.vitals?.bp || "",
-                        pulse: prescription.vitals?.pulse || "",
-                        temp: prescription.vitals?.temp || "",
-                        spo2: prescription.vitals?.spo2 || ""
-                    },
-                    diagnosis: prescription.diagnosis || [],
-                    chiefComplaints: prescription.chiefComplaints || "",
-                    advisedInvestigations: prescription.advisedInvestigations || "",
-                    adviceGiven: prescription.adviceGiven || "",
-                    specialInstructions: prescription.specialInstructions || ""
-                } : null
+                ...appointment,
+                treatmentHistory: enrichedTreatmentHistory,
+                clinicalLogs: enrichedClinicalLogs,
+                prescriptions: prescriptions || [],
+                ambulanceJourney: linkedAmbulanceTrip || null
             }
         });
 
     } catch (error) {
-        console.error("Super Details Fetch Error:", error);
+        console.error("Get Track Case Super Details Error:", error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
