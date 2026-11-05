@@ -99,25 +99,33 @@ const updateProgressStep = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
  
-// Add Evidence / Attach Document (Image 7)
+// Add Evidence / Attach Document (Null-Safe)
 const uploadEvidence = async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: "No file uploaded" });
  
         const pcase = await PoliceCase.findById(req.params.id);
+        if (!pcase) {
+            return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
         const newEvidence = {
             fileName: req.file.originalname,
             fileUrl: `/uploads/police_staff/${req.file.filename}`,
-            fileType: req.file.mimetype.split('/')[1],
+            fileType: req.file.mimetype.startsWith('image/') ? 'Image' : (req.file.mimetype.startsWith('video/') ? 'Video' : 'Document'),
             uploadedAt: Date.now()
         };
  
+        if (!Array.isArray(pcase.evidence)) pcase.evidence = [];
         pcase.evidence.push(newEvidence);
+        if (!pcase.progress) pcase.progress = {};
         pcase.progress.isEvidenceCollected = true;
         await pcase.save();
  
         res.json({ success: true, message: "Document Attached Successfully", data: pcase });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
  
 const closeCase = async (req, res) => {
@@ -131,15 +139,17 @@ const closeCase = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
  
-// --- OFFICER PROFILE (Screen 26) ---
+// OFFICER PROFILE (Screen 26 - Null-Safe Station Lookup)
 const getDetailedProfile = async (req, res) => {
     try {
         const staffId = req.user.id;
         const staff = await PoliceStaff.findById(staffId).populate('stationId');
+        if (!staff) {
+            return res.status(404).json({ success: false, message: "Officer profile not found" });
+        }
  
         const activeCases = await PoliceCase.countDocuments({ assignedStaff: staffId, status: 'Under Investigation' });
         
-        // Fetch last activities for "Recent Activity" list
         const activity = await PoliceCase.find({ assignedStaff: staffId })
             .sort({ updatedAt: -1 })
             .limit(5);
@@ -150,16 +160,18 @@ const getDetailedProfile = async (req, res) => {
                 fullName: staff.fullName,
                 rank: staff.rank,
                 badgeId: staff.badgeId,
-                stationName: staff.stationId.stationName,
+                stationName: staff.stationId?.stationName || "Assigned Station",
                 joiningDate: staff.createdAt,
                 stats: {
                     activeCases,
-                    attendance: "96%", // Mocked as per Figma
+                    attendance: "96%",
                 },
                 recentActivity: activity
             }
         });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
  
 // --- PROFILE SETTINGS (Screens 8, 9) ---

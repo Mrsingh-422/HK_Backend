@@ -318,13 +318,15 @@ const updateJurisdiction = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-// ADDED: Jurisdiction Details (Screen 41)
+// ADDED: Jurisdiction Details (Screen 41 - Null-Safe)
 const getJurisdictionData = async (req, res) => {
     try {
         const hq = await FireHQ.findById(req.user.id);
+        if (!hq) {
+            return res.status(404).json({ success: false, message: "Fire HQ not found" });
+        }
         
-        // Agar DB mein sectors nahi hain toh default bhejenge (Figma match)
-        const sectors = hq.primarySectors.length > 0 ? hq.primarySectors : [
+        const sectors = (Array.isArray(hq.primarySectors) && hq.primarySectors.length > 0) ? hq.primarySectors : [
             { sectorName: "Sector A: Central Commercial", description: "MI Road, Sindhi Camp & surrounding markets. High footfall area.", iconType: "Commercial" },
             { sectorName: "Sector B: Residential", description: "Malviya Nagar, Raja Park. Predominantly apartments and housing.", iconType: "Residential" },
             { sectorName: "Sector C: Industrial Hub", description: "Sitapura & VKI Areas. High risk of chemical and electrical fires.", iconType: "Industrial" }
@@ -333,11 +335,13 @@ const getJurisdictionData = async (req, res) => {
         res.json({
             success: true,
             data: {
-                coverage: hq.jurisdictionStats,
+                coverage: hq.jurisdictionStats || {},
                 sectors: sectors
             }
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 // NEW: Request Boundary Update (Figma Screen 41 Button)

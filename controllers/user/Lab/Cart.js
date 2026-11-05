@@ -659,7 +659,7 @@ const compareCartOnMap = async (req, res) => {
 //////////////////// PHARMACY CART LOGIC ///////////////////////////////
 /////////////////////////////////////////////////////////////////////////
 
-// 1. ADD TO PHARMACY CART
+// 1. ADD TO PHARMACY CART (Null-Safe Master Medicine Check)
 // endpoint: /user/cart/pharmacy/add
 const addToPharmacyCart = async (req, res) => {
     try {
@@ -675,20 +675,21 @@ const addToPharmacyCart = async (req, res) => {
         
         const userId = req.user.id;
 
-        // 🚨 UPDATED: Find the earliest expiring in-stock batch of this medicine [cite: 1.1.2]
         const inventory = await MedicineInventory.findOne({ 
             pharmacyId, 
             medicineId, 
             is_available: true,
             stock_quantity: { $gt: 0 }
-        }).sort({ expiry_date: 1 }); // FEFO Sort [cite: 1.1.2]
+        }).sort({ expiry_date: 1 });
 
         if (!inventory) return res.status(404).json({ success: false, message: "Out of stock in this pharmacy" });
+
+        const medData = await Medicine.findById(medicineId);
+        if (!medData) return res.status(404).json({ success: false, message: "Medicine details not found in master catalog" });
 
         let cart = await Cart.findOne({ userId });
         if (!cart) cart = new Cart({ userId, pharmacyCart: { items: [] } });
 
-        // "Replace Cart" logic
         if (cart.pharmacyCart.items.length > 0 && cart.pharmacyCart.pharmacyId?.toString() !== pharmacyId && !forceReplace) {
             return res.status(400).json({ 
                 success: false, 
@@ -703,7 +704,6 @@ const addToPharmacyCart = async (req, res) => {
         
         cart.pharmacyCart.pharmacyId = pharmacyId;
 
-        // Checks both medicineId and isComboApplied
         const itemIndex = cart.pharmacyCart.items.findIndex(i => 
             i.medicineId.toString() === medicineId && 
             i.isComboApplied === (isComboApplied === true)
@@ -713,11 +713,10 @@ const addToPharmacyCart = async (req, res) => {
             cart.pharmacyCart.items[itemIndex].quantity += Number(quantity);
             cart.pharmacyCart.items[itemIndex].duration = duration;
         } else {
-            const medData = await Medicine.findById(medicineId);
             cart.pharmacyCart.items.push({
                 medicineId,
-                name: medData.name,
-                price: inventory.vendor_price, // Saved lowest available price
+                name: medData.name || "Medicine",
+                price: inventory.vendor_price,
                 quantity: Number(quantity),
                 duration: duration,
                 isComboApplied: isComboApplied === true,

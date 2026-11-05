@@ -23,19 +23,27 @@ const loginStaff = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. UPDATE STAFF PROFILE
+// 2. UPDATE STAFF PROFILE (Null-Safe & Clean Path)
 const updateStaffProfile = async (req, res) => {
     try {
         const staffId = req.user.id;
         const { fullName, rank, mobileNumber, address } = req.body;
         
-        let updateData = { fullName, rank, mobileNumber, address };
+        const currentStaff = await FireStaff.findById(staffId);
+        if (!currentStaff) {
+            return res.status(404).json({ success: false, message: "Staff profile not found" });
+        }
 
-        // Profile Image replacement logic
+        let updateData = {};
+        if (fullName !== undefined) updateData.fullName = fullName;
+        if (rank !== undefined) updateData.rank = rank;
+        if (mobileNumber !== undefined) updateData.mobileNumber = mobileNumber;
+        if (address !== undefined) updateData.address = address;
+
+        // Profile Image replacement logic (Null-safe)
         if (req.file) {
-            const currentStaff = await FireStaff.findById(staffId);
             if (currentStaff.profileImage) deleteFile(currentStaff.profileImage);
-            updateData.profileImage = req.file.path;
+            updateData.profileImage = req.file.path.replace(/\\/g, "/");
         }
 
         const updatedStaff = await FireStaff.findByIdAndUpdate(
@@ -45,7 +53,35 @@ const updateStaffProfile = async (req, res) => {
         );
 
         res.json({ success: true, message: "Profile Updated Successfully!", data: updatedStaff });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
+// 6. Authenticated Change Password (Null-Safe)
+const changePassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: "Old password and new password are required" });
+        }
+
+        const staff = await FireStaff.findById(req.user.id).select('+password');
+        if (!staff) {
+            return res.status(404).json({ success: false, message: "Staff account not found" });
+        }
+
+        const isMatch = await bcrypt.compare(String(oldPassword), staff.password);
+        if (!isMatch) return res.status(400).json({ success: false, message: "Old password does not match" });
+
+        const salt = await bcrypt.genSalt(10);
+        staff.password = await bcrypt.hash(String(newPassword), salt);
+        await staff.save();
+
+        res.json({ success: true, message: "Password updated successfully" });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 
@@ -105,23 +141,23 @@ const resetPassword = async (req, res) => {
 };
 
 // Missing: Authenticated Change Password (Figma Screen Settings)
-const changePassword = async (req, res) => {
-    try {
-        const { oldPassword, newPassword } = req.body;
-        const staff = await FireStaff.findById(req.user.id).select('+password');
+// const changePassword = async (req, res) => {
+//     try {
+//         const { oldPassword, newPassword } = req.body;
+//         const staff = await FireStaff.findById(req.user.id).select('+password');
 
-        // Check if old password is correct
-        const isMatch = await bcrypt.compare(oldPassword, staff.password);
-        if (!isMatch) return res.status(400).json({ success: false, message: "Old password does not match" });
+//         // Check if old password is correct
+//         const isMatch = await bcrypt.compare(oldPassword, staff.password);
+//         if (!isMatch) return res.status(400).json({ success: false, message: "Old password does not match" });
 
-        // Hash and Save new password
-        const salt = await bcrypt.genSalt(10);
-        staff.password = await bcrypt.hash(newPassword, salt);
-        await staff.save();
+//         // Hash and Save new password
+//         const salt = await bcrypt.genSalt(10);
+//         staff.password = await bcrypt.hash(newPassword, salt);
+//         await staff.save();
 
-        res.json({ success: true, message: "Password updated successfully" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+//         res.json({ success: true, message: "Password updated successfully" });
+//     } catch (error) { res.status(500).json({ message: error.message }); }
+// };
 
 
 module.exports = { loginStaff, updateStaffProfile, forgotPassword, verifyOTP, resetPassword, changePassword };

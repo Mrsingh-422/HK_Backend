@@ -23,21 +23,30 @@ const loginPoliceStation = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 2. UPDATE STATION PROFILE
+// 2. UPDATE STATION PROFILE (Null-Safe)
 const updatePoliceStationProfile = async (req, res) => {
     try {
         const id = req.user.id;
-        const updates = req.body;
+        const updates = { ...req.body };
         const current = await PoliceStation.findById(id);
 
-        if (req.files && req.files.profileImage) {
-            if (current.profileImage) deleteFile(current.profileImage);
-            updates.profileImage = req.files.profileImage[0].path;
+        if (!current) {
+            return res.status(404).json({ success: false, message: "Police Station not found" });
         }
 
-        const updated = await PoliceStation.findByIdAndUpdate(id, updates, { new: true });
+        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+            if (current.profileImage) deleteFile(current.profileImage);
+            updates.profileImage = req.files.profileImage[0].path.replace(/\\/g, "/");
+        } else if (req.file) {
+            if (current.profileImage) deleteFile(current.profileImage);
+            updates.profileImage = req.file.path.replace(/\\/g, "/");
+        }
+
+        const updated = await PoliceStation.findByIdAndUpdate(id, { $set: updates }, { new: true });
         res.json({ success: true, data: updated });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
 module.exports = { loginPoliceStation, updatePoliceStationProfile };

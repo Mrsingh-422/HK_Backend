@@ -60,21 +60,21 @@ const getFindConsultant = async (req, res) => {
     }
 };
 
-// ==========================================
-// 3. DOCTORS PRIORITY SECTION
-// ==========================================
+// 3. DOCTORS PRIORITY SECTION (Crash-Proof JSON Parser)
 const updateDoctorsPriority = async (req, res) => {
     try {
         const { title, description, points } = req.body;
         
         let updateData = { title, description };
 
-        // Parse JSON string array from FormData
-        if (points) {
-            updateData.points = typeof points === 'string' ? JSON.parse(points) : points;
+        if (points !== undefined) {
+            if (typeof points === 'string') {
+                try { updateData.points = JSON.parse(points); } catch (e) { updateData.points = points.split(',').map(s => s.trim()); }
+            } else {
+                updateData.points = points;
+            }
         }
 
-        // Handle Images (Path same as homepage since you are using contentUploads)
         if (req.files && req.files.length > 0) {
             updateData.images = req.files.map(file => `/uploads/homepage/${file.filename}`);
         }
@@ -91,27 +91,19 @@ const updateDoctorsPriority = async (req, res) => {
     }
 };
 
-const getDoctorsPriority = async (req, res) => {
-    try {
-        const content = await FrontendContent.findOne({ section: 'doctorsPriority' });
-        res.status(200).json({ success: true, data: content });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
-    }
-};
-
-// ==========================================
-// 4. HOW TO SECURE SECTION
-// ==========================================
+// 4. HOW TO SECURE SECTION (Crash-Proof JSON Parser)
 const updateHowToSecure = async (req, res) => {
     try {
         const { header, title, items } = req.body;
         
         let updateData = { header, title };
 
-        // Parse JSON string array of objects from FormData
-        if (items) {
-            updateData.items = typeof items === 'string' ? JSON.parse(items) : items;
+        if (items !== undefined) {
+            if (typeof items === 'string') {
+                try { updateData.items = JSON.parse(items); } catch (e) { updateData.items = []; }
+            } else {
+                updateData.items = items;
+            }
         }
 
         const content = await FrontendContent.findOneAndUpdate(
@@ -125,6 +117,16 @@ const updateHowToSecure = async (req, res) => {
         res.status(500).json({ message: error.message }); 
     }
 };
+
+const getDoctorsPriority = async (req, res) => {
+    try {
+        const content = await FrontendContent.findOne({ section: 'doctorsPriority' });
+        res.status(200).json({ success: true, data: content });
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
+};
+
 
 const getHowToSecure = async (req, res) => {
     try {

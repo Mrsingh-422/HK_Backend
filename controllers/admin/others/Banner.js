@@ -25,7 +25,7 @@ const createBanner = async (req, res) => {
     }
 };
 
-// 2. ADMIN: UPDATE BANNER
+// 2. ADMIN: UPDATE BANNER (Safe Image Array Cleanup)
 const updateBanner = async (req, res) => {
     try {
         const banner = await Banner.findById(req.params.id);
@@ -33,15 +33,16 @@ const updateBanner = async (req, res) => {
 
         let updateData = { ...req.body };
 
-        // Agar nayi images upload hui hain toh purani delete karke nayi save karein
         if (req.files && req.files.length > 0) {
-            // Purani sabhi images delete karein disk se
-            banner.image.forEach(img => {
-                const oldPath = path.join(__dirname, '../../../public', img);
-                if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-            });
+            if (Array.isArray(banner.image)) {
+                banner.image.forEach(img => {
+                    if (img) {
+                        const oldPath = path.join(__dirname, '../../../public', img);
+                        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+                    }
+                });
+            }
 
-            // Nayi images ka array banayein
             updateData.image = req.files.map(file => `/uploads/banners/${file.filename}`);
         }
 
@@ -52,25 +53,33 @@ const updateBanner = async (req, res) => {
         );
 
         res.json({ success: true, message: "Banner updated successfully", data: updatedBanner });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
 
-// 3. ADMIN: DELETE BANNER
+// 3. ADMIN: DELETE BANNER (Safe Image Array Cleanup)
 const deleteBanner = async (req, res) => {
     try {
         const banner = await Banner.findById(req.params.id);
         if (!banner) return res.status(404).json({ message: "Banner not found" });
 
-        // Disk se saari images delete karein
-        banner.image.forEach(img => {
-            const filePath = path.join(__dirname, '../../../public', img);
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        });
+        if (Array.isArray(banner.image)) {
+            banner.image.forEach(img => {
+                if (img) {
+                    const filePath = path.join(__dirname, '../../../public', img);
+                    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+                }
+            });
+        }
 
         await Banner.findByIdAndDelete(req.params.id);
         res.json({ success: true, message: "Banner and images deleted successfully" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ message: error.message }); 
+    }
 };
+
 // 3. ADMIN: GET ALL BANNERS (For Dashboard List)
 const getAllBanners = async (req, res) => {
     try {
