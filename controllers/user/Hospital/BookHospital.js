@@ -2340,342 +2340,367 @@ const getHospitalOpdCheckoutSummary = async (req, res) => {
     }
 };
 
-// @desc    Book Hospital OPD Appointment (Token Generation, Collision Guard, Razorpay Order & Insurance Support)
+// @desc    Book Hospital OPD Appointment (Crash-Proof JSON/FormData Parser, Token Generator & Razorpay Safe)
 // @route   POST /user/hospital/opd/book
 // @access  Private (User)
 const bookHospitalOpdAppointment = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { 
-            doctorId, 
-            hospitalId, 
-            appointmentDate, 
-            appointmentTime, 
-            timeSlot, 
-            patients, 
-            patientName, 
-            patientAge, 
-            gender, 
-            relation, 
-            paymentMethod = 'COD', 
-            couponCode, 
-            specialServiceIds, 
-            reasonForVisit,
+        const body = req.body || {};
 
-            // Insurance Body Fields
-            hasInsurance, 
-            insuranceNumber, 
-            companyName, 
-            insuranceType, 
-            masterInsuranceId 
-        } = req.body;
+        let {
+            hospitalId,
+            doctorId,
+            appointmentDate,
+            date,
+            appointmentTime,
+            timeSlot,
+            time,
+            patients,
+            specialServices,
+            couponCode,
+            paymentMethod,
+            bookingReason,
+            reasonForVisit,
+            insuranceDetails,
+            hasInsurance,
+            insuranceNumber,
+            companyName,
+            insuranceType,
+            masterInsuranceId
+        } = body;
+
+        // 1. Resolve flexible date and time keys from frontend
+        const targetDateStr = String(appointmentDate || date || moment().format('YYYY-MM-DD')).trim();
+        const targetTimeStr = String(appointmentTime || timeSlot || time || "10:00 AM").trim();
 
         if (!doctorId || !mongoose.isValidObjectId(doctorId)) {
-            return res.status(400).json({ success: false, message: "Valid doctorId is required." });
-        }
-
-        const selectedSlotTime = String(appointmentTime || timeSlot || "").trim();
-        if (!selectedSlotTime) {
-            return res.status(400).json({ success: false, message: "appointmentTime (slot) is required." });
-        }
-
-        const targetDateStr = appointmentDate ? String(appointmentDate).trim() : moment().format('YYYY-MM-DD');
-        const targetMoment = moment(targetDateStr, 'YYYY-MM-DD');
-
-        if (!targetMoment.isValid()) {
-            return res.status(400).json({ success: false, message: "Invalid date format. Expected YYYY-MM-DD." });
-        }
-
-        // 1. Fetch Doctor with Hospital
-        const doctor = await Doctor.findById(doctorId)
-            .populate('hospitalId', 'name city address hospitalImage isInsuranceAccepted')
-            .lean();
-
-        if (!doctor) {
-            return res.status(404).json({ success: false, message: "Doctor not found." });
-        }
-
-        const resolvedHospitalId = hospitalId || doctor.hospitalId?._id || doctor.hospitalId;
-        const opdRoomNumber = doctor.department?.roomNumber || "Cabin 1";
-        const baseOpdFee = Number(doctor.fees?.clinic || 500);
-
-        // 2. Anti-Collision Lock: Ensure this slot hasn't been taken in the meantime
-        const startOfDay = targetMoment.clone().startOf('day').toDate();
-        const endOfDay = targetMoment.clone().endOf('day').toDate();
-        const cleanSlot24 = selectedSlotTime.split(' ')[0];
-
-        const slotCollision = await Appointment.findOne({
-            doctorId: doctor._id,
-            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'] },
-            appointmentTime: { $regex: new RegExp(`^${cleanSlot24}`, 'i') }
-        }).lean();
-
-        if (slotCollision) {
             return res.status(400).json({
                 success: false,
-                isCollision: true,
-                message: `Slot ${selectedSlotTime} was just booked by another patient. Please select another slot.`
+                message: "Valid doctorId is required for Hospital OPD booking."
             });
         }
 
-        // 3. Calculate Premium Surcharge for this slot
-        const availabilityConfig = await Availability.findOne({
-            vendorId: doctorId,
-            vendorType: 'Doctor'
-        }).lean();
+        // 2. Fetch Doctor & Resolve Hospital ID automatically if frontend missed hospitalId
+        const doctor = await Doctor.findById(doctorId).lean();
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Hospital Doctor not found." });
+        }
 
-        const premiumSlotsList = availabilityConfig?.premiumSlots || [];
-        const premiumMatch = premiumSlotsList.find(p => 
-            p.time === cleanSlot24 || 
-            p.time === selectedSlotTime ||
-            selectedSlotTime.startsWith(p.time)
-        );
+        const resolvedHospitalId = (hospitalId && mongoose.isValidObjectId(hospitalId))
+            ? hospitalId
+            : doctor.hospitalId;
 
-        const premiumFee = premiumMatch ? Number(premiumMatch.extraFee || 0) : 0;
-        const slotTotalFee = baseOpdFee + premiumFee;
+        if (!resolvedHospitalId) {
+            return res.status(400).json({
+                success: false,
+                message: "This doctor is not linked to any hospital. Please use Independent Doctor booking."
+            });
+        }
 
-        // 4. Resolve Patients List
-        let formattedPatients = [];
-        if (patients) {
-            formattedPatients = typeof patients === 'string' ? JSON.parse(patients) : patients;
-        } else if (patientName) {
-            formattedPatients = [{
-                patientName: String(patientName).trim(),
-                patientAge: Number(patientAge) || 30,
-                gender: gender || "Male",
-                relation: relation || "Self",
-                reasonForVisit: reasonForVisit || "OPD Consultation",
-                isMainUser: true
-            }];
-        } else {
-            formattedPatients = [{
+        const hospital = await Hospital.findById(resolvedHospitalId).lean();
+        if (!hospital) {
+            return res.status(404).json({ success: false, message: "Hospital not found." });
+        }
+
+        // 3. Validate Date Format
+        const parsedDate = moment(targetDateStr, ['YYYY-MM-DD', moment.ISO_8601]);
+        if (!parsedDate.isValid()) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid appointmentDate format. Expected YYYY-MM-DD."
+            });
+        }
+
+        const startOfDay = parsedDate.clone().startOf('day').toDate();
+        const endOfDay = parsedDate.clone().endOf('day').toDate();
+
+        // 4. Crash-Proof Patients Array Parser (Handles JSON, Stringified JSON, or fallback to logged-in user)
+        let parsedPatients = [];
+        if (typeof patients === 'string') {
+            try { parsedPatients = JSON.parse(patients); } catch (e) { parsedPatients = []; }
+        } else if (Array.isArray(patients)) {
+            parsedPatients = patients;
+        } else if (patients && typeof patients === 'object') {
+            parsedPatients = [patients];
+        }
+
+        const formattedPatients = parsedPatients.length > 0
+            ? parsedPatients.map((p, idx) => {
+                const rawGender = String(p.gender || req.user.gender || 'Male').trim();
+                const validGender = ['Male', 'Female', 'Other'].includes(rawGender) ? rawGender : 'Male';
+                const parsedAge = parseInt(p.patientAge || p.age || 30);
+
+                return {
+                    patientName: String(p.patientName || p.name || p.memberName || req.user.name || "Patient").trim(),
+                    patientAge: isNaN(parsedAge) || parsedAge <= 0 ? 30 : parsedAge,
+                    gender: validGender,
+                    relation: String(p.relation || (idx === 0 ? 'Self' : 'Family')).trim(),
+                    reasonForVisit: String(p.reasonForVisit || bookingReason || reasonForVisit || "OPD Consultation").trim(),
+                    bloodGroup: p.bloodGroup || req.user.bloodGroup || null,
+                    isMainUser: Boolean(p.isMainUser ?? (idx === 0))
+                };
+            })
+            : [{
                 patientName: req.user.name || "Patient",
-                patientAge: req.user.age || 30,
-                gender: req.user.gender || "Male",
-                relation: "Self",
-                reasonForVisit: reasonForVisit || "OPD Consultation",
+                patientAge: req.user.dob ? Math.max(1, moment().diff(moment(req.user.dob), 'years')) : 30,
+                gender: ['Male', 'Female', 'Other'].includes(req.user.gender) ? req.user.gender : 'Male',
+                relation: 'Self',
+                reasonForVisit: String(bookingReason || reasonForVisit || "OPD Consultation").trim(),
+                bloodGroup: req.user.bloodGroup || null,
                 isMainUser: true
             }];
+
+        const patientCount = Math.max(1, formattedPatients.length);
+
+        // 5. Crash-Proof Special Services Parser
+        let parsedServicesInput = [];
+        if (typeof specialServices === 'string') {
+            try { parsedServicesInput = JSON.parse(specialServices); } catch (e) { parsedServicesInput = []; }
+        } else if (Array.isArray(specialServices)) {
+            parsedServicesInput = specialServices;
         }
 
-        const numPatients = Math.max(1, formattedPatients.length);
-        const consultationSubtotal = slotTotalFee * numPatients;
-
-        // 5. Special Services
+        let specialServicesList = [];
         let specialServicesTotal = 0;
-        let selectedServicesList = [];
-        let parsedServiceIds = specialServiceIds;
-        if (typeof specialServiceIds === 'string') {
-            try { parsedServiceIds = JSON.parse(specialServiceIds); } catch (e) { parsedServiceIds = [specialServiceIds]; }
+
+        for (const srv of parsedServicesInput) {
+            const srvId = typeof srv === 'object' ? (srv.serviceId || srv._id || srv.id) : srv;
+            if (srvId && mongoose.isValidObjectId(srvId)) {
+                const dbService = await HospitalService.findById(srvId).lean();
+                if (dbService) {
+                    const price = Number(dbService.price || 0);
+                    specialServicesList.push({
+                        serviceId: dbService._id,
+                        serviceName: dbService.serviceName,
+                        price: price
+                    });
+                    specialServicesTotal += price;
+                }
+            }
         }
 
-        if (Array.isArray(parsedServiceIds) && parsedServiceIds.length > 0) {
-            const foundServices = await HospitalService.find({
-                _id: { $in: parsedServiceIds },
-                hospitalId: resolvedHospitalId
-            }).lean();
+        // 6. Pricing Calculation (Base OPD Fee + Premium Slot Surcharge + Special Services - Coupon)
+        const singleOpdFee = Number(doctor.fees?.clinic || 500);
+        const originalBaseFee = singleOpdFee * patientCount;
 
-            selectedServicesList = foundServices.map(s => ({
-                serviceId: s._id,
-                serviceName: s.serviceName,
-                price: Number(s.price || 0)
-            }));
-            specialServicesTotal = selectedServicesList.reduce((sum, s) => sum + s.price, 0);
+        // Check Premium Slot Fee if configured in Availability
+        let premiumSlotFee = 0;
+        const availConfig = await Availability.findOne({ vendorId: doctor._id }).lean();
+        if (availConfig && Array.isArray(availConfig.premiumSlots)) {
+            const normTime24 = moment(targetTimeStr, ["HH:mm", "hh:mm A"]).format("HH:mm");
+            const matchedPremium = availConfig.premiumSlots.find(ps =>
+                moment(ps.time, ["HH:mm", "hh:mm A"]).format("HH:mm") === normTime24
+            );
+            if (matchedPremium) {
+                premiumSlotFee = Number(matchedPremium.extraFee || 0);
+            }
         }
 
-        const grossSubtotal = consultationSubtotal + specialServicesTotal;
+        // Subscription Benefit Check (Free Doctor Consultation Quota)
+        const subBenefit = await checkAndApplyBenefit(userId, 'freeDoctorAppointmentsCount', originalBaseFee);
+        const effectiveBaseFee = subBenefit.isApplied ? 0 : originalBaseFee;
 
-        // 6. Subscription Benefit Check
-        let isSubscriptionUsed = false;
-        let subscriptionDiscount = 0;
-        const subCheck = await checkAndApplyBenefit(userId, 'freeDoctorAppointmentsCount', baseOpdFee);
-        if (subCheck.isApplied) {
-            isSubscriptionUsed = true;
-            subscriptionDiscount = baseOpdFee;
-            await deductBenefitCount(userId, 'freeDoctorAppointmentsCount');
-        }
+        const subtotalBeforeCoupon = effectiveBaseFee + premiumSlotFee + specialServicesTotal;
 
-        // 7. Coupon Discount Check
-        let couponDiscount = 0;
-        let appliedCouponId = null;
+        // Coupon Evaluation
+        let discountAmount = 0;
+        let appliedCouponObj = undefined;
         if (couponCode && String(couponCode).trim() !== "") {
             const cleanCode = String(couponCode).trim().toUpperCase();
             const coupon = await Coupon.findOne({
                 couponName: cleanCode,
                 isActive: true,
-                expiryDate: { $gte: new Date() }
-            });
+                expiryDate: { $gte: new Date() },
+                $or: [
+                    { vendorId: resolvedHospitalId },
+                    { isAdminCreated: true, vendorType: { $in: ['Hospital', 'Doctor', 'All'] } }
+                ]
+            }).lean();
 
-            if (coupon && grossSubtotal >= (coupon.minOrderAmount || 0)) {
-                couponDiscount = Math.min(
-                    Math.round((grossSubtotal * coupon.discountPercentage) / 100),
-                    coupon.maxDiscount || Infinity
-                );
-                appliedCouponId = coupon._id;
-
-                await Coupon.updateOne(
-                    { _id: coupon._id },
-                    { $push: { usedBy: { userId, usageCount: 1 } } }
-                );
+            if (coupon && subtotalBeforeCoupon >= Number(coupon.minOrderAmount || 0)) {
+                const calcDisc = Math.round((subtotalBeforeCoupon * Number(coupon.discountPercentage || 0)) / 100);
+                discountAmount = Math.min(calcDisc, Number(coupon.maxDiscount || calcDisc));
+                appliedCouponObj = {
+                    couponId: coupon._id,
+                    couponCode: coupon.couponName,
+                    discountValue: discountAmount
+                };
             }
         }
 
-        const finalTotalAmount = Math.max(0, grossSubtotal - couponDiscount - subscriptionDiscount);
+        const finalPayable = Math.max(0, Math.round(subtotalBeforeCoupon - discountAmount));
 
-        // 8. Generate Next Daily Token Number for this Doctor & Date
-        const dailyCount = await Appointment.countDocuments({
-            hospitalId: resolvedHospitalId,
-            doctorId: doctor._id,
-            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-            bookingType: 'OPD',
-            tokenNumber: { $ne: null }
-        });
-        const generatedTokenNumber = dailyCount + 1;
+        // 7. Normalize Payment Method Safely (Matches Appointment Schema Enum)
+        const rawMethod = String(paymentMethod || 'Online').trim().toUpperCase();
+        const isCodOrCash = rawMethod === 'COD' || rawMethod === 'CASH' || rawMethod.includes('HOSPITAL') || rawMethod.includes('COUNTER') || rawMethod.includes('PAY AT');
+        const normalizedPaymentMethod = isCodOrCash ? 'COD' : 'Online';
 
-        // 9. Generate Unique Order ID
-        const generatedBookingId = await generateUniqueOrderCode('HKH-OPD', Appointment, 'bookingId');
-
-        // 10. Process Insurance Information & File Attachments
-        const isUserClaimingInsurance = hasInsurance === 'true' || hasInsurance === true || hasInsurance === 1 || hasInsurance === '1';
-        let insurancePayload = { hasInsurance: false };
-
-        if (isUserClaimingInsurance) {
-            const files = req.files || {};
-            const frontPhoto = files.insuranceDocumentFront ? `/uploads/insurance/${files.insuranceDocumentFront[0].filename}` : null;
-            const backPhoto = files.insuranceDocumentBack ? `/uploads/insurance/${files.insuranceDocumentBack[0].filename}` : null;
-            const singleDoc = files.insuranceDocument ? `/uploads/insurance/${files.insuranceDocument[0].filename}` : null;
-
-            // Fallback to user profile insurance if files not uploaded during this booking
-            const userProfileIns = req.user.insuranceDetails || {};
-
-            insurancePayload = {
-                hasInsurance: true,
-                insuranceNumber: insuranceNumber || userProfileIns.insuranceNumber || "",
-                companyName: companyName || userProfileIns.companyName || "",
-                insuranceType: insuranceType || userProfileIns.insuranceType || "Cashless",
-                masterInsuranceId: masterInsuranceId || userProfileIns.masterInsuranceId || null,
-                insuranceDocumentFront: frontPhoto || userProfileIns.insuranceDocumentFront || null,
-                insuranceDocumentBack: backPhoto || userProfileIns.insuranceDocumentBack || null,
-                insuranceDocument: singleDoc || userProfileIns.insuranceDocument || null,
-                approvalStatus: 'Pending',
-                rejectionReason: null
-            };
+        if (normalizedPaymentMethod === 'COD') {
+            const codAllowed = await isCodEnabled('Hospital', userId);
+            if (!codAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Pay at Hospital (COD) is currently disabled. Please proceed with Online Payment."
+                });
+            }
         }
 
-        // 11. Normalize Payment Method & Status
-        const cleanPaymentMethod = String(paymentMethod).trim().toUpperCase() === 'ONLINE' ? 'Online' : 'COD';
-        const initialStatus = cleanPaymentMethod === 'Online' && finalTotalAmount > 0 ? 'Pending' : 'Confirmed';
-        const initialPaymentStatus = finalTotalAmount === 0 ? 'Paid' : 'Pending';
+        // 8. Parse Insurance Details Safely (Prevent Empty String ObjectId CastError)
+        let parsedIns = {};
+        if (typeof insuranceDetails === 'string') {
+            try { parsedIns = JSON.parse(insuranceDetails); } catch (e) { parsedIns = {}; }
+        } else if (insuranceDetails && typeof insuranceDetails === 'object') {
+            parsedIns = insuranceDetails;
+        }
 
-        // 12. Create Appointment in MongoDB
-        const newAppointment = await Appointment.create({
+        const isInsuredBool = Boolean(
+            hasInsurance === true || hasInsurance === 'true' ||
+            parsedIns.hasInsurance === true || parsedIns.hasInsurance === 'true'
+        );
+
+        const rawMasterInsId = masterInsuranceId || parsedIns.masterInsuranceId || null;
+        const validMasterInsId = (rawMasterInsId && mongoose.isValidObjectId(rawMasterInsId))
+            ? new mongoose.Types.ObjectId(rawMasterInsId)
+            : null;
+
+        const files = req.files || {};
+        const docSingle = files.insuranceDocument?.[0] ? `/uploads/insurance/${files.insuranceDocument[0].filename}` : (parsedIns.insuranceDocument || null);
+        const docFront = files.insuranceDocumentFront?.[0] ? `/uploads/insurance/${files.insuranceDocumentFront[0].filename}` : (parsedIns.insuranceDocumentFront || null);
+        const docBack = files.insuranceDocumentBack?.[0] ? `/uploads/insurance/${files.insuranceDocumentBack[0].filename}` : (parsedIns.insuranceDocumentBack || null);
+
+        // 9. Generate Daily Sequential OPD Token Number for this Doctor on this Date
+        const existingOpdCount = await Appointment.countDocuments({
+            hospitalId: resolvedHospitalId,
+            doctorId: doctor._id,
+            bookingType: 'OPD',
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay }
+        });
+        const nextTokenNumber = existingOpdCount + 1;
+
+        const uniqueBookingId = `HKO-${Date.now().toString(36).toUpperCase().slice(-4)}${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+        const opdRoom = doctor.department?.roomNumber || "OPD Cabin 1";
+
+        // 10. Create Razorpay Order ONLY if Online Payment AND finalPayable > 0
+        let rzpOrder = null;
+        const isInstantConfirm = (normalizedPaymentMethod === 'COD' || finalPayable === 0);
+
+        if (!isInstantConfirm) {
+            rzpOrder = await createRazorpayOrder(finalPayable, `opd_${uniqueBookingId}`);
+        }
+
+        // 11. Create Appointment Document
+        const newOpdAppointment = await Appointment.create({
             userId,
             hospitalId: resolvedHospitalId,
             doctorId: doctor._id,
-            bookingId: generatedBookingId,
             bookingType: 'OPD',
-            tokenNumber: generatedTokenNumber,
-            opdRoomNumber: opdRoomNumber,
-            appointmentDate: targetDateStr,
-            appointmentTime: selectedSlotTime,
-            consultationType: 'Clinic Visit',
+            tokenNumber: nextTokenNumber,
+            opdRoomNumber: opdRoom,
+            bookingId: uniqueBookingId,
+            bookingReason: String(bookingReason || reasonForVisit || formattedPatients[0]?.reasonForVisit || "OPD Consultation").trim(),
             patients: formattedPatients,
-            specialServices: selectedServicesList,
+            appointmentDate: startOfDay,
+            appointmentTime: targetTimeStr,
+            consultationType: 'Clinic Visit',
+            specialServices: specialServicesList,
             pricingBreakdown: {
-                baseFee: baseOpdFee,
-                originalBaseFee: baseOpdFee,
-                extraCharges: premiumFee,
-                discountAmount: couponDiscount + subscriptionDiscount,
-                subtotal: grossSubtotal,
-                bookedDurationDays: 1,
-                depositPaidOnBooking: finalTotalAmount
+                baseFee: effectiveBaseFee,
+                originalBaseFee: originalBaseFee,
+                visitCharges: 0,
+                extraCharges: premiumSlotFee + specialServicesTotal,
+                discountAmount: discountAmount,
+                subtotal: subtotalBeforeCoupon
             },
-            totalAmount: finalTotalAmount,
-            couponDetails: appliedCouponId ? {
-                couponId: appliedCouponId,
-                couponCode: couponCode,
-                discountValue: couponDiscount
-            } : undefined,
-            subscriptionDetails: isSubscriptionUsed ? {
-                isSubscriptionApplied: true,
-                planName: subCheck.planName || "Care Plan"
-            } : { isSubscriptionApplied: false },
-            insuranceDetails: insurancePayload,
-            paymentMethod: cleanPaymentMethod,
-            paymentStatus: initialPaymentStatus,
-            status: initialStatus
+            totalAmount: finalPayable,
+            paymentMethod: normalizedPaymentMethod,
+            paymentStatus: finalPayable === 0 ? 'Paid' : 'Pending',
+            status: isInstantConfirm ? 'Confirmed' : 'Pending',
+            transactionId: rzpOrder ? rzpOrder.id : (finalPayable === 0 ? `FREE-OPD-${Date.now()}` : `COD-OPD-${Date.now()}`),
+            couponDetails: appliedCouponObj,
+            insuranceDetails: {
+                hasInsurance: isInsuredBool,
+                insuranceNumber: String(insuranceNumber || parsedIns.insuranceNumber || "").trim(),
+                companyName: String(companyName || parsedIns.companyName || "").trim(),
+                insuranceType: String(insuranceType || parsedIns.insuranceType || "").trim(),
+                masterInsuranceId: validMasterInsId,
+                insuranceDocument: docSingle,
+                insuranceDocumentFront: docFront,
+                insuranceDocumentBack: docBack,
+                approvalStatus: isInsuredBool ? 'Pending' : 'None'
+            },
+            treatmentHistory: [{
+                fromDoctorId: null,
+                toDoctorId: doctor._id,
+                action: 'Initial-Assignment',
+                notes: `OPD Token #${nextTokenNumber} booked for Dr. ${doctor.name} (${opdRoom}).`,
+                subscriptionDetails: {
+                    isSubscriptionApplied: subBenefit.isApplied,
+                    userSubscriptionId: subBenefit.subId || null,
+                    planName: subBenefit.planName || ""
+                },
+                timestamp: new Date(),
+                startTime: new Date(),
+                endTime: null,
+                durationDisplay: "Scheduled OPD"
+            }]
         });
 
-        // 13. Handle Online Payment (Razorpay Order Generation)
-        let razorpayOrderData = null;
-        if (cleanPaymentMethod === 'Online' && finalTotalAmount > 0) {
-            const rzpOrder = await createRazorpayOrder(finalTotalAmount, `receipt_${generatedBookingId}`);
-            newAppointment.paymentDetails = {
-                razorpayOrderId: rzpOrder.id,
-                amount: finalTotalAmount,
-                currency: 'INR',
-                status: 'created'
-            };
-            await newAppointment.save();
+        // 12. Deduct Subscription Benefit & Mark Coupon Used if Confirmed Immediately
+        if (isInstantConfirm) {
+            if (subBenefit.isApplied) {
+                await deductBenefitCount(userId, 'freeDoctorAppointmentsCount');
+            }
+            if (appliedCouponObj?.couponId) {
+                await Coupon.updateOne(
+                    { _id: appliedCouponObj.couponId },
+                    { $push: { usedBy: { userId, usageCount: 1 } } }
+                );
+            }
 
-            razorpayOrderData = {
-                key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
-                amount: rzpOrder.amount,
-                currency: "INR",
-                razorpayOrderId: rzpOrder.id
-            };
+            // Dispatch Notifications in background
+            Promise.allSettled([
+                sendPushNotification(
+                    doctor._id,
+                    'doctor',
+                    `🎟️ New OPD Booking (Token #${nextTokenNumber})`,
+                    `Patient ${formattedPatients[0].patientName} booked OPD slot at ${targetTimeStr} on ${targetDateStr}.`,
+                    { appointmentId: String(newOpdAppointment._id), bookingId: uniqueBookingId, type: 'NEW_OPD_BOOKING' }
+                ),
+                notifyAdminsAndVendor(
+                    resolvedHospitalId,
+                    'hospital',
+                    `🎟️ New Hospital OPD Booking (#${uniqueBookingId})`,
+                    `Token #${nextTokenNumber} booked for Dr. ${doctor.name} (${opdRoom}) on ${targetDateStr}.`,
+                    { appointmentId: String(newOpdAppointment._id), bookingId: uniqueBookingId, type: 'NEW_OPD_BOOKING' }
+                )
+            ]);
         }
-
-        // 14. Dispatch Notifications
-        try {
-            await sendPushNotification(
-                userId,
-                'user',
-                `OPD Appointment Confirmed! (Token #${generatedTokenNumber})`,
-                `Your appointment with Dr. ${doctor.name} is confirmed for ${selectedSlotTime} at ${opdRoomNumber}.`,
-                {
-                    type: 'OPD_BOOKING_CONFIRMED',
-                    appointmentId: String(newAppointment._id),
-                    bookingId: generatedBookingId,
-                    tokenNumber: String(generatedTokenNumber),
-                    roomNumber: opdRoomNumber,
-                    click_action: 'FLUTTER_NOTIFICATION_CLICK'
-                }
-            );
-
-            await notifyAdminsAndVendor(
-                resolvedHospitalId,
-                'hospital',
-                `New OPD Token Booked: Token #${generatedTokenNumber}`,
-                `Patient ${formattedPatients[0]?.patientName} booked Dr. ${doctor.name} for ${targetDateStr} (${selectedSlotTime}).`,
-                {
-                    type: 'NEW_OPD_APPOINTMENT',
-                    appointmentId: String(newAppointment._id),
-                    tokenNumber: String(generatedTokenNumber)
-                }
-            );
-        } catch (e) {}
 
         return res.status(201).json({
             success: true,
-            message: `OPD Appointment booked successfully! Your Token Number is #${generatedTokenNumber} at ${opdRoomNumber}.`,
-            bookingId: generatedBookingId,
-            tokenNumber: generatedTokenNumber,
-            opdRoomNumber: opdRoomNumber,
-            appointmentDate: targetDateStr,
-            appointmentTime: selectedSlotTime,
-            totalAmount: finalTotalAmount,
-            paymentMethod: cleanPaymentMethod,
-            paymentStatus: initialPaymentStatus,
-            hasInsurance: insurancePayload.hasInsurance,
-            razorpay: razorpayOrderData,
-            data: newAppointment
+            paymentRequired: !isInstantConfirm,
+            message: isInstantConfirm
+                ? `OPD Appointment Confirmed! Your Queue Token is #${nextTokenNumber} (${opdRoom}).`
+                : "OPD Order generated. Please complete online payment to confirm your token.",
+            bookingId: uniqueBookingId,
+            appointmentId: newOpdAppointment._id,
+            tokenNumber: nextTokenNumber,
+            opdRoomNumber: opdRoom,
+            razorpayOrderId: rzpOrder ? rzpOrder.id : null,
+            amount: rzpOrder ? rzpOrder.amount : finalPayable * 100,
+            totalPayable: finalPayable,
+            currency: "INR",
+            key_id: process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_TEST_KEY_ID,
+            data: newOpdAppointment
         });
 
     } catch (error) {
         console.error("Book Hospital OPD Appointment Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
