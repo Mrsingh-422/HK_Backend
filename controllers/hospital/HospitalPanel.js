@@ -39,7 +39,7 @@ const generateCaseRef = (type) => {
     return `HK-${new Date().getFullYear()}-${prefix}-${timeSlice}${randomHex}`;
 };
 
-// Helper: Calculate human-readable shift duration between two timestamps
+// Helper: Calculate human-readable duration between two timestamps
 const formatShiftDuration = (startTime, endTime = new Date()) => {
     if (!startTime) return "0 mins";
     const diffMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
@@ -53,6 +53,87 @@ const formatShiftDuration = (startTime, endTime = new Date()) => {
     if (hours > 0) parts.push(`${hours} hr${hours > 1 ? 's' : ''}`);
     parts.push(`${mins} min${mins !== 1 ? 's' : ''}`);
     return parts.join(' ');
+};
+
+// Helper: Enrich treatmentHistory array + build a dedicated doctorAssignmentSummary for Hospital Admin UI
+const buildHospitalDoctorAuditTrail = (historyArray = [], appointmentStatus = 'Pending') => {
+    const now = new Date();
+    const isCaseClosed = ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'].includes(appointmentStatus);
+
+    const enrichedHistory = (historyArray || []).map((item, index) => {
+        const assignedTime = item.assignedAt || item.startTime || item.timestamp;
+        const acceptedTime = item.acceptedAt || null;
+        const endedTime = item.endTime || null;
+        const status = item.acceptanceStatus || 'Pending-Acceptance';
+        const isLastEntry = index === historyArray.length - 1;
+
+        let computedUnacceptedWait = item.unacceptedWaitDuration || "";
+        let computedActiveDuty = "";
+        let liveStatusLabel = item.durationDisplay || "";
+
+        if (status === 'Pending-Acceptance') {
+            if (!endedTime && !isCaseClosed && isLastEntry) {
+                computedUnacceptedWait = formatShiftDuration(assignedTime, now);
+                liveStatusLabel = `Unaccepted for ${computedUnacceptedWait} (Awaiting Doctor Acceptance)`;
+            } else {
+                const refEnd = endedTime || now;
+                computedUnacceptedWait = item.unacceptedWaitDuration || formatShiftDuration(assignedTime, refEnd);
+                liveStatusLabel = `Did Not Accept for ${computedUnacceptedWait}`;
+            }
+        } else if (status === 'Unaccepted-Reassigned') {
+            const refEnd = endedTime || now;
+            computedUnacceptedWait = item.unacceptedWaitDuration || formatShiftDuration(assignedTime, refEnd);
+            liveStatusLabel = item.durationDisplay || `Did Not Accept for ${computedUnacceptedWait} (Reassigned)`;
+        } else if (status === 'Rejected-By-Doctor') {
+            const refEnd = endedTime || now;
+            computedUnacceptedWait = item.unacceptedWaitDuration || formatShiftDuration(assignedTime, refEnd);
+            liveStatusLabel = item.durationDisplay || `Rejected after ${computedUnacceptedWait}`;
+        } else if (status === 'Accepted' || status === 'Replaced-After-Acceptance' || status === 'Completed') {
+            const dutyStart = acceptedTime || assignedTime;
+            if (!endedTime && !isCaseClosed && isLastEntry) {
+                computedActiveDuty = formatShiftDuration(dutyStart, now);
+                liveStatusLabel = `${computedActiveDuty} (Active Duty)`;
+            } else {
+                const dutyEnd = endedTime || now;
+                computedActiveDuty = formatShiftDuration(dutyStart, dutyEnd);
+                liveStatusLabel = item.durationDisplay || `${computedActiveDuty} (Shift Completed)`;
+            }
+        }
+
+        return {
+            ...item,
+            attemptNumber: index + 1,
+            fromDoctorName: item.fromDoctorId?.name || null,
+            fromDoctorSpeciality: item.fromDoctorId?.speciality || null,
+            toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
+            toDoctorSpeciality: item.toDoctorId?.speciality || "",
+            toDoctorPhone: item.toDoctorId?.phone || "",
+            toDoctorRoom: item.toDoctorId?.department?.roomNumber || "",
+            assignmentSource: item.assignmentSource || 'Hospital-Admin',
+            acceptanceStatus: status,
+            assignedAt: assignedTime,
+            acceptedAt: acceptedTime,
+            endedAt: endedTime,
+            unacceptedWaitDuration: computedUnacceptedWait,
+            activeDutyDuration: computedActiveDuty,
+            isCurrentlyActive: Boolean(!endedTime && !isCaseClosed && isLastEntry && status === 'Accepted'),
+            isAwaitingAcceptance: Boolean(!endedTime && !isCaseClosed && isLastEntry && status === 'Pending-Acceptance'),
+            durationDisplay: liveStatusLabel
+        };
+    });
+
+    const summaryStats = {
+        totalAssignmentAttempts: enrichedHistory.length,
+        unacceptedOrRejectedCount: enrichedHistory.filter(h =>
+            ['Unaccepted-Reassigned', 'Rejected-By-Doctor'].includes(h.acceptanceStatus)
+        ).length,
+        wasPreSelectedByUserAtBooking: enrichedHistory.some(h => h.assignmentSource === 'User-Selected-At-Booking'),
+        currentAssignmentStatus: enrichedHistory.length > 0
+            ? enrichedHistory[enrichedHistory.length - 1].acceptanceStatus
+            : 'Unassigned'
+    };
+
+    return { enrichedHistory, summaryStats };
 };
 
 // 🛡️ REUSABLE DTO HELPER: Resolves accurate single patient profile & bloodGroup without data leaks
@@ -452,81 +533,156 @@ const deleteSpecificBed = async (req, res) => {
 };
 
 
-// --- 3. ADMIT PATIENT (Admin Panel Flow) ---
+// @desc    Hospital Admin Admits Walk-In / Emergency Patient Directly to a Bed (With Synced treatmentHistory)
+// @route   POST /hospital/panel/ward/admit-patient
+// @access  Private (Hospital Admin)
 const admitPatientToBed = async (req, res) => {
     try {
-        const { appointmentId, bedId, startDate, endDate } = req.body;
+        const hospitalId = req.user.id;
+        const {
+            bedId,
+            doctorId,
+            patientName,
+            patientPhone,
+            patientAge = 30,
+            gender = 'Male',
+            bloodGroup,
+            triageLevel = 'Routine',
+            stayDuration = 1,
+            bookingReason,
+            paymentMethod = 'Cash'
+        } = req.body;
 
-        // 1. Fetch Target Bed
-        const bed = await Bed.findById(bedId);
-        if (!bed) {
-            return res.status(404).json({ success: false, message: "Selected Bed not found in system." });
-        }
-
-        // Validate physical maintenance lock
-        if (bed.status === 'Maintenance') {
-            return res.status(400).json({ success: false, message: "Selected bed is currently under maintenance." });
-        }
-
-        // 2. Fetch Target Appointment
-        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId: req.user.id });
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission request record not found." });
-        }
-
-        // Standardise check-in & check-out dates
-        const start = startDate ? moment(startDate).startOf('day').toDate() : (appointment.startDate || moment().startOf('day').toDate());
-        const end = endDate ? moment(endDate).endOf('day').toDate() : (appointment.endDate || moment().add(1, 'days').endOf('day').toDate());
-
-        // 3. STRICT DOUBLE-BOOKING VALIDATION ON CHECK-IN
-        const isAlreadyBooked = await Appointment.findOne({
-            _id: { $ne: appointmentId },
-            bedId: bedId,
-            status: { $in: ['Confirmed', 'In-Progress', 'Hospital-Pending', 'Discharge-Pending'] },
-            $and: [
-                { startDate: { $lte: end } },
-                { endDate: { $gte: start } }
-            ]
-        });
-
-        if (isAlreadyBooked) {
+        if (!bedId || !patientName || !patientPhone) {
             return res.status(400).json({
                 success: false,
-                message: "Selected dates ke liye ye bed pehle se hi occupied hai. Kripya doosra bed ya date range choose karein."
+                message: "bedId, patientName, and patientPhone are required."
             });
         }
 
-        // 4. Update physical Bed status to Occupied
+        const bed = await Bed.findOne({ _id: bedId, hospitalId }).populate('wardId');
+        if (!bed || bed.status !== 'Available') {
+            return res.status(400).json({
+                success: false,
+                message: "Selected bed is not available."
+            });
+        }
+
+        // Find or create patient User record
+        const cleanPhone = String(patientPhone).trim().replace(/\D/g, "").slice(-10);
+        let user = await User.findOne({ phone: cleanPhone });
+        if (!user) {
+            const hashedPassword = await bcrypt.hash('Patient@123', 10);
+            user = await User.create({
+                name: String(patientName).trim(),
+                phone: cleanPhone,
+                countryCode: '+91',
+                password: hashedPassword,
+                role: 'user',
+                isPhoneVerified: true,
+                profileStatus: 'Approved'
+            });
+        }
+
+        let assignedDoctor = null;
+        if (doctorId && mongoose.isValidObjectId(doctorId)) {
+            assignedDoctor = await Doctor.findOne({ _id: doctorId, hospitalId }).select('_id name speciality department').lean();
+        }
+
+        const now = new Date();
+        const days = Math.max(1, parseInt(stayDuration) || 1);
+        const totalDeposit = Number(bed.pricePerDay || 1000) * days;
+        const wardName = bed.wardId?.name || "General Ward";
+        const bookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+        const initialHistory = [];
+        if (assignedDoctor) {
+            initialHistory.push({
+                fromDoctorId: null,
+                toDoctorId: assignedDoctor._id,
+                action: 'Initial-Assignment',
+                assignmentSource: 'Hospital-Admin',
+                acceptanceStatus: 'Pending-Acceptance',
+                assignedAt: now,
+                acceptedAt: null,
+                unacceptedWaitDuration: "",
+                notes: `Assigned to Dr. ${assignedDoctor.name} (${assignedDoctor.speciality || 'Specialist'}) during walk-in admission at Hospital Desk. Awaiting acceptance.`,
+                timestamp: now,
+                startTime: now,
+                endTime: null,
+                durationDisplay: "Awaiting Doctor Acceptance"
+            });
+        }
+
+        const appointment = await Appointment.create({
+            userId: user._id,
+            hospitalId,
+            bedId: bed._id,
+            doctorId: assignedDoctor ? assignedDoctor._id : null,
+            bookingType: 'Admission',
+            bedBookingType: triageLevel === 'Emergency' ? 'Emergency-Bed' : 'General-Bed',
+            bookingId,
+            bookingReason: bookingReason || "Direct Walk-In Hospital Admission",
+            triageLevel,
+            wardName,
+            bedNumber: bed.bedNumber,
+            stayDuration: days,
+            startDate: now,
+            endDate: moment(now).add(days, 'days').toDate(),
+            appointmentDate: now,
+            patients: [{
+                patientName: String(patientName).trim(),
+                patientAge: Number(patientAge) || 30,
+                gender: ['Male', 'Female', 'Other'].includes(gender) ? gender : 'Male',
+                relation: 'Self',
+                reasonForVisit: bookingReason || "Direct Hospital Admission",
+                bloodGroup: bloodGroup || null,
+                isMainUser: true
+            }],
+            pricingBreakdown: {
+                baseFee: totalDeposit,
+                originalBaseFee: totalDeposit,
+                subtotal: totalDeposit,
+                bookedDurationDays: days,
+                depositPaidOnBooking: totalDeposit
+            },
+            totalAmount: totalDeposit,
+            paymentMethod: paymentMethod || 'Cash',
+            paymentStatus: 'Paid',
+            status: 'In-Progress',
+            transactionId: `COUNTER-ADM-${Date.now().toString().slice(-6)}`,
+            treatmentHistory: initialHistory
+        });
+
         bed.status = 'Occupied';
         await bed.save();
+        await syncHospitalWardAndBedCapacity(hospitalId, bed.wardId?._id);
 
-        // 🚀 SYNC FIX: Safely decrement Ward availableBeds counter on physical bed check-in
-        await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
+        if (assignedDoctor) {
+            sendPushNotification(
+                assignedDoctor._id,
+                'doctor',
+                "🏥 New Walk-In Admission Assigned",
+                `Patient ${patientName} admitted to ${wardName} (${bed.bedNumber}, #${bookingId}). Please accept and take charge.`,
+                { appointmentId: String(appointment._id), bookingId, type: 'CASE_ASSIGNED' }
+            ).catch(() => {});
+        }
 
-        // 5. Update and Sync Appointment record
-        appointment.bedId = bedId;
-        appointment.bedNumber = bed.bedNumber;
-        
-        const ward = await Ward.findById(bed.wardId);
-        appointment.wardName = ward ? ward.name : appointment.wardName;
-
-        appointment.startDate = start;
-        appointment.endDate = end;
-        appointment.status = 'In-Progress'; // Patient is now physically in the bed
-
-        await appointment.save();
-
-        res.json({ 
-            success: true, 
-            message: `Patient admitted successfully to ${ward ? ward.name : 'Ward'} - ${bed.bedNumber}`, 
-            data: appointment 
+        return res.status(201).json({
+            success: true,
+            message: `Patient admitted to ${wardName} (${bed.bedNumber}) successfully.`,
+            data: appointment
         });
 
     } catch (error) {
-        console.error("Admit patient error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Admit Patient To Bed Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
+
 const updateWardBeds = async (req, res) => {
     try {
         const { wardId, action, bedCount, pricePerDay } = req.body;
@@ -673,12 +829,12 @@ const updateBedStatus = async (req, res) => {
     }
 };
 
-// 1. ASSIGN DOCTOR TO ADMISSION (Logs Initial-Assignment in treatmentHistory)
+// 1. ASSIGN DOCTOR TO ADMISSION (Preserves Previous Unaccepted/Pre-Selected Doctor Logs)
 // Endpoint: POST /hospital/panel/admissions/assign-doctor
 const assignDoctorToAdmission = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { appointmentId, doctorId, notes } = req.body;
+        const { appointmentId, doctorId, notes, reason } = req.body;
 
         if (!appointmentId || !doctorId) {
             return res.status(400).json({
@@ -693,46 +849,72 @@ const assignDoctorToAdmission = async (req, res) => {
             ...(isApptObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
         };
 
-        // Parallel fetch for speed
-        const [appointment, doctor] = await Promise.all([
-            Appointment.findOne(apptQuery),
+        const [appointment, newDoctor] = await Promise.all([
+            Appointment.findOne(apptQuery).populate('doctorId', 'name speciality'),
             Doctor.findOne({ _id: doctorId, hospitalId }).select('name speciality department phone profileImage').lean()
         ]);
 
         if (!appointment) {
             return res.status(404).json({ success: false, message: "Admission record not found in this hospital." });
         }
-        if (!doctor) {
+        if (!newDoctor) {
             return res.status(404).json({ success: false, message: "Doctor not found in this hospital." });
         }
 
         const now = new Date();
-        const previousDoctorId = appointment.doctorId;
+        const previousDoctorId = appointment.doctorId?._id || appointment.doctorId || null;
+        const previousDoctorName = appointment.doctorId?.name || "Previous Doctor";
 
-        // Close any previous open shift log in treatmentHistory
-        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
-            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
-            if (lastLog && !lastLog.endTime) {
-                lastLog.endTime = now;
-                lastLog.durationDisplay = formatShiftDuration(lastLog.startTime || lastLog.timestamp, now);
-            }
-        } else {
+        if (!Array.isArray(appointment.treatmentHistory)) {
             appointment.treatmentHistory = [];
         }
 
-        // Push new assignment log so User, Doctor & Hospital Panel all see the exact audit trail
+        // 🚨 CLOSE PREVIOUS OPEN DOCTOR LOG (Track whether previous doctor failed to accept or was replaced after accepting)
+        if (appointment.treatmentHistory.length > 0) {
+            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
+            if (lastLog && !lastLog.endTime) {
+                const prevAssignedTime = lastLog.assignedAt || lastLog.startTime || lastLog.timestamp;
+                lastLog.endTime = now;
+
+                if (lastLog.acceptanceStatus === 'Pending-Acceptance' || !lastLog.acceptedAt) {
+                    const waitTimeStr = formatShiftDuration(prevAssignedTime, now);
+                    lastLog.acceptanceStatus = 'Unaccepted-Reassigned';
+                    lastLog.unacceptedWaitDuration = waitTimeStr;
+                    lastLog.durationDisplay = `Did Not Accept for ${waitTimeStr} (Reassigned to Dr. ${newDoctor.name})`;
+                    lastLog.notes = `${lastLog.notes || ''} | [Reassigned at ${moment(now).format('hh:mm A')}: Did not accept for ${waitTimeStr}]`.trim();
+                } else {
+                    const dutyTimeStr = formatShiftDuration(lastLog.acceptedAt || prevAssignedTime, now);
+                    lastLog.acceptanceStatus = 'Replaced-After-Acceptance';
+                    lastLog.durationDisplay = `${dutyTimeStr} (Shift Ended - Reassigned to Dr. ${newDoctor.name})`;
+                }
+            }
+        }
+
+        const isReassignment = Boolean(previousDoctorId && String(previousDoctorId) !== String(newDoctor._id));
+        const customNote = notes || reason;
+
+        // Push new assignment entry into treatmentHistory
         appointment.treatmentHistory.push({
             fromDoctorId: previousDoctorId || null,
-            toDoctorId: doctor._id,
-            action: previousDoctorId ? 'Transfer-Accepted' : 'Initial-Assignment',
-            notes: notes ? String(notes).trim() : `Assigned to Dr. ${doctor.name} (${doctor.speciality || 'Specialist'}) by Hospital Management.`,
+            toDoctorId: newDoctor._id,
+            action: isReassignment ? 'Reassigned-By-Hospital' : 'Initial-Assignment',
+            assignmentSource: 'Hospital-Admin',
+            acceptanceStatus: 'Pending-Acceptance',
+            assignedAt: now,
+            acceptedAt: null,
+            unacceptedWaitDuration: "",
+            notes: customNote
+                ? String(customNote).trim()
+                : (isReassignment
+                    ? `Hospital Admin reassigned case from Dr. ${previousDoctorName} to Dr. ${newDoctor.name} (${newDoctor.speciality || 'Specialist'}). Awaiting acceptance.`
+                    : `Assigned to Dr. ${newDoctor.name} (${newDoctor.speciality || 'Specialist'}) by Hospital Management. Awaiting acceptance.`),
             timestamp: now,
             startTime: now,
             endTime: null,
-            durationDisplay: "Active Shift"
+            durationDisplay: "Awaiting Doctor Acceptance"
         });
 
-        appointment.doctorId = doctor._id;
+        appointment.doctorId = newDoctor._id;
         appointment.pendingDoctorId = null;
 
         if (appointment.status === 'Hospital-Pending' || appointment.status === 'Pending') {
@@ -741,28 +923,48 @@ const assignDoctorToAdmission = async (req, res) => {
 
         await appointment.save();
 
-        // Non-blocking notifications to Doctor and Patient
+        // Dispatch Push Notifications in background
         Promise.allSettled([
             sendPushNotification(
-                doctor._id,
+                newDoctor._id,
                 'doctor',
-                "🏥 New IPD Case Assigned",
-                `Hospital Admin assigned you to patient ${appointment.patients?.[0]?.patientName || 'Patient'} (Booking #${appointment.bookingId}, Bed: ${appointment.bedNumber || 'Assigned'}).`,
+                "🏥 New IPD Case Assigned - Action Required",
+                `Hospital Admin assigned you to patient ${appointment.patients?.[0]?.patientName || 'Patient'} (#${appointment.bookingId}, Bed: ${appointment.bedNumber || 'Assigned'}). Please accept/take charge.`,
                 { appointmentId: String(appointment._id), bookingId: String(appointment.bookingId), type: 'CASE_ASSIGNED' }
             ),
+            (isReassignment && previousDoctorId) ? sendPushNotification(
+                previousDoctorId,
+                'doctor',
+                "ℹ️ Case Reassigned by Hospital",
+                `Case #${appointment.bookingId} has been reassigned to Dr. ${newDoctor.name} by Hospital Management.`,
+                { appointmentId: String(appointment._id), bookingId: String(appointment.bookingId), type: 'CASE_REASSIGNED_AWAY' }
+            ) : Promise.resolve(),
             appointment.userId ? sendPushNotification(
                 appointment.userId,
                 'user',
                 "👨‍⚕️ Attending Doctor Assigned",
-                `Dr. ${doctor.name} (${doctor.speciality || 'Specialist'}) has been assigned to your hospital care (#${appointment.bookingId}).`,
+                `Dr. ${newDoctor.name} (${newDoctor.speciality || 'Specialist'}) has been assigned to your hospital care (#${appointment.bookingId}).`,
                 { appointmentId: String(appointment._id), bookingId: String(appointment.bookingId), type: 'DOCTOR_ASSIGNED' }
             ) : Promise.resolve()
         ]);
 
+        // Populate and enrich history so Hospital UI updates immediately
+        const updatedPopulated = await Appointment.findById(appointment._id)
+            .populate('doctorId', 'name speciality qualification phone profileImage department')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage phone department')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage phone department')
+            .lean();
+
+        const { enrichedHistory, summaryStats } = buildHospitalDoctorAuditTrail(updatedPopulated.treatmentHistory, updatedPopulated.status);
+
         return res.status(200).json({
             success: true,
-            message: `Dr. ${doctor.name} assigned to case #${appointment.bookingId} successfully.`,
-            data: appointment
+            message: `Dr. ${newDoctor.name} assigned to case #${appointment.bookingId} successfully.`,
+            doctorAssignmentSummary: summaryStats,
+            data: {
+                ...updatedPopulated,
+                treatmentHistory: enrichedHistory
+            }
         });
 
     } catch (error) {
@@ -770,9 +972,6 @@ const assignDoctorToAdmission = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
-
-
-
 
 
 // --- 2. MANAGE SERVICES (Screenshot 11, 12, 31) ---
@@ -825,155 +1024,236 @@ const calcDuration = (start, end) => {
     const minutes = duration.minutes();
     return hours > 0 ? `${hours} hr ${minutes} mins` : `${minutes} mins`;
 };
-// --- 3. FINAL DISCHARGE & DYNAMIC BILLING (Full Code - Auto-closes open specialist care shifts on checkout) ---
-// Endpoint: POST /hospital/panel/discharge/finalize
+// @desc    Generate 24-Hour Dynamic Final Bill & Discharge Patient (Closes Open Shift in treatmentHistory)
+// @route   POST /hospital/panel/discharge/finalize
+// @access  Private (Hospital Admin)
 const generateFinalBillAndDischarge = async (req, res) => {
     try {
-        const { appointmentId, billingItems } = req.body; 
         const hospitalId = req.user.id;
+        const {
+            appointmentId,
+            extraCharges = 0,
+            discountAmount = 0,
+            dischargeNote,
+            paymentMethod
+        } = req.body;
 
-        const appointment = await Appointment.findOne({ _id: appointmentId, hospitalId });
-        if (!appointment) return res.status(404).json({ success: false, message: "Admission Record Not Found" });
-
-        const actualEndDate = new Date();
-
-        // 🚀 1. Run 24-Hour Stay & Financial Ledger Calculations
-        const ledger = calcStayAndLedger(appointment, actualEndDate, billingItems);
-
-        // 2. Add extra billing items to specialServices schema
-        const items = Array.isArray(billingItems) ? billingItems : [];
-        items.forEach(itm => {
-            appointment.specialServices.push({
-                serviceName: itm.serviceName,
-                price: Number(itm.price)
-            });
-        });
-
-        if (ledger.overstayCharge > 0) {
-            appointment.specialServices.push({ 
-                serviceName: `Overstay Bed Surcharge (${ledger.overstayDays} days)`, 
-                price: ledger.overstayCharge 
+        if (!appointmentId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId is required to finalize discharge."
             });
         }
 
-        // 3. Update Pricing Breakdown & Ledger Snapshots
-        if (!appointment.pricingBreakdown) {
-            appointment.pricingBreakdown = {};
+        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            hospitalId,
+            ...(isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query)
+            .populate('bedId')
+            .populate('userId', 'name phone fcmToken')
+            .populate('doctorId', 'name speciality');
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Admission record not found in this hospital."
+            });
         }
 
-        appointment.pricingBreakdown.baseFee = ledger.accumulatedBaseFee;
-        appointment.pricingBreakdown.extraCharges = ledger.extraServicesTotal;
-        appointment.pricingBreakdown.discountAmount = ledger.discountAmount;
-        appointment.pricingBreakdown.subtotal = ledger.accumulatedBaseFee + ledger.extraServicesTotal;
-        appointment.pricingBreakdown.actualStayHours = ledger.exactStayHours;
-        appointment.pricingBreakdown.actualStayDays = ledger.actualStayDays;
-        appointment.pricingBreakdown.bookedDurationDays = ledger.bookedDays;
-        appointment.pricingBreakdown.depositPaidOnBooking = ledger.depositPaidOnBooking;
-        appointment.pricingBreakdown.unusedDaysRefund = ledger.unusedDaysRefund;
-        appointment.pricingBreakdown.refundDueToUser = ledger.refundDueToUser;
-        appointment.pricingBreakdown.pendingDepartureBalance = ledger.pendingDepartureBalance;
-        appointment.pricingBreakdown.settlementStatus = ledger.settlementStatus;
+        const now = new Date();
+        const admissionStart = appointment.startDate ? new Date(appointment.startDate) : new Date(appointment.createdAt);
 
-        appointment.status = 'Completed';
-        appointment.endDate = actualEndDate;
-        appointment.totalAmount = ledger.totalActualBill; // Saved Final Actual Bill
+        // 1. 24-Hour Dynamic Stay Calculation
+        const diffMs = Math.max(0, now.getTime() - admissionStart.getTime());
+        const actualStayHours = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60)));
+        const actualStayDays = Math.max(1, Math.ceil(actualStayHours / 24));
+        const bookedDays = Math.max(1, Number(appointment.stayDuration || appointment.pricingBreakdown?.bookedDurationDays || 1));
 
-        // 🚀 4. PAYMENT & REFUND RESOLUTION
-        if (ledger.refundDueToUser > 0 && appointment.paymentMethod === 'Online' && appointment.paymentDetails?.razorpayPaymentId) {
-            try {
-                const { refundRazorpayPayment } = require('../../utils/razorpay');
-                await refundRazorpayPayment(
-                    appointment.paymentDetails.razorpayPaymentId,
-                    ledger.refundDueToUser,
-                    appointment.bookingId
-                );
-                appointment.paymentStatus = 'Refund-Initiated';
-            } catch (refundErr) {
-                console.error("Gateway Refund Exception:", refundErr.message);
-                appointment.paymentStatus = 'Refund-Initiated';
-            }
-        } else if (ledger.pendingDepartureBalance > 0) {
-            appointment.paymentStatus = 'Paid'; // Marked Paid after counter collection
+        const bedPricePerDay = Number(
+            appointment.bedId?.pricePerDay ||
+            (Number(appointment.pricingBreakdown?.baseFee || 1000) / bookedDays)
+        );
+
+        const specialServicesSum = (appointment.specialServices || []).reduce(
+            (sum, s) => sum + Number(s.price || 0),
+            0
+        );
+
+        const actualRoomCharges = bedPricePerDay * actualStayDays;
+        const visitCharges = Number(appointment.pricingBreakdown?.visitCharges || 0);
+        const totalExtra = Number(extraCharges || 0) + specialServicesSum;
+        const totalDiscount = Number(discountAmount || appointment.pricingBreakdown?.discountAmount || 0);
+
+        const finalActualBill = Math.max(0, Math.round(actualRoomCharges + visitCharges + totalExtra - totalDiscount));
+        const depositAlreadyPaid = appointment.paymentStatus === 'Paid'
+            ? Number(appointment.pricingBreakdown?.depositPaidOnBooking || appointment.totalAmount || 0)
+            : 0;
+
+        let unusedDaysRefund = 0;
+        let pendingDepartureBalance = 0;
+        let settlementStatus = 'Settled';
+
+        if (depositAlreadyPaid > finalActualBill) {
+            unusedDaysRefund = Math.round(depositAlreadyPaid - finalActualBill);
+            settlementStatus = 'Refund-Initiated';
+            appointment.paymentStatus = 'Refund-Initiated';
+        } else if (finalActualBill > depositAlreadyPaid) {
+            pendingDepartureBalance = Math.round(finalActualBill - depositAlreadyPaid);
+            settlementStatus = 'Settled';
+            appointment.paymentStatus = 'Paid';
         } else {
+            settlementStatus = 'Settled';
             appointment.paymentStatus = 'Paid';
         }
 
-        // 5. Auto-close open primary doctor's active shift
-        if (appointment.doctorId) {
-            const activePrimaryShift = appointment.treatmentHistory.find(h => 
-                h.toDoctorId && 
-                h.toDoctorId.toString() === appointment.doctorId.toString() && 
-                !h.endTime
-            );
-            if (activePrimaryShift) {
-                activePrimaryShift.endTime = actualEndDate;
-                activePrimaryShift.durationDisplay = calcDuration(activePrimaryShift.startTime, actualEndDate);
+        if (paymentMethod) {
+            appointment.paymentMethod = paymentMethod;
+        }
+
+        // 2. Update Pricing Breakdown Ledger
+        if (!appointment.pricingBreakdown) appointment.pricingBreakdown = {};
+        appointment.pricingBreakdown.bookedDurationDays = bookedDays;
+        appointment.pricingBreakdown.actualStayHours = actualStayHours;
+        appointment.pricingBreakdown.actualStayDays = actualStayDays;
+        appointment.pricingBreakdown.depositPaidOnBooking = depositAlreadyPaid;
+        appointment.pricingBreakdown.unusedDaysRefund = unusedDaysRefund;
+        appointment.pricingBreakdown.refundDueToUser = unusedDaysRefund;
+        appointment.pricingBreakdown.pendingDepartureBalance = pendingDepartureBalance;
+        appointment.pricingBreakdown.extraCharges = totalExtra;
+        appointment.pricingBreakdown.discountAmount = totalDiscount;
+        appointment.pricingBreakdown.subtotal = actualRoomCharges + visitCharges + totalExtra;
+        appointment.pricingBreakdown.settlementStatus = settlementStatus;
+
+        appointment.totalAmount = finalActualBill;
+        appointment.status = 'Completed';
+        appointment.endDate = now;
+
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+        appointment.clinicalSummary.dischargedAt = now;
+        if (dischargeNote) {
+            appointment.clinicalSummary.dischargeNote = dischargeNote;
+        }
+
+        // 3. 🚨 CLOSE OPEN SHIFT IN treatmentHistory & APPEND FINAL DISCHARGE LOG
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
+        }
+
+        let alreadyHasDischargedLog = false;
+        for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+            const logItem = appointment.treatmentHistory[i];
+            if (!logItem) continue;
+
+            if (logItem.action === 'Discharged') {
+                alreadyHasDischargedLog = true;
+            }
+
+            if (!logItem.endTime) {
+                const startRef = logItem.acceptedAt || logItem.assignedAt || logItem.startTime || logItem.timestamp;
+                const durStr = formatShiftDuration(startRef, now);
+                logItem.endTime = now;
+
+                if (logItem.acceptanceStatus === 'Pending-Acceptance') {
+                    logItem.acceptanceStatus = 'Unaccepted-Reassigned';
+                    logItem.unacceptedWaitDuration = durStr;
+                    logItem.durationDisplay = `Did Not Accept for ${durStr} (Case Discharged)`;
+                } else {
+                    logItem.acceptanceStatus = 'Completed';
+                    logItem.durationDisplay = `${durStr} (Shift Completed on Final Discharge)`;
+                }
             }
         }
 
-        // 6. Auto-close bedside specialist care shifts
-        if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
-            appointment.bedsideCareTeam.forEach(careMember => {
-                if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
-                    careMember.status = 'Completed';
-                    careMember.endTime = actualEndDate;
-                    careMember.durationDisplay = calcDuration(careMember.startTime, actualEndDate);
-                }
+        if (!alreadyHasDischargedLog) {
+            appointment.treatmentHistory.push({
+                fromDoctorId: appointment.doctorId?._id || appointment.doctorId || null,
+                toDoctorId: appointment.doctorId?._id || appointment.doctorId || null,
+                action: 'Discharged',
+                assignmentSource: 'Hospital-Admin',
+                acceptanceStatus: 'Completed',
+                assignedAt: now,
+                acceptedAt: now,
+                endTime: now,
+                unacceptedWaitDuration: "0 mins",
+                durationDisplay: "Final Bill Settled & Discharged",
+                notes: dischargeNote || `Final discharge completed by Hospital Billing Desk. Actual Stay: ${actualStayDays} day(s) (${actualStayHours} hrs).`,
+                timestamp: now,
+                startTime: now
             });
+        }
+
+        // 4. Release Bed to Available & Sync Ward Capacity
+        if (appointment.bedId) {
+            const bedMongoId = appointment.bedId._id || appointment.bedId;
+            await Bed.findByIdAndUpdate(bedMongoId, { $set: { status: 'Available' } });
         }
 
         await appointment.save();
+        await syncHospitalWardAndBedCapacity(hospitalId);
 
-        // 7. Release Bed & Update Ward capacity
-        if (appointment.bedId) {
-            const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
-            if (bed && bed.wardId) {
-                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
-            }
+        // 5. Notify Patient
+        if (appointment.userId) {
+            const notifMsg = unusedDaysRefund > 0
+                ? `Your hospital stay (#${appointment.bookingId}) is complete. Early discharge refund of ₹${unusedDaysRefund} has been initiated.`
+                : `Your hospital discharge (#${appointment.bookingId}) is complete. Wishing you a speedy recovery!`;
+
+            sendPushNotification(
+                appointment.userId._id || appointment.userId,
+                'user',
+                "🏥 Hospital Discharge Completed",
+                notifMsg,
+                {
+                    type: 'HOSPITAL_DISCHARGE_COMPLETED',
+                    serviceType: 'Hospital',
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId)
+                }
+            ).catch(() => {});
         }
 
-        // 8. Release Ambulance if not currently in transit
-        if (appointment.ambulanceId) {
-            const AmbulanceBooking = require('../../models/AmbulanceBooking');
-            const activeDischargeTrip = await AmbulanceBooking.findOne({
-                ambulanceId: appointment.ambulanceId,
-                status: { $in: ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] }
-            });
-
-            if (!activeDischargeTrip) {
-                await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
-                    $set: { availableForEmergency: true } 
-                });
-            }
-        }
-
-        res.json({ 
-            success: true, 
-            message: ledger.refundDueToUser > 0
-                ? `Patient Discharged. Stay of ${ledger.durationDisplay} settled. Excess advance of ₹${ledger.refundDueToUser} refunded to user.`
-                : (ledger.pendingDepartureBalance > 0
-                    ? `Patient Discharged. Stay of ${ledger.durationDisplay} settled. Pending balance of ₹${ledger.pendingDepartureBalance} cleared.`
-                    : `Patient Discharged successfully. Full stay of ${ledger.durationDisplay} settled.`),
-            data: {
-                bookingId: appointment.bookingId,
-                stayDuration: ledger.durationDisplay,
-                actualStayDays: ledger.actualStayDays,
-                exactStayHours: ledger.exactStayHours,
-                accumulatedBaseFee: ledger.accumulatedBaseFee,
-                depositPaidOnBooking: ledger.depositPaidOnBooking,
-                extraServicesFee: ledger.extraServicesTotal,
-                totalInvoiceValue: ledger.totalActualBill,
-                refundDueToUser: ledger.refundDueToUser,
-                pendingDepartureBalance: ledger.pendingDepartureBalance,
-                settlementStatus: ledger.settlementStatus
-            }
+        return res.status(200).json({
+            success: true,
+            message: unusedDaysRefund > 0
+                ? `Discharge finalized! Unused stay refund of ₹${unusedDaysRefund} initiated for patient.`
+                : "Patient discharged and final bill settled successfully.",
+            settlementSummary: {
+                bookedDays,
+                actualStayHours,
+                actualStayDays,
+                depositAlreadyPaid,
+                finalActualBill,
+                unusedDaysRefund,
+                pendingDepartureBalance,
+                settlementStatus
+            },
+            data: appointment
         });
 
-    } catch (error) { 
-        console.error("Discharge Error:", error);
-        res.status(500).json({ message: error.message }); 
+    } catch (error) {
+        console.error("Generate Final Bill And Discharge Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
+
+// // @desc    Finalize Discharge Alias Route (Uses the exact same 24-Hour Dynamic Ledger & treatmentHistory Sync)
+// // @route   POST /hospital/panel/finalize-discharge
+// // @access  Private (Hospital Admin)
+// const finalizeDischarge = async (req, res) => {
+//     try {
+//         return await generateFinalBillAndDischarge(req, res);
+//     } catch (error) {
+//         return res.status(500).json({
+//             success: false,
+//             message: error.message
+//         });
+//     }
+// };
 
 
 
@@ -2004,143 +2284,229 @@ const getDailyOccupancy = async (req, res) => {
     }
 };
 
-// @desc    Hospital Admin Finalizes Inpatient Discharge & Calculates 24-Hour Stay Settlement with Insurance
+// @desc    Finalize Patient Discharge, Settle 24-Hour Dynamic Ledger, Close Active Doctor Shift & Release Bed
 // @route   POST /hospital/panel/finalize-discharge
 // @access  Private (Hospital Admin)
 const finalizeDischarge = async (req, res) => {
     try {
-        const { appointmentId, dischargeNote } = req.body;
         const hospitalId = req.user.id;
+        const {
+            appointmentId,
+            extraCharges = 0,
+            discountAmount = 0,
+            dischargeNote,
+            paymentMethod
+        } = req.body;
 
-        const isObjectId = mongoose.isValidObjectId(appointmentId);
-        const query = {
-            hospitalId,
-            bookingType: 'Admission',
-            ...(isObjectId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
-        };
-
-        const appointment = await Appointment.findOne(query).populate('userId', 'name phone fcmToken');
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission record not found." });
+        if (!appointmentId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId is required to finalize discharge."
+            });
         }
 
-        if (appointment.status === 'Completed') {
-            return res.status(400).json({ success: false, message: "Patient is already discharged." });
+        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            hospitalId,
+            ...(isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query)
+            .populate('bedId')
+            .populate('userId', 'name phone fcmToken')
+            .populate('doctorId', 'name speciality');
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Admission record not found in this hospital."
+            });
         }
 
         const now = new Date();
-        const startMoment = moment(appointment.startDate || appointment.createdAt);
-        const currentMoment = moment(now);
+        const admissionStart = appointment.startDate
+            ? new Date(appointment.startDate)
+            : new Date(appointment.createdAt);
 
-        // Calculate actual stay duration based on standard 24-hour cycle
-        const actualStayHours = Math.max(1, currentMoment.diff(startMoment, 'hours'));
+        // 1. 24-Hour Dynamic Stay Calculation
+        const diffMs = Math.max(0, now.getTime() - admissionStart.getTime());
+        const actualStayHours = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60)));
         const actualStayDays = Math.max(1, Math.ceil(actualStayHours / 24));
-        const bookedDays = Number(appointment.pricingBreakdown?.bookedDurationDays || appointment.stayDuration || 1);
+        const bookedDays = Math.max(
+            1,
+            Number(appointment.stayDuration || appointment.pricingBreakdown?.bookedDurationDays || 1)
+        );
 
-        const targetBed = await Bed.findById(appointment.bedId);
-        const bedPricePerDay = Number(targetBed?.pricePerDay || 1000);
-        const depositPaid = Number(appointment.pricingBreakdown?.depositPaidOnBooking || appointment.totalAmount || 0);
+        const bedPricePerDay = Number(
+            appointment.bedId?.pricePerDay ||
+            (Number(appointment.pricingBreakdown?.baseFee || 1000) / bookedDays)
+        );
 
-        // Standard stay cost calculation
-        const actualBaseFee = bedPricePerDay * actualStayDays;
-        const specialServicesFee = Number(appointment.pricingBreakdown?.extraCharges || 0);
-        const doctorFee = Number(appointment.pricingBreakdown?.visitCharges || 0);
-        const totalActualBill = actualBaseFee + specialServicesFee + doctorFee;
+        const specialServicesSum = (appointment.specialServices || []).reduce(
+            (sum, s) => sum + Number(s.price || 0),
+            0
+        );
 
-        // 🚨 CASHLESS INSURANCE SETTLEMENT ENGINE
-        const isCashlessApproved = appointment.insuranceDetails?.hasInsurance === true && 
-                                   appointment.insuranceDetails?.approvalStatus === 'Approved';
+        const actualRoomCharges = bedPricePerDay * actualStayDays;
+        const visitCharges = Number(appointment.pricingBreakdown?.visitCharges || 0);
+        const totalExtra = Number(extraCharges || 0) + specialServicesSum;
+        const totalDiscount = Number(discountAmount || appointment.pricingBreakdown?.discountAmount || 0);
 
-        let refundDue = 0;
-        let pendingPayableByPatient = 0;
-        let settlementNotes = "";
+        const finalActualBill = Math.max(
+            0,
+            Math.round(actualRoomCharges + visitCharges + totalExtra - totalDiscount)
+        );
 
-        if (isCashlessApproved) {
-            // Case A: 100% Cashless TPA Claim Approved
-            // The insurance company pays the hospital bill directly.
-            // Any initial deposit paid by patient is 100% refunded!
-            refundDue = depositPaid;
-            pendingPayableByPatient = 0;
-            settlementNotes = `100% Cashless Claim Approved by TPA. Hospital bill of ₹${totalActualBill} settled by insurance. Booking deposit of ₹${depositPaid} refunded to patient.`;
+        const depositAlreadyPaid = appointment.paymentStatus === 'Paid'
+            ? Number(appointment.pricingBreakdown?.depositPaidOnBooking || appointment.totalAmount || 0)
+            : 0;
+
+        let unusedDaysRefund = 0;
+        let pendingDepartureBalance = 0;
+        let settlementStatus = 'Settled';
+
+        if (depositAlreadyPaid > finalActualBill) {
+            unusedDaysRefund = Math.round(depositAlreadyPaid - finalActualBill);
+            settlementStatus = 'Refund-Initiated';
+            appointment.paymentStatus = 'Refund-Initiated';
+        } else if (finalActualBill > depositAlreadyPaid) {
+            pendingDepartureBalance = Math.round(finalActualBill - depositAlreadyPaid);
+            settlementStatus = 'Settled';
+            appointment.paymentStatus = 'Paid';
         } else {
-            // Case B: Self-Pay / Cash / Pending Insurance
-            if (depositPaid > totalActualBill) {
-                // Early recovery: refund unused days
-                refundDue = depositPaid - totalActualBill;
-                pendingPayableByPatient = 0;
-                settlementNotes = `Patient recovered early (${actualStayDays}/${bookedDays} days). Unused deposit refund: ₹${refundDue}.`;
-            } else if (totalActualBill > depositPaid) {
-                // Extended stay: collect additional balance at counter
-                pendingPayableByPatient = totalActualBill - depositPaid;
-                refundDue = 0;
-                settlementNotes = `Extended stay (${actualStayDays} days). Pending balance payable at counter: ₹${pendingPayableByPatient}.`;
-            } else {
-                refundDue = 0;
-                pendingPayableByPatient = 0;
-                settlementNotes = "Deposit exactly covers the hospitalization bill.";
-            }
+            settlementStatus = 'Settled';
+            appointment.paymentStatus = 'Paid';
         }
 
-        // Update Appointment Document
+        if (paymentMethod) {
+            appointment.paymentMethod = paymentMethod;
+        }
+
+        // 2. Update Pricing Breakdown Ledger
+        if (!appointment.pricingBreakdown) appointment.pricingBreakdown = {};
+        appointment.pricingBreakdown.bookedDurationDays = bookedDays;
+        appointment.pricingBreakdown.actualStayHours = actualStayHours;
+        appointment.pricingBreakdown.actualStayDays = actualStayDays;
+        appointment.pricingBreakdown.depositPaidOnBooking = depositAlreadyPaid;
+        appointment.pricingBreakdown.unusedDaysRefund = unusedDaysRefund;
+        appointment.pricingBreakdown.refundDueToUser = unusedDaysRefund;
+        appointment.pricingBreakdown.pendingDepartureBalance = pendingDepartureBalance;
+        appointment.pricingBreakdown.extraCharges = totalExtra;
+        appointment.pricingBreakdown.discountAmount = totalDiscount;
+        appointment.pricingBreakdown.subtotal = actualRoomCharges + visitCharges + totalExtra;
+        appointment.pricingBreakdown.settlementStatus = settlementStatus;
+
+        appointment.totalAmount = finalActualBill;
         appointment.status = 'Completed';
+        appointment.endDate = now;
+
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
         appointment.clinicalSummary.dischargedAt = now;
         if (dischargeNote) {
             appointment.clinicalSummary.dischargeNote = dischargeNote;
         }
 
-        if (!appointment.pricingBreakdown) appointment.pricingBreakdown = {};
-        appointment.pricingBreakdown.actualStayHours = actualStayHours;
-        appointment.pricingBreakdown.actualStayDays = actualStayDays;
-        appointment.pricingBreakdown.unusedDaysRefund = refundDue;
-        appointment.pricingBreakdown.refundDueToUser = refundDue;
-        appointment.pricingBreakdown.pendingDepartureBalance = pendingPayableByPatient;
-        appointment.pricingBreakdown.settlementStatus = refundDue > 0 ? 'Refund-Initiated' : 'Settled';
+        // 3. Close any open shift in treatmentHistory & record final Discharged log
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
+        }
 
-        // 🚨 Release Bed & Synchronize Hospital Capacity
-        if (targetBed) {
-            targetBed.status = 'Available';
-            await targetBed.save();
+        let alreadyHasDischargedLog = false;
+        for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+            const logItem = appointment.treatmentHistory[i];
+            if (!logItem) continue;
+
+            if (logItem.action === 'Discharged') {
+                alreadyHasDischargedLog = true;
+            }
+
+            if (!logItem.endTime) {
+                const startRef = logItem.acceptedAt || logItem.assignedAt || logItem.startTime || logItem.timestamp;
+                const durStr = formatShiftDuration(startRef, now);
+                logItem.endTime = now;
+
+                if (logItem.acceptanceStatus === 'Pending-Acceptance') {
+                    logItem.acceptanceStatus = 'Unaccepted-Reassigned';
+                    logItem.unacceptedWaitDuration = durStr;
+                    logItem.durationDisplay = `Did Not Accept for ${durStr} (Case Discharged)`;
+                } else {
+                    logItem.acceptanceStatus = 'Completed';
+                    logItem.durationDisplay = `${durStr} (Shift Completed on Final Discharge)`;
+                }
+            }
+        }
+
+        if (!alreadyHasDischargedLog) {
+            appointment.treatmentHistory.push({
+                fromDoctorId: appointment.doctorId?._id || appointment.doctorId || null,
+                toDoctorId: appointment.doctorId?._id || appointment.doctorId || null,
+                action: 'Discharged',
+                assignmentSource: 'Hospital-Admin',
+                acceptanceStatus: 'Completed',
+                assignedAt: now,
+                acceptedAt: now,
+                endTime: now,
+                unacceptedWaitDuration: "0 mins",
+                durationDisplay: "Final Bill Settled & Discharged",
+                notes: dischargeNote || `Final discharge completed by Hospital Billing Desk. Actual Stay: ${actualStayDays} day(s) (${actualStayHours} hrs).`,
+                timestamp: now,
+                startTime: now
+            });
+        }
+
+        // 4. Release Bed to Available & Sync Ward Capacity
+        if (appointment.bedId) {
+            const bedMongoId = appointment.bedId._id || appointment.bedId;
+            await Bed.findByIdAndUpdate(bedMongoId, { $set: { status: 'Available' } });
         }
 
         await appointment.save();
+        await syncHospitalWardAndBedCapacity(hospitalId);
 
-        if (appointment.hospitalId) {
-            await syncHospitalWardAndBedCapacity(appointment.hospitalId, targetBed?.wardId);
-        }
-
-        // Notify Patient
+        // 5. Notify Patient via Push Notification
         if (appointment.userId) {
-            try {
-                await sendPushNotification(
-                    appointment.userId._id,
-                    'user',
-                    "🏥 Hospital Discharge Finalized",
-                    `Discharge finalized for Bed ${appointment.bedNumber}. ${settlementNotes}`,
-                    { appointmentId: appointment._id.toString(), type: 'discharge_completed' }
-                );
-            } catch (e) {}
+            const notifMsg = unusedDaysRefund > 0
+                ? `Your hospital stay (#${appointment.bookingId}) is complete. Early discharge refund of ₹${unusedDaysRefund} has been initiated.`
+                : `Your hospital discharge (#${appointment.bookingId}) is complete. Wishing you a speedy recovery!`;
+
+            sendPushNotification(
+                appointment.userId._id || appointment.userId,
+                'user',
+                "🏥 Hospital Discharge Completed",
+                notifMsg,
+                {
+                    type: 'HOSPITAL_DISCHARGE_COMPLETED',
+                    serviceType: 'Hospital',
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId)
+                }
+            ).catch(() => {});
         }
 
         return res.status(200).json({
             success: true,
-            message: "Discharge finalized successfully. Bed released to Available.",
-            settlement: {
-                bookingId: appointment.bookingId,
-                isCashlessInsuranceApproved: isCashlessApproved,
+            message: unusedDaysRefund > 0
+                ? `Discharge finalized! Unused stay refund of ₹${unusedDaysRefund} initiated for patient.`
+                : "Patient discharged and final bill settled successfully.",
+            settlementSummary: {
+                bookedDays,
+                actualStayHours,
                 actualStayDays,
-                totalActualBill,
-                depositPaidOnBooking: depositPaid,
-                refundDueToUser: refundDue,
-                pendingPayableAtCounter: pendingPayableByPatient,
-                settlementStatus: appointment.pricingBreakdown.settlementStatus,
-                notes: settlementNotes
+                depositAlreadyPaid,
+                finalActualBill,
+                unusedDaysRefund,
+                pendingDepartureBalance,
+                settlementStatus
             },
             data: appointment
         });
 
     } catch (error) {
         console.error("Finalize Discharge Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
@@ -2416,158 +2782,109 @@ const getHospitalHistory = async (req, res) => {
     }
 };
 
-// --- API: EMERGENCY PATIENT DISCHARGE & RESOURCE RELEASE (Full Code - Auto-closes open specialist care shifts on discharge) ---
-// Endpoint: POST /hospital/panel/discharge/emergency
+// @desc    Emergency / Direct Discharge by Hospital Admin (Closes Active Doctor Shift in treatmentHistory & Frees Bed)
+// @route   POST /hospital/panel/discharge/emergency
+// @access  Private (Hospital Admin)
 const emergencyDischarge = async (req, res) => {
     try {
-        const { appointmentId, billingItems } = req.body; 
-        const hospitalId = req.user.id; 
+        const hospitalId = req.user.id;
+        const { appointmentId, reason, dischargeNote } = req.body;
 
-        const appointment = await Appointment.findOne({ 
-            _id: appointmentId, 
+        if (!appointmentId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId is required."
+            });
+        }
+
+        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const query = {
             hospitalId,
-            $or: [
-                { ambulanceId: { $ne: null, $exists: true } },
-                { bedBookingType: 'Emergency-Bed' },
-                { triageLevel: 'Emergency' }
-            ]
-        });
+            ...(isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
 
+        const appointment = await Appointment.findOne(query);
         if (!appointment) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Active Emergency Admission Record Not Found or unauthorized." 
+            return res.status(404).json({
+                success: false,
+                message: "Admission record not found."
             });
         }
 
-        if (appointment.status === 'Completed') {
-            return res.status(400).json({ success: false, message: "Patient is already discharged." });
+        const now = new Date();
+
+        // Close any open doctor shift in treatmentHistory
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
         }
 
-        const actualEndDate = new Date();
+        if (appointment.treatmentHistory.length > 0) {
+            for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+                const logItem = appointment.treatmentHistory[i];
+                if (logItem && !logItem.endTime) {
+                    const startRef = logItem.acceptedAt || logItem.assignedAt || logItem.startTime || logItem.timestamp;
+                    const durStr = formatShiftDuration(startRef, now);
+                    logItem.endTime = now;
+                    if (logItem.acceptanceStatus === 'Pending-Acceptance') {
+                        logItem.acceptanceStatus = 'Unaccepted-Reassigned';
+                        logItem.unacceptedWaitDuration = durStr;
+                        logItem.durationDisplay = `Did Not Accept for ${durStr} (Case Discharged)`;
+                    } else {
+                        logItem.acceptanceStatus = 'Completed';
+                        logItem.durationDisplay = `${durStr} (Shift Completed on Discharge)`;
+                    }
+                    break;
+                }
+            }
+        }
 
-        // 🚀 1. Run 24-Hour Stay & Financial Ledger Calculations
-        const ledger = calcStayAndLedger(appointment, actualEndDate, billingItems);
-
-        const items = Array.isArray(billingItems) ? billingItems : [];
-        items.forEach(itm => {
-            appointment.specialServices.push({
-                serviceName: itm.serviceName,
-                price: Number(itm.price)
-            });
+        appointment.treatmentHistory.push({
+            fromDoctorId: appointment.doctorId || null,
+            toDoctorId: appointment.doctorId || null,
+            action: 'Discharged',
+            assignmentSource: 'Hospital-Admin',
+            acceptanceStatus: 'Completed',
+            assignedAt: now,
+            acceptedAt: now,
+            endTime: now,
+            unacceptedWaitDuration: "0 mins",
+            durationDisplay: "Discharged by Hospital Management",
+            notes: reason || dischargeNote || "Discharged directly by Hospital Admin.",
+            timestamp: now,
+            startTime: now
         });
-
-        if (ledger.overstayCharge > 0) {
-            appointment.specialServices.push({ 
-                serviceName: `Overstay Bed Surcharge (${ledger.overstayDays} days)`, 
-                price: ledger.overstayCharge 
-            });
-        }
-
-        if (!appointment.pricingBreakdown) {
-            appointment.pricingBreakdown = {};
-        }
-
-        appointment.pricingBreakdown.baseFee = ledger.accumulatedBaseFee;
-        appointment.pricingBreakdown.extraCharges = ledger.extraServicesTotal;
-        appointment.pricingBreakdown.discountAmount = ledger.discountAmount;
-        appointment.pricingBreakdown.subtotal = ledger.accumulatedBaseFee + ledger.extraServicesTotal;
-        appointment.pricingBreakdown.actualStayHours = ledger.exactStayHours;
-        appointment.pricingBreakdown.actualStayDays = ledger.actualStayDays;
-        appointment.pricingBreakdown.bookedDurationDays = ledger.bookedDays;
-        appointment.pricingBreakdown.depositPaidOnBooking = ledger.depositPaidOnBooking;
-        appointment.pricingBreakdown.unusedDaysRefund = ledger.unusedDaysRefund;
-        appointment.pricingBreakdown.refundDueToUser = ledger.refundDueToUser;
-        appointment.pricingBreakdown.pendingDepartureBalance = ledger.pendingDepartureBalance;
-        appointment.pricingBreakdown.settlementStatus = ledger.settlementStatus;
 
         appointment.status = 'Completed';
-        appointment.endDate = actualEndDate;
-        appointment.totalAmount = ledger.totalActualBill;
-
-        // Payment & Refund Action
-        if (ledger.refundDueToUser > 0 && appointment.paymentMethod === 'Online' && appointment.paymentDetails?.razorpayPaymentId) {
-            try {
-                const { refundRazorpayPayment } = require('../../utils/razorpay');
-                await refundRazorpayPayment(
-                    appointment.paymentDetails.razorpayPaymentId,
-                    ledger.refundDueToUser,
-                    appointment.bookingId
-                );
-                appointment.paymentStatus = 'Refund-Initiated';
-            } catch (e) {
-                appointment.paymentStatus = 'Refund-Initiated';
-            }
-        } else {
-            appointment.paymentStatus = 'Paid';
+        appointment.endDate = now;
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+        appointment.clinicalSummary.dischargedAt = now;
+        if (dischargeNote || reason) {
+            appointment.clinicalSummary.dischargeNote = dischargeNote || reason;
         }
 
-        // Auto-close doctor shift
-        if (appointment.doctorId) {
-            const activePrimaryShift = appointment.treatmentHistory.find(h => 
-                h.toDoctorId && 
-                h.toDoctorId.toString() === appointment.doctorId.toString() && 
-                !h.endTime
-            );
-            if (activePrimaryShift) {
-                activePrimaryShift.endTime = actualEndDate;
-                activePrimaryShift.durationDisplay = calcDuration(activePrimaryShift.startTime, actualEndDate);
-            }
-        }
-
-        // Auto-close bedside team
-        if (appointment.bedsideCareTeam && appointment.bedsideCareTeam.length > 0) {
-            appointment.bedsideCareTeam.forEach(careMember => {
-                if (careMember.status === 'In-Progress' || careMember.status === 'Accepted') {
-                    careMember.status = 'Completed';
-                    careMember.endTime = actualEndDate;
-                    careMember.durationDisplay = calcDuration(careMember.startTime, actualEndDate);
-                }
-            });
+        if (appointment.bedId) {
+            await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
         }
 
         await appointment.save();
+        await syncHospitalWardAndBedCapacity(hospitalId);
 
-        // Release Bed
-        if (appointment.bedId) {
-            const bed = await Bed.findByIdAndUpdate(appointment.bedId, { $set: { status: 'Available' } });
-            if (bed && bed.wardId) {
-                await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
-            }
-        }
-
-        // Release Ambulance
-        if (appointment.ambulanceId) {
-            await Ambulance.findByIdAndUpdate(appointment.ambulanceId, { 
-                $set: { availableForEmergency: true } 
-            });
-        }
-
-        res.json({ 
-            success: true, 
-            message: `Emergency Patient Discharged. Total stay: ${ledger.durationDisplay}. Bill settled successfully.`, 
-            data: {
-                bookingId: appointment.bookingId,
-                stayDuration: ledger.durationDisplay,
-                actualStayDays: ledger.actualStayDays,
-                exactStayHours: ledger.exactStayHours,
-                accumulatedBaseFee: ledger.accumulatedBaseFee,
-                depositPaidOnBooking: ledger.depositPaidOnBooking,
-                extraServicesFee: ledger.extraServicesTotal,
-                totalInvoiceValue: ledger.totalActualBill,
-                refundDueToUser: ledger.refundDueToUser,
-                pendingDepartureBalance: ledger.pendingDepartureBalance,
-                settlementStatus: ledger.settlementStatus
-            }
+        return res.status(200).json({
+            success: true,
+            message: "Patient discharged successfully and bed released to Available.",
+            data: appointment
         });
 
-    } catch (error) { 
+    } catch (error) {
         console.error("Emergency Discharge Error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
-// 3. GET HOSPITAL CASE DETAILS (Full Populated Doctor Assignment & Clinical Logs)
+// 3. GET HOSPITAL CASE DETAILS (With Complete Unaccepted/Reassigned Doctor Chain)
 // Endpoint: GET /hospital/panel/admissions/details/:id
 const getHospitalCaseDetails = async (req, res) => {
     try {
@@ -2606,30 +2923,13 @@ const getHospitalCaseDetails = async (req, res) => {
             });
         }
 
-        // Fetch any prescriptions linked to this case in parallel
         const prescriptions = await Prescription.find({ appointmentId: caseData._id })
             .populate('doctorId', 'name speciality qualification signatureImage')
             .sort({ createdAt: -1 })
             .lean();
 
-        // Enrich treatmentHistory with live elapsed time for currently active shift
-        const now = new Date();
-        const enrichedTreatmentHistory = (caseData.treatmentHistory || []).map(item => {
-            const startRef = item.startTime || item.timestamp;
-            const isCurrentlyActive = !item.endTime && caseData.status !== 'Completed';
-            return {
-                ...item,
-                fromDoctorName: item.fromDoctorId?.name || null,
-                toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
-                toDoctorSpeciality: item.toDoctorId?.speciality || "",
-                isCurrentlyActive,
-                durationDisplay: item.endTime
-                    ? (item.durationDisplay || formatShiftDuration(startRef, item.endTime))
-                    : (isCurrentlyActive ? `${formatShiftDuration(startRef, now)} (Active)` : (item.durationDisplay || "Completed"))
-            };
-        });
+        const { enrichedHistory, summaryStats } = buildHospitalDoctorAuditTrail(caseData.treatmentHistory, caseData.status);
 
-        // Enrich clinicalLogs with flat doctorName for easy UI rendering
         const enrichedClinicalLogs = (caseData.clinicalLogs || []).map(log => ({
             ...log,
             doctorName: log.doctorId?.name || "Attending Doctor",
@@ -2640,7 +2940,8 @@ const getHospitalCaseDetails = async (req, res) => {
             success: true,
             data: {
                 ...caseData,
-                treatmentHistory: enrichedTreatmentHistory,
+                doctorAssignmentSummary: summaryStats,
+                treatmentHistory: enrichedHistory,
                 clinicalLogs: enrichedClinicalLogs,
                 prescriptions: prescriptions || []
             }
@@ -2651,6 +2952,7 @@ const getHospitalCaseDetails = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 // 🧮 MASTER 24-HOUR DYNAMIC STAY & FINANCIAL LEDGER ENGINE
@@ -3187,18 +3489,19 @@ const reassignAmbulanceOnBreakdown = async (req, res) => {
     }
 };
 
-// 2. REASSIGN DOCTOR FROM HOSPITAL PANEL (Closes old shift & logs new doctor)
-// Endpoint: POST /hospital/panel/reassign-doctor
+// @desc    Reassign Doctor from Hospital Panel (Standalone Full Function with Unaccepted/Accepted Audit Trail)
+// @route   POST /hospital/panel/reassign-doctor
+// @access  Private (Hospital Admin)
 const reassignDoctorFromPanel = async (req, res) => {
     try {
         const hospitalId = req.user.id;
-        const { appointmentId, newDoctorId, doctorId, reason } = req.body;
-        const targetNewDocId = newDoctorId || doctorId;
+        const { appointmentId, newDoctorId, doctorId, reason, notes } = req.body;
+        const targetNewDoctorId = newDoctorId || doctorId;
 
-        if (!appointmentId || !targetNewDocId) {
+        if (!appointmentId || !targetNewDoctorId) {
             return res.status(400).json({
                 success: false,
-                message: "appointmentId and newDoctorId are required."
+                message: "appointmentId and newDoctorId (or doctorId) are required."
             });
         }
 
@@ -3208,85 +3511,166 @@ const reassignDoctorFromPanel = async (req, res) => {
             ...(isApptObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
         };
 
+        // Fetch admission case and target new doctor in parallel
         const [appointment, newDoctor] = await Promise.all([
-            Appointment.findOne(apptQuery).populate('doctorId', 'name speciality'),
-            Doctor.findOne({ _id: targetNewDocId, hospitalId }).select('name speciality department phone profileImage').lean()
+            Appointment.findOne(apptQuery).populate('doctorId', 'name speciality department phone'),
+            Doctor.findOne({ _id: targetNewDoctorId, hospitalId }).select('name speciality department phone profileImage qualification').lean()
         ]);
 
         if (!appointment) {
-            return res.status(404).json({ success: false, message: "Admission case not found." });
+            return res.status(404).json({
+                success: false,
+                message: "Admission case record not found in this hospital."
+            });
         }
+
         if (!newDoctor) {
-            return res.status(404).json({ success: false, message: "Target doctor not found in this hospital." });
+            return res.status(404).json({
+                success: false,
+                message: "Selected new doctor not found in this hospital."
+            });
         }
 
         const now = new Date();
-        const oldDoctorId = appointment.doctorId?._id || appointment.doctorId || null;
-        const oldDoctorName = appointment.doctorId?.name || "Previous Doctor";
+        const previousDoctorId = appointment.doctorId?._id || appointment.doctorId || null;
+        const previousDoctorName = appointment.doctorId?.name || "Previous Doctor";
 
-        // Close previous doctor's active shift duration in treatmentHistory
-        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
-            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
-            if (lastLog && !lastLog.endTime) {
-                lastLog.endTime = now;
-                lastLog.durationDisplay = formatShiftDuration(lastLog.startTime || lastLog.timestamp, now);
-            }
-        } else {
+        if (previousDoctorId && String(previousDoctorId) === String(newDoctor._id) && !appointment.pendingDoctorId) {
+            return res.status(400).json({
+                success: false,
+                message: `Dr. ${newDoctor.name} is already assigned to this case.`
+            });
+        }
+
+        if (!Array.isArray(appointment.treatmentHistory)) {
             appointment.treatmentHistory = [];
         }
 
-        // Push complete handover log
+        // 1. Close any previous open doctor assignment log in treatmentHistory
+        if (appointment.treatmentHistory.length > 0) {
+            for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+                const logItem = appointment.treatmentHistory[i];
+                if (logItem && !logItem.endTime) {
+                    const prevAssignedTime = logItem.assignedAt || logItem.startTime || logItem.timestamp;
+                    logItem.endTime = now;
+
+                    // Check if previous doctor never accepted the case
+                    if (logItem.acceptanceStatus === 'Pending-Acceptance' || !logItem.acceptedAt) {
+                        const waitTimeStr = formatShiftDuration(prevAssignedTime, now);
+                        logItem.acceptanceStatus = 'Unaccepted-Reassigned';
+                        logItem.unacceptedWaitDuration = waitTimeStr;
+                        logItem.durationDisplay = `Did Not Accept for ${waitTimeStr} (Reassigned to Dr. ${newDoctor.name})`;
+                        logItem.notes = `${logItem.notes || ''} | [Reassigned by Hospital at ${moment(now).format('hh:mm A')}: Did not accept for ${waitTimeStr}]`.trim();
+                    } else {
+                        // Previous doctor had accepted and worked on the case
+                        const dutyTimeStr = formatShiftDuration(logItem.acceptedAt || prevAssignedTime, now);
+                        logItem.acceptanceStatus = 'Replaced-After-Acceptance';
+                        logItem.durationDisplay = `${dutyTimeStr} (Shift Ended - Reassigned to Dr. ${newDoctor.name})`;
+                        logItem.notes = `${logItem.notes || ''} | [Reassigned to Dr. ${newDoctor.name} after ${dutyTimeStr} of active duty]`.trim();
+                    }
+                    break;
+                }
+            }
+        }
+
+        const customReason = reason || notes || "Reassigned by Hospital Management";
+
+        // 2. Push new doctor assignment log into treatmentHistory
         appointment.treatmentHistory.push({
-            fromDoctorId: oldDoctorId,
+            fromDoctorId: previousDoctorId,
             toDoctorId: newDoctor._id,
-            action: 'Transfer-Accepted',
-            notes: reason
-                ? `Reassigned by Hospital Admin from Dr. ${oldDoctorName} to Dr. ${newDoctor.name}. Reason: ${reason}`
-                : `Case reassigned by Hospital Admin from Dr. ${oldDoctorName} to Dr. ${newDoctor.name} (${newDoctor.speciality}).`,
+            action: 'Reassigned-By-Hospital',
+            assignmentSource: 'Hospital-Admin',
+            acceptanceStatus: 'Pending-Acceptance',
+            assignedAt: now,
+            acceptedAt: null,
+            unacceptedWaitDuration: "",
+            notes: previousDoctorId
+                ? `Reassigned by Hospital Admin from Dr. ${previousDoctorName} to Dr. ${newDoctor.name} (${newDoctor.speciality || 'Specialist'}). Reason: ${customReason}`
+                : `Assigned to Dr. ${newDoctor.name} (${newDoctor.speciality || 'Specialist'}) by Hospital Admin. Reason: ${customReason}`,
             timestamp: now,
             startTime: now,
             endTime: null,
-            durationDisplay: "Active Shift"
+            durationDisplay: "Awaiting Doctor Acceptance"
         });
 
+        // 3. Update active doctorId & clear any pending colleague transfer
         appointment.doctorId = newDoctor._id;
         appointment.pendingDoctorId = null;
+
+        if (appointment.status === 'Hospital-Pending' || appointment.status === 'Pending') {
+            appointment.status = 'Confirmed';
+        }
+
         await appointment.save();
 
-        // Notify New Doctor, Old Doctor & Patient in background
+        // 4. Send Push Notifications to New Doctor, Previous Doctor, and Patient
         Promise.allSettled([
             sendPushNotification(
                 newDoctor._id,
                 'doctor',
-                "🔄 Case Reassigned to You",
-                `Hospital Admin reassigned patient ${appointment.patients?.[0]?.patientName || 'Patient'} (#${appointment.bookingId}) to your care.`,
-                { appointmentId: String(appointment._id), type: 'CASE_REASSIGNED' }
+                "🔄 Case Reassigned to You - Action Required",
+                `Hospital Admin assigned patient ${appointment.patients?.[0]?.patientName || 'Patient'} (#${appointment.bookingId}, Bed: ${appointment.bedNumber || 'IPD'}) to your care. Please accept.`,
+                {
+                    type: 'CASE_REASSIGNED',
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId)
+                }
             ),
-            oldDoctorId ? sendPushNotification(
-                oldDoctorId,
+            previousDoctorId ? sendPushNotification(
+                previousDoctorId,
                 'doctor',
-                "ℹ️ Case Handed Over",
-                `Case #${appointment.bookingId} has been reassigned to Dr. ${newDoctor.name} by Hospital Admin.`,
-                { appointmentId: String(appointment._id), type: 'CASE_HANDOVER_COMPLETE' }
+                "ℹ️ Case Reassigned by Hospital Admin",
+                `Case #${appointment.bookingId} has been reassigned to Dr. ${newDoctor.name}. Reason: ${customReason}`,
+                {
+                    type: 'CASE_HANDOVER_COMPLETE',
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId)
+                }
             ) : Promise.resolve(),
             appointment.userId ? sendPushNotification(
                 appointment.userId,
                 'user',
                 "👨‍⚕️ Attending Doctor Updated",
-                `Dr. ${newDoctor.name} (${newDoctor.speciality}) is now your attending doctor for booking #${appointment.bookingId}.`,
-                { appointmentId: String(appointment._id), type: 'DOCTOR_UPDATED' }
+                `Dr. ${newDoctor.name} (${newDoctor.speciality || 'Specialist'}) has been assigned to your hospital care (#${appointment.bookingId}).`,
+                {
+                    type: 'DOCTOR_UPDATED',
+                    serviceType: 'Hospital',
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId)
+                }
             ) : Promise.resolve()
         ]);
 
+        // 5. Fetch populated document and build enriched audit trail for immediate frontend state update
+        const updatedPopulated = await Appointment.findById(appointment._id)
+            .populate('userId', 'name phone gender dob bloodGroup profilePic')
+            .populate('doctorId', 'name speciality qualification phone profileImage department')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage phone department')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage phone department')
+            .lean();
+
+        const { enrichedHistory, summaryStats } = buildHospitalDoctorAuditTrail(
+            updatedPopulated.treatmentHistory,
+            updatedPopulated.status
+        );
+
         return res.status(200).json({
             success: true,
-            message: `Case successfully reassigned to Dr. ${newDoctor.name}.`,
-            data: appointment
+            message: `Case #${appointment.bookingId} successfully reassigned to Dr. ${newDoctor.name}.`,
+            doctorAssignmentSummary: summaryStats,
+            data: {
+                ...updatedPopulated,
+                treatmentHistory: enrichedHistory
+            }
         });
 
     } catch (error) {
         console.error("Reassign Doctor From Panel Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
@@ -3545,7 +3929,7 @@ const getTrackCasesList = async (req, res) => {
     }
 };
 
-// 4. GET TRACK CASE SUPER DETAILS (Consolidated Ambulance + Doctor + Ward Audit)
+// 4. GET TRACK CASE SUPER DETAILS (360° Audit: Ambulance + Unaccepted/Accepted Doctors + Clinical Logs)
 // Endpoint: GET /hospital/panel/cases/track-details/:id
 const getTrackCaseSuperDetails = async (req, res) => {
     try {
@@ -3584,7 +3968,6 @@ const getTrackCaseSuperDetails = async (req, res) => {
             });
         }
 
-        // Parallel fetch for linked Ambulance Trip (if patient came via Ambulance) and Prescriptions
         const [linkedAmbulanceTrip, prescriptions] = await Promise.all([
             appointment.transactionId
                 ? AmbulanceBooking.findOne({ bookingId: appointment.transactionId })
@@ -3598,21 +3981,7 @@ const getTrackCaseSuperDetails = async (req, res) => {
                 .lean()
         ]);
 
-        const now = new Date();
-        const enrichedTreatmentHistory = (appointment.treatmentHistory || []).map(item => {
-            const startRef = item.startTime || item.timestamp;
-            const isCurrentlyActive = !item.endTime && appointment.status !== 'Completed';
-            return {
-                ...item,
-                fromDoctorName: item.fromDoctorId?.name || null,
-                toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
-                toDoctorSpeciality: item.toDoctorId?.speciality || "",
-                isCurrentlyActive,
-                durationDisplay: item.endTime
-                    ? (item.durationDisplay || formatShiftDuration(startRef, item.endTime))
-                    : (isCurrentlyActive ? `${formatShiftDuration(startRef, now)} (Active)` : (item.durationDisplay || "Completed"))
-            };
-        });
+        const { enrichedHistory, summaryStats } = buildHospitalDoctorAuditTrail(appointment.treatmentHistory, appointment.status);
 
         const enrichedClinicalLogs = (appointment.clinicalLogs || []).map(log => ({
             ...log,
@@ -3624,7 +3993,8 @@ const getTrackCaseSuperDetails = async (req, res) => {
             success: true,
             data: {
                 ...appointment,
-                treatmentHistory: enrichedTreatmentHistory,
+                doctorAssignmentSummary: summaryStats,
+                treatmentHistory: enrichedHistory,
                 clinicalLogs: enrichedClinicalLogs,
                 prescriptions: prescriptions || [],
                 ambulanceJourney: linkedAmbulanceTrip || null

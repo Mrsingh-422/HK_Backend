@@ -40,6 +40,68 @@ const formatDocShiftDuration = (startTime, endTime = new Date()) => {
     return parts.join(' ');
 };
 
+// Helper: Enrich treatmentHistory for Doctor Panel
+const enrichDocPanelHistory = (historyArray = [], appointmentStatus = 'Pending') => {
+    const now = new Date();
+    const isCaseClosed = ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show'].includes(appointmentStatus);
+
+    return (historyArray || []).map((item, index) => {
+        const assignedTime = item.assignedAt || item.startTime || item.timestamp;
+        const acceptedTime = item.acceptedAt || null;
+        const endedTime = item.endTime || null;
+        const status = item.acceptanceStatus || 'Pending-Acceptance';
+        const isLastEntry = index === historyArray.length - 1;
+
+        let computedUnacceptedWait = item.unacceptedWaitDuration || "";
+        let computedActiveDuty = "";
+        let liveStatusLabel = item.durationDisplay || "";
+
+        if (status === 'Pending-Acceptance') {
+            if (!endedTime && !isCaseClosed && isLastEntry) {
+                computedUnacceptedWait = formatDocShiftDuration(assignedTime, now);
+                liveStatusLabel = `Unaccepted for ${computedUnacceptedWait} (Awaiting Acceptance)`;
+            } else {
+                computedUnacceptedWait = item.unacceptedWaitDuration || formatDocShiftDuration(assignedTime, endedTime || now);
+                liveStatusLabel = `Did Not Accept for ${computedUnacceptedWait}`;
+            }
+        } else if (status === 'Unaccepted-Reassigned') {
+            computedUnacceptedWait = item.unacceptedWaitDuration || formatDocShiftDuration(assignedTime, endedTime || now);
+            liveStatusLabel = item.durationDisplay || `Did Not Accept for ${computedUnacceptedWait} (Reassigned)`;
+        } else if (status === 'Rejected-By-Doctor') {
+            computedUnacceptedWait = item.unacceptedWaitDuration || formatDocShiftDuration(assignedTime, endedTime || now);
+            liveStatusLabel = item.durationDisplay || `Rejected after ${computedUnacceptedWait}`;
+        } else if (status === 'Accepted' || status === 'Replaced-After-Acceptance' || status === 'Completed') {
+            const dutyStart = acceptedTime || assignedTime;
+            if (!endedTime && !isCaseClosed && isLastEntry) {
+                computedActiveDuty = formatDocShiftDuration(dutyStart, now);
+                liveStatusLabel = `${computedActiveDuty} (Active Duty)`;
+            } else {
+                computedActiveDuty = formatDocShiftDuration(dutyStart, endedTime || now);
+                liveStatusLabel = item.durationDisplay || `${computedActiveDuty} (Shift Completed)`;
+            }
+        }
+
+        return {
+            ...item,
+            attemptNumber: index + 1,
+            fromDoctorName: item.fromDoctorId?.name || null,
+            toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
+            toDoctorSpeciality: item.toDoctorId?.speciality || "",
+            assignmentSource: item.assignmentSource || 'Hospital-Admin',
+            acceptanceStatus: status,
+            assignedAt: assignedTime,
+            acceptedAt: acceptedTime,
+            endedAt: endedTime,
+            unacceptedWaitDuration: computedUnacceptedWait,
+            activeDutyDuration: computedActiveDuty,
+            isCurrentlyActive: Boolean(!endedTime && !isCaseClosed && isLastEntry && status === 'Accepted'),
+            isAwaitingAcceptance: Boolean(!endedTime && !isCaseClosed && isLastEntry && status === 'Pending-Acceptance'),
+            durationDisplay: liveStatusLabel
+        };
+    });
+};
+
+
 // --- ENRICH APPOINTMENT WITH DYNAMIC 24-HOUR LEDGER SNAPSHOT (For Doctor Panel) ---
 const enrichAppointmentClinicalDetails = async (appt, targetDischargeDate = new Date()) => {
     const apptObj = appt.toObject ? appt.toObject() : { ...appt };
@@ -766,18 +828,22 @@ const transferPatient = async (req, res) => {
             fromDoctorId: fromDoctorId,
             toDoctorId: targetDoctor._id,
             action: 'Transfer-Initiated',
+            assignmentSource: 'Colleague-Handover',
+            acceptanceStatus: 'Pending-Acceptance',
+            assignedAt: now,
+            acceptedAt: null,
+            unacceptedWaitDuration: "",
             notes: reason
                 ? `Handover requested to Dr. ${targetDoctor.name} (${priority || 'Routine'}). Note: ${reason}`
                 : `Shift handover requested to Dr. ${targetDoctor.name}.`,
             timestamp: now,
             startTime: now,
-            endTime: now,
-            durationDisplay: "Handover Pending"
+            endTime: null,
+            durationDisplay: "Awaiting Handover Acceptance"
         });
 
         await appointment.save();
 
-        // Notify Colleague Doctor & Hospital Admin
         Promise.allSettled([
             sendPushNotification(
                 targetDoctor._id,
@@ -807,7 +873,7 @@ const transferPatient = async (req, res) => {
 
 
 
-// 4. ACCEPT PATIENT HANDOVER (Closes previous doctor's active shift & starts new shift)
+// 4. ACCEPT PATIENT HANDOVER (Closes Previous Shift & Marks Transfer Accepted)
 // Endpoint: POST /hospital-doctor/panel/case/accept-transfer
 const acceptTransfer = async (req, res) => {
     try {
@@ -833,33 +899,52 @@ const acceptTransfer = async (req, res) => {
         const previousDoctorId = appointment.doctorId?._id || appointment.doctorId || null;
         const previousDoctorName = appointment.doctorId?.name || "Previous Doctor";
 
-        // Close previous doctor's open shift log
-        if (Array.isArray(appointment.treatmentHistory)) {
-            for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
-                const logItem = appointment.treatmentHistory[i];
-                if (logItem && !logItem.endTime && logItem.action !== 'Transfer-Initiated') {
-                    logItem.endTime = now;
-                    logItem.durationDisplay = formatDocShiftDuration(logItem.startTime || logItem.timestamp, now);
-                    break;
-                }
-            }
-        } else {
+        if (!Array.isArray(appointment.treatmentHistory)) {
             appointment.treatmentHistory = [];
         }
 
-        // Start new active shift log for accepting doctor
-        appointment.treatmentHistory.push({
-            fromDoctorId: previousDoctorId,
-            toDoctorId: doctorId,
-            action: 'Transfer-Accepted',
-            notes: notes
-                ? String(notes).trim()
-                : `Handover accepted by Dr. ${req.user.name} from Dr. ${previousDoctorName}.`,
-            timestamp: now,
-            startTime: now,
-            endTime: null,
-            durationDisplay: "Active Shift"
-        });
+        // Close previous doctor's active shift AND update the pending Transfer-Initiated log
+        let updatedExistingTransferLog = false;
+        for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+            const logItem = appointment.treatmentHistory[i];
+            if (!logItem) continue;
+
+            if (logItem.action === 'Transfer-Initiated' && String(logItem.toDoctorId) === String(doctorId) && !logItem.acceptedAt) {
+                const waitStr = formatDocShiftDuration(logItem.assignedAt || logItem.timestamp, now);
+                logItem.action = 'Transfer-Accepted';
+                logItem.acceptanceStatus = 'Accepted';
+                logItem.acceptedAt = now;
+                logItem.unacceptedWaitDuration = waitStr;
+                logItem.durationDisplay = "Active Duty";
+                logItem.notes = notes
+                    ? `${logItem.notes} | [Accepted by Dr. ${req.user.name} after ${waitStr}: ${notes}]`
+                    : `${logItem.notes} | [Handover accepted by Dr. ${req.user.name} after ${waitStr}]`;
+                updatedExistingTransferLog = true;
+            } else if (!logItem.endTime && String(logItem.toDoctorId) !== String(doctorId)) {
+                logItem.endTime = now;
+                const startRef = logItem.acceptedAt || logItem.startTime || logItem.timestamp;
+                logItem.acceptanceStatus = 'Completed';
+                logItem.durationDisplay = `${formatDocShiftDuration(startRef, now)} (Handed over to Dr. ${req.user.name})`;
+            }
+        }
+
+        if (!updatedExistingTransferLog) {
+            appointment.treatmentHistory.push({
+                fromDoctorId: previousDoctorId,
+                toDoctorId: doctorId,
+                action: 'Transfer-Accepted',
+                assignmentSource: 'Colleague-Handover',
+                acceptanceStatus: 'Accepted',
+                assignedAt: now,
+                acceptedAt: now,
+                unacceptedWaitDuration: "0 mins",
+                notes: notes || `Handover accepted by Dr. ${req.user.name} from Dr. ${previousDoctorName}.`,
+                timestamp: now,
+                startTime: now,
+                endTime: null,
+                durationDisplay: "Active Duty"
+            });
+        }
 
         appointment.doctorId = doctorId;
         appointment.pendingDoctorId = null;
@@ -867,7 +952,6 @@ const acceptTransfer = async (req, res) => {
 
         await appointment.save();
 
-        // Notify Previous Doctor, Hospital Admin & Patient
         Promise.allSettled([
             previousDoctorId ? sendPushNotification(
                 previousDoctorId,
@@ -902,51 +986,74 @@ const acceptTransfer = async (req, res) => {
     }
 };
 
-// --- 16. REJECT/DECLINE PATIENT HANDOVER (Doctor B Action - NEW API) ---
-// Updated: Re-activates/re-opens a new active treatment shift for Doctor A if Doctor B declines handover
+
+// 5. REJECT PATIENT HANDOVER / ASSIGNMENT (Logs Rejection Reason & Wait Duration)
+// Endpoint: POST /hospital-doctor/panel/case/reject-transfer
 const rejectTransfer = async (req, res) => {
     try {
+        const doctorId = req.user.id;
         const { appointmentId, reason } = req.body;
-        const doctorId = req.user.id; // Doctor B (Who is rejecting)
 
-        const appointment = await Appointment.findOne({ 
-            _id: appointmentId, 
-            pendingDoctorId: doctorId 
-        });
-
-        if (!appointment) {
-            return res.status(404).json({ success: false, message: "Handover request not found or already processed." });
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: "appointmentId is required." });
         }
 
-        const senderDoctorId = appointment.doctorId; // Doctor A (Original sender)
+        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const query = {
+            $or: [{ pendingDoctorId: doctorId }, { doctorId: doctorId }],
+            ...(isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Case assignment/transfer request not found." });
+        }
+
         const now = new Date();
+        const rejectReasonStr = reason ? String(reason).trim() : "Doctor busy in emergency / unavailable";
 
-        // 1. Clear pending transfer state (Patient goes back to Doctor A's active queue instantly)
-        appointment.pendingDoctorId = null;
-        
-        // 2. Push rejection log to timeline history securely
-        appointment.treatmentHistory.push({
-            fromDoctorId: doctorId, // Doctor B
-            toDoctorId: senderDoctorId, // Doctor A
-            action: 'Transfer-Initiated', 
-            notes: `Transfer Rejected by Dr. ${req.user.name}. Reason: ${reason || 'Shift duty mismatch'}`,
-            timestamp: now
-        });
+        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
+            for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+                const logItem = appointment.treatmentHistory[i];
+                if (logItem && String(logItem.toDoctorId) === String(doctorId) && !logItem.endTime) {
+                    const waitStr = formatDocShiftDuration(logItem.assignedAt || logItem.timestamp, now);
+                    logItem.action = 'Transfer-Rejected';
+                    logItem.acceptanceStatus = 'Rejected-By-Doctor';
+                    logItem.endTime = now;
+                    logItem.unacceptedWaitDuration = waitStr;
+                    logItem.rejectionReason = rejectReasonStr;
+                    logItem.durationDisplay = `Declined after ${waitStr} (Reason: ${rejectReasonStr})`;
+                    logItem.notes = `${logItem.notes || ''} | [Declined by Dr. ${req.user.name} after ${waitStr}: ${rejectReasonStr}]`;
+                    break;
+                }
+            }
+        }
 
-        // 🚀 SYNC FIX: Re-open a new active treatment shift for Doctor A (senderDoctorId) so they can continue tracking stay duration
-        appointment.treatmentHistory.push({
-            toDoctorId: senderDoctorId,
-            action: 'Transfer-Accepted', // Re-activated under Doctor A
-            notes: `Case returned to duty of previous physician after transfer rejection.`,
-            timestamp: now,
-            startTime: now // Start new active shift tracking for Doctor A
-        });
+        if (String(appointment.pendingDoctorId) === String(doctorId)) {
+            appointment.pendingDoctorId = null;
+        } else if (String(appointment.doctorId) === String(doctorId)) {
+            appointment.doctorId = null;
+        }
 
         await appointment.save();
-        res.json({ success: true, message: "Handover transfer declined successfully. Case returned to sender." });
 
+        if (appointment.hospitalId) {
+            sendPushNotification(
+                appointment.hospitalId,
+                'hospital',
+                "⚠️ Doctor Declined Case Assignment",
+                `Dr. ${req.user.name} declined case #${appointment.bookingId}. Reason: "${rejectReasonStr}". Please assign another doctor.`,
+                { appointmentId: String(appointment._id), type: 'DOCTOR_REJECTED_CASE' }
+            ).catch(() => {});
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Case assignment/handover declined and logged.",
+            data: appointment
+        });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -972,121 +1079,161 @@ const getHospitalColleagues = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// --- 7. DISCHARGE SUMMARY (Updated with safe atomic $set and Multiple file uploads) ---
-// Endpoint: POST /hospital-doctor/panel/case/discharge-summary
+// @desc    Doctor Submits Discharge Summary & Closes Active Treatment Shift Timer
+// @route   POST /hospital-doctor/panel/case/discharge-summary
+// @access  Private (Hospital-Doctor)
 const submitDischargeSummary = async (req, res) => {
     try {
-        const body = req.body || {};
-        const appointmentId = body.appointmentId || req.query.appointmentId;
+        const doctorId = req.user.id;
+        const {
+            appointmentId,
+            diagnosis,
+            investigation,
+            treatmentResult,
+            dischargeNote,
+            chiefComplaint,
+            dateOfSurgery,
+            conditionDuringAdmission,
+            conditionDuringDischarge,
+            vitals
+        } = req.body;
 
         if (!appointmentId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Validation Error: 'appointmentId' is required." 
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId is required to submit discharge summary."
             });
+        }
+
+        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const query = isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() };
+
+        const appointment = await Appointment.findOne(query);
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Admission case not found."
+            });
+        }
+
+        let parsedVitals = {};
+        if (typeof vitals === 'string') {
+            try { parsedVitals = JSON.parse(vitals); } catch (e) { parsedVitals = {}; }
+        } else if (vitals && typeof vitals === 'object') {
+            parsedVitals = vitals;
+        }
+
+        // Handle uploaded files (dischargePdf and clinicalReports)
+        const files = req.files || {};
+        let dischargePdfPath = appointment.clinicalSummary?.dischargeSummaryPdf || null;
+        let uploadedReportPaths = Array.isArray(appointment.clinicalSummary?.uploadedReports)
+            ? [...appointment.clinicalSummary.uploadedReports]
+            : [];
+
+        if (Array.isArray(req.files)) {
+            req.files.forEach(file => {
+                uploadedReportPaths.push(`/uploads/doctor_reports/${file.filename}`);
+            });
+        } else {
+            if (files.dischargePdf && files.dischargePdf[0]) {
+                dischargePdfPath = `/uploads/hospital_discharges/${files.dischargePdf[0].filename}`;
+            }
+            if (files.clinicalReports && files.clinicalReports.length > 0) {
+                const newReps = files.clinicalReports.map(f => `/uploads/doctor_reports/${f.filename}`);
+                uploadedReportPaths.push(...newReps);
+            }
         }
 
         const now = new Date();
-        const appointmentObj = await Appointment.findById(appointmentId);
-        if (!appointmentObj) {
-            return res.status(404).json({ success: false, message: "Patient Admission Record Not Found." });
-        }
 
-        // Close Active Doctor's shift directly on document
-        if (appointmentObj.treatmentHistory && appointmentObj.treatmentHistory.length > 0) {
-            const activeShift = appointmentObj.treatmentHistory.find(h => 
-                h.toDoctorId && h.toDoctorId.toString() === req.user.id.toString() && !h.endTime
-            );
-            if (activeShift) {
-                activeShift.endTime = now;
-                activeShift.durationDisplay = calculateDurationDisplay(activeShift.startTime, now);
-            }
-        }
+        // Update clinicalSummary
+        if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
+        if (diagnosis !== undefined) appointment.clinicalSummary.diagnosis = diagnosis;
+        if (investigation !== undefined) appointment.clinicalSummary.investigation = investigation;
+        if (treatmentResult !== undefined) appointment.clinicalSummary.treatmentResult = treatmentResult;
+        if (dischargeNote !== undefined) appointment.clinicalSummary.dischargeNote = dischargeNote;
+        if (chiefComplaint !== undefined) appointment.clinicalSummary.chiefComplaint = chiefComplaint;
+        if (dateOfSurgery) appointment.clinicalSummary.dateOfSurgery = new Date(dateOfSurgery);
+        if (conditionDuringAdmission !== undefined) appointment.clinicalSummary.conditionDuringAdmission = conditionDuringAdmission;
+        if (conditionDuringDischarge !== undefined) appointment.clinicalSummary.conditionDuringDischarge = conditionDuringDischarge;
+        if (dischargePdfPath) appointment.clinicalSummary.dischargeSummaryPdf = dischargePdfPath;
+        appointment.clinicalSummary.uploadedReports = uploadedReportPaths;
+        appointment.clinicalSummary.dischargedAt = now;
 
-        // Auto-close bedside specialist consults
-        if (appointmentObj.bedsideCareTeam && appointmentObj.bedsideCareTeam.length > 0) {
-            appointmentObj.bedsideCareTeam.forEach(member => {
-                if (['Pending', 'Accepted', 'In-Progress'].includes(member.status)) {
-                    member.status = member.status === 'Pending' ? 'Rejected' : 'Completed';
-                    member.endTime = member.endTime || now;
-                    member.respondedAt = member.respondedAt || now;
-                    if (member.startTime) {
-                        member.durationDisplay = calculateDurationDisplay(member.startTime, now);
-                    }
-                }
-            });
-        }
-
-        // Extract uploaded additional reports
-        let updatedReports = appointmentObj.clinicalSummary?.uploadedReports || [];
-        if (req.files && req.files.clinicalReports) {
-            const reportPaths = req.files.clinicalReports.map(f => `/uploads/doctor_reports/${f.filename}`);
-            updatedReports = [...updatedReports, ...reportPaths];
-        }
-
-        // Extract final generated Discharge PDF path
-        let dischargePdfPath = appointmentObj.clinicalSummary?.dischargeSummaryPdf || null;
-        if (req.files && req.files.dischargePdf && req.files.dischargePdf[0]) {
-            dischargePdfPath = `/uploads/hospital_discharges/${req.files.dischargePdf[0].filename}`;
-        }
-
-        // Parse final discharge vitals
-        let parsedVitals = { bp: "", pulse: "", temp: "", spo2: "" };
-        if (body.vitals) {
-            parsedVitals = typeof body.vitals === 'string' ? JSON.parse(body.vitals) : body.vitals;
-        } else {
-            parsedVitals = {
-                bp: body.bp || "",
-                pulse: body.pulse || "",
-                temp: body.temp || "",
-                spo2: body.spo2 || ""
+        if (Object.keys(parsedVitals).length > 0) {
+            appointment.clinicalSummary.vitals = {
+                bp: parsedVitals.bp || appointment.clinicalSummary.vitals?.bp || "",
+                pulse: parsedVitals.pulse || appointment.clinicalSummary.vitals?.pulse || "",
+                temp: parsedVitals.temp || appointment.clinicalSummary.vitals?.temp || "",
+                spo2: parsedVitals.spo2 || appointment.clinicalSummary.vitals?.spo2 || ""
             };
         }
 
-        // 🛡️ CRASH FIX: Safe Date Parsing for dateOfSurgery
-        let parsedSurgeryDate = appointmentObj.clinicalSummary?.dateOfSurgery || null;
-        if (body.dateOfSurgery && body.dateOfSurgery !== 'undefined' && body.dateOfSurgery !== 'null' && String(body.dateOfSurgery).trim() !== '') {
-            const d = new Date(body.dateOfSurgery);
-            if (!isNaN(d.getTime())) {
-                parsedSurgeryDate = d;
+        // Close open shift timer in treatmentHistory and record Discharged action
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
+        }
+
+        if (appointment.treatmentHistory.length > 0) {
+            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
+            if (lastLog && !lastLog.endTime) {
+                const startRef = lastLog.acceptedAt || lastLog.startTime || lastLog.timestamp;
+                const totalDutyStr = formatDocShiftDuration(startRef, now);
+                lastLog.endTime = now;
+                lastLog.acceptanceStatus = 'Completed';
+                lastLog.durationDisplay = `${totalDutyStr} (Completed & Discharged)`;
             }
         }
 
-        appointmentObj.status = 'Discharge-Pending';
-        appointmentObj.clinicalSummary = {
-            diagnosis: body.diagnosis || appointmentObj.clinicalSummary?.diagnosis || "",
-            investigation: body.investigation || appointmentObj.clinicalSummary?.investigation || "",
-            treatmentResult: body.treatmentResult || appointmentObj.clinicalSummary?.treatmentResult || "",
-            dischargeNote: body.dischargeNote || appointmentObj.clinicalSummary?.dischargeNote || "",
-            dischargedAt: now,
-            uploadedReports: updatedReports,
-            dateOfSurgery: parsedSurgeryDate,
-            conditionDuringAdmission: body.conditionDuringAdmission || appointmentObj.clinicalSummary?.conditionDuringAdmission || "",
-            conditionDuringDischarge: body.conditionDuringDischarge || appointmentObj.clinicalSummary?.conditionDuringDischarge || "",
-            dischargeSummaryPdf: dischargePdfPath,
-            vitals: parsedVitals
-        };
-
-        appointmentObj.treatmentHistory.push({
-            fromDoctorId: req.user.id,
+        appointment.treatmentHistory.push({
+            fromDoctorId: doctorId,
+            toDoctorId: doctorId,
             action: 'Discharged',
-            notes: "Clinical discharge summary and medical reports submitted by duty physician.",
-            timestamp: now
+            assignmentSource: 'Hospital-Admin',
+            acceptanceStatus: 'Completed',
+            assignedAt: now,
+            acceptedAt: now,
+            endTime: now,
+            unacceptedWaitDuration: "0 mins",
+            durationDisplay: "Discharge Summary Submitted",
+            notes: `Discharge summary submitted by Dr. ${req.user.name}. Diagnosis: ${diagnosis || 'Recorded'}. Ready for final billing clearance.`,
+            timestamp: now,
+            startTime: now
         });
 
-        appointmentObj.markModified('treatmentHistory');
-        appointmentObj.markModified('bedsideCareTeam');
-        await appointmentObj.save();
+        appointment.status = 'Discharge-Pending';
+        await appointment.save();
 
-        res.json({ 
-            success: true, 
-            message: "Discharge summary, clinical files, and final PDF summary recorded successfully.", 
-            data: appointmentObj 
+        // Notify Hospital Admin & Patient
+        Promise.allSettled([
+            appointment.hospitalId ? sendPushNotification(
+                appointment.hospitalId,
+                'hospital',
+                "📋 Discharge Summary Submitted by Doctor",
+                `Dr. ${req.user.name} submitted discharge summary for case #${appointment.bookingId} (Bed: ${appointment.bedNumber || 'IPD'}). Ready for final bill settlement.`,
+                { appointmentId: String(appointment._id), bookingId: String(appointment.bookingId), type: 'DISCHARGE_PENDING' }
+            ) : Promise.resolve(),
+            appointment.userId ? sendPushNotification(
+                appointment.userId,
+                'user',
+                "📋 Discharge Summary Ready",
+                `Dr. ${req.user.name} has prepared your discharge summary for booking #${appointment.bookingId}.`,
+                { appointmentId: String(appointment._id), bookingId: String(appointment.bookingId), type: 'DISCHARGE_SUMMARY_READY' }
+            ) : Promise.resolve()
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: "Discharge summary & medical reports submitted successfully.",
+            data: appointment
         });
 
-    } catch (error) { 
-        console.error("Discharge summary error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Submit Discharge Summary Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
@@ -1867,8 +2014,9 @@ const getRawDischargeSummary = async (req, res) => {
     }
 };
 
-// 5. GET PATIENT DETAILS FOR DOCTOR PANEL (Full Populated Sync)
+// 6. GET PATIENT DETAILS FOR DOCTOR PANEL (Full Populated Audit Trail)
 // Endpoint: GET /hospital-doctor/panel/case-details/:id
+// =========================================================================
 const getPatientDetails = async (req, res) => {
     try {
         const { id } = req.params;
@@ -1887,10 +2035,10 @@ const getPatientDetails = async (req, res) => {
             })
             .populate('ambulanceId', 'name phone vehicleNumber vehicleType location driverInfo')
             .populate('specialServices.serviceId', 'serviceName price image description')
-            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage department')
-            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage department')
-            .populate('clinicalLogs.doctorId', 'name speciality profileImage department')
-            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage department')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage department phone')
+            .populate('treatmentHistory.toDoctorId', 'name speciality profileImage department phone')
+            .populate('clinicalLogs.doctorId', 'name speciality profileImage department phone')
+            .populate('bedsideCareTeam.doctorId', 'name speciality profileImage department phone')
             .populate('activeMedications.addedBy', 'name speciality profileImage')
             .lean();
 
@@ -1903,21 +2051,7 @@ const getPatientDetails = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        const now = new Date();
-        const enrichedTreatmentHistory = (caseData.treatmentHistory || []).map(item => {
-            const startRef = item.startTime || item.timestamp;
-            const isCurrentlyActive = !item.endTime && caseData.status !== 'Completed';
-            return {
-                ...item,
-                fromDoctorName: item.fromDoctorId?.name || null,
-                toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
-                toDoctorSpeciality: item.toDoctorId?.speciality || "",
-                isCurrentlyActive,
-                durationDisplay: item.endTime
-                    ? (item.durationDisplay || formatDocShiftDuration(startRef, item.endTime))
-                    : (isCurrentlyActive ? `${formatDocShiftDuration(startRef, now)} (Active)` : (item.durationDisplay || "Completed"))
-            };
-        });
+        const enrichedTreatmentHistory = enrichDocPanelHistory(caseData.treatmentHistory, caseData.status);
 
         const enrichedClinicalLogs = (caseData.clinicalLogs || []).map(log => ({
             ...log,
@@ -2206,22 +2340,23 @@ const getPendingAdmissions = async (req, res) => {
     }
 };
 
-// 1. TAKE CHARGE OF ADMISSION (Hospital Doctor claims unassigned admission)
+// 1. TAKE CHARGE OF ADMISSION (Marks Pending Assignment as 'Accepted' with Response Time)
 // Endpoint: POST /hospital-doctor/panel/case/take-charge
 const takeChargeOfAdmission = async (req, res) => {
     try {
         const doctorId = req.user.id;
         const hospitalId = req.user.hospitalId;
-        const { appointmentId, notes } = req.body;
+        const { appointmentId, caseId, bookingId, notes } = req.body;
 
-        if (!appointmentId) {
+        const targetId = appointmentId || caseId || bookingId;
+        if (!targetId) {
             return res.status(400).json({ success: false, message: "appointmentId is required." });
         }
 
-        const isObjId = mongoose.isValidObjectId(appointmentId);
+        const isObjId = mongoose.isValidObjectId(targetId);
         const query = {
             hospitalId,
-            ...(isObjId ? { _id: appointmentId } : { bookingId: String(appointmentId).trim() })
+            ...(isObjId ? { _id: targetId } : { bookingId: String(targetId).trim() })
         };
 
         const appointment = await Appointment.findOne(query);
@@ -2230,14 +2365,60 @@ const takeChargeOfAdmission = async (req, res) => {
         }
 
         const now = new Date();
-        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
-            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
-            if (lastLog && !lastLog.endTime) {
-                lastLog.endTime = now;
-                lastLog.durationDisplay = formatDocShiftDuration(lastLog.startTime || lastLog.timestamp, now);
-            }
-        } else {
+        if (!Array.isArray(appointment.treatmentHistory)) {
             appointment.treatmentHistory = [];
+        }
+
+        const lastLog = appointment.treatmentHistory.length > 0
+            ? appointment.treatmentHistory[appointment.treatmentHistory.length - 1]
+            : null;
+
+        // CASE A: This doctor was already assigned (by User at booking or by Hospital Admin) and is now accepting
+        if (lastLog && !lastLog.endTime && String(lastLog.toDoctorId) === String(doctorId) && lastLog.acceptanceStatus === 'Pending-Acceptance') {
+            const assignedTime = lastLog.assignedAt || lastLog.startTime || lastLog.timestamp;
+            const responseDelay = formatDocShiftDuration(assignedTime, now);
+
+            lastLog.acceptanceStatus = 'Accepted';
+            lastLog.acceptedAt = now;
+            lastLog.unacceptedWaitDuration = responseDelay;
+            lastLog.durationDisplay = "Active Duty";
+            lastLog.notes = notes
+                ? `${lastLog.notes} | [Accepted by Dr. ${req.user.name} after ${responseDelay}: ${notes}]`
+                : `${lastLog.notes} | [Accepted by Dr. ${req.user.name} after ${responseDelay}]`;
+        } else {
+            // CASE B: Another doctor was pending/open, close their log first
+            if (lastLog && !lastLog.endTime) {
+                const prevAssigned = lastLog.assignedAt || lastLog.startTime || lastLog.timestamp;
+                lastLog.endTime = now;
+                if (lastLog.acceptanceStatus === 'Pending-Acceptance') {
+                    const waitStr = formatDocShiftDuration(prevAssigned, now);
+                    lastLog.acceptanceStatus = 'Unaccepted-Reassigned';
+                    lastLog.unacceptedWaitDuration = waitStr;
+                    lastLog.durationDisplay = `Did Not Accept for ${waitStr} (Taken over by Dr. ${req.user.name})`;
+                } else {
+                    lastLog.acceptanceStatus = 'Replaced-After-Acceptance';
+                    lastLog.durationDisplay = formatDocShiftDuration(lastLog.acceptedAt || prevAssigned, now);
+                }
+            }
+
+            // Push fresh Accepted log for this doctor
+            appointment.treatmentHistory.push({
+                fromDoctorId: appointment.doctorId || null,
+                toDoctorId: doctorId,
+                action: 'Initial-Assignment',
+                assignmentSource: 'Doctor-Self-Assigned',
+                acceptanceStatus: 'Accepted',
+                assignedAt: now,
+                acceptedAt: now,
+                unacceptedWaitDuration: "0 mins (Instant)",
+                notes: notes
+                    ? String(notes).trim()
+                    : `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) took charge of the patient.`,
+                timestamp: now,
+                startTime: now,
+                endTime: null,
+                durationDisplay: "Active Duty"
+            });
         }
 
         appointment.doctorId = doctorId;
@@ -2246,51 +2427,39 @@ const takeChargeOfAdmission = async (req, res) => {
             appointment.status = 'In-Progress';
         }
 
-        appointment.treatmentHistory.push({
-            fromDoctorId: null,
-            toDoctorId: doctorId,
-            action: 'Initial-Assignment',
-            notes: notes ? String(notes).trim() : `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) took charge of the patient.`,
-            timestamp: now,
-            startTime: now,
-            endTime: null,
-            durationDisplay: "Active Shift"
-        });
-
         await appointment.save();
 
-        // Notify Patient & Hospital Admin
         Promise.allSettled([
             appointment.userId ? sendPushNotification(
                 appointment.userId,
                 'user',
-                "👨‍⚕️ Doctor Took Charge",
-                `Dr. ${req.user.name} is now attending your admission case (#${appointment.bookingId}).`,
+                "👨‍⚕️ Doctor Accepted & Took Charge",
+                `Dr. ${req.user.name} is now actively attending your admission case (#${appointment.bookingId}).`,
                 { appointmentId: String(appointment._id), type: 'DOCTOR_TOOK_CHARGE' }
             ) : Promise.resolve(),
             hospitalId ? sendPushNotification(
                 hospitalId,
                 'hospital',
-                "👨‍⚕️ Doctor Claimed Case",
-                `Dr. ${req.user.name} took charge of case #${appointment.bookingId}.`,
+                "✅ Doctor Accepted Case",
+                `Dr. ${req.user.name} accepted and took charge of case #${appointment.bookingId}.`,
                 { appointmentId: String(appointment._id), type: 'DOCTOR_TOOK_CHARGE' }
             ) : Promise.resolve()
         ]);
 
         return res.status(200).json({
             success: true,
-            message: "You have successfully taken charge of this patient.",
+            message: "You have successfully accepted and taken charge of this patient.",
             data: appointment
         });
     } catch (error) {
+        console.error("Take Charge Error:", error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-
-// @desc    Hospital Doctor Self-Assigns an Unassigned / Incoming Emergency or IPD Case
-// @route   POST /hospital-doctor/panel/case/self-assign
-// @access  Private (Hospital-Doctor)
+// 2. DOCTOR SELF-ASSIGN CASE (Full Standalone Implementation)
+// Endpoint: POST /hospital-doctor/panel/case/self-assign
+// =========================================================================
 const doctorSelfAssignCase = async (req, res) => {
     try {
         const doctorId = req.user.id;
@@ -2319,98 +2488,88 @@ const doctorSelfAssignCase = async (req, res) => {
             });
         }
 
-        // Security check: If another doctor is already actively assigned, block accidental overwrite
-        if (appointment.doctorId && String(appointment.doctorId) !== String(doctorId)) {
-            return res.status(400).json({
-                success: false,
-                message: "This case is already assigned to another doctor. Please use the Shift Handover / Transfer flow."
-            });
-        }
-
         const now = new Date();
-
-        // Close any previous open shift log in treatmentHistory if present
-        if (Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0) {
-            const lastLog = appointment.treatmentHistory[appointment.treatmentHistory.length - 1];
-            if (lastLog && !lastLog.endTime) {
-                lastLog.endTime = now;
-                lastLog.durationDisplay = formatDocShiftDuration(lastLog.startTime || lastLog.timestamp, now);
-            }
-        } else {
+        if (!Array.isArray(appointment.treatmentHistory)) {
             appointment.treatmentHistory = [];
         }
 
-        // Assign current doctor & update status to In-Progress
+        const lastLog = appointment.treatmentHistory.length > 0
+            ? appointment.treatmentHistory[appointment.treatmentHistory.length - 1]
+            : null;
+
+        // If this doctor was already in Pending-Acceptance state, mark Accepted
+        if (lastLog && !lastLog.endTime && String(lastLog.toDoctorId) === String(doctorId) && lastLog.acceptanceStatus === 'Pending-Acceptance') {
+            const assignedTime = lastLog.assignedAt || lastLog.startTime || lastLog.timestamp;
+            const responseDelay = formatDocShiftDuration(assignedTime, now);
+
+            lastLog.acceptanceStatus = 'Accepted';
+            lastLog.acceptedAt = now;
+            lastLog.unacceptedWaitDuration = responseDelay;
+            lastLog.durationDisplay = "Active Duty";
+            lastLog.notes = `${lastLog.notes} | [Accepted by Dr. ${req.user.name} after ${responseDelay}]`;
+        } else {
+            if (lastLog && !lastLog.endTime) {
+                const prevAssigned = lastLog.assignedAt || lastLog.startTime || lastLog.timestamp;
+                lastLog.endTime = now;
+                if (lastLog.acceptanceStatus === 'Pending-Acceptance') {
+                    const waitStr = formatDocShiftDuration(prevAssigned, now);
+                    lastLog.acceptanceStatus = 'Unaccepted-Reassigned';
+                    lastLog.unacceptedWaitDuration = waitStr;
+                    lastLog.durationDisplay = `Did Not Accept for ${waitStr} (Self-Assigned by Dr. ${req.user.name})`;
+                } else {
+                    lastLog.acceptanceStatus = 'Replaced-After-Acceptance';
+                    lastLog.durationDisplay = formatDocShiftDuration(lastLog.acceptedAt || prevAssigned, now);
+                }
+            }
+
+            appointment.treatmentHistory.push({
+                fromDoctorId: appointment.doctorId || null,
+                toDoctorId: doctorId,
+                action: 'Initial-Assignment',
+                assignmentSource: 'Doctor-Self-Assigned',
+                acceptanceStatus: 'Accepted',
+                assignedAt: now,
+                acceptedAt: now,
+                unacceptedWaitDuration: "0 mins (Instant)",
+                notes: notes
+                    ? String(notes).trim()
+                    : `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) self-assigned and took charge of the case.`,
+                timestamp: now,
+                startTime: now,
+                endTime: null,
+                durationDisplay: "Active Duty"
+            });
+        }
+
         appointment.doctorId = doctorId;
         appointment.pendingDoctorId = null;
         if (['Pending', 'Hospital-Pending', 'Confirmed'].includes(appointment.status)) {
             appointment.status = 'In-Progress';
         }
 
-        // Push full audit entry into treatmentHistory so User, Doctor & Hospital Panel stay synced
-        appointment.treatmentHistory.push({
-            fromDoctorId: null,
-            toDoctorId: doctorId,
-            action: 'Initial-Assignment',
-            notes: notes
-                ? String(notes).trim()
-                : `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) self-assigned and took charge of the case.`,
-            timestamp: now,
-            startTime: now,
-            endTime: null,
-            durationDisplay: "Active Shift"
-        });
-
         await appointment.save();
 
-        // Non-blocking Push Notifications to Patient & Hospital Admin
-        Promise.allSettled([
-            appointment.userId ? sendPushNotification(
-                appointment.userId,
-                'user',
-                "👨‍⚕️ Attending Doctor Assigned",
-                `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) has taken charge of your hospital case (#${appointment.bookingId}).`,
-                {
-                    type: 'DOCTOR_SELF_ASSIGNED',
-                    serviceType: 'Hospital',
-                    appointmentId: String(appointment._id),
-                    bookingId: String(appointment.bookingId)
-                }
-            ) : Promise.resolve(),
-            hospitalId ? sendPushNotification(
-                hospitalId,
-                'hospital',
-                "👨‍⚕️ Doctor Self-Assigned Case",
-                `Dr. ${req.user.name} has self-assigned case #${appointment.bookingId} (Bed: ${appointment.bedNumber || 'IPD'}).`,
-                {
-                    type: 'DOCTOR_SELF_ASSIGNED',
-                    appointmentId: String(appointment._id),
-                    bookingId: String(appointment.bookingId)
-                }
-            ) : Promise.resolve()
-        ]);
-
-        // Return populated appointment so Frontend UI updates immediately
         const populatedCase = await Appointment.findById(appointment._id)
             .populate('userId', 'name phone gender dob bloodGroup profilePic')
             .populate('doctorId', 'name speciality qualification phone profileImage department')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality profileImage department')
             .populate('treatmentHistory.toDoctorId', 'name speciality profileImage department')
             .lean();
 
         return res.status(200).json({
             success: true,
             message: `Case #${appointment.bookingId} self-assigned successfully to Dr. ${req.user.name}.`,
-            data: populatedCase
+            data: {
+                ...populatedCase,
+                treatmentHistory: enrichDocPanelHistory(populatedCase.treatmentHistory, populatedCase.status)
+            }
         });
-
     } catch (error) {
         console.error("Doctor Self Assign Case Error:", error);
-        return res.status(500).json({
-            success: false,
-            message: error.message
-        });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // Endpoint: POST /hospital-doctor/panel/case/clinical-log/add
 // Path: controllers/hospital/Doctor/hosDocPanel.js
@@ -3464,201 +3623,212 @@ const getDoctorAvailableWardsAndBeds = async (req, res) => {
     }
 };
 
-// @desc    Hospital Doctor Initiates OPD-to-IPD Bed Admission (Seamlessly Carries Over Patient Insurance)
+// @desc    Hospital Doctor Initiates IPD Bed Admission from OPD Consultation (30-Min Bed Hold + Synced treatmentHistory)
 // @route   POST /hospital-doctor/panel/opd/initiate-admission
 // @access  Private (Hospital-Doctor)
 const initiateOpdToIpdAdmission = async (req, res) => {
     try {
         const doctorId = req.user.id;
-        const { 
-            opdAppointmentId, 
-            appointmentId, 
-            bedId, 
-            stayDuration = 1, 
-            triageLevel = 'Urgent', 
-            bookingReason, 
-            admissionNotes 
+        const hospitalId = req.user.hospitalId;
+        const {
+            opdAppointmentId,
+            bedId,
+            stayDuration = 1,
+            triageLevel = 'Urgent',
+            bookingReason,
+            admissionNotes,
+            vitals
         } = req.body;
 
-        const targetOpdId = opdAppointmentId || appointmentId;
-
-        if (!targetOpdId || !bedId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "opdAppointmentId and bedId are required to initiate bed admission." 
+        if (!opdAppointmentId || !bedId) {
+            return res.status(400).json({
+                success: false,
+                message: "opdAppointmentId and bedId are required to initiate IPD admission."
             });
         }
 
-        const isObjectId = mongoose.isValidObjectId(targetOpdId);
-        const opdAppt = await Appointment.findOne(
-            isObjectId ? { _id: targetOpdId } : { bookingId: String(targetOpdId).trim() }
-        ).populate('userId', 'name phone email age gender fcmToken');
+        const isOpdObjId = mongoose.isValidObjectId(opdAppointmentId);
+        const opdQuery = {
+            hospitalId,
+            bookingType: 'OPD',
+            ...(isOpdObjId ? { _id: opdAppointmentId } : { bookingId: String(opdAppointmentId).trim() })
+        };
 
-        if (!opdAppt) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Parent OPD appointment record not found." 
-            });
-        }
-
-        const hospitalId = opdAppt.hospitalId || req.user.hospitalId;
-        if (!hospitalId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Hospital reference missing on appointment." 
-            });
-        }
-
+        // Release any expired holds first
         await syncHospitalWardAndBedCapacity(hospitalId);
 
-        const targetBed = await Bed.findOne({ _id: bedId, hospitalId }).populate('wardId', 'name type');
-        if (!targetBed) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Selected bed not found in this hospital." 
+        const [opdAppt, targetBed] = await Promise.all([
+            Appointment.findOne(opdQuery).populate('userId', 'name phone email gender dob bloodGroup insuranceDetails'),
+            Bed.findOne({ _id: bedId, hospitalId }).populate('wardId')
+        ]);
+
+        if (!opdAppt) {
+            return res.status(404).json({
+                success: false,
+                message: "Parent OPD appointment record not found."
             });
         }
 
-        if (targetBed.status !== 'Available') {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Bed ${targetBed.bedNumber} is currently ${targetBed.status}. Please select another available bed.` 
+        if (!targetBed || targetBed.status !== 'Available') {
+            return res.status(400).json({
+                success: false,
+                message: "Selected bed is currently not available. Please select another bed."
+            });
+        }
+
+        // Check if an active IPD hold already exists for this OPD appointment
+        const existingHold = await Appointment.findOne({
+            opdAppointmentId: opdAppt._id,
+            bookingType: 'Admission',
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Hospital', 'Cancelled-By-Doctor', 'No-Show'] }
+        });
+
+        if (existingHold) {
+            return res.status(400).json({
+                success: false,
+                message: `An IPD admission (#${existingHold.bookingId}) has already been initiated for this OPD consultation.`
             });
         }
 
         const now = new Date();
-        const holdExpiresAt = moment(now).add(30, 'minutes').toDate();
-        const durationDays = Math.max(1, parseInt(stayDuration) || 1);
-        const startDate = now;
-        const endDate = moment(now).add(durationDays, 'days').toDate();
-
-        const bedPricePerDay = Number(targetBed.pricePerDay || 1000);
-        const depositAmount = bedPricePerDay * durationDays;
+        const holdExpiresAt = new Date(now.getTime() + 30 * 60 * 1000); // 30-Minute Bed Hold Window
+        const days = Math.max(1, parseInt(stayDuration) || 1);
+        const depositAmount = Number(targetBed.pricePerDay || 1000) * days;
         const wardTitle = targetBed.wardId?.name || "General Ward";
+        const admissionBookingId = `HKH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
+        // Lock bed to 'Reserved' for 30 minutes
         targetBed.status = 'Reserved';
         await targetBed.save();
 
-        const admissionBookingId = await generateUniqueOrderCode('HKH', Appointment, 'bookingId');
+        // Carry forward patient insurance from OPD booking or User profile
+        const sourceInsurance = (opdAppt.insuranceDetails && opdAppt.insuranceDetails.hasInsurance)
+            ? opdAppt.insuranceDetails
+            : (opdAppt.userId?.insuranceDetails?.hasInsurance ? {
+                hasInsurance: true,
+                insuranceNumber: opdAppt.userId.insuranceDetails.insuranceNumber || "",
+                companyName: opdAppt.userId.insuranceDetails.companyName || "",
+                insuranceType: opdAppt.userId.insuranceDetails.insuranceType || "",
+                masterInsuranceId: opdAppt.userId.insuranceDetails.masterInsuranceId || null,
+                insuranceDocument: opdAppt.userId.insuranceDetails.insuranceDocument || null,
+                insuranceDocumentFront: opdAppt.userId.insuranceDetails.insuranceDocumentFront || null,
+                insuranceDocumentBack: opdAppt.userId.insuranceDetails.insuranceDocumentBack || null,
+                approvalStatus: 'Pending'
+            } : { hasInsurance: false, approvalStatus: 'None' });
 
-        // 🚨 CRITICAL FIX: Copy over insurance details from OPD appointment to IPD Admission
-        const insurancePayload = opdAppt.insuranceDetails ? {
-            hasInsurance: Boolean(opdAppt.insuranceDetails.hasInsurance),
-            insuranceNumber: opdAppt.insuranceDetails.insuranceNumber || "",
-            companyName: opdAppt.insuranceDetails.companyName || "",
-            insuranceType: opdAppt.insuranceDetails.insuranceType || "",
-            masterInsuranceId: opdAppt.insuranceDetails.masterInsuranceId || null,
-            insuranceDocument: opdAppt.insuranceDetails.insuranceDocument || null,
-            insuranceDocumentFront: opdAppt.insuranceDetails.insuranceDocumentFront || null,
-            insuranceDocumentBack: opdAppt.insuranceDetails.insuranceDocumentBack || null,
-            approvalLetterPdf: opdAppt.insuranceDetails.approvalLetterPdf || null,
-            approvalStatus: opdAppt.insuranceDetails.approvalStatus || (opdAppt.insuranceDetails.hasInsurance ? 'Pending' : 'None'),
-            rejectionReason: opdAppt.insuranceDetails.rejectionReason || null
-        } : { hasInsurance: false };
+        const resolvedVitals = vitals || opdAppt.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" };
 
-        const admissionAppt = await Appointment.create({
-            userId: opdAppt.userId._id || opdAppt.userId,
-            hospitalId: hospitalId,
-            doctorId: doctorId,
+        // Create IPD Admission with complete treatmentHistory schema sync
+        const newAdmission = await Appointment.create({
+            userId: opdAppt.userId?._id || opdAppt.userId,
+            hospitalId,
+            doctorId,
             bedId: targetBed._id,
             opdAppointmentId: opdAppt._id,
-            bookingId: admissionBookingId,
             bookingType: 'Admission',
-            bedBookingType: 'General-Bed',
-            triageLevel: ['Emergency', 'Very Urgent', 'Urgent', 'Routine'].includes(triageLevel) ? triageLevel : 'Urgent',
+            bedBookingType: triageLevel === 'Emergency' ? 'Emergency-Bed' : 'General-Bed',
+            bookingId: admissionBookingId,
+            bookingReason: bookingReason || admissionNotes || `Admitted from OPD (Token #${opdAppt.tokenNumber || '1'}) by Dr. ${req.user.name}`,
+            triageLevel,
             wardName: wardTitle,
             bedNumber: targetBed.bedNumber,
-            stayDuration: durationDays,
-            startDate: startDate,
-            endDate: endDate,
-            appointmentDate: startDate,
-            bookingReason: bookingReason || admissionNotes || "Recommended IPD admission after OPD consultation",
-            patients: opdAppt.patients && opdAppt.patients.length > 0 ? opdAppt.patients : [{
-                patientName: opdAppt.userId?.name || "Patient",
-                patientAge: opdAppt.userId?.age || 30,
-                gender: opdAppt.userId?.gender || "Male",
-                relation: "Self",
-                reasonForVisit: bookingReason || "OPD to IPD Admission",
-                isMainUser: true
-            }],
+            stayDuration: days,
+            startDate: now,
+            endDate: moment(now).add(days, 'days').toDate(),
+            appointmentDate: now,
+            admissionHoldExpiresAt: holdExpiresAt,
+            patients: opdAppt.patients,
             pricingBreakdown: {
                 baseFee: depositAmount,
                 originalBaseFee: depositAmount,
+                visitCharges: 0,
+                extraCharges: 0,
+                discountAmount: 0,
                 subtotal: depositAmount,
-                bookedDurationDays: durationDays,
+                bookedDurationDays: days,
                 depositPaidOnBooking: depositAmount
             },
             totalAmount: depositAmount,
             paymentMethod: 'Online',
             paymentStatus: 'Pending',
             status: 'Hospital-Pending',
-            admissionHoldExpiresAt: holdExpiresAt,
-            insuranceDetails: insurancePayload, // 👈 Saved with full insurance
+            insuranceDetails: sourceInsurance,
             clinicalSummary: {
-                vitals: opdAppt.clinicalSummary?.vitals || { bp: "", pulse: "", temp: "", spo2: "" },
-                admissionNote: admissionNotes || bookingReason || ""
+                diagnosis: opdAppt.clinicalSummary?.diagnosis || bookingReason || "",
+                admissionNote: admissionNotes || `Admitted from OPD consultation #${opdAppt.bookingId}`,
+                vitals: resolvedVitals
             },
+            // 🚨 SYNCED TREATMENT HISTORY: Doctor who initiated admission is already Accepted & Active
             treatmentHistory: [{
+                fromDoctorId: null,
                 toDoctorId: doctorId,
                 action: 'Initial-Assignment',
-                notes: `Initiated IPD admission from OPD Consultation (#${opdAppt.bookingId}). Bed ${targetBed.bedNumber} held for 30 minutes.`,
+                assignmentSource: 'Doctor-Self-Assigned',
+                acceptanceStatus: 'Accepted',
+                assignedAt: now,
+                acceptedAt: now,
+                unacceptedWaitDuration: "0 mins (Admitted from OPD)",
+                notes: `Dr. ${req.user.name} (${req.user.speciality || 'Specialist'}) initiated IPD admission from OPD Token #${opdAppt.tokenNumber || '1'} to ${wardTitle} (${targetBed.bedNumber}).`,
                 timestamp: now,
-                startTime: now
+                startTime: now,
+                endTime: null,
+                durationDisplay: "Active Duty"
             }]
         });
 
-        if (opdAppt.status !== 'Completed') {
-            opdAppt.status = 'Completed';
-            await opdAppt.save();
+        // Mark parent OPD consultation as Completed
+        opdAppt.status = 'Completed';
+        if (opdAppt.paymentMethod === 'COD' || opdAppt.paymentMethod === 'Cash') {
+            opdAppt.paymentStatus = 'Paid';
         }
+        await opdAppt.save();
 
+        // Sync ward bed counters
         await syncHospitalWardAndBedCapacity(hospitalId, targetBed.wardId?._id);
 
-        try {
-            await sendPushNotification(
-                opdAppt.userId._id || opdAppt.userId,
+        // Notify Patient & Hospital Reception Desk
+        Promise.allSettled([
+            sendPushNotification(
+                opdAppt.userId?._id || opdAppt.userId,
                 'user',
-                "🏥 Bed Admission Recommended (30-Min Hold)",
-                `Dr. ${req.user.name || 'Doctor'} has reserved Bed ${targetBed.bedNumber} (${wardTitle}) for you. Please pay deposit of ₹${depositAmount} within 30 minutes via app or hospital counter.`,
+                "🏥 IPD Bed Admission Initiated (30-Min Hold)",
+                `Dr. ${req.user.name} has reserved Bed ${targetBed.bedNumber} (${wardTitle}) for you. Please pay deposit of ₹${depositAmount} online or at Hospital Reception within 30 minutes.`,
                 {
                     type: 'OPD_TO_IPD_ADMISSION_HOLD',
-                    admissionAppointmentId: String(admissionAppt._id),
-                    bookingId: String(admissionBookingId),
-                    bedNumber: String(targetBed.bedNumber),
-                    wardName: String(wardTitle),
-                    depositAmount: String(depositAmount),
-                    hasInsurance: String(insurancePayload.hasInsurance),
-                    holdExpiresAt: holdExpiresAt.toISOString(),
-                    click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    serviceType: 'Hospital',
+                    appointmentId: String(newAdmission._id),
+                    bookingId: admissionBookingId,
+                    depositPayable: String(depositAmount),
+                    holdExpiresAt: holdExpiresAt.toISOString()
                 }
-            );
-
-            await notifyAdminsAndVendor(
+            ),
+            notifyAdminsAndVendor(
                 hospitalId,
                 'hospital',
-                `🛏️ New OPD-to-IPD Bed Hold: ${targetBed.bedNumber}`,
-                `Dr. ${req.user.name || 'Doctor'} reserved Bed ${targetBed.bedNumber} (${wardTitle}) for patient ${opdAppt.patients?.[0]?.patientName || 'Patient'}. Insurance: ${insurancePayload.hasInsurance ? 'Yes (' + (insurancePayload.companyName || 'TPA') + ')' : 'Self-Pay'}.`,
+                `🛏️ New OPD-to-IPD Admission Hold (#${admissionBookingId})`,
+                `Dr. ${req.user.name} reserved Bed ${targetBed.bedNumber} (${wardTitle}) for patient ${opdAppt.patients?.[0]?.patientName || 'Patient'}. Deposit due: ₹${depositAmount}.`,
                 {
                     type: 'NEW_ADMISSION_HOLD',
-                    admissionAppointmentId: String(admissionAppt._id),
-                    bookingId: String(admissionBookingId)
+                    appointmentId: String(newAdmission._id),
+                    bookingId: admissionBookingId
                 }
-            );
-        } catch (notifErr) {
-            console.error("Admission Hold Notification Error:", notifErr.message);
-        }
+            )
+        ]);
 
         return res.status(201).json({
             success: true,
-            message: `Bed ${targetBed.bedNumber} (${wardTitle}) reserved for 30 minutes! Patient can now pay ₹${depositAmount} online or at the Hospital Reception Counter.`,
-            holdExpiresAt,
+            message: `Bed ${targetBed.bedNumber} (${wardTitle}) reserved for 30 minutes! Patient can pay ₹${depositAmount} online or at Reception.`,
+            admissionHoldExpiresAt: holdExpiresAt,
             depositPayable: depositAmount,
-            data: admissionAppt
+            data: newAdmission
         });
 
     } catch (error) {
         console.error("Initiate OPD to IPD Admission Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 

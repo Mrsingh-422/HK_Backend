@@ -148,23 +148,51 @@ const appointmentSchema = new mongoose.Schema({
         toDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
         action: {
             type: String,
-            enum: ['Initial-Assignment', 'Transfer-Initiated', 'Transfer-Accepted', 'Discharged'],
+            enum: [
+                'Booked-With-Doctor',
+                'Initial-Assignment',
+                'Reassigned-By-Hospital',
+                'Transfer-Initiated',
+                'Transfer-Accepted',
+                'Transfer-Rejected',
+                'Discharged'
+            ],
             default: 'Initial-Assignment'
         },
+        // Tracks who assigned/selected this doctor
+        assignmentSource: {
+            type: String,
+            enum: ['User-Selected-At-Booking', 'Hospital-Admin', 'Doctor-Self-Assigned', 'Colleague-Handover'],
+            default: 'Hospital-Admin'
+        },
+        // Tracks whether the doctor accepted, ignored (reassigned), or rejected the assignment
+        acceptanceStatus: {
+            type: String,
+            enum: [
+                'Pending-Acceptance',
+                'Accepted',
+                'Unaccepted-Reassigned',
+                'Replaced-After-Acceptance',
+                'Rejected-By-Doctor',
+                'Completed'
+            ],
+            default: 'Pending-Acceptance'
+        },
+        assignedAt: { type: Date, default: Date.now },
+        acceptedAt: { type: Date, default: null },
+        unacceptedWaitDuration: { type: String, default: "" }, // e.g., "45 mins" (How long doctor didn't accept)
+        rejectionReason: { type: String, default: "" },
         notes: { type: String, default: "" },
-        
-        // Root-level Subscription Tracking for Doctor / Hospital Appointments
+
         subscriptionDetails: {
-            isSubscriptionApplied: { type: Boolean, default: false }, // 🚨 NEW: True if booked via subscription
-            userSubscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserSubscription', default: null }, // 🚨 NEW: Reference to active subscriber sheet
-            planName: { type: String, default: "" } // 🚨 NEW: Active Plan Name (e.g. Basic Annual Care)
+            isSubscriptionApplied: { type: Boolean, default: false },
+            userSubscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserSubscription', default: null },
+            planName: { type: String, default: "" }
         },
         timestamp: { type: Date, default: Date.now },
-
-        // --- NEW: ADDMISSION SHIFT DURATION TRACKING ---
-        startTime: { type: Date, default: null },
+        startTime: { type: Date, default: Date.now },
         endTime: { type: Date, default: null },
-        durationDisplay: { type: String, default: "" } // e.g. "2 hr 15 mins"
+        durationDisplay: { type: String, default: "" }
     }],
     clinicalSummary: {
         diagnosis: { type: String, default: "" },
